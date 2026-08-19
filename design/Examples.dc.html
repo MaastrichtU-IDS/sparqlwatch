@@ -11,20 +11,41 @@
     body { margin: 0; }
     a { color: var(--accent-blue); text-decoration: none; }
     a:hover { color: var(--accent); text-decoration: underline; }
+    /* Four themes surfaced from ontoexplorer. Base .root is blue dark (blueprint),
+       the default; the others override. Values copied from
+       ~/code/ontoexplorer/frontend/src/index.css, not derived. */
     .root {
-      --bg: #0f172a; --bg-secondary: #1e293b; --bg-hover: #334155; --bg-deep: #0a0f1a;
-      --border: #334155; --text: #e2e8f0; --text-bright: #f1f5f9; --text-muted: #94a3b8;
-      --text-dim: #64748b; --accent: #22c55e; --on-accent: #0a0f1a; --accent-blue: #67e8f9;
-      --good: #3fb950; --warn: #f0883e; --crit: #f85149; --overlay: rgba(255,255,255,0.04);
+      --bg: #0a1929; --bg-secondary: #112a3f; --bg-hover: #1a3952; --bg-deep: #061320;
+      --border: #2a5580; --text: #d0e4f5; --text-bright: #ffffff; --text-muted: #7fa5c8;
+      --text-dim: #5c7c9c; --accent: #4fc3f7; --on-accent: #0a1929; --accent-blue: #81d4fa;
+      --good: #66bb6a; --warn: #ffb74d; --crit: #ef5350; --overlay: rgba(255,255,255,0.05);
+      --s1: #1e8ffe; --s2: #e649a2; --s3: #bb8300;
       --radius: 6px; --radius-sm: 4px;
       --mono: ui-monospace, 'Cascadia Code', 'Source Code Pro', monospace;
       color-scheme: dark;
     }
-    .root.light {
+    .root.blue-light {
+      --bg: #f8fafe; --bg-secondary: #ffffff; --bg-hover: #eef4fa; --bg-deep: #eef4fa;
+      --border: #d4e2f0; --text: #1a2a3a; --text-bright: #0d1a28; --text-muted: #6a8aa8;
+      --text-dim: #93aec6; --accent: #2b8dd6; --on-accent: #ffffff; --accent-blue: #5ba4d9;
+      --good: #1f9d57; --warn: #b5791f; --crit: #c93b3b; --overlay: rgba(10,40,80,0.05);
+      --s1: #0969da; --s2: #bf3989; --s3: #9a6700;
+      color-scheme: light;
+    }
+    .root.green-dark {
+      --bg: #0f172a; --bg-secondary: #1e293b; --bg-hover: #334155; --bg-deep: #0a0f1a;
+      --border: #334155; --text: #e2e8f0; --text-bright: #f1f5f9; --text-muted: #94a3b8;
+      --text-dim: #64748b; --accent: #22c55e; --on-accent: #0a0f1a; --accent-blue: #67e8f9;
+      --good: #3fb950; --warn: #f0883e; --crit: #f85149; --overlay: rgba(255,255,255,0.04);
+      --s1: #1e8ffe; --s2: #e649a2; --s3: #bb8300;
+      color-scheme: dark;
+    }
+    .root.green-light {
       --bg: #ffffff; --bg-secondary: #f6f8fa; --bg-hover: #eaeef2; --bg-deep: #f6f8fa;
       --border: #d0d7de; --text: #1f2328; --text-bright: #1f2328; --text-muted: #57606a;
       --text-dim: #8c959f; --accent: #16a34a; --on-accent: #ffffff; --accent-blue: #0969da;
       --good: #1a7f37; --warn: #bc4c00; --crit: #cf222e; --overlay: rgba(0,0,0,0.04);
+      --s1: #0969da; --s2: #bf3989; --s3: #9a6700;
       color-scheme: light;
     }
     .card:hover { border-color: var(--text-dim); }
@@ -112,7 +133,7 @@
 </div>
 </x-dc>
 
-<script data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"dark","section":"Display"}}'>
+<script data-dc-script data-props='{"theme":{"editor":"enum","options":["blue-dark","blue-light","green-dark","green-light"],"default":"blue-dark","section":"Display"}}'>
 class Component extends DCLogic {
   constructor(props) {
     super(props);
@@ -165,7 +186,7 @@ class Component extends DCLogic {
     for (const d of all) if (!endpoints.includes(d.target)) endpoints.push(d.target);
 
     return {
-      themeClass: (this.props.theme ?? 'dark') === 'light' ? 'light' : '',
+      themeClass: (this.props.theme ?? 'blue-dark') === 'blue-dark' ? '' : (this.props.theme ?? ''),
       query: s.query,
       onQuery: (e) => this.setState({ query: e.target.value }),
       clearAll: () => this.setState({ query: '', topics: {}, fed: false }),

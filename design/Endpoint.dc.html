@@ -11,20 +11,41 @@
     body { margin: 0; }
     a { color: var(--accent-blue); text-decoration: none; }
     a:hover { color: var(--accent); text-decoration: underline; }
+    /* Four themes surfaced from ontoexplorer. Base .root is blue dark (blueprint),
+       the default; the others override. Values copied from
+       ~/code/ontoexplorer/frontend/src/index.css, not derived. */
     .root {
-      --bg: #0f172a; --bg-secondary: #1e293b; --bg-hover: #334155; --bg-deep: #0a0f1a;
-      --border: #334155; --text: #e2e8f0; --text-bright: #f1f5f9; --text-muted: #94a3b8;
-      --text-dim: #64748b; --accent: #22c55e; --on-accent: #0a0f1a; --accent-blue: #67e8f9;
-      --good: #3fb950; --warn: #f0883e; --crit: #f85149; --overlay: rgba(255,255,255,0.04);
+      --bg: #0a1929; --bg-secondary: #112a3f; --bg-hover: #1a3952; --bg-deep: #061320;
+      --border: #2a5580; --text: #d0e4f5; --text-bright: #ffffff; --text-muted: #7fa5c8;
+      --text-dim: #5c7c9c; --accent: #4fc3f7; --on-accent: #0a1929; --accent-blue: #81d4fa;
+      --good: #66bb6a; --warn: #ffb74d; --crit: #ef5350; --overlay: rgba(255,255,255,0.05);
+      --s1: #1e8ffe; --s2: #e649a2; --s3: #bb8300;
       --radius: 6px; --radius-sm: 4px;
       --mono: ui-monospace, 'Cascadia Code', 'Source Code Pro', monospace;
       color-scheme: dark;
     }
-    .root.light {
+    .root.blue-light {
+      --bg: #f8fafe; --bg-secondary: #ffffff; --bg-hover: #eef4fa; --bg-deep: #eef4fa;
+      --border: #d4e2f0; --text: #1a2a3a; --text-bright: #0d1a28; --text-muted: #6a8aa8;
+      --text-dim: #93aec6; --accent: #2b8dd6; --on-accent: #ffffff; --accent-blue: #5ba4d9;
+      --good: #1f9d57; --warn: #b5791f; --crit: #c93b3b; --overlay: rgba(10,40,80,0.05);
+      --s1: #0969da; --s2: #bf3989; --s3: #9a6700;
+      color-scheme: light;
+    }
+    .root.green-dark {
+      --bg: #0f172a; --bg-secondary: #1e293b; --bg-hover: #334155; --bg-deep: #0a0f1a;
+      --border: #334155; --text: #e2e8f0; --text-bright: #f1f5f9; --text-muted: #94a3b8;
+      --text-dim: #64748b; --accent: #22c55e; --on-accent: #0a0f1a; --accent-blue: #67e8f9;
+      --good: #3fb950; --warn: #f0883e; --crit: #f85149; --overlay: rgba(255,255,255,0.04);
+      --s1: #1e8ffe; --s2: #e649a2; --s3: #bb8300;
+      color-scheme: dark;
+    }
+    .root.green-light {
       --bg: #ffffff; --bg-secondary: #f6f8fa; --bg-hover: #eaeef2; --bg-deep: #f6f8fa;
       --border: #d0d7de; --text: #1f2328; --text-bright: #1f2328; --text-muted: #57606a;
       --text-dim: #8c959f; --accent: #16a34a; --on-accent: #ffffff; --accent-blue: #0969da;
       --good: #1a7f37; --warn: #bc4c00; --crit: #cf222e; --overlay: rgba(0,0,0,0.04);
+      --s1: #0969da; --s2: #bf3989; --s3: #9a6700;
       color-scheme: light;
     }
     .tab:hover { color: var(--text-bright); }
@@ -56,8 +77,8 @@
           <div style="font-size: 18px; font-weight: 600; color: var(--warn); font-variant-numeric: tabular-nums; margin-top: 2px">5.7 s</div>
         </div>
         <div>
-          <div style="font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em">Ready</div>
-          <div style="font-size: 18px; font-weight: 600; color: var(--text-bright); font-variant-numeric: tabular-nums; margin-top: 2px">2 / 4</div>
+          <div style="font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em">Verdicts</div>
+          <div style="font-size: 18px; font-weight: 600; color: var(--text-bright); font-variant-numeric: tabular-nums; margin-top: 2px">2 ok · 3 gap · 1 ?</div>
         </div>
       </div>
     </div>
@@ -74,7 +95,7 @@
     <!-- FINDINGS -->
     <sc-if value="{{isFindings}}" hint-placeholder-val="{{true}}">
       <div>
-        <div style="font-size: 12px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 12px">What tools need from this endpoint</div>
+        <div style="font-size: 12px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 12px">Conformance, attribute by attribute</div>
         <div style="display: flex; flex-direction: column; gap: 8px">
           <sc-for list="{{findings}}" as="f" hint-placeholder-count="4">
             <div style="border: 1px solid var(--border); border-left: 3px solid {{f.edge}}; border-radius: var(--radius-sm); background: var(--bg-secondary); padding: 13px 15px">
@@ -84,7 +105,13 @@
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--good)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M8 12.5l2.5 2.5L16 9.5"></path></svg>
                   </sc-if>
                   <sc-if value="{{f.todo}}" hint-placeholder-val="{{false}}">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--warn)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 8v4.5"></path><path d="M12 16h.01"></path></svg>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M8 12h8"></path></svg>
+                  </sc-if>
+                  <sc-if value="{{f.bad}}" hint-placeholder-val="{{false}}">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--crit)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5L21.5 20H2.5z"></path><path d="M12 10v4"></path><path d="M12 17h.01"></path></svg>
+                  </sc-if>
+                  <sc-if value="{{f.unsure}}" hint-placeholder-val="{{false}}">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--warn)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9" stroke-dasharray="3 2.5"></circle><path d="M9.6 9.4a2.4 2.4 0 113.3 2.2c-.6.3-.9.8-.9 1.4v.3"></path><path d="M12 17h.01"></path></svg>
                   </sc-if>
                 </div>
                 <div style="flex-grow: 1; min-width: 0">
@@ -93,6 +120,16 @@
                     <div class="chip" style="color: {{f.edge}}; border-color: {{f.edge}}">{{f.state}}</div>
                   </div>
                   <div style="color: var(--text-muted); font-size: 13px; margin-top: 5px; line-height: 1.5">{{f.detail}}</div>
+                  <sc-if value="{{f.hasLevel}}" hint-placeholder-val="{{false}}">
+                    <div style="display: flex; align-items: center; gap: 9px; margin-top: 9px">
+                      <div style="display: flex; gap: 3px">
+                        <sc-for list="{{f.levelBars}}" as="b" hint-placeholder-count="4">
+                          <div style="width: 26px; height: 6px; border-radius: 2px; background: {{b.fill}}; border: 1px solid {{b.border}}"></div>
+                        </sc-for>
+                      </div>
+                      <div style="font-size: 12px; color: var(--text-muted)">{{f.levelText}}</div>
+                    </div>
+                  </sc-if>
                   <sc-if value="{{f.hasFix}}" hint-placeholder-val="{{true}}">
                     <div style="margin-top: 9px; padding: 9px 11px; background: var(--bg-deep); border: 1px solid var(--border); border-radius: var(--radius-sm); font-family: var(--mono); font-size: 12px; color: var(--text); white-space: pre-line; overflow-x: auto">{{f.fix}}</div>
                   </sc-if>
@@ -234,7 +271,7 @@
 </div>
 </x-dc>
 
-<script data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"dark","section":"Display"},"tab":{"editor":"enum","options":["Findings","Content","Query","History"],"default":"Findings","section":"Display"}}'>
+<script data-dc-script data-props='{"theme":{"editor":"enum","options":["blue-dark","blue-light","green-dark","green-light"],"default":"blue-dark","section":"Display"},"tab":{"editor":"enum","options":["Findings","Content","Query","History"],"default":"Findings","section":"Display"}}'>
 class Component extends DCLogic {
   constructor(props) {
     super(props);
@@ -243,7 +280,7 @@ class Component extends DCLogic {
 
   current() { return this.state.tab ?? this.props.tab ?? 'Findings'; }
 
-  series() { return (this.props.theme ?? 'dark') === 'light' ? '#0969da' : '#1e8ffe'; }
+  series() { return 'var(--s1)'; }
 
   history() {
     return [
@@ -267,21 +304,37 @@ class Component extends DCLogic {
       y: y(v).toFixed(1), ty: (y(v) + 4).toFixed(1), label: v === 0 ? '0' : (v / 1000) + 's'
     }));
 
+    const V = {
+      verified:   { label: 'verified',            color: 'var(--good)' },
+      undeclared: { label: 'works, not declared', color: 'var(--good)', dashed: true },
+      declared:   { label: 'declared only',       color: 'var(--text-muted)' },
+      absent:     { label: 'absent',              color: 'var(--text-dim)' },
+      wrong:      { label: 'declared but wrong',  color: 'var(--crit)' },
+      unknown:    { label: 'indeterminate',       color: 'var(--warn)' }
+    };
+
     const findings = [
-      { title: 'CORS headers', state: 'published', ok: true,
-        detail: 'Sends Access-Control-Allow-Origin and answers preflight, so the query editor can run queries from the browser.' },
-      { title: 'SPARQL service description', state: 'published', ok: true,
-        detail: 'A service description is available, naming supported languages and result formats.' },
-      { title: 'VoID description', state: 'missing', ok: false,
-        detail: 'No VoID description with class-property partitions, so tools cannot learn the shape of the data. sparqlwatch samples it instead and serves the result, marked as sampled.',
+      { title: 'CORS headers', v: 'verified',
+        detail: 'Sends Access-Control-Allow-Origin and answers preflight, so the editor can run queries straight from the browser.' },
+      { title: 'GeoSPARQL functions', v: 'undeclared',
+        detail: 'geof:sfWithin evaluates correctly, but nothing in the service description advertises it. That is the norm rather than the exception: across the LOD Cloud, 18 endpoints evaluate this filter and none declares it.',
+        fix: 'Advertise it so clients can discover it without probing:\n  sd:extensionFunction geof:sfWithin' },
+      { title: 'Service description', v: 'declared', level: 2,
+        detail: 'Served, and it names a default dataset, but carries no VoID partitions and no entailment regime. Graded rather than pass/fail, because a stub description tells a client almost nothing.' },
+      { title: 'VoID class partitions', v: 'absent',
+        detail: 'No VoID description, so tools cannot learn the shape of the data. sparqlwatch samples it instead and serves the result, marked as sampled.',
         fix: 'Serve a VoID description at:\n  https://data.kkg.kadaster.nl/.well-known/void' },
-      { title: 'Example queries', state: 'missing', ok: false,
+      { title: 'Example queries', v: 'absent',
         detail: 'No examples published, so newcomers have nothing to start from. sparqlwatch hosts three curated examples for this endpoint in the meantime.',
-        fix: 'Publish examples in the named graph:\n  https://data.kkg.kadaster.nl/.well-known/sparql-examples' }
+        fix: 'Publish examples in the named graph:\n  https://data.kkg.kadaster.nl/.well-known/sparql-examples' },
+      { title: 'geo:wktLiteral typing', v: 'unknown',
+        detail: 'Cannot be determined through this engine. Virtuoso rewrites DATATYPE(?g) to virtrdf#Geometry for every literal, so the declared datatype is unobservable from outside. Reported as indeterminate rather than non-conformant.' }
     ];
 
+    const SD_LEVELS = ['none served', 'stub only', 'names a dataset or graphs', 'carries VoID partitions', 'declares entailment or extensions'];
+
     return {
-      themeClass: (this.props.theme ?? 'dark') === 'light' ? 'light' : '',
+      themeClass: (this.props.theme ?? 'blue-dark') === 'blue-dark' ? '' : (this.props.theme ?? ''),
       s1: this.series(),
 
       tabs: ['Findings', 'Content', 'Query', 'History'].map((t) => ({
@@ -295,12 +348,24 @@ class Component extends DCLogic {
       isQuery: tab === 'Query',
       isHistory: tab === 'History',
 
-      findings: findings.map((f) => ({
-        title: f.title, state: f.state, detail: f.detail,
-        edge: f.ok ? 'var(--good)' : 'var(--warn)',
-        hasFix: !!f.fix, fix: f.fix ?? '',
-        ok: f.ok, todo: !f.ok
-      })),
+      findings: findings.map((f) => {
+        const m = V[f.v];
+        return {
+          title: f.title, state: m.label, detail: f.detail,
+          edge: m.color,
+          hasFix: !!f.fix, fix: f.fix ?? '',
+          ok: f.v === 'verified' || f.v === 'undeclared',
+          todo: f.v === 'absent' || f.v === 'declared',
+          bad: f.v === 'wrong',
+          unsure: f.v === 'unknown',
+          hasLevel: f.level !== undefined,
+          levelText: f.level !== undefined ? ('level ' + f.level + ' of 4: ' + SD_LEVELS[f.level]) : '',
+          levelBars: f.level !== undefined ? [0, 1, 2, 3].map((i) => ({
+            fill: i < f.level ? m.color : 'transparent',
+            border: i < f.level ? m.color : 'var(--border)'
+          })) : []
+        };
+      }),
 
       classes: [
         { name: 'geo:Feature', count: '412 M', props: ['geo:hasGeometry', 'skos:prefLabel', 'rdf:type'] },

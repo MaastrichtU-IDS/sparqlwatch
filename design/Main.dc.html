@@ -11,20 +11,41 @@
     body { margin: 0; }
     a { color: var(--accent-blue); text-decoration: none; }
     a:hover { color: var(--accent); text-decoration: underline; }
+    /* Four themes surfaced from ontoexplorer. Base .root is blue dark (blueprint),
+       the default; the others override. Values copied from
+       ~/code/ontoexplorer/frontend/src/index.css, not derived. */
     .root {
-      --bg: #0f172a; --bg-secondary: #1e293b; --bg-hover: #334155; --bg-deep: #0a0f1a;
-      --border: #334155; --text: #e2e8f0; --text-bright: #f1f5f9; --text-muted: #94a3b8;
-      --text-dim: #64748b; --accent: #22c55e; --on-accent: #0a0f1a; --accent-blue: #67e8f9;
-      --good: #3fb950; --warn: #f0883e; --crit: #f85149; --overlay: rgba(255,255,255,0.04);
+      --bg: #0a1929; --bg-secondary: #112a3f; --bg-hover: #1a3952; --bg-deep: #061320;
+      --border: #2a5580; --text: #d0e4f5; --text-bright: #ffffff; --text-muted: #7fa5c8;
+      --text-dim: #5c7c9c; --accent: #4fc3f7; --on-accent: #0a1929; --accent-blue: #81d4fa;
+      --good: #66bb6a; --warn: #ffb74d; --crit: #ef5350; --overlay: rgba(255,255,255,0.05);
+      --s1: #1e8ffe; --s2: #e649a2; --s3: #bb8300;
       --radius: 6px; --radius-sm: 4px;
       --mono: ui-monospace, 'Cascadia Code', 'Source Code Pro', monospace;
       color-scheme: dark;
     }
-    .root.light {
+    .root.blue-light {
+      --bg: #f8fafe; --bg-secondary: #ffffff; --bg-hover: #eef4fa; --bg-deep: #eef4fa;
+      --border: #d4e2f0; --text: #1a2a3a; --text-bright: #0d1a28; --text-muted: #6a8aa8;
+      --text-dim: #93aec6; --accent: #2b8dd6; --on-accent: #ffffff; --accent-blue: #5ba4d9;
+      --good: #1f9d57; --warn: #b5791f; --crit: #c93b3b; --overlay: rgba(10,40,80,0.05);
+      --s1: #0969da; --s2: #bf3989; --s3: #9a6700;
+      color-scheme: light;
+    }
+    .root.green-dark {
+      --bg: #0f172a; --bg-secondary: #1e293b; --bg-hover: #334155; --bg-deep: #0a0f1a;
+      --border: #334155; --text: #e2e8f0; --text-bright: #f1f5f9; --text-muted: #94a3b8;
+      --text-dim: #64748b; --accent: #22c55e; --on-accent: #0a0f1a; --accent-blue: #67e8f9;
+      --good: #3fb950; --warn: #f0883e; --crit: #f85149; --overlay: rgba(255,255,255,0.04);
+      --s1: #1e8ffe; --s2: #e649a2; --s3: #bb8300;
+      color-scheme: dark;
+    }
+    .root.green-light {
       --bg: #ffffff; --bg-secondary: #f6f8fa; --bg-hover: #eaeef2; --bg-deep: #f6f8fa;
       --border: #d0d7de; --text: #1f2328; --text-bright: #1f2328; --text-muted: #57606a;
       --text-dim: #8c959f; --accent: #16a34a; --on-accent: #ffffff; --accent-blue: #0969da;
       --good: #1a7f37; --warn: #bc4c00; --crit: #cf222e; --overlay: rgba(0,0,0,0.04);
+      --s1: #0969da; --s2: #bf3989; --s3: #9a6700;
       color-scheme: light;
     }
     .facet-btn:hover { background: var(--overlay); }
@@ -57,7 +78,7 @@
     <!-- facet rail -->
     <div style="width: 244px; flex-shrink: 0; border-right: 1px solid var(--border); padding: 18px 16px; min-height: 852px">
 
-      <div style="font-size: 12px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 10px">Missing for tools</div>
+      <div style="font-size: 12px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 10px">Not usable for</div>
       <div style="display: flex; flex-direction: column; gap: 2px; margin-bottom: 24px">
         <sc-for list="{{gapFacets}}" as="f" hint-placeholder-count="4">
           <div class="facet-btn" onClick="{{f.toggle}}" style="display: flex; align-items: center; gap: 9px; padding: 7px 8px; border-radius: var(--radius-sm); cursor: pointer; min-height: 44px; box-sizing: border-box">
@@ -94,6 +115,15 @@
     <!-- results -->
     <div style="flex-grow: 1; padding: 18px 20px; min-width: 0">
 
+      <div style="margin-bottom: 14px">
+        <div style="font-size: 12px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px">What do you need it to do?</div>
+        <div style="display: flex; gap: 7px; flex-wrap: wrap">
+          <sc-for list="{{tasks}}" as="t" hint-placeholder-count="4">
+            <div onClick="{{t.pick}}" style="padding: 8px 14px; border: 1px solid {{t.border}}; border-radius: var(--radius); background: {{t.bg}}; color: {{t.color}}; cursor: pointer; font-size: 13px; min-height: 36px; box-sizing: border-box; display: flex; align-items: center">{{t.label}}</div>
+          </sc-for>
+        </div>
+      </div>
+
       <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 6px">
         <div style="position: relative; flex-grow: 1">
           <div style="position: absolute; left: 10px; top: 9px; pointer-events: none">
@@ -117,30 +147,34 @@
       </div>
 
       <!-- column header -->
-      <div style="display: grid; grid-template-columns: 1fr 148px 96px 84px; gap: 12px; padding: 0 12px 8px; font-size: 12px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--border)">
+      <div style="display: grid; grid-template-columns: 1fr 184px 96px 84px; gap: 12px; padding: 0 12px 8px; font-size: 12px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--border)">
         <div>Endpoint</div>
-        <div>Ready for tools</div>
+        <div>Conformance</div>
         <div style="text-align: right">Triples</div>
         <div style="text-align: right">Response</div>
       </div>
 
       <div style="display: flex; flex-direction: column">
         <sc-for list="{{rows}}" as="r" hint-placeholder-count="6">
-          <div class="row" style="display: grid; grid-template-columns: 1fr 148px 96px 84px; gap: 12px; padding: 12px; border-bottom: 1px solid var(--border); cursor: pointer; align-items: center">
+          <div class="row" style="display: grid; grid-template-columns: 1fr 184px 96px 84px; gap: 12px; padding: 12px; border-bottom: 1px solid var(--border); cursor: pointer; align-items: center">
             <div style="min-width: 0">
               <div style="display: flex; align-items: center; gap: 8px">
                 <div style="width: 7px; height: 7px; border-radius: 999px; background: {{r.statusDot}}; flex-shrink: 0"></div>
                 <div style="font-weight: 600; color: var(--text-bright)">{{r.name}}</div>
-                <sc-if value="{{r.sampled}}" hint-placeholder-val="{{true}}">
-                  <div class="chip" style="color: var(--text-dim); border-color: var(--border)">sampled</div>
-                </sc-if>
               </div>
               <div style="font-family: var(--mono); font-size: 12px; color: var(--text-dim); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{r.url}}</div>
             </div>
 
             <div style="display: flex; gap: 5px; align-items: center">
-              <sc-for list="{{r.caps}}" as="c" hint-placeholder-count="4">
-                <div title="{{c.title}}" style="display: flex; align-items: center; justify-content: center; width: 26px; height: 22px; border-radius: var(--radius-sm); background: {{c.bg}}; border: 1px solid {{c.border}}; font-size: 10px; font-weight: 700; color: {{c.color}}; font-family: var(--mono)">{{c.abbr}}</div>
+              <sc-for list="{{r.caps}}" as="c" hint-placeholder-count="5">
+                <div>
+                  <sc-if value="{{c.solidBorder}}" hint-placeholder-val="{{true}}">
+                    <div title="{{c.title}}" style="display: flex; align-items: center; justify-content: center; width: 26px; height: 22px; border-radius: var(--radius-sm); background: {{c.bg}}; border: 1px solid {{c.border}}; font-size: 10px; font-weight: 700; color: {{c.color}}; font-family: var(--mono)">{{c.abbr}}</div>
+                  </sc-if>
+                  <sc-if value="{{c.dashed}}" hint-placeholder-val="{{false}}">
+                    <div title="{{c.title}}" style="display: flex; align-items: center; justify-content: center; width: 26px; height: 22px; border-radius: var(--radius-sm); background: {{c.bg}}; border: 1px dashed {{c.border}}; font-size: 10px; font-weight: 700; color: {{c.color}}; font-family: var(--mono)">{{c.abbr}}</div>
+                  </sc-if>
+                </div>
               </sc-for>
             </div>
 
@@ -157,10 +191,23 @@
         </div>
       </sc-if>
 
-      <div style="margin-top: 16px; padding: 12px 14px; border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: var(--radius-sm); background: var(--bg-secondary); display: flex; gap: 11px; align-items: flex-start">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" style="flex-shrink: 0; margin-top: 1px"><circle cx="12" cy="12" r="9"></circle><path d="M12 16v-5"></path><path d="M12 8h.01"></path></svg>
-        <div style="font-size: 13px; color: var(--text-muted); line-height: 1.5">
-          A letter chip means the endpoint publishes what tools need. Where it is missing, sparqlwatch serves the metadata itself, so the query editor still autocompletes.
+      <div style="margin-top: 16px; padding: 13px 15px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-secondary)">
+        <div style="font-size: 11px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 10px">Verdicts</div>
+        <div style="display: flex; gap: 18px; flex-wrap: wrap">
+          <sc-for list="{{legend}}" as="l" hint-placeholder-count="6">
+            <div style="display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text-muted)">
+              <sc-if value="{{l.solid}}" hint-placeholder-val="{{true}}">
+                <div style="width: 20px; height: 16px; border-radius: 3px; border: 1px solid {{l.border}}; background: {{l.bg}}"></div>
+              </sc-if>
+              <sc-if value="{{l.hollow}}" hint-placeholder-val="{{false}}">
+                <div style="width: 20px; height: 16px; border-radius: 3px; border: 1px dashed {{l.color}}"></div>
+              </sc-if>
+              <span>{{l.label}}</span>
+            </div>
+          </sc-for>
+        </div>
+        <div style="font-size: 12px; color: var(--text-muted); margin-top: 11px; line-height: 1.5; max-width: 860px">
+          Declared but wrong is worse than absent: a false claim misleads a client that trusts it. Indeterminate means the engine or a time budget stopped us answering, never that the attribute is missing.
         </div>
       </div>
     </div>
@@ -168,65 +215,105 @@
 </div>
 </x-dc>
 
-<script data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"dark","section":"Display"}}'>
+<script data-dc-script data-props='{"theme":{"editor":"enum","options":["blue-dark","blue-light","green-dark","green-light"],"default":"blue-dark","section":"Display"}}'>
 class Component extends DCLogic {
   constructor(props) {
     super(props);
-    this.state = { query: '', gaps: {}, reach: 'all', vocabs: {}, sort: 'gaps' };
+    this.state = { query: '', gaps: {}, reach: 'all', vocabs: {}, sort: 'gaps', task: 'any' };
   }
 
   data() {
-    // Illustrative fleet. The first three are the endpoints actually probed.
+    // Verdict vocabulary: verified | undeclared | wrong | declared | absent | unknown
+    // Illustrative, but the states and their mix follow ~/code/umaka-test findings:
+    // capability is usually undeclared-but-working, and some engines answer wrongly.
     return [
-      { name: 'QLever OSM Planet', url: 'https://qlever.dev/api/osm-planet', up: true, triples: null, sampled: true, ms: 210,
-        caps: { CORS: true, VoID: false, SD: false, EX: false }, vocabs: ['osmkey', 'geo', 'rdfs'] },
-      { name: 'Kadaster Knowledge Graph', url: 'https://data.kkg.kadaster.nl/query', up: true, triples: '1.73 G', sampled: false, ms: 5714,
-        caps: { CORS: true, VoID: false, SD: true, EX: false }, vocabs: ['geo', 'skos', 'rdfs'] },
-      { name: 'Ontop CERTAIN', url: 'https://ontop.certain.ai.ustp.at/sparql', up: true, triples: '7.8 K', sampled: false, ms: 173,
-        caps: { CORS: true, VoID: false, SD: false, EX: false }, vocabs: ['rdfs', 'owl'] },
-      { name: 'UniProt', url: 'https://sparql.uniprot.org/sparql', up: true, triples: '95 G', sampled: false, ms: 320,
-        caps: { CORS: true, VoID: true, SD: true, EX: true }, vocabs: ['up', 'skos', 'rdfs', 'owl'] },
-      { name: 'Rhea', url: 'https://sparql.rhea-db.org/sparql', up: true, triples: '12 M', sampled: false, ms: 190,
-        caps: { CORS: true, VoID: true, SD: true, EX: true }, vocabs: ['rh', 'chebi', 'rdfs'] },
-      { name: 'Wikidata', url: 'https://query.wikidata.org/sparql', up: true, triples: '15 G', sampled: true, ms: 1450,
-        caps: { CORS: true, VoID: false, SD: true, EX: true }, vocabs: ['wdt', 'skos', 'geo'] },
-      { name: 'DBpedia', url: 'https://dbpedia.org/sparql', up: false, triples: '1.1 G', sampled: false, ms: null,
-        caps: { CORS: false, VoID: true, SD: false, EX: false }, vocabs: ['dbo', 'skos', 'geo', 'owl'] },
-      { name: 'MetaNetX', url: 'https://rdf.metanetx.org/sparql', up: true, triples: '48 M', sampled: false, ms: 240,
-        caps: { CORS: true, VoID: true, SD: true, EX: true }, vocabs: ['mnx', 'chebi', 'rdfs'] },
-      { name: 'SwissLipids', url: 'https://sparql.swisslipids.org/sparql', up: true, triples: '31 M', sampled: false, ms: 275,
-        caps: { CORS: true, VoID: true, SD: true, EX: true }, vocabs: ['sl', 'chebi', 'owl'] },
-      { name: 'Bgee', url: 'https://bgee.org/sparql', up: true, triples: '2.4 G', sampled: true, ms: 890,
-        caps: { CORS: true, VoID: false, SD: true, EX: true }, vocabs: ['genex', 'up', 'rdfs'] }
+      { name: 'QLever OSM Planet', url: 'https://qlever.dev/api/osm-planet', up: true, triples: null, ms: 210,
+        v: { CORS: 'verified', VOID: 'absent', SD: 'absent', EX: 'absent', GEO: 'undeclared' },
+        sdLevel: 0, vocabs: ['osmkey', 'geo', 'rdfs'] },
+      { name: 'Kadaster Knowledge Graph', url: 'https://data.kkg.kadaster.nl/query', up: true, triples: '1.73 G', ms: 5714,
+        v: { CORS: 'verified', VOID: 'absent', SD: 'declared', EX: 'absent', GEO: 'undeclared' },
+        sdLevel: 2, vocabs: ['geo', 'skos', 'rdfs'] },
+      { name: 'FOODIE / SPOI', url: 'https://www.foodie-cloud.org/sparql', up: true, triples: '126 M', ms: 1900,
+        v: { CORS: 'verified', VOID: 'absent', SD: 'declared', EX: 'absent', GEO: 'undeclared' },
+        sdLevel: 1, vocabs: ['geo', 'inspire', 'foodie'] },
+      { name: 'Cultural Heritage NL', url: 'https://api.linkeddata.cultureelerfgoed.nl/datasets/rce/cho/services/cho/sparql', up: true, triples: '243 K', ms: 640,
+        v: { CORS: 'verified', VOID: 'absent', SD: 'absent', EX: 'absent', GEO: 'undeclared' },
+        sdLevel: 0, vocabs: ['geo', 'ceo', 'skos'] },
+      { name: 'Aragon Open Data', url: 'http://opendata.aragon.es/sparql', up: true, triples: '137 K', ms: 1100,
+        v: { CORS: 'absent', VOID: 'absent', SD: 'declared', EX: 'absent', GEO: 'undeclared' },
+        sdLevel: 1, vocabs: ['geo', 'hydro', 'rdfs'] },
+      { name: 'CSIRO Chronostratigraphy', url: 'http://vocabs.ardc.edu.au/repository/api/sparql/csiro_geologic-time-scale', up: true, triples: '75', ms: 380,
+        v: { CORS: 'verified', VOID: 'absent', SD: 'absent', EX: 'absent', GEO: 'absent' },
+        sdLevel: 0, vocabs: ['geo', 'gts', 'skos'] },
+      { name: 'bittich.be', url: 'https://bittich.be/sparql', up: true, triples: '1', ms: 240,
+        v: { CORS: 'verified', VOID: 'absent', SD: 'absent', EX: 'absent', GEO: 'wrong' },
+        sdLevel: 0, vocabs: ['geo'] },
+      { name: 'UniProt', url: 'https://sparql.uniprot.org/sparql', up: true, triples: '95 G', ms: 320,
+        v: { CORS: 'verified', VOID: 'verified', SD: 'verified', EX: 'verified', GEO: 'absent' },
+        sdLevel: 4, vocabs: ['up', 'skos', 'rdfs'] },
+      { name: 'Rhea', url: 'https://sparql.rhea-db.org/sparql', up: true, triples: '12 M', ms: 190,
+        v: { CORS: 'verified', VOID: 'verified', SD: 'verified', EX: 'verified', GEO: 'absent' },
+        sdLevel: 3, vocabs: ['rh', 'chebi', 'rdfs'] },
+      { name: 'publications.europa.eu', url: 'http://publications.europa.eu/webapi/rdf/sparql', up: true, triples: '1.4 G', ms: 2400,
+        v: { CORS: 'absent', VOID: 'absent', SD: 'declared', EX: 'absent', GEO: 'wrong' },
+        sdLevel: 1, vocabs: ['skos', 'geo', 'dcterms'] },
+      { name: 'DBpedia', url: 'https://dbpedia.org/sparql', up: false, triples: '1.1 G', ms: null,
+        v: { CORS: 'unknown', VOID: 'unknown', SD: 'unknown', EX: 'unknown', GEO: 'unknown' },
+        sdLevel: null, vocabs: ['dbo', 'skos', 'geo'] }
+    ];
+  }
+
+  // One place defines how a verdict looks and reads.
+  verdictMeta() {
+    return {
+      verified:   { label: 'verified',            color: 'var(--good)',      weight: 0 },
+      undeclared: { label: 'works, not declared', color: 'var(--good)',      weight: 1, hollow: true },
+      declared:   { label: 'declared only',       color: 'var(--text-muted)', weight: 2 },
+      absent:     { label: 'absent',              color: 'var(--text-dim)',  weight: 3 },
+      wrong:      { label: 'declared but wrong',  color: 'var(--crit)',      weight: 4 },
+      unknown:    { label: 'indeterminate',       color: 'var(--warn)',      weight: 5 }
+    };
+  }
+
+  tasks() {
+    return [
+      { id: 'any',  label: 'Anything',            need: null },
+      { id: 'geo',  label: 'Geospatial queries',  need: (d) => ['verified', 'undeclared'].includes(d.v.GEO) },
+      { id: 'edit', label: 'Editor autocomplete', need: (d) => d.v.CORS === 'verified' },
+      { id: 'doc',  label: 'Documented for newcomers', need: (d) => d.v.EX === 'verified' || d.sdLevel >= 3 }
     ];
   }
 
   capMeta() {
     return [
-      { key: 'CORS', abbr: 'C', label: 'No CORS headers', title: 'CORS headers' },
-      { key: 'VoID', abbr: 'V', label: 'No VoID description', title: 'VoID class/property partitions' },
-      { key: 'SD', abbr: 'S', label: 'No service description', title: 'SPARQL service description' },
-      { key: 'EX', abbr: 'E', label: 'No example queries', title: 'Published example queries' }
+      { key: 'CORS', abbr: 'C', title: 'CORS headers' },
+      { key: 'VOID', abbr: 'V', title: 'VoID partitions' },
+      { key: 'SD',   abbr: 'S', title: 'Service description' },
+      { key: 'EX',   abbr: 'E', title: 'Example queries' },
+      { key: 'GEO',  abbr: 'G', title: 'GeoSPARQL functions' }
     ];
   }
 
   filtered() {
-    const s = this.state;
-    const q = s.query.trim().toLowerCase();
-    const activeGaps = Object.keys(s.gaps).filter((k) => s.gaps[k]);
-    const activeVocabs = Object.keys(s.vocabs).filter((k) => s.vocabs[k]);
+    const st = this.state;
+    const q = st.query.trim().toLowerCase();
+    const task = this.tasks().find((t) => t.id === (st.task ?? 'any'));
+    const activeGaps = Object.keys(st.gaps).filter((k) => st.gaps[k]);
+    const activeVocabs = Object.keys(st.vocabs).filter((k) => st.vocabs[k]);
     let out = this.data().filter((d) => {
       if (q && !(d.name + ' ' + d.url + ' ' + d.vocabs.join(' ')).toLowerCase().includes(q)) return false;
-      if (s.reach === 'up' && !d.up) return false;
-      if (s.reach === 'down' && d.up) return false;
-      for (const g of activeGaps) if (d.caps[g]) return false;
+      if (task && task.need && !task.need(d)) return false;
+      if (st.reach === 'up' && !d.up) return false;
+      if (st.reach === 'down' && d.up) return false;
+      // a gap facet keeps endpoints whose verdict for that attribute is NOT satisfying
+      for (const g of activeGaps) if (['verified', 'undeclared'].includes(d.v[g])) return false;
       for (const v of activeVocabs) if (!d.vocabs.includes(v)) return false;
       return true;
     });
-    const gapCount = (d) => this.capMeta().filter((c) => !d.caps[c.key]).length;
-    if (s.sort === 'gaps') out = out.slice().sort((a, b) => gapCount(b) - gapCount(a));
-    if (s.sort === 'name') out = out.slice().sort((a, b) => a.name.localeCompare(b.name));
-    if (s.sort === 'speed') out = out.slice().sort((a, b) => (a.ms ?? 1e9) - (b.ms ?? 1e9));
+    const worst = (d) => Math.max(...this.capMeta().map((c) => this.verdictMeta()[d.v[c.key]].weight));
+    if (st.sort === 'gaps') out = out.slice().sort((a, b) => worst(b) - worst(a));
+    if (st.sort === 'name') out = out.slice().sort((a, b) => a.name.localeCompare(b.name));
+    if (st.sort === 'speed') out = out.slice().sort((a, b) => (a.ms ?? 1e9) - (b.ms ?? 1e9));
     return out;
   }
 
@@ -241,7 +328,7 @@ class Component extends DCLogic {
     for (const d of all) for (const v of d.vocabs) if (!vocabList.includes(v)) vocabList.push(v);
 
     return {
-      themeClass: (this.props.theme ?? 'dark') === 'light' ? 'light' : '',
+      themeClass: (this.props.theme ?? 'blue-dark') === 'blue-dark' ? '' : (this.props.theme ?? ''),
       lastSweep: '2026-08-19 14:23 UTC',
       query: s.query,
       onQuery: (e) => this.setState({ query: e.target.value }),
@@ -251,11 +338,28 @@ class Component extends DCLogic {
       totalCount: all.length,
       empty: rows.length === 0,
 
+      tasks: this.tasks().map((t) => ({
+        label: t.label,
+        bg: (s.task ?? 'any') === t.id ? 'var(--accent)' : 'transparent',
+        color: (s.task ?? 'any') === t.id ? 'var(--on-accent)' : 'var(--text-muted)',
+        border: (s.task ?? 'any') === t.id ? 'var(--accent)' : 'var(--border)',
+        pick: () => this.setState({ task: t.id })
+      })),
+
+      legend: Object.keys(this.verdictMeta()).map((k) => ({
+        label: this.verdictMeta()[k].label,
+        color: this.verdictMeta()[k].color,
+        border: k === 'absent' ? 'transparent' : this.verdictMeta()[k].color,
+        bg: k === 'absent' ? 'var(--overlay)' : (k === 'verified' ? 'var(--overlay)' : 'transparent'),
+        hollow: !!this.verdictMeta()[k].hollow,
+        solid: !this.verdictMeta()[k].hollow
+      })),
+
       gapFacets: this.capMeta().map((c) => {
         const on = !!s.gaps[c.key];
         return {
-          label: c.label, on,
-          count: all.filter((d) => !d.caps[c.key]).length,
+          label: 'No ' + c.title, on,
+          count: all.filter((d) => !['verified', 'undeclared'].includes(d.v[c.key])).length,
           boxBg: on ? 'var(--accent)' : 'transparent',
           boxBorder: on ? 'var(--accent)' : 'var(--border)',
           labelColor: on ? 'var(--text-bright)' : 'var(--text-muted)',
@@ -298,18 +402,26 @@ class Component extends DCLogic {
       rows: rows.map((d) => ({
         name: d.name,
         url: d.url,
-        sampled: d.sampled,
         statusDot: d.up ? 'var(--good)' : 'var(--crit)',
         triples: d.triples ?? 'not measured',
         triplesColor: d.triples ? 'var(--text)' : 'var(--text-dim)',
         ms: d.ms ? d.ms + ' ms' : '—',
-        caps: this.capMeta().map((c) => ({
-          abbr: c.abbr,
-          title: d.caps[c.key] ? c.title + ': published' : c.title + ': missing, served by sparqlwatch',
-          bg: d.caps[c.key] ? 'var(--overlay)' : 'transparent',
-          border: d.caps[c.key] ? 'var(--good)' : 'var(--border)',
-          color: d.caps[c.key] ? 'var(--good)' : 'var(--text-dim)'
-        }))
+        caps: this.capMeta().map((c) => {
+          const v = d.v[c.key];
+          const m = this.verdictMeta()[v];
+          return {
+            abbr: c.abbr,
+            title: c.title + ': ' + m.label,
+            color: m.color,
+            // absent has no border at all, so it reads as empty rather than as
+            // another shade of grey next to "declared only"
+            border: v === 'absent' ? 'transparent' : m.color,
+            bg: v === 'verified' ? 'var(--overlay)' : 'transparent',
+            // secondary encoding so verdicts never rest on colour alone
+            dashed: v === 'undeclared' || v === 'unknown',
+            solidBorder: !(v === 'undeclared' || v === 'unknown')
+          };
+        })
       }))
     };
   }

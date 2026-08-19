@@ -2,7 +2,7 @@
 
 **Status:** draft for review
 **Date:** 2026-08-19
-**Working name:** `sparqlwatch` (placeholder, see Open decisions)
+**Name:** `sparqlwatch`
 
 ## Purpose
 
@@ -48,6 +48,10 @@ Decided with the project owner:
 | Query editor | Embedded, with autocomplete, per accessible endpoint |
 | Content metadata | Extracted for accessible endpoints, tiered by cost |
 | Example queries | Ingested from `sib-swiss/sparql-examples`, discovered from endpoints, contributable |
+| Conformance | Per-attribute verdicts and graded levels. **No composite score, no ranking.** |
+| Primary surface | Task-first ("what do you need it to do"), verdict matrix as the detail view |
+| Registry seed | LOD Cloud dump + YummyData's list, probed once, only responders admitted |
+| Themes | Four, from ontoexplorer: green dark/light and blue dark/light. Blue is the default. |
 
 Non-negotiable constraints from the environment:
 
@@ -59,9 +63,9 @@ Non-negotiable constraints from the environment:
 
 ## Core architectural idea
 
-**Separate measurement from scoring.**
+**Separate measurement from judgement.**
 
-Store immutable, append-only *measurements*. Compute *scores* as a query over them.
+Store immutable, append-only *measurements*. Derive every *verdict* as a query over them.
 
 umakadata conflates the two: its crawler writes one column per criterion into a
 26-column `evaluations` table and computes the score in a `before_save` hook. The
@@ -72,10 +76,10 @@ from what was stored.
 Separating them buys three things that matter directly given the owner wants to
 define and evolve their own metrics:
 
-1. A metric definition can change and every historical score can be recomputed
+1. A metric definition can change and every historical verdict can be recomputed
    without re-probing a single endpoint.
 2. Adding a metric is publishing a definition plus a probe, not migrating a table.
-3. Consumers can disagree with our weighting and compute their own from the same
+3. Consumers can disagree with our judgement and derive their own from the same
    published measurements.
 
 ## Data model
@@ -227,6 +231,11 @@ data model.
 
 ### 3. Web tier (Python / FastAPI)
 
+Four themes, surfaced from ontoexplorer: green dark (`:root`) and light, plus blue dark
+(`blueprint`, `#0a1929`) and blue light (`arctic`, `#f8fafe`). **Blue is the default.**
+The chart series palette was validated against all four panel surfaces and passes every
+check on each, so the theme choice carries no accessibility cost.
+
 Read paths, all SPARQL-backed:
 
 - Leaderboard, filterable and sortable by dimension
@@ -315,6 +324,7 @@ that each end in something demonstrable, and each gets its own plan.
 | **0. Egress spike** | Proof that a pod in an egress-locked ids3 namespace can run a SPARQL query against an arbitrary public endpoint through Squid | none, do this first |
 | **1. Data model + prober core** | Metric definitions for an initial set, probe kinds, N-Quads output, tests against a mock endpoint. Runs locally, writes to a local Oxigraph. | stage 0 passes, or the prober is relocated outside the cluster |
 | **2. Scoring as queries** | Score computation as pure SPARQL/functions over stored measurements, with recomputation over history proven | stage 1 |
+| **1b. Registry seeding** | Ingest LOD Cloud + YummyData candidates, resolve front-ends to real endpoints, probe, admit responders | stage 1 |
 | **2b. Content metadata + examples** | Tiered VoID extraction, SIB example ingestion, `/.well-known/sparql-examples` discovery | stage 1 |
 | **3. Web read tier** | Faceted search, browse, endpoint pages, metric pages, charts, content negotiation, read-only public SPARQL endpoint | stage 2, 2b |
 | **3b. Embedded editor** | `@sib-swiss/sparql-editor` per endpoint, fed autocomplete metadata from our origin | stage 2b, 3 |
@@ -326,6 +336,111 @@ Stage 0 is a spike whose output is an answer, not code. Stages 1 through 3 are t
 minimum for a service worth showing anyone. Stages 5 and 6 are what make it a community
 service rather than a dashboard, but they add the only untrusted input paths, so they
 come after the read side is solid.
+
+## Conformance model
+
+**No composite score and no ranking.** Both were rejected deliberately: a number cannot
+express "we could not determine this", and the evidence below shows that is the single
+most common honest answer.
+
+### Why, from measured evidence
+
+A survey of the LOD Cloud dump (`~/code/umaka-test`, 2026-06-15 release, 548 distinct
+endpoint URLs) found that **declaration and behaviour are almost entirely decoupled**:
+
+- **0** endpoints advertise GeoSPARQL through `sd:feature` or `sd:extensionFunction`,
+  while **18** demonstrably evaluate `geof:sfWithin` correctly.
+- **9** endpoints return the *wrong* answer to a point-in-polygon filter that a
+  conformant engine must answer `true`. That is a distinct failure from absence.
+- **23 of 28** service descriptions claim SPARQL 1.0 only, while many of the same
+  endpoints answer SPARQL 1.1.
+- **21 of 28** service descriptions are byte-identical 14-triple Virtuoso stubs, so a
+  binary "publishes a service description" credits the *engine*, not the publisher.
+- Virtuoso rewrites `DATATYPE(?g)` to `virtrdf#Geometry` for 100% of literals, so
+  `geo:wktLiteral` conformance **cannot be tested at all** through three of the four
+  real geospatial endpoints. A naive checker marks them non-conformant when the
+  underlying data may be fine.
+
+### Verdicts, not values
+
+Every attribute resolves to one verdict from a fixed vocabulary. The vocabulary exists
+because each state was observed in the survey.
+
+| Verdict | Meaning | Observed example |
+|---|---|---|
+| `verified` | A probe confirms it works | 18 endpoints evaluating `geof:sfWithin` |
+| `undeclared-but-verified` | Works, but the endpoint does not advertise it | the same 18, none of which mentions geo |
+| `declared-but-wrong` | Claimed or bound, but behaves incorrectly | the 9 answering `false` |
+| `declared-only` | Claimed, not confirmable by probe | e.g. entailment regimes |
+| `absent` | Neither claimed nor observed | |
+| `indeterminate` | The engine or the budget prevents an answer | Virtuoso datatype rewriting; 90s aggregate timeouts |
+
+`declared-but-wrong` ranks as worse than `absent`, because a false claim misleads a
+client that trusts it. `indeterminate` is a required outcome, never a silent zero.
+
+### Graded levels where binary misleads
+
+Some attributes are a degree, not a yes/no. Service-description informativeness is the
+worked example, graded by what it actually tells a client:
+
+| Level | Criterion |
+|---|---|
+| 0 | none served |
+| 1 | stub: endpoint, result formats, supported language (the Virtuoso default) |
+| 2 | names a default dataset or graphs |
+| 3 | carries VoID class or property partitions |
+| 4 | declares an entailment regime, example resources, or extension functions |
+
+The same shape applies to VoID completeness. This is what "degree of conformance"
+means where it applies.
+
+### Task-first presentation
+
+The primary surface asks what the user needs the endpoint to *do*, then answers with
+endpoints whose verdicts satisfy it. Tasks are defined as verdict predicates over
+attributes, so they are data and not code:
+
+- "Run geospatial queries" = geo functions `verified` AND geometry data `verified`
+- "Autocomplete in an editor" = CORS `verified` AND (VoID level >= 3 OR sparqlwatch-derived)
+- "Federate with X" = `sd:BasicFederatedQuery` verified, or a `spex:federatesWith` example exists
+
+The verdict matrix (endpoints x attributes) is the detail view behind that, not the
+front door. Ranking is deliberately absent from both.
+
+### Probe rules this forces
+
+- **Two independent probes per capability**: a data-free filter tests function binding;
+  an `ASK` over data tests presence. In the survey 18 endpoints have the functions, 4
+  hold usable geometry, and only 3 do both.
+- **Guard against false positives.** `publications.europa.eu` passes a naive
+  `ASK { ?s geo:asWKT ?g }` while every object is `rdf:nil`, so literal probes need an
+  `isLiteral` guard. One endpoint's entire geospatial content is a single test triple.
+- **Never gate a test on a declaration**, since declarations under-report.
+- **A timeout is `indeterminate`**, never `absent`.
+
+## Endpoint registry
+
+Seeded from two sources, then probed before admission:
+
+1. The **LOD Cloud** dump: 1683 datasets, 713 declaring an endpoint, 548 distinct URLs.
+2. **YummyData's** curated biomedical list.
+
+Only URLs that answer a trivial query are admitted as monitored endpoints. The rest are
+retained as an `unreachable-candidates` list, which is data worth publishing but is not
+re-probed daily. This matters at the observed rates: **only 65 of 548 LOD Cloud URLs
+(11.9%) answer at all**, so importing everything would leave a directory that is ~88%
+tombstones and waste most of every sweep.
+
+Two resolution steps are mandatory before admission, both from measured failure modes:
+
+- **114 URLs return HTTP 200 with HTML**, i.e. a query front-end rather than a protocol
+  endpoint. The real endpoint often lives at a different path. This is not a corner case:
+  it happened with all three endpoints hand-supplied during evaluation.
+- **472 of 548 URLs are still plain `http://`**, which is itself a decay signal and worth
+  recording rather than silently upgrading.
+
+The LOD Cloud's own `status` field is not a usable liveness oracle: it disagreed with
+observation in both directions, marking 10 responders FAIL and 54 non-responders OK.
 
 ## Deliberately out of scope for v1
 
@@ -340,17 +455,14 @@ come after the read side is solid.
 
 ## Open decisions
 
-1. **Name.** `sparqlwatch` is a placeholder. A public service's name is the owner's
-   call.
-2. **The metric set itself.** Largely resolved by the tool-readiness framing. The v1 set
-   is what an endpoint must provide for tooling to work: availability, response time,
-   CORS headers, service description, VoID with class-property partitions, published
-   example queries, content-negotiation support, cool-URI conformance. umakadata's
-   `criteria/` is a usable reference implementation for the detection logic of several
-   of these. Still to settle: weighting, and whether a single composite score is
-   published at all or only per-dimension results.
-3. **Which community, and hence which endpoint list**, seeds the registry.
-4. **Public domain name** and whether it sits under an institutional domain.
+1. **The task list.** Three are sketched (geospatial querying, editor autocomplete,
+   federation). The full set needs the owner's input, since tasks are the front door.
+2. **Attribute set beyond the tool-readiness core.** Availability, response time, CORS,
+   service-description level, VoID level, published examples, content negotiation,
+   cool URIs, GeoSPARQL function support, GeoSPARQL data presence. umakadata's
+   `criteria/` is a usable reference for several detection routines, and
+   `~/code/umaka-test` already has working probes for the geo ones.
+3. **Public domain name** and whether it sits under an institutional domain.
 
 ## Appendix A: why not umakadata
 

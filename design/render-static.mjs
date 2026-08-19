@@ -111,7 +111,10 @@ const PAGES = [
   { file: 'Endpoint.dc.html', label: 'Endpoint detail: query',    width: 1120, props: { tab: 'Query' } },
   { file: 'Endpoint.dc.html', label: 'Endpoint detail: history',  width: 1120, props: { tab: 'History' } },
   { file: 'Examples.dc.html', label: 'Example catalog',           width: 1120 },
-  { file: 'Fleet.dc.html',    label: 'Fleet charts',              width: 1120 }
+  { file: 'Fleet.dc.html',    label: 'Fleet charts',              width: 1120 },
+  { file: 'Main.dc.html',     label: 'Theme: blue light (arctic)',  width: 1280, props: { theme: 'blue-light' } },
+  { file: 'Main.dc.html',     label: 'Theme: green dark',           width: 1280, props: { theme: 'green-dark' } },
+  { file: 'Main.dc.html',     label: 'Theme: green light',          width: 1280, props: { theme: 'green-light' } }
 ];
 
 const sections = PAGES.map(({ file, label, width, props }) => {
@@ -119,7 +122,7 @@ const sections = PAGES.map(({ file, label, width, props }) => {
   return { label, width, style, html: render(body, vals) };
 });
 
-const PAGE_W = 1376, PAGE_H = 1340;
+const PAGE_W = 1376, PAGE_H = 1320;
 const doc = `<!doctype html>
 <html><head><meta charset="utf-8"><title>sparqlwatch UI</title>
 <style>

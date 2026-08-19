@@ -11,17 +11,36 @@
     body { margin: 0; }
     a { color: var(--accent-blue); text-decoration: none; }
     a:hover { color: var(--accent); text-decoration: underline; }
+    /* Four themes surfaced from ontoexplorer. Base .root is blue dark (blueprint),
+       the default; the others override. Values copied from
+       ~/code/ontoexplorer/frontend/src/index.css, not derived. */
     .root {
+      --bg: #0a1929; --bg-secondary: #112a3f; --bg-hover: #1a3952; --bg-deep: #061320;
+      --border: #2a5580; --text: #d0e4f5; --text-bright: #ffffff; --text-muted: #7fa5c8;
+      --text-dim: #5c7c9c; --accent: #4fc3f7; --on-accent: #0a1929; --accent-blue: #81d4fa;
+      --good: #66bb6a; --warn: #ffb74d; --crit: #ef5350; --overlay: rgba(255,255,255,0.05);
+      --s1: #1e8ffe; --s2: #e649a2; --s3: #bb8300;
+      --radius: 6px; --radius-sm: 4px;
+      --mono: ui-monospace, 'Cascadia Code', 'Source Code Pro', monospace;
+      color-scheme: dark;
+    }
+    .root.blue-light {
+      --bg: #f8fafe; --bg-secondary: #ffffff; --bg-hover: #eef4fa; --bg-deep: #eef4fa;
+      --border: #d4e2f0; --text: #1a2a3a; --text-bright: #0d1a28; --text-muted: #6a8aa8;
+      --text-dim: #93aec6; --accent: #2b8dd6; --on-accent: #ffffff; --accent-blue: #5ba4d9;
+      --good: #1f9d57; --warn: #b5791f; --crit: #c93b3b; --overlay: rgba(10,40,80,0.05);
+      --s1: #0969da; --s2: #bf3989; --s3: #9a6700;
+      color-scheme: light;
+    }
+    .root.green-dark {
       --bg: #0f172a; --bg-secondary: #1e293b; --bg-hover: #334155; --bg-deep: #0a0f1a;
       --border: #334155; --text: #e2e8f0; --text-bright: #f1f5f9; --text-muted: #94a3b8;
       --text-dim: #64748b; --accent: #22c55e; --on-accent: #0a0f1a; --accent-blue: #67e8f9;
       --good: #3fb950; --warn: #f0883e; --crit: #f85149; --overlay: rgba(255,255,255,0.04);
-      --radius: 6px; --radius-sm: 4px;
       --s1: #1e8ffe; --s2: #e649a2; --s3: #bb8300;
-      --mono: ui-monospace, 'Cascadia Code', 'Source Code Pro', monospace;
       color-scheme: dark;
     }
-    .root.light {
+    .root.green-light {
       --bg: #ffffff; --bg-secondary: #f6f8fa; --bg-hover: #eaeef2; --bg-deep: #f6f8fa;
       --border: #d0d7de; --text: #1f2328; --text-bright: #1f2328; --text-muted: #57606a;
       --text-dim: #8c959f; --accent: #16a34a; --on-accent: #ffffff; --accent-blue: #0969da;
@@ -37,7 +56,7 @@
 
   <div style="display: flex; align-items: baseline; gap: 12px; margin-bottom: 18px">
     <h1 style="font-size: 20px; font-weight: 600; color: var(--text-bright); letter-spacing: -0.01em">Fleet</h1>
-    <div style="color: var(--text-dim); font-size: 13px">10 endpoints · swept daily · last 2026-08-19 14:23 UTC</div>
+    <div style="color: var(--text-dim); font-size: 13px">11 endpoints · swept daily · last 2026-08-19 14:23 UTC</div>
   </div>
 
   <!-- stat tiles -->
@@ -56,44 +75,42 @@
 
   <!-- readiness -->
   <div style="border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-secondary); padding: 16px; margin-bottom: 12px">
-    <div style="font-size: 12px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px">Ready for tools</div>
-    <div style="font-size: 13px; color: var(--text-muted); margin-bottom: 16px">How many of the 10 endpoints publish each thing a query tool needs.</div>
+    <div style="font-size: 12px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px">Conformance across the fleet</div>
+    <div style="font-size: 13px; color: var(--text-muted); margin-bottom: 16px">Verdict per attribute across 11 monitored endpoints. Dashed means the capability works but is not declared, or could not be determined.</div>
 
-    <div style="display: flex; flex-direction: column; gap: 12px">
-      <sc-for list="{{readiness}}" as="r" hint-placeholder-count="4">
-        <div>
-          <div style="display: flex; align-items: baseline; gap: 8px; margin-bottom: 5px">
-            <div style="width: 200px; flex-shrink: 0; font-size: 13px; color: var(--text)">{{r.label}}</div>
-            <div style="font-size: 13px; font-weight: 600; color: var(--text-bright); font-variant-numeric: tabular-nums">{{r.have}}</div>
-            <div style="font-size: 12px; color: var(--text-dim)">published{{r.gapText}}</div>
-          </div>
-          <div style="display: flex; align-items: center; gap: 8px">
-            <div style="width: 200px; flex-shrink: 0"></div>
-            <svg viewBox="0 0 620 16" width="620" height="16" style="overflow: visible">
-              <rect x="0" y="3" width="620" height="10" rx="4" fill="var(--overlay)"></rect>
-              <rect x="0" y="3" width="{{r.w}}" height="10" rx="4" fill="{{r.fill}}"
-                    onMouseEnter="{{r.hover}}" onMouseLeave="{{r.out}}" style="cursor: pointer"></rect>
-              <sc-if value="{{r.isHovered}}" hint-placeholder-val="{{false}}">
-                <g>
-                  <rect x="{{r.tipX}}" y="-30" width="128" height="26" rx="4" fill="var(--bg-deep)" stroke="var(--border)"></rect>
-                  <text x="{{r.tipTextX}}" y="-12" fill="var(--text-bright)" font-size="11" font-family="system-ui, sans-serif">{{r.tipText}}</text>
-                </g>
-              </sc-if>
-            </svg>
-          </div>
+    <div style="display: flex; flex-direction: column; gap: 11px">
+      <sc-for list="{{readiness}}" as="r" hint-placeholder-count="6">
+        <div style="display: flex; align-items: center; gap: 10px">
+          <div style="width: 186px; flex-shrink: 0; font-size: 13px; color: var(--text)">{{r.label}}</div>
+          <svg viewBox="0 0 620 18" width="620" height="18" style="overflow: visible">
+            <sc-for list="{{r.segs}}" as="g" hint-placeholder-count="3">
+              <g>
+                <sc-if value="{{g.solid}}" hint-placeholder-val="{{true}}">
+                  <rect x="{{g.x}}" y="2" width="{{g.w}}" height="13" rx="3" fill="{{g.color}}"></rect>
+                </sc-if>
+                <sc-if value="{{g.dash}}" hint-placeholder-val="{{false}}">
+                  <rect x="{{g.x}}" y="2" width="{{g.w}}" height="13" rx="3" fill="none" stroke="{{g.color}}" stroke-width="1.5" stroke-dasharray="4 2.5"></rect>
+                </sc-if>
+              </g>
+            </sc-for>
+          </svg>
+          <div style="width: 108px; flex-shrink: 0; font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums">{{r.summary}}</div>
         </div>
       </sc-for>
     </div>
 
-    <div style="display: flex; gap: 18px; margin-top: 16px; padding-top: 13px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text-muted)">
-      <div style="display: flex; align-items: center; gap: 7px">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--good)" stroke-width="2.5" stroke-linecap="round"><path d="M5 13l4 4L19 7"></path></svg>
-        <span>Published by the provider</span>
-      </div>
-      <div style="display: flex; align-items: center; gap: 7px">
-        <div style="width: 12px; height: 8px; border-radius: 2px; background: var(--overlay); border: 1px solid var(--border)"></div>
-        <span>Missing, served by sparqlwatch instead</span>
-      </div>
+    <div style="display: flex; gap: 16px; flex-wrap: wrap; margin-top: 16px; padding-top: 13px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text-muted)">
+      <sc-for list="{{verdictKeys}}" as="v" hint-placeholder-count="6">
+        <div style="display: flex; align-items: center; gap: 7px">
+          <sc-if value="{{v.solid}}" hint-placeholder-val="{{true}}">
+            <div style="width: 16px; height: 9px; border-radius: 2px; background: {{v.color}}"></div>
+          </sc-if>
+          <sc-if value="{{v.dash}}" hint-placeholder-val="{{false}}">
+            <div style="width: 16px; height: 9px; border-radius: 2px; border: 1px dashed {{v.color}}"></div>
+          </sc-if>
+          <span>{{v.label}}</span>
+        </div>
+      </sc-for>
     </div>
   </div>
 
@@ -189,18 +206,16 @@
 </div>
 </x-dc>
 
-<script data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"dark","section":"Display"}}'>
+<script data-dc-script data-props='{"theme":{"editor":"enum","options":["blue-dark","blue-light","green-dark","green-light"],"default":"blue-dark","section":"Display"}}'>
 class Component extends DCLogic {
   constructor(props) {
     super(props);
     this.state = { range: '14d', hoverCol: null, hoverBar: null, hoverCap: null };
   }
 
-  palette() {
-    return (this.props.theme ?? 'dark') === 'light'
-      ? ['#0969da', '#bf3989', '#9a6700']
-      : ['#1e8ffe', '#e649a2', '#bb8300'];
-  }
+  // Series colours live in the theme tokens (--s1..--s3), so each theme's
+  // validated set is used automatically and there is one source of truth.
+  palette() { return ['var(--s1)', 'var(--s2)', 'var(--s3)']; }
 
   trend() {
     // ms per day, oldest first. 30 points; the range control slices the tail.
@@ -233,13 +248,25 @@ class Component extends DCLogic {
 
     const hc = s.hoverCol;
 
-    // readiness: how many of 10 publish each capability
-    const caps = [
-      { label: 'CORS headers', have: 9 },
-      { label: 'Service description', have: 7 },
-      { label: 'VoID class partitions', have: 5 },
-      { label: 'Example queries', have: 6 }
+    // Verdict distribution per attribute. Stacked, ordered worst-to-best left to right
+    // so the gap is the thing you read first.
+    const VORDER = [
+      { k: 'verified',   label: 'verified',            color: 'var(--good)',       dash: false },
+      { k: 'undeclared', label: 'works, not declared', color: 'var(--good)',       dash: true },
+      { k: 'declared',   label: 'declared only',       color: 'var(--text-muted)', dash: false },
+      { k: 'absent',     label: 'absent',              color: 'var(--text-dim)',   dash: false },
+      { k: 'wrong',      label: 'declared but wrong',  color: 'var(--crit)',       dash: false },
+      { k: 'unknown',    label: 'indeterminate',       color: 'var(--warn)',       dash: true }
     ];
+    const caps = [
+      { label: 'CORS headers',           counts: { verified: 8, undeclared: 0, declared: 0, absent: 2, wrong: 0, unknown: 1 } },
+      { label: 'Service description',    counts: { verified: 2, undeclared: 0, declared: 4, absent: 4, wrong: 0, unknown: 1 } },
+      { label: 'VoID class partitions',  counts: { verified: 2, undeclared: 0, declared: 0, absent: 8, wrong: 0, unknown: 1 } },
+      { label: 'Example queries',        counts: { verified: 2, undeclared: 0, declared: 0, absent: 8, wrong: 0, unknown: 1 } },
+      { label: 'GeoSPARQL functions',    counts: { verified: 0, undeclared: 5, declared: 0, absent: 3, wrong: 2, unknown: 1 } },
+      { label: 'geo:wktLiteral typing',  counts: { verified: 1, undeclared: 0, declared: 0, absent: 1, wrong: 0, unknown: 9 } }
+    ];
+    const TOTAL = 11;
 
     // vocabularies
     const vocabs = [
@@ -251,31 +278,34 @@ class Component extends DCLogic {
     const bw = 92, gap = 2;
 
     return {
-      themeClass: (this.props.theme ?? 'dark') === 'light' ? 'light' : '',
+      themeClass: (this.props.theme ?? 'blue-dark') === 'blue-dark' ? '' : (this.props.theme ?? ''),
 
       tiles: [
-        { label: 'Endpoints', value: '10', unit: 'monitored', sub: '9 reachable in the last sweep' },
-        { label: 'Fully tool-ready', value: '4', unit: 'of 10', sub: 'publish all four requirements' },
+        { label: 'Endpoints', value: '11', unit: 'monitored', sub: '10 reachable in the last sweep' },
+        { label: 'Undeclared capability', value: '5', unit: 'endpoints', sub: 'work but advertise nothing' },
         { label: 'Metadata we serve', value: '11', unit: 'documents', sub: 'VoID and examples filling provider gaps' },
-        { label: 'Not measurable', value: '2', unit: 'endpoints', sub: 'too large to sample within budget' }
+        { label: 'Indeterminate', value: '9', unit: 'verdicts', sub: 'engine or budget blocked the answer' }
       ],
 
+      verdictKeys: VORDER.map((v) => ({ label: v.label, color: v.color, dash: v.dash, solid: !v.dash })),
+
       readiness: caps.map((c) => {
-        const w = (c.have / 10) * 620;
-        const hovered = s.hoverCap === c.label;
-        return {
-          label: c.label,
-          have: c.have + ' / 10',
-          gapText: c.have === 10 ? '' : ', ' + (10 - c.have) + ' served by us',
-          w: w.toFixed(1),
-          fill: 'var(--good)',
-          isHovered: hovered,
-          tipX: Math.max(0, w - 64).toFixed(1),
-          tipTextX: (Math.max(0, w - 64) + 11).toFixed(1),
-          tipText: c.have + ' publish, ' + (10 - c.have) + ' missing',
-          hover: () => this.setState({ hoverCap: c.label }),
-          out: () => this.setState({ hoverCap: null })
-        };
+        let acc = 0;
+        const segs = VORDER.map((v) => {
+          const n = c.counts[v.k] ?? 0;
+          const x = (acc / TOTAL) * 620;
+          const w = (n / TOTAL) * 620;
+          acc += n;
+          return {
+            x: x.toFixed(1),
+            // 2px surface gap between adjacent fills
+            w: Math.max(0, w - 2).toFixed(1),
+            color: v.color, n, show: n > 0, dash: v.dash, solid: !v.dash,
+            label: String(n)
+          };
+        }).filter((seg) => seg.show);
+        const good = (c.counts.verified ?? 0) + (c.counts.undeclared ?? 0);
+        return { label: c.label, segs, summary: good + ' of ' + TOTAL + ' usable' };
       }),
 
       ranges: ['7d', '14d', '30d'].map((r) => ({
