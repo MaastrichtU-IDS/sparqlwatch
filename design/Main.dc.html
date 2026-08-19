@@ -1,0 +1,319 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    body { margin: 0; }
+    a { color: var(--accent-blue); text-decoration: none; }
+    a:hover { color: var(--accent); text-decoration: underline; }
+    .root {
+      --bg: #0f172a; --bg-secondary: #1e293b; --bg-hover: #334155; --bg-deep: #0a0f1a;
+      --border: #334155; --text: #e2e8f0; --text-bright: #f1f5f9; --text-muted: #94a3b8;
+      --text-dim: #64748b; --accent: #22c55e; --on-accent: #0a0f1a; --accent-blue: #67e8f9;
+      --good: #3fb950; --warn: #f0883e; --crit: #f85149; --overlay: rgba(255,255,255,0.04);
+      --radius: 6px; --radius-sm: 4px;
+      --mono: ui-monospace, 'Cascadia Code', 'Source Code Pro', monospace;
+      color-scheme: dark;
+    }
+    .root.light {
+      --bg: #ffffff; --bg-secondary: #f6f8fa; --bg-hover: #eaeef2; --bg-deep: #f6f8fa;
+      --border: #d0d7de; --text: #1f2328; --text-bright: #1f2328; --text-muted: #57606a;
+      --text-dim: #8c959f; --accent: #16a34a; --on-accent: #ffffff; --accent-blue: #0969da;
+      --good: #1a7f37; --warn: #bc4c00; --crit: #cf222e; --overlay: rgba(0,0,0,0.04);
+      color-scheme: light;
+    }
+    .facet-btn:hover { background: var(--overlay); }
+    .row:hover { background: var(--overlay); }
+    .chip { border: 1px solid var(--border); border-radius: 999px; padding: 2px 8px; font-size: 11px; }
+  </style>
+</helmet>
+
+<div class="root {{themeClass}}" style="background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; font-size: 14px; min-height: 900px; width: 1280px">
+
+  <!-- nav -->
+  <div style="height: 48px; border-bottom: 1px solid var(--border); background: var(--bg-secondary); display: flex; align-items: center; gap: 24px; padding: 0 20px">
+    <div style="display: flex; align-items: center; gap: 9px; font-weight: 600; color: var(--text-bright); letter-spacing: -0.01em">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round">
+        <circle cx="11" cy="11" r="6"></circle><path d="M15.5 15.5 L21 21"></path><path d="M8 11h6"></path>
+      </svg>
+      sparqlwatch
+    </div>
+    <div style="display: flex; gap: 4px; flex-grow: 1">
+      <div style="padding: 6px 11px; border-radius: var(--radius-sm); background: var(--overlay); color: var(--text-bright); font-weight: 500">Endpoints</div>
+      <div style="padding: 6px 11px; border-radius: var(--radius-sm); color: var(--text-muted)">Examples</div>
+      <div style="padding: 6px 11px; border-radius: var(--radius-sm); color: var(--text-muted)">Fleet</div>
+      <div style="padding: 6px 11px; border-radius: var(--radius-sm); color: var(--text-muted)">Metrics</div>
+    </div>
+    <div style="color: var(--text-dim); font-size: 12px">Last sweep {{lastSweep}}</div>
+  </div>
+
+  <div style="display: flex; align-items: flex-start">
+
+    <!-- facet rail -->
+    <div style="width: 244px; flex-shrink: 0; border-right: 1px solid var(--border); padding: 18px 16px; min-height: 852px">
+
+      <div style="font-size: 12px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 10px">Missing for tools</div>
+      <div style="display: flex; flex-direction: column; gap: 2px; margin-bottom: 24px">
+        <sc-for list="{{gapFacets}}" as="f" hint-placeholder-count="4">
+          <div class="facet-btn" onClick="{{f.toggle}}" style="display: flex; align-items: center; gap: 9px; padding: 7px 8px; border-radius: var(--radius-sm); cursor: pointer; min-height: 44px; box-sizing: border-box">
+            <div style="width: 15px; height: 15px; border-radius: 3px; border: 1px solid {{f.boxBorder}}; background: {{f.boxBg}}; flex-shrink: 0; display: flex; align-items: center; justify-content: center">
+              <sc-if value="{{f.on}}" hint-placeholder-val="{{true}}">
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="var(--on-accent)" stroke-width="3.5" stroke-linecap="round"><path d="M5 13l4 4L19 7"></path></svg>
+              </sc-if>
+            </div>
+            <div style="flex-grow: 1; color: {{f.labelColor}}">{{f.label}}</div>
+            <div style="color: var(--text-dim); font-size: 12px; font-variant-numeric: tabular-nums">{{f.count}}</div>
+          </div>
+        </sc-for>
+      </div>
+
+      <div style="font-size: 12px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 10px">Reachability</div>
+      <div style="display: flex; flex-direction: column; gap: 2px; margin-bottom: 24px">
+        <sc-for list="{{reachFacets}}" as="f" hint-placeholder-count="3">
+          <div class="facet-btn" onClick="{{f.pick}}" style="display: flex; align-items: center; gap: 9px; padding: 7px 8px; border-radius: var(--radius-sm); cursor: pointer; min-height: 44px; box-sizing: border-box; background: {{f.rowBg}}">
+            <div style="width: 8px; height: 8px; border-radius: 999px; background: {{f.dot}}; flex-shrink: 0"></div>
+            <div style="flex-grow: 1; color: {{f.labelColor}}">{{f.label}}</div>
+            <div style="color: var(--text-dim); font-size: 12px; font-variant-numeric: tabular-nums">{{f.count}}</div>
+          </div>
+        </sc-for>
+      </div>
+
+      <div style="font-size: 12px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 10px">Vocabulary</div>
+      <div style="display: flex; flex-wrap: wrap; gap: 6px">
+        <sc-for list="{{vocabFacets}}" as="v" hint-placeholder-count="6">
+          <div class="chip facet-btn" onClick="{{v.toggle}}" style="cursor: pointer; color: {{v.color}}; border-color: {{v.borderColor}}; background: {{v.bg}}; font-family: var(--mono)">{{v.label}}</div>
+        </sc-for>
+      </div>
+    </div>
+
+    <!-- results -->
+    <div style="flex-grow: 1; padding: 18px 20px; min-width: 0">
+
+      <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 6px">
+        <div style="position: relative; flex-grow: 1">
+          <div style="position: absolute; left: 10px; top: 9px; pointer-events: none">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><path d="M16.5 16.5L21 21"></path></svg>
+          </div>
+          <input value="{{query}}" onInput="{{onQuery}}" placeholder="Filter by name, host, vocabulary or class…"
+            style="width: 100%; height: 34px; box-sizing: border-box; padding: 0 12px 0 32px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--bg-secondary); color: var(--text); font-family: inherit; font-size: 14px; outline: none" />
+        </div>
+        <div style="display: flex; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden">
+          <sc-for list="{{sorts}}" as="s" hint-placeholder-count="3">
+            <div onClick="{{s.pick}}" style="padding: 7px 12px; cursor: pointer; font-size: 12px; background: {{s.bg}}; color: {{s.color}}; border-left: 1px solid var(--border)">{{s.label}}</div>
+          </sc-for>
+        </div>
+      </div>
+
+      <div style="display: flex; align-items: baseline; gap: 8px; margin-bottom: 14px; color: var(--text-dim); font-size: 12px">
+        <span style="color: var(--text-muted)"><strong style="color: var(--text-bright); font-variant-numeric: tabular-nums">{{shownCount}}</strong> of {{totalCount}} endpoints</span>
+        <sc-if value="{{hasFilters}}" hint-placeholder-val="{{true}}">
+          <span onClick="{{clearAll}}" style="cursor: pointer; color: var(--accent-blue)">clear filters</span>
+        </sc-if>
+      </div>
+
+      <!-- column header -->
+      <div style="display: grid; grid-template-columns: 1fr 148px 96px 84px; gap: 12px; padding: 0 12px 8px; font-size: 12px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--border)">
+        <div>Endpoint</div>
+        <div>Ready for tools</div>
+        <div style="text-align: right">Triples</div>
+        <div style="text-align: right">Response</div>
+      </div>
+
+      <div style="display: flex; flex-direction: column">
+        <sc-for list="{{rows}}" as="r" hint-placeholder-count="6">
+          <div class="row" style="display: grid; grid-template-columns: 1fr 148px 96px 84px; gap: 12px; padding: 12px; border-bottom: 1px solid var(--border); cursor: pointer; align-items: center">
+            <div style="min-width: 0">
+              <div style="display: flex; align-items: center; gap: 8px">
+                <div style="width: 7px; height: 7px; border-radius: 999px; background: {{r.statusDot}}; flex-shrink: 0"></div>
+                <div style="font-weight: 600; color: var(--text-bright)">{{r.name}}</div>
+                <sc-if value="{{r.sampled}}" hint-placeholder-val="{{true}}">
+                  <div class="chip" style="color: var(--text-dim); border-color: var(--border)">sampled</div>
+                </sc-if>
+              </div>
+              <div style="font-family: var(--mono); font-size: 12px; color: var(--text-dim); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{r.url}}</div>
+            </div>
+
+            <div style="display: flex; gap: 5px; align-items: center">
+              <sc-for list="{{r.caps}}" as="c" hint-placeholder-count="4">
+                <div title="{{c.title}}" style="display: flex; align-items: center; justify-content: center; width: 26px; height: 22px; border-radius: var(--radius-sm); background: {{c.bg}}; border: 1px solid {{c.border}}; font-size: 10px; font-weight: 700; color: {{c.color}}; font-family: var(--mono)">{{c.abbr}}</div>
+              </sc-for>
+            </div>
+
+            <div style="text-align: right; font-variant-numeric: tabular-nums; color: {{r.triplesColor}}; font-size: 13px">{{r.triples}}</div>
+            <div style="text-align: right; font-variant-numeric: tabular-nums; color: var(--text-muted); font-size: 13px">{{r.ms}}</div>
+          </div>
+        </sc-for>
+      </div>
+
+      <sc-if value="{{empty}}" hint-placeholder-val="{{false}}">
+        <div style="padding: 48px 12px; text-align: center; color: var(--text-dim)">
+          <div style="margin-bottom: 6px; color: var(--text-muted)">No endpoint matches these filters.</div>
+          <div style="font-size: 12px">Try removing a vocabulary chip, or <span onClick="{{clearAll}}" style="cursor: pointer; color: var(--accent-blue)">clear all filters</span>.</div>
+        </div>
+      </sc-if>
+
+      <div style="margin-top: 16px; padding: 12px 14px; border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: var(--radius-sm); background: var(--bg-secondary); display: flex; gap: 11px; align-items: flex-start">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" style="flex-shrink: 0; margin-top: 1px"><circle cx="12" cy="12" r="9"></circle><path d="M12 16v-5"></path><path d="M12 8h.01"></path></svg>
+        <div style="font-size: 13px; color: var(--text-muted); line-height: 1.5">
+          A letter chip means the endpoint publishes what tools need. Where it is missing, sparqlwatch serves the metadata itself, so the query editor still autocompletes.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"dark","section":"Display"}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { query: '', gaps: {}, reach: 'all', vocabs: {}, sort: 'gaps' };
+  }
+
+  data() {
+    // Illustrative fleet. The first three are the endpoints actually probed.
+    return [
+      { name: 'QLever OSM Planet', url: 'https://qlever.dev/api/osm-planet', up: true, triples: null, sampled: true, ms: 210,
+        caps: { CORS: true, VoID: false, SD: false, EX: false }, vocabs: ['osmkey', 'geo', 'rdfs'] },
+      { name: 'Kadaster Knowledge Graph', url: 'https://data.kkg.kadaster.nl/query', up: true, triples: '1.73 G', sampled: false, ms: 5714,
+        caps: { CORS: true, VoID: false, SD: true, EX: false }, vocabs: ['geo', 'skos', 'rdfs'] },
+      { name: 'Ontop CERTAIN', url: 'https://ontop.certain.ai.ustp.at/sparql', up: true, triples: '7.8 K', sampled: false, ms: 173,
+        caps: { CORS: true, VoID: false, SD: false, EX: false }, vocabs: ['rdfs', 'owl'] },
+      { name: 'UniProt', url: 'https://sparql.uniprot.org/sparql', up: true, triples: '95 G', sampled: false, ms: 320,
+        caps: { CORS: true, VoID: true, SD: true, EX: true }, vocabs: ['up', 'skos', 'rdfs', 'owl'] },
+      { name: 'Rhea', url: 'https://sparql.rhea-db.org/sparql', up: true, triples: '12 M', sampled: false, ms: 190,
+        caps: { CORS: true, VoID: true, SD: true, EX: true }, vocabs: ['rh', 'chebi', 'rdfs'] },
+      { name: 'Wikidata', url: 'https://query.wikidata.org/sparql', up: true, triples: '15 G', sampled: true, ms: 1450,
+        caps: { CORS: true, VoID: false, SD: true, EX: true }, vocabs: ['wdt', 'skos', 'geo'] },
+      { name: 'DBpedia', url: 'https://dbpedia.org/sparql', up: false, triples: '1.1 G', sampled: false, ms: null,
+        caps: { CORS: false, VoID: true, SD: false, EX: false }, vocabs: ['dbo', 'skos', 'geo', 'owl'] },
+      { name: 'MetaNetX', url: 'https://rdf.metanetx.org/sparql', up: true, triples: '48 M', sampled: false, ms: 240,
+        caps: { CORS: true, VoID: true, SD: true, EX: true }, vocabs: ['mnx', 'chebi', 'rdfs'] },
+      { name: 'SwissLipids', url: 'https://sparql.swisslipids.org/sparql', up: true, triples: '31 M', sampled: false, ms: 275,
+        caps: { CORS: true, VoID: true, SD: true, EX: true }, vocabs: ['sl', 'chebi', 'owl'] },
+      { name: 'Bgee', url: 'https://bgee.org/sparql', up: true, triples: '2.4 G', sampled: true, ms: 890,
+        caps: { CORS: true, VoID: false, SD: true, EX: true }, vocabs: ['genex', 'up', 'rdfs'] }
+    ];
+  }
+
+  capMeta() {
+    return [
+      { key: 'CORS', abbr: 'C', label: 'No CORS headers', title: 'CORS headers' },
+      { key: 'VoID', abbr: 'V', label: 'No VoID description', title: 'VoID class/property partitions' },
+      { key: 'SD', abbr: 'S', label: 'No service description', title: 'SPARQL service description' },
+      { key: 'EX', abbr: 'E', label: 'No example queries', title: 'Published example queries' }
+    ];
+  }
+
+  filtered() {
+    const s = this.state;
+    const q = s.query.trim().toLowerCase();
+    const activeGaps = Object.keys(s.gaps).filter((k) => s.gaps[k]);
+    const activeVocabs = Object.keys(s.vocabs).filter((k) => s.vocabs[k]);
+    let out = this.data().filter((d) => {
+      if (q && !(d.name + ' ' + d.url + ' ' + d.vocabs.join(' ')).toLowerCase().includes(q)) return false;
+      if (s.reach === 'up' && !d.up) return false;
+      if (s.reach === 'down' && d.up) return false;
+      for (const g of activeGaps) if (d.caps[g]) return false;
+      for (const v of activeVocabs) if (!d.vocabs.includes(v)) return false;
+      return true;
+    });
+    const gapCount = (d) => this.capMeta().filter((c) => !d.caps[c.key]).length;
+    if (s.sort === 'gaps') out = out.slice().sort((a, b) => gapCount(b) - gapCount(a));
+    if (s.sort === 'name') out = out.slice().sort((a, b) => a.name.localeCompare(b.name));
+    if (s.sort === 'speed') out = out.slice().sort((a, b) => (a.ms ?? 1e9) - (b.ms ?? 1e9));
+    return out;
+  }
+
+  renderVals() {
+    const s = this.state;
+    const all = this.data();
+    const rows = this.filtered();
+    const activeVocabCount = Object.keys(s.vocabs).filter((k) => s.vocabs[k]).length;
+    const activeGapCount = Object.keys(s.gaps).filter((k) => s.gaps[k]).length;
+
+    const vocabList = [];
+    for (const d of all) for (const v of d.vocabs) if (!vocabList.includes(v)) vocabList.push(v);
+
+    return {
+      themeClass: (this.props.theme ?? 'dark') === 'light' ? 'light' : '',
+      lastSweep: '2026-08-19 14:23 UTC',
+      query: s.query,
+      onQuery: (e) => this.setState({ query: e.target.value }),
+      clearAll: () => this.setState({ query: '', gaps: {}, reach: 'all', vocabs: {} }),
+      hasFilters: !!(s.query || activeGapCount || activeVocabCount || s.reach !== 'all'),
+      shownCount: rows.length,
+      totalCount: all.length,
+      empty: rows.length === 0,
+
+      gapFacets: this.capMeta().map((c) => {
+        const on = !!s.gaps[c.key];
+        return {
+          label: c.label, on,
+          count: all.filter((d) => !d.caps[c.key]).length,
+          boxBg: on ? 'var(--accent)' : 'transparent',
+          boxBorder: on ? 'var(--accent)' : 'var(--border)',
+          labelColor: on ? 'var(--text-bright)' : 'var(--text-muted)',
+          toggle: () => this.setState({ gaps: { ...s.gaps, [c.key]: !on } })
+        };
+      }),
+
+      reachFacets: [
+        { id: 'all', label: 'All', dot: 'var(--text-dim)', n: all.length },
+        { id: 'up', label: 'Reachable', dot: 'var(--good)', n: all.filter((d) => d.up).length },
+        { id: 'down', label: 'Unreachable', dot: 'var(--crit)', n: all.filter((d) => !d.up).length }
+      ].map((r) => ({
+        label: r.label, dot: r.dot, count: r.n,
+        rowBg: s.reach === r.id ? 'var(--overlay)' : 'transparent',
+        labelColor: s.reach === r.id ? 'var(--text-bright)' : 'var(--text-muted)',
+        pick: () => this.setState({ reach: r.id })
+      })),
+
+      vocabFacets: vocabList.map((v) => {
+        const on = !!s.vocabs[v];
+        return {
+          label: v, bg: on ? 'var(--accent)' : 'transparent',
+          color: on ? 'var(--on-accent)' : 'var(--text-muted)',
+          borderColor: on ? 'var(--accent)' : 'var(--border)',
+          toggle: () => this.setState({ vocabs: { ...s.vocabs, [v]: !on } })
+        };
+      }),
+
+      sorts: [
+        { id: 'gaps', label: 'Most gaps' },
+        { id: 'name', label: 'Name' },
+        { id: 'speed', label: 'Fastest' }
+      ].map((x) => ({
+        label: x.label,
+        bg: s.sort === x.id ? 'var(--accent)' : 'transparent',
+        color: s.sort === x.id ? 'var(--on-accent)' : 'var(--text-muted)',
+        pick: () => this.setState({ sort: x.id })
+      })),
+
+      rows: rows.map((d) => ({
+        name: d.name,
+        url: d.url,
+        sampled: d.sampled,
+        statusDot: d.up ? 'var(--good)' : 'var(--crit)',
+        triples: d.triples ?? 'not measured',
+        triplesColor: d.triples ? 'var(--text)' : 'var(--text-dim)',
+        ms: d.ms ? d.ms + ' ms' : '—',
+        caps: this.capMeta().map((c) => ({
+          abbr: c.abbr,
+          title: d.caps[c.key] ? c.title + ': published' : c.title + ': missing, served by sparqlwatch',
+          bg: d.caps[c.key] ? 'var(--overlay)' : 'transparent',
+          border: d.caps[c.key] ? 'var(--good)' : 'var(--border)',
+          color: d.caps[c.key] ? 'var(--good)' : 'var(--text-dim)'
+        }))
+      }))
+    };
+  }
+}
+</script>
+</body>
+</html>

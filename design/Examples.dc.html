@@ -1,0 +1,208 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    body { margin: 0; }
+    a { color: var(--accent-blue); text-decoration: none; }
+    a:hover { color: var(--accent); text-decoration: underline; }
+    .root {
+      --bg: #0f172a; --bg-secondary: #1e293b; --bg-hover: #334155; --bg-deep: #0a0f1a;
+      --border: #334155; --text: #e2e8f0; --text-bright: #f1f5f9; --text-muted: #94a3b8;
+      --text-dim: #64748b; --accent: #22c55e; --on-accent: #0a0f1a; --accent-blue: #67e8f9;
+      --good: #3fb950; --warn: #f0883e; --crit: #f85149; --overlay: rgba(255,255,255,0.04);
+      --radius: 6px; --radius-sm: 4px;
+      --mono: ui-monospace, 'Cascadia Code', 'Source Code Pro', monospace;
+      color-scheme: dark;
+    }
+    .root.light {
+      --bg: #ffffff; --bg-secondary: #f6f8fa; --bg-hover: #eaeef2; --bg-deep: #f6f8fa;
+      --border: #d0d7de; --text: #1f2328; --text-bright: #1f2328; --text-muted: #57606a;
+      --text-dim: #8c959f; --accent: #16a34a; --on-accent: #ffffff; --accent-blue: #0969da;
+      --good: #1a7f37; --warn: #bc4c00; --crit: #cf222e; --overlay: rgba(0,0,0,0.04);
+      color-scheme: light;
+    }
+    .card:hover { border-color: var(--text-dim); }
+    .tag:hover { background: var(--overlay); }
+    .chip { border: 1px solid var(--border); border-radius: 999px; padding: 2px 8px; font-size: 11px; }
+  </style>
+</helmet>
+
+<div class="root {{themeClass}}" style="background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; font-size: 14px; width: 1120px; min-height: 900px; padding: 22px 24px; box-sizing: border-box">
+
+  <div style="display: flex; align-items: baseline; gap: 12px; margin-bottom: 4px">
+    <h1 style="font-size: 20px; font-weight: 600; color: var(--text-bright); letter-spacing: -0.01em">Example queries</h1>
+    <div style="color: var(--text-dim); font-size: 13px">{{totalCount}} across {{endpointCount}} endpoints</div>
+  </div>
+  <div style="color: var(--text-muted); font-size: 13px; margin-bottom: 18px; max-width: 760px; line-height: 1.5">
+    Ingested from the SIB Swiss sparql-examples corpus, discovered from endpoints that publish their own, and contributed here. Every example is RDF, so this page is a view over a SPARQL query.
+  </div>
+
+  <div style="display: flex; gap: 10px; margin-bottom: 12px">
+    <div style="position: relative; flex-grow: 1">
+      <div style="position: absolute; left: 10px; top: 9px; pointer-events: none">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><path d="M16.5 16.5L21 21"></path></svg>
+      </div>
+      <input value="{{query}}" onInput="{{onQuery}}" placeholder="Search by description, keyword, class or property…"
+        style="width: 100%; height: 34px; box-sizing: border-box; padding: 0 12px 0 32px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--bg-secondary); color: var(--text); font-family: inherit; font-size: 14px; outline: none" />
+    </div>
+    <div class="tag" onClick="{{toggleFed}}" style="display: flex; align-items: center; gap: 8px; padding: 0 13px; height: 34px; box-sizing: border-box; border: 1px solid {{fedBorder}}; border-radius: var(--radius); cursor: pointer; background: {{fedBg}}; color: {{fedColor}}; font-size: 13px">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="6" cy="6" r="2.5"></circle><circle cx="18" cy="18" r="2.5"></circle><circle cx="18" cy="6" r="2.5"></circle><path d="M8.5 6h7"></path><path d="M18 8.5v7"></path></svg>
+      Federated only
+    </div>
+  </div>
+
+  <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px">
+    <sc-for list="{{topics}}" as="t" hint-placeholder-count="8">
+      <div class="chip tag" onClick="{{t.toggle}}" style="cursor: pointer; color: {{t.color}}; border-color: {{t.borderColor}}; background: {{t.bg}}">{{t.label}}</div>
+    </sc-for>
+  </div>
+
+  <div style="display: flex; align-items: baseline; gap: 8px; margin-bottom: 14px; font-size: 12px; color: var(--text-dim)">
+    <span style="color: var(--text-muted)"><strong style="color: var(--text-bright); font-variant-numeric: tabular-nums">{{shownCount}}</strong> matching</span>
+    <sc-if value="{{hasFilters}}" hint-placeholder-val="{{true}}">
+      <span onClick="{{clearAll}}" style="cursor: pointer; color: var(--accent-blue)">clear</span>
+    </sc-if>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 10px">
+    <sc-for list="{{cards}}" as="c" hint-placeholder-count="4">
+      <div class="card" style="border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-secondary); overflow: hidden">
+        <div style="padding: 13px 15px 11px">
+          <div style="display: flex; align-items: flex-start; gap: 12px">
+            <div style="flex-grow: 1; min-width: 0">
+              <div style="font-weight: 600; color: var(--text-bright); line-height: 1.4">{{c.title}}</div>
+              <div style="display: flex; align-items: center; gap: 7px; margin-top: 7px; flex-wrap: wrap">
+                <div class="chip" style="color: var(--accent-blue); border-color: var(--accent-blue); font-family: var(--mono)">{{c.target}}</div>
+                <sc-for list="{{c.keywords}}" as="k" hint-placeholder-count="2">
+                  <div class="chip" style="color: var(--text-dim)">{{k}}</div>
+                </sc-for>
+                <sc-if value="{{c.federated}}" hint-placeholder-val="{{false}}">
+                  <div class="chip" style="color: var(--text-muted); border-color: var(--text-dim); display: flex; align-items: center; gap: 5px">
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="6" cy="6" r="2.5"></circle><circle cx="18" cy="18" r="2.5"></circle><path d="M8 8l8 8"></path></svg>
+                    {{c.fedWith}}
+                  </div>
+                </sc-if>
+              </div>
+            </div>
+            <div onClick="{{c.toggle}}" style="flex-shrink: 0; display: flex; align-items: center; gap: 7px; padding: 6px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); cursor: pointer; font-size: 12px; color: var(--text-muted); min-height: 32px; box-sizing: border-box">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M6 4l14 8-14 8z"></path></svg>
+              {{c.buttonLabel}}
+            </div>
+          </div>
+        </div>
+        <sc-if value="{{c.open}}" hint-placeholder-val="{{false}}">
+          <div style="border-top: 1px solid var(--border); background: var(--bg-deep); padding: 13px 15px; font-family: var(--mono); font-size: 12px; line-height: 1.65; color: var(--text); white-space: pre-line; overflow-x: auto">{{c.sparql}}</div>
+        </sc-if>
+      </div>
+    </sc-for>
+  </div>
+
+  <sc-if value="{{empty}}" hint-placeholder-val="{{false}}">
+    <div style="padding: 48px 12px; text-align: center; color: var(--text-dim)">
+      <div style="margin-bottom: 6px; color: var(--text-muted)">Nothing matches.</div>
+      <div style="font-size: 12px">Try a broader keyword, or <span onClick="{{clearAll}}" style="cursor: pointer; color: var(--accent-blue)">clear the filters</span>.</div>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"dark","section":"Display"}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { query: '', topics: {}, fed: false, open: {} };
+  }
+
+  data() {
+    return [
+      { title: 'Enzymes catalysing a reaction with a given ChEBI compound',
+        target: 'rhea', keywords: ['enzyme', 'reaction'], fedWith: 'uniprot',
+        sparql: 'PREFIX rh: <http://rdf.rhea-db.org/>\nPREFIX chebi: <http://purl.obolibrary.org/obo/CHEBI_>\n\nSELECT ?reaction ?equation WHERE {\n  ?reaction rh:side/rh:contains/rh:compound ?compound .\n  ?compound rh:chebi chebi:17234 .\n  ?reaction rh:equation ?equation .\n}' },
+      { title: 'Human proteins reviewed in the last release, with gene names',
+        target: 'uniprot', keywords: ['protein', 'gene'], fedWith: null,
+        sparql: 'PREFIX up: <http://purl.uniprot.org/core/>\n\nSELECT ?protein ?gene WHERE {\n  ?protein a up:Protein ;\n           up:reviewed true ;\n           up:organism taxon:9606 ;\n           up:encodedBy/skos:prefLabel ?gene .\n}' },
+      { title: 'Buildings within a municipality, with construction year',
+        target: 'kadaster', keywords: ['geospatial', 'building'], fedWith: null,
+        sparql: 'PREFIX imxgeo: <https://data.kkg.kadaster.nl/def/imx-geo#>\nPREFIX geo: <http://www.opengis.net/ont/geosparql#>\n\nSELECT ?building ?year WHERE {\n  ?place skos:prefLabel "Maastricht"@nl .\n  ?building a imxgeo:Gebouw ;\n            geo:sfWithin ?place ;\n            imxgeo:bouwjaar ?year .\n}' },
+      { title: 'Lipids sharing a fatty-acid backbone, mapped to reactions',
+        target: 'swisslipids', keywords: ['lipid', 'reaction'], fedWith: 'rhea',
+        sparql: 'PREFIX sl: <https://swisslipids.org/rdf/>\n\nSELECT ?lipid ?name WHERE {\n  ?lipid a sl:Lipid ;\n         sl:name ?name ;\n         sl:hasFattyAcid ?fa .\n}' },
+      { title: 'Restaurants within 500 m of a railway station',
+        target: 'osm-planet', keywords: ['geospatial', 'amenity'], fedWith: null,
+        sparql: 'PREFIX osmkey: <https://www.openstreetmap.org/wiki/Key:>\nPREFIX geo: <http://www.opengis.net/ont/geosparql#>\n\nSELECT ?restaurant ?station WHERE {\n  ?restaurant osmkey:amenity "restaurant" ;\n              geo:hasGeometry/geo:asWKT ?rgeom .\n  ?station osmkey:railway "station" ;\n           geo:hasGeometry/geo:asWKT ?sgeom .\n}' },
+      { title: 'Genes expressed in a given anatomical structure',
+        target: 'bgee', keywords: ['gene', 'expression'], fedWith: 'uniprot',
+        sparql: 'PREFIX genex: <http://purl.org/genex#>\n\nSELECT ?gene ?anatomy WHERE {\n  ?expression genex:hasSequenceUnit ?gene ;\n              genex:hasAnatomicalEntity ?anatomy .\n}' },
+      { title: 'Metabolites shared between two model organisms',
+        target: 'metanetx', keywords: ['metabolite', 'reaction'], fedWith: null,
+        sparql: 'PREFIX mnx: <https://rdf.metanetx.org/schema/>\n\nSELECT ?metabolite WHERE {\n  ?metabolite a mnx:CHEM ;\n              mnx:chemRefer ?ref .\n}' }
+    ];
+  }
+
+  renderVals() {
+    const s = this.state;
+    const all = this.data();
+    const q = s.query.trim().toLowerCase();
+    const activeTopics = Object.keys(s.topics).filter((k) => s.topics[k]);
+
+    const rows = all.filter((d) => {
+      if (q && !(d.title + ' ' + d.target + ' ' + d.keywords.join(' ') + ' ' + d.sparql).toLowerCase().includes(q)) return false;
+      if (s.fed && !d.fedWith) return false;
+      for (const t of activeTopics) if (!d.keywords.includes(t)) return false;
+      return true;
+    });
+
+    const topicList = [];
+    for (const d of all) for (const k of d.keywords) if (!topicList.includes(k)) topicList.push(k);
+
+    const endpoints = [];
+    for (const d of all) if (!endpoints.includes(d.target)) endpoints.push(d.target);
+
+    return {
+      themeClass: (this.props.theme ?? 'dark') === 'light' ? 'light' : '',
+      query: s.query,
+      onQuery: (e) => this.setState({ query: e.target.value }),
+      clearAll: () => this.setState({ query: '', topics: {}, fed: false }),
+      hasFilters: !!(q || activeTopics.length || s.fed),
+      totalCount: all.length,
+      endpointCount: endpoints.length,
+      shownCount: rows.length,
+      empty: rows.length === 0,
+
+      fedBg: s.fed ? 'var(--accent)' : 'transparent',
+      fedColor: s.fed ? 'var(--on-accent)' : 'var(--text-muted)',
+      fedBorder: s.fed ? 'var(--accent)' : 'var(--border)',
+      toggleFed: () => this.setState({ fed: !s.fed }),
+
+      topics: topicList.map((t) => {
+        const on = !!s.topics[t];
+        return {
+          label: t, bg: on ? 'var(--accent)' : 'transparent',
+          color: on ? 'var(--on-accent)' : 'var(--text-muted)',
+          borderColor: on ? 'var(--accent)' : 'var(--border)',
+          toggle: () => this.setState({ topics: { ...s.topics, [t]: !on } })
+        };
+      }),
+
+      cards: rows.map((d) => {
+        const open = !!s.open[d.title];
+        return {
+          title: d.title, target: d.target, keywords: d.keywords,
+          federated: !!d.fedWith, fedWith: d.fedWith ?? '',
+          sparql: d.sparql, open,
+          buttonLabel: open ? 'Hide query' : 'Show query',
+          toggle: () => this.setState({ open: { ...s.open, [d.title]: !open } })
+        };
+      })
+    };
+  }
+}
+</script>
+</body>
+</html>

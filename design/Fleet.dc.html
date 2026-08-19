@@ -1,0 +1,364 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    body { margin: 0; }
+    a { color: var(--accent-blue); text-decoration: none; }
+    a:hover { color: var(--accent); text-decoration: underline; }
+    .root {
+      --bg: #0f172a; --bg-secondary: #1e293b; --bg-hover: #334155; --bg-deep: #0a0f1a;
+      --border: #334155; --text: #e2e8f0; --text-bright: #f1f5f9; --text-muted: #94a3b8;
+      --text-dim: #64748b; --accent: #22c55e; --on-accent: #0a0f1a; --accent-blue: #67e8f9;
+      --good: #3fb950; --warn: #f0883e; --crit: #f85149; --overlay: rgba(255,255,255,0.04);
+      --radius: 6px; --radius-sm: 4px;
+      --s1: #1e8ffe; --s2: #e649a2; --s3: #bb8300;
+      --mono: ui-monospace, 'Cascadia Code', 'Source Code Pro', monospace;
+      color-scheme: dark;
+    }
+    .root.light {
+      --bg: #ffffff; --bg-secondary: #f6f8fa; --bg-hover: #eaeef2; --bg-deep: #f6f8fa;
+      --border: #d0d7de; --text: #1f2328; --text-bright: #1f2328; --text-muted: #57606a;
+      --text-dim: #8c959f; --accent: #16a34a; --on-accent: #ffffff; --accent-blue: #0969da;
+      --good: #1a7f37; --warn: #bc4c00; --crit: #cf222e; --overlay: rgba(0,0,0,0.04);
+      --s1: #0969da; --s2: #bf3989; --s3: #9a6700;
+      color-scheme: light;
+    }
+    .seg:hover { color: var(--text-bright); }
+  </style>
+</helmet>
+
+<div class="root {{themeClass}}" style="background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; font-size: 14px; width: 1120px; min-height: 1000px; padding: 22px 24px; box-sizing: border-box">
+
+  <div style="display: flex; align-items: baseline; gap: 12px; margin-bottom: 18px">
+    <h1 style="font-size: 20px; font-weight: 600; color: var(--text-bright); letter-spacing: -0.01em">Fleet</h1>
+    <div style="color: var(--text-dim); font-size: 13px">10 endpoints · swept daily · last 2026-08-19 14:23 UTC</div>
+  </div>
+
+  <!-- stat tiles -->
+  <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 20px">
+    <sc-for list="{{tiles}}" as="t" hint-placeholder-count="4">
+      <div style="border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-secondary); padding: 14px 16px">
+        <div style="font-size: 11px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em">{{t.label}}</div>
+        <div style="display: flex; align-items: baseline; gap: 7px; margin-top: 7px">
+          <div style="font-size: 26px; font-weight: 600; color: var(--text-bright); font-variant-numeric: tabular-nums; letter-spacing: -0.02em">{{t.value}}</div>
+          <div style="font-size: 12px; color: var(--text-dim)">{{t.unit}}</div>
+        </div>
+        <div style="font-size: 12px; color: var(--text-muted); margin-top: 5px">{{t.sub}}</div>
+      </div>
+    </sc-for>
+  </div>
+
+  <!-- readiness -->
+  <div style="border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-secondary); padding: 16px; margin-bottom: 12px">
+    <div style="font-size: 12px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px">Ready for tools</div>
+    <div style="font-size: 13px; color: var(--text-muted); margin-bottom: 16px">How many of the 10 endpoints publish each thing a query tool needs.</div>
+
+    <div style="display: flex; flex-direction: column; gap: 12px">
+      <sc-for list="{{readiness}}" as="r" hint-placeholder-count="4">
+        <div>
+          <div style="display: flex; align-items: baseline; gap: 8px; margin-bottom: 5px">
+            <div style="width: 200px; flex-shrink: 0; font-size: 13px; color: var(--text)">{{r.label}}</div>
+            <div style="font-size: 13px; font-weight: 600; color: var(--text-bright); font-variant-numeric: tabular-nums">{{r.have}}</div>
+            <div style="font-size: 12px; color: var(--text-dim)">published{{r.gapText}}</div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px">
+            <div style="width: 200px; flex-shrink: 0"></div>
+            <svg viewBox="0 0 620 16" width="620" height="16" style="overflow: visible">
+              <rect x="0" y="3" width="620" height="10" rx="4" fill="var(--overlay)"></rect>
+              <rect x="0" y="3" width="{{r.w}}" height="10" rx="4" fill="{{r.fill}}"
+                    onMouseEnter="{{r.hover}}" onMouseLeave="{{r.out}}" style="cursor: pointer"></rect>
+              <sc-if value="{{r.isHovered}}" hint-placeholder-val="{{false}}">
+                <g>
+                  <rect x="{{r.tipX}}" y="-30" width="128" height="26" rx="4" fill="var(--bg-deep)" stroke="var(--border)"></rect>
+                  <text x="{{r.tipTextX}}" y="-12" fill="var(--text-bright)" font-size="11" font-family="system-ui, sans-serif">{{r.tipText}}</text>
+                </g>
+              </sc-if>
+            </svg>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+
+    <div style="display: flex; gap: 18px; margin-top: 16px; padding-top: 13px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text-muted)">
+      <div style="display: flex; align-items: center; gap: 7px">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--good)" stroke-width="2.5" stroke-linecap="round"><path d="M5 13l4 4L19 7"></path></svg>
+        <span>Published by the provider</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 7px">
+        <div style="width: 12px; height: 8px; border-radius: 2px; background: var(--overlay); border: 1px solid var(--border)"></div>
+        <span>Missing, served by sparqlwatch instead</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- response time trend -->
+  <div style="border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-secondary); padding: 16px; margin-bottom: 12px">
+    <div style="display: flex; align-items: flex-start; gap: 12px; margin-bottom: 14px">
+      <div style="flex-grow: 1">
+        <div style="font-size: 12px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em">Median response time</div>
+        <div style="font-size: 13px; color: var(--text-muted); margin-top: 4px">Three endpoints with the most history. Hover for exact values.</div>
+      </div>
+      <div style="display: flex; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; flex-shrink: 0">
+        <sc-for list="{{ranges}}" as="g" hint-placeholder-count="3">
+          <div class="seg" onClick="{{g.pick}}" style="padding: 6px 12px; cursor: pointer; font-size: 12px; background: {{g.bg}}; color: {{g.color}}; border-left: 1px solid var(--border)">{{g.label}}</div>
+        </sc-for>
+      </div>
+    </div>
+
+    <svg viewBox="0 0 1050 250" width="100%" height="250" style="overflow: visible">
+      <sc-for list="{{gridY}}" as="g" hint-placeholder-count="5">
+        <g>
+          <line x1="46" y1="{{g.y}}" x2="1042" y2="{{g.y}}" stroke="var(--border)" stroke-dasharray="3 3"></line>
+          <text x="38" y="{{g.ty}}" text-anchor="end" fill="var(--text-dim)" font-size="11" font-family="system-ui, sans-serif">{{g.label}}</text>
+        </g>
+      </sc-for>
+
+      <sc-for list="{{lines}}" as="l" hint-placeholder-count="3">
+        <g>
+          <polyline points="{{l.pts}}" fill="none" stroke="{{l.color}}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"></polyline>
+          <text x="{{l.labelX}}" y="{{l.labelY}}" fill="{{l.color}}" font-size="11" font-weight="600" font-family="system-ui, sans-serif">{{l.name}}</text>
+        </g>
+      </sc-for>
+
+      <sc-for list="{{cols}}" as="c" hint-placeholder-count="14">
+        <g>
+          <rect x="{{c.hitX}}" y="6" width="{{c.hitW}}" height="212" fill="transparent" onMouseEnter="{{c.hover}}" onMouseLeave="{{c.out}}" style="cursor: crosshair"></rect>
+          <text x="{{c.x}}" y="238" text-anchor="middle" fill="var(--text-dim)" font-size="11" font-family="system-ui, sans-serif">{{c.label}}</text>
+        </g>
+      </sc-for>
+
+      <sc-if value="{{hasHover}}" hint-placeholder-val="{{false}}">
+        <g>
+          <line x1="{{hx}}" y1="6" x2="{{hx}}" y2="218" stroke="var(--text-dim)" stroke-dasharray="2 3"></line>
+          <sc-for list="{{hoverDots}}" as="d" hint-placeholder-count="3">
+            <circle cx="{{d.x}}" cy="{{d.y}}" r="4.5" fill="{{d.color}}" stroke="var(--bg-secondary)" stroke-width="2"></circle>
+          </sc-for>
+          <rect x="{{tipX}}" y="{{tipY}}" width="186" height="{{tipH}}" rx="4" fill="var(--bg-deep)" stroke="var(--border)"></rect>
+          <text x="{{tipTextX}}" y="{{tipHeadY}}" fill="var(--text-muted)" font-size="11" font-family="system-ui, sans-serif">{{hoverLabel}}</text>
+          <sc-for list="{{hoverRows}}" as="r" hint-placeholder-count="3">
+            <g>
+              <rect x="{{r.swX}}" y="{{r.swY}}" width="8" height="8" rx="2" fill="{{r.color}}"></rect>
+              <text x="{{r.nameX}}" y="{{r.textY}}" fill="var(--text-muted)" font-size="11" font-family="system-ui, sans-serif">{{r.name}}</text>
+              <text x="{{r.valX}}" y="{{r.textY}}" text-anchor="end" fill="var(--text-bright)" font-size="11" font-weight="600" font-family="system-ui, sans-serif">{{r.value}}</text>
+            </g>
+          </sc-for>
+        </g>
+      </sc-if>
+    </svg>
+
+    <div style="display: flex; gap: 18px; margin-top: 12px; font-size: 11px; color: var(--text-muted)">
+      <sc-for list="{{lines}}" as="l" hint-placeholder-count="3">
+        <div style="display: flex; align-items: center; gap: 7px">
+          <div style="width: 18px; height: 2px; background: {{l.color}}"></div>
+          <span>{{l.name}}</span>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+
+  <!-- vocabulary composition -->
+  <div style="border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-secondary); padding: 16px">
+    <div style="font-size: 12px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px">Shared vocabularies</div>
+    <div style="font-size: 13px; color: var(--text-muted); margin-bottom: 16px">Endpoints using each vocabulary. Overlap is where federation becomes possible.</div>
+
+    <svg viewBox="0 0 1050 190" width="100%" height="190" style="overflow: visible">
+      <sc-for list="{{vocabGrid}}" as="g" hint-placeholder-count="5">
+        <g>
+          <line x1="46" y1="{{g.y}}" x2="1042" y2="{{g.y}}" stroke="var(--border)" stroke-dasharray="3 3"></line>
+          <text x="38" y="{{g.ty}}" text-anchor="end" fill="var(--text-dim)" font-size="11" font-family="system-ui, sans-serif">{{g.label}}</text>
+        </g>
+      </sc-for>
+      <line x1="46" y1="150" x2="1042" y2="150" stroke="var(--border)"></line>
+
+      <sc-for list="{{bars}}" as="b" hint-placeholder-count="8">
+        <g>
+          <rect x="{{b.x}}" y="{{b.y}}" width="{{b.w}}" height="{{b.h}}" rx="4" fill="{{b.fill}}" stroke="{{b.ring}}" stroke-width="2"
+                onMouseEnter="{{b.hover}}" onMouseLeave="{{b.out}}" style="cursor: pointer"></rect>
+          <text x="{{b.cx}}" y="{{b.valY}}" text-anchor="middle" fill="var(--text-muted)" font-size="11" font-weight="600" font-family="system-ui, sans-serif">{{b.value}}</text>
+          <text x="{{b.cx}}" y="166" text-anchor="middle" fill="{{b.labelColor}}" font-size="11" style="font-family: var(--mono)">{{b.label}}</text>
+        </g>
+      </sc-for>
+    </svg>
+  </div>
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"dark","section":"Display"}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { range: '14d', hoverCol: null, hoverBar: null, hoverCap: null };
+  }
+
+  palette() {
+    return (this.props.theme ?? 'dark') === 'light'
+      ? ['#0969da', '#bf3989', '#9a6700']
+      : ['#1e8ffe', '#e649a2', '#bb8300'];
+  }
+
+  trend() {
+    // ms per day, oldest first. 30 points; the range control slices the tail.
+    const k = {
+      'Kadaster': [5100, 4800, 5200, 5000, 4900, 5300, 5100, 4700, 5000, 5200, 4900, 5100, 5400, 5000, 4800, 5200, 4900, 5100, 4900, 5200, 4700, 6100, 5400, 5100, 5300, 7200, 6400, 5600, 5900, 5714],
+      'Wikidata': [1200, 1350, 1180, 1420, 1300, 1250, 1500, 1380, 1220, 1400, 1310, 1280, 1600, 1450, 1330, 1290, 1240, 1370, 1410, 1320, 1260, 1480, 1390, 1340, 1300, 1520, 1440, 1380, 1420, 1450],
+      'UniProt': [340, 310, 330, 300, 320, 350, 305, 315, 340, 300, 325, 310, 360, 330, 300, 320, 315, 305, 340, 310, 330, 380, 350, 320, 310, 400, 360, 330, 315, 320]
+    };
+    return k;
+  }
+
+  renderVals() {
+    const s = this.state;
+    const pal = this.palette();
+    const n = { '7d': 7, '14d': 14, '30d': 30 }[s.range];
+    const raw = this.trend();
+    const names = Object.keys(raw);
+    const seriesData = names.map((nm, i) => ({ name: nm, color: pal[i], vals: raw[nm].slice(-n) }));
+
+    const dayLabel = (i) => {
+      const d = new Date(Date.UTC(2026, 7, 19));
+      d.setUTCDate(d.getUTCDate() - (n - 1 - i));
+      return String(d.getUTCMonth() + 1).padStart(2, '0') + '/' + String(d.getUTCDate()).padStart(2, '0');
+    };
+
+    const max = 8000;
+    // stop the plot short of the viewBox so the direct series labels fit
+    const x = (i) => 56 + (i * 890) / (n - 1);
+    const y = (v) => 218 - (v / max) * 206;
+
+    const hc = s.hoverCol;
+
+    // readiness: how many of 10 publish each capability
+    const caps = [
+      { label: 'CORS headers', have: 9 },
+      { label: 'Service description', have: 7 },
+      { label: 'VoID class partitions', have: 5 },
+      { label: 'Example queries', have: 6 }
+    ];
+
+    // vocabularies
+    const vocabs = [
+      { label: 'rdfs', n: 7 }, { label: 'skos', n: 5 }, { label: 'geo', n: 4 },
+      { label: 'owl', n: 3 }, { label: 'chebi', n: 3 }, { label: 'up', n: 2 },
+      { label: 'osmkey', n: 1 }, { label: 'genex', n: 1 }
+    ];
+    const vmax = 8;
+    const bw = 92, gap = 2;
+
+    return {
+      themeClass: (this.props.theme ?? 'dark') === 'light' ? 'light' : '',
+
+      tiles: [
+        { label: 'Endpoints', value: '10', unit: 'monitored', sub: '9 reachable in the last sweep' },
+        { label: 'Fully tool-ready', value: '4', unit: 'of 10', sub: 'publish all four requirements' },
+        { label: 'Metadata we serve', value: '11', unit: 'documents', sub: 'VoID and examples filling provider gaps' },
+        { label: 'Not measurable', value: '2', unit: 'endpoints', sub: 'too large to sample within budget' }
+      ],
+
+      readiness: caps.map((c) => {
+        const w = (c.have / 10) * 620;
+        const hovered = s.hoverCap === c.label;
+        return {
+          label: c.label,
+          have: c.have + ' / 10',
+          gapText: c.have === 10 ? '' : ', ' + (10 - c.have) + ' served by us',
+          w: w.toFixed(1),
+          fill: 'var(--good)',
+          isHovered: hovered,
+          tipX: Math.max(0, w - 64).toFixed(1),
+          tipTextX: (Math.max(0, w - 64) + 11).toFixed(1),
+          tipText: c.have + ' publish, ' + (10 - c.have) + ' missing',
+          hover: () => this.setState({ hoverCap: c.label }),
+          out: () => this.setState({ hoverCap: null })
+        };
+      }),
+
+      ranges: ['7d', '14d', '30d'].map((r) => ({
+        label: r,
+        bg: s.range === r ? 'var(--accent)' : 'transparent',
+        color: s.range === r ? 'var(--on-accent)' : 'var(--text-muted)',
+        pick: () => this.setState({ range: r, hoverCol: null })
+      })),
+
+      gridY: [0, 2000, 4000, 6000, 8000].map((v) => ({
+        y: y(v).toFixed(1), ty: (y(v) + 4).toFixed(1), label: v === 0 ? '0' : (v / 1000) + 's'
+      })),
+
+      lines: seriesData.map((sd) => ({
+        name: sd.name,
+        color: sd.color,
+        pts: sd.vals.map((v, i) => x(i).toFixed(1) + ',' + y(v).toFixed(1)).join(' '),
+        labelX: (x(n - 1) + 8).toFixed(1),
+        labelY: (y(sd.vals[n - 1]) + 4).toFixed(1)
+      })),
+
+      cols: Array.from({ length: n }, (_, i) => ({
+        x: x(i).toFixed(1),
+        label: n > 14 ? (i % 3 === 0 ? dayLabel(i) : '') : dayLabel(i),
+        hitX: (x(i) - 890 / (n - 1) / 2).toFixed(1),
+        hitW: (890 / (n - 1)).toFixed(1),
+        hover: () => this.setState({ hoverCol: i }),
+        out: () => this.setState({ hoverCol: null })
+      })),
+
+      hasHover: hc !== null,
+      hx: hc !== null ? x(hc).toFixed(1) : '0',
+      hoverDots: hc !== null ? seriesData.map((sd) => ({
+        x: x(hc).toFixed(1), y: y(sd.vals[hc]).toFixed(1), color: sd.color
+      })) : [],
+      hoverLabel: hc !== null ? dayLabel(hc) : '',
+      tipX: hc !== null ? Math.min(856, Math.max(6, x(hc) + 14)).toFixed(1) : '0',
+      tipY: '14',
+      tipH: String(28 + names.length * 17),
+      tipTextX: hc !== null ? (Math.min(856, Math.max(6, x(hc) + 14)) + 11).toFixed(1) : '0',
+      tipHeadY: '32',
+      hoverRows: hc !== null ? seriesData.map((sd, i) => {
+        const bx = Math.min(856, Math.max(6, x(hc) + 14));
+        return {
+          name: sd.name,
+          value: sd.vals[hc] >= 1000 ? (sd.vals[hc] / 1000).toFixed(2) + ' s' : sd.vals[hc] + ' ms',
+          color: sd.color,
+          swX: (bx + 11).toFixed(1),
+          swY: (43 + i * 17).toFixed(1),
+          nameX: (bx + 25).toFixed(1),
+          valX: (bx + 175).toFixed(1),
+          textY: (51 + i * 17).toFixed(1)
+        };
+      }) : [],
+
+      vocabGrid: [0, 2, 4, 6, 8].map((v) => {
+        const yy = 150 - (v / vmax) * 138;
+        return { y: yy.toFixed(1), ty: (yy + 4).toFixed(1), label: String(v) };
+      }),
+
+      bars: vocabs.map((v, i) => {
+        const h = (v.n / vmax) * 138;
+        const hovered = s.hoverBar === v.label;
+        return {
+          x: (i * (bw + gap) + 60).toFixed(1),
+          y: (150 - h).toFixed(1),
+          w: bw.toFixed(1),
+          h: h.toFixed(1),
+          cx: (i * (bw + gap) + 60 + bw / 2).toFixed(1),
+          valY: (150 - h - 7).toFixed(1),
+          value: String(v.n),
+          label: v.label,
+          labelColor: hovered ? 'var(--text-bright)' : 'var(--text-dim)',
+          // never a status colour for hover: keep the series hue, ring it instead
+          fill: 'var(--s1)',
+          ring: hovered ? 'var(--text-bright)' : 'transparent',
+          hover: () => this.setState({ hoverBar: v.label }),
+          out: () => this.setState({ hoverBar: null })
+        };
+      })
+    };
+  }
+}
+</script>
+</body>
+</html>

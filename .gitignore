@@ -4,3 +4,5 @@ __pycache__/
 *.pyc
 .env
 data/
+design/sparqlwatch-ui.html
+design/sparqlwatch-ui-print.html
