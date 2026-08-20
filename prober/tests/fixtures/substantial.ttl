@@ -1,0 +1,34 @@
+@prefix sd: <http://www.w3.org/ns/sparql-service-description#> .
+@prefix void: <http://rdfs.org/ns/void#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+
+<http://example.org/sparql>
+    rdf:type sd:Service ;
+    sd:endpoint <http://example.org/sparql> ;
+    sd:feature sd:UnionDefaultGraph ;
+    sd:supportedLanguage sd:SPARQL11Query ;
+    sd:defaultEntailmentRegime <http://www.w3.org/ns/entailment/RDFS> ;
+    sd:defaultDataset <http://example.org/sparql#dataset> .
+
+<http://example.org/sparql#dataset>
+    rdf:type sd:Dataset ;
+    void:classPartition <http://example.org/sparql#partition/Person> ;
+    void:classPartition <http://example.org/sparql#partition/Organization> ;
+    void:propertyPartition <http://example.org/sparql#partition/name> ;
+    void:propertyPartition <http://example.org/sparql#partition/knows> .
+
+<http://example.org/sparql#partition/Person>
+    void:class <http://xmlns.com/foaf/0.1/Person> ;
+    void:entities 12345 .
+
+<http://example.org/sparql#partition/Organization>
+    void:class <http://xmlns.com/foaf/0.1/Organization> ;
+    void:entities 42 .
+
+<http://example.org/sparql#partition/name>
+    void:property <http://xmlns.com/foaf/0.1/name> ;
+    void:triples 12345 .
+
+<http://example.org/sparql#partition/knows>
+    void:property <http://xmlns.com/foaf/0.1/knows> ;
+    void:triples 6789 .
