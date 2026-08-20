@@ -47,8 +47,17 @@ pub fn resolve(def: &MetricDef, declared: Declared, obs: Result<&Observation, Ex
             // only because no shipped `AskData` metric sets `expect` — the
             // day one does, genuine data absence would silently become
             // `DeclaredButWrong` instead of `Absent`.
+            // A capability claim needs the endpoint's own successful answer just
+            // as much as an absence claim does: a 500 body that happens to carry
+            // {"boolean": true} is not the engine confirming anything.
             (Some(got), Some(want)) if got == want => {
-                if declared.claimed { Verdict::Verified } else { Verdict::UndeclaredButVerified }
+                if !answered_ok(o) {
+                    Verdict::Indeterminate
+                } else if declared.claimed {
+                    Verdict::Verified
+                } else {
+                    Verdict::UndeclaredButVerified
+                }
             }
             // Bound but wrong: the function answered, and answered
             // incorrectly. Only claimable when the endpoint itself answered
@@ -58,7 +67,13 @@ pub fn resolve(def: &MetricDef, declared: Declared, obs: Result<&Observation, Ex
                 if answered_ok(o) { Verdict::DeclaredButWrong } else { Verdict::Indeterminate }
             }
             (Some(true), None) => {
-                if declared.claimed { Verdict::Verified } else { Verdict::UndeclaredButVerified }
+                if !answered_ok(o) {
+                    Verdict::Indeterminate
+                } else if declared.claimed {
+                    Verdict::Verified
+                } else {
+                    Verdict::UndeclaredButVerified
+                }
             }
             (Some(false), None) => {
                 if answered_ok(o) { Verdict::Absent } else { Verdict::Indeterminate }
@@ -222,6 +237,32 @@ mod tests {
         o.body_kind = BodyKind::Other;
         let v = resolve(&def(ProbeKind::FetchWellKnown, None), Declared { claimed: true }, Ok(&o));
         assert_eq!(v, Verdict::DeclaredOnly);
+    }
+
+    #[test]
+    fn ask_filter_a_matching_boolean_from_a_500_is_indeterminate_not_verified() {
+        // A capability claim needs the endpoint's own successful answer. A 500
+        // body that happens to carry {"boolean": true} is not the engine
+        // confirming the function is bound.
+        let mut o = obs(Some(true));
+        o.status = Some(500);
+        let v = resolve(&def(ProbeKind::AskFilter, Some(true)), Declared { claimed: false }, Ok(&o));
+        assert_eq!(v, Verdict::Indeterminate);
+    }
+
+    #[test]
+    fn ask_data_true_with_no_expectation_from_a_503_is_indeterminate() {
+        let mut o = obs(Some(true));
+        o.status = Some(503);
+        let v = resolve(&def(ProbeKind::AskData, None), Declared { claimed: false }, Ok(&o));
+        assert_eq!(v, Verdict::Indeterminate);
+    }
+
+    #[test]
+    fn a_matching_boolean_from_a_2xx_is_still_a_capability_claim() {
+        // The gate must not swallow the ordinary success case.
+        let v = resolve(&def(ProbeKind::AskFilter, Some(true)), Declared { claimed: false }, Ok(&obs(Some(true))));
+        assert_eq!(v, Verdict::UndeclaredButVerified);
     }
 
     #[test]
