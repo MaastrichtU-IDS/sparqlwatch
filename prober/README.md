@@ -121,3 +121,18 @@ cargo clippy --all-targets -- -D warnings
 Everything but `live_smoke` runs against a local `wiremock` server, so the
 suite is deterministic and CI never touches a stranger's endpoint. Rust 1.96,
 edition 2021, no nightly features.
+
+## Looking at a run
+
+The web tier is stage 3 and does not exist yet. Until it does, render a run as a
+standalone local page:
+
+```
+cargo run -q -- --at 2026-08-20T12:00:00Z --out run.nq
+node ../tools/render-run.mjs run.nq run.html
+```
+
+It is a read-only viewer over the emitted N-Quads, using the same verdict encoding
+as the design: dashed borders mark "works but not declared" and "indeterminate",
+and `absent` has no border at all, because it is the only verdict that claims a
+negative. The real web tier will query Oxigraph rather than parse a file.
