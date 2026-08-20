@@ -152,11 +152,20 @@ pub fn grade_from_declarations(defs: &Declarations) -> Level {
 /// dereferenceable, parseable service description at its well-known URL, and
 /// if so, how informative is it.
 ///
-/// A served 404 is the one deliberate exception to "no absence claim from a
-/// non-2xx response" used everywhere else in this module: the endpoint
-/// answered, and answered that nothing is published there, so absence is
-/// genuinely established. 401 and 403 stay `Indeterminate` -- being refused
-/// says nothing about what exists.
+/// `Absent` is minted only from a `404` or a `410`: those are the only status
+/// codes that speak to what is published at the URL -- nothing was ever
+/// there, or it was and has since been removed. Every other non-2xx status,
+/// `401`/`403` included, describes our request or the server's state, not
+/// the endpoint's published metadata, so it stays `Indeterminate`. This is
+/// deliberately narrow, not merely cautious: the survey behind this project
+/// recorded 10 of 548 endpoints returning a plain `400` for a queryless
+/// GET -- rejecting the very shape of request this probe makes -- plus 5
+/// more unrelated `400`s, and a `429` throttle is exactly the situation
+/// where we know least about what exists. Treating the wider `4xx` range as
+/// `Absent` would have reported every one of those as "no service
+/// description published," a false absence -- the failure mode this system
+/// exists to prevent. A future reader tempted to widen this back to `4xx`
+/// should re-read that number first.
 pub fn resolve_fetch(defs: &Declarations, obs: Result<&Observation, Expired>) -> (Verdict, Option<Level>) {
     let o = match obs {
         Err(Expired) => return (Verdict::Indeterminate, None),
@@ -172,8 +181,7 @@ pub fn resolve_fetch(defs: &Declarations, obs: Result<&Observation, Expired>) ->
     }
 
     match o.status {
-        Some(401) | Some(403) => (Verdict::Indeterminate, None),
-        Some(s) if (400..500).contains(&s) => (Verdict::Absent, Some(Level(0))),
+        Some(404) | Some(410) => (Verdict::Absent, Some(Level(0))),
         _ => (Verdict::Indeterminate, None),
     }
 }
@@ -510,6 +518,60 @@ mod tests {
         let (v, level) = resolve_fetch(&Declarations::empty(), Ok(&o));
         assert_eq!(v, Verdict::Absent);
         assert_eq!(level, Some(Level(0)));
+    }
+
+    #[test]
+    fn a_410_on_the_description_is_absent_not_indeterminate() {
+        // Gone is the other genuine absence: it was published and has since
+        // been withdrawn.
+        let mut o = obs(None);
+        o.status = Some(410);
+        o.body_kind = BodyKind::Other;
+        let (v, level) = resolve_fetch(&Declarations::empty(), Ok(&o));
+        assert_eq!(v, Verdict::Absent);
+        assert_eq!(level, Some(Level(0)));
+    }
+
+    #[test]
+    fn a_400_from_a_queryless_get_rejection_is_indeterminate_not_absent() {
+        // 10 of 548 surveyed endpoints return a plain 400 to exactly the
+        // queryless GET this probe makes: the server rejected the shape of
+        // the request, which says nothing about whether a description is
+        // published there. Treating 400 as absence would falsely tombstone
+        // every one of them.
+        let mut o = obs(None);
+        o.status = Some(400);
+        o.body_kind = BodyKind::Other;
+        let (v, level) = resolve_fetch(&Declarations::empty(), Ok(&o));
+        assert_eq!(v, Verdict::Indeterminate);
+        assert_eq!(level, None);
+    }
+
+    #[test]
+    fn a_429_throttle_is_indeterminate_not_absent() {
+        // Being throttled is the one situation where we know least about
+        // what exists; it must not resolve to the same verdict as knowing
+        // for certain that nothing is published.
+        let mut o = obs(None);
+        o.status = Some(429);
+        o.body_kind = BodyKind::Other;
+        let (v, level) = resolve_fetch(&Declarations::empty(), Ok(&o));
+        assert_eq!(v, Verdict::Indeterminate);
+        assert_eq!(level, None);
+    }
+
+    #[test]
+    fn a_401_or_403_on_the_description_is_indeterminate_not_absent() {
+        // Refused is not the same as nothing being there: a real, well-formed
+        // description can sit behind auth.
+        for status in [401, 403] {
+            let mut o = obs(None);
+            o.status = Some(status);
+            o.body_kind = BodyKind::Other;
+            let (v, level) = resolve_fetch(&Declarations::empty(), Ok(&o));
+            assert_eq!(v, Verdict::Indeterminate, "status {status}");
+            assert_eq!(level, None, "status {status}");
+        }
     }
 
     #[test]
