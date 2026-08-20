@@ -159,6 +159,15 @@ impl Client {
             Ok(b) => b,
             Err(e) => return Observation::failed(e.to_string(), elapsed),
         };
+        // Truncate BEFORE classifying, so classification and the declaration
+        // parse downstream read the same bytes. Classifying the full body while
+        // `Declarations` is parsed from the truncated one published a
+        // self-contradictory row: a description whose only triples sat past the
+        // cut classified as `Rdf` (so `verified`) and then graded `Level(0)`,
+        // which means "none served", indistinguishable by level from an absent
+        // row. Reading one body throughout makes an over-large description
+        // `indeterminate`, which is the honest answer: we never read it.
+        let body = truncate_body(body, MAX_BODY);
 
         let looks_html = ctype.to_ascii_lowercase().contains("text/html")
             || body.trim_start().to_ascii_lowercase().starts_with("<!doctype html")
@@ -177,7 +186,7 @@ impl Client {
             boolean: None,
             bindings: Vec::new(),
             body_kind,
-            body: Some(truncate_body(body, MAX_BODY)),
+            body: Some(body),
             content_type: if ctype.is_empty() { None } else { Some(ctype.to_ascii_lowercase()) },
             elapsed_ms: elapsed,
             error: None,

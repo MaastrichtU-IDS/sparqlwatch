@@ -176,19 +176,26 @@ The following are deferred deliberately, not oversights:
   follow `sd:defaultDataset` for the VoID partitions), deferred to stage 1c and
   **before any real registry sweep**.
 
-- The declaration join reads a body truncated at 256 KiB while classification
-  (`body_kind`, deciding `Rdf` vs. `Other`) reads the whole body. Those two
-  reads can disagree once a description crosses the cut, and the cost is
-  worse than a grading error alone: measured with a 300 KiB Turtle
-  description whose `sd:extensionFunction geof:sfWithin` and
-  `sd:defaultEntailmentRegime` both sit past 256 KiB, the `geo-functions`
-  metric silently lost its declaration and reported
-  `undeclared-but-verified` instead of `verified`, and `service-description`
-  graded `verified level=1` rather than level 4, a three-level miss, not a
-  one-level one. This is acceptable in practice today: real descriptions are
-  typically hundreds of bytes, not hundreds of kilobytes. Unpicking the
-  asymmetry (reading the same, untruncated bytes for both the join and the
-  classification) is stage 1c's job, not this branch's.
+- A description larger than the 256 KiB body cap is never graded: it reports
+  `indeterminate`, because we did not read it. Classification and the
+  declaration join now read the same truncated bytes, which is what makes that
+  answer coherent. They used not to: classification read the whole body while
+  the join read the truncated one, so a description whose only triples sat past
+  the cut classified as `Rdf` (licensing `verified`) and then graded `Level(0)`,
+  which means "none served". That row asserted both that a description is
+  published and that it says nothing, and its level was indistinguishable from
+  an `absent` row's.
+
+- One cost of that cap remains, in the conservative direction. Declarations are
+  read from the same truncated body, so a declaration sitting past the cut is
+  lost, and a metric that should read `verified` reports
+  `undeclared-but-verified` instead. Measured with a 300 KiB Turtle description
+  whose `sd:extensionFunction geof:sfWithin` sits past 256 KiB, `geo-functions`
+  reported `undeclared-but-verified`. That understates a real endpoint rather
+  than asserting something false about it, which is the direction this project
+  errs in on purpose. Whether to raise the cap, stream the parse, or leave it is
+  stage 1c's call; real descriptions are typically hundreds of bytes, not
+  hundreds of kilobytes.
 
 ## Tests
 

@@ -275,3 +275,36 @@ async fn a_genuine_rdf_payload_under_a_generic_media_type_degrades_to_indetermin
     }
     assert!(misread.is_empty(), "generic media types must not license an RDF verdict: {misread:?}");
 }
+
+#[tokio::test]
+async fn a_description_whose_triples_sit_past_the_truncation_cut_is_indeterminate_not_verified() {
+    // Classification and the declaration parse must read the SAME bytes.
+    // They used not to: `body_kind` was decided on the full response while
+    // `Declarations` was parsed from the body truncated at `MAX_BODY`. A
+    // description whose only real triples sat past that cut therefore
+    // classified as `Rdf`, which licensed `verified`, and then graded
+    // `Level(0)`, which means "none served". That row asserted the endpoint
+    // publishes a description and simultaneously that the description says
+    // nothing, and its level was indistinguishable from an `absent` row's.
+    //
+    // Truncating before classifying makes the answer `indeterminate`: we did
+    // not read the document, so we say so. The trade is that a description
+    // larger than `MAX_BODY` is never graded, which is the conservative
+    // direction and the one this project's rule demands.
+    let mut body = String::new();
+    while body.len() <= 256 * 1024 {
+        body.push_str("# padding that is valid Turtle but declares nothing\n");
+    }
+    body.push_str(
+        "@prefix sd: <http://www.w3.org/ns/sparql-service-description#> .\n\
+         <http://example.org/svc> a sd:Service ;\n\
+           sd:extensionFunction <http://www.opengis.net/def/function/geosparql/sfWithin> ;\n\
+           sd:defaultEntailmentRegime <http://www.w3.org/ns/entailment/RDFS> .\n",
+    );
+    assert!(body.len() > 256 * 1024, "fixture must exceed the cap to exercise truncation");
+
+    let (verdict, level, kind) = fetch_and_resolve(200, Some("text/turtle"), &body).await;
+    assert_eq!(kind, BodyKind::Other, "a body we only partly read is not identified RDF");
+    assert_eq!(verdict, Verdict::Indeterminate, "we never read the description, so we cannot verify it");
+    assert_eq!(level, None, "no level, rather than the level 0 that means 'none served'");
+}
