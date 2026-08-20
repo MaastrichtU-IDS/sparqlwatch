@@ -22,7 +22,7 @@ resolves to exactly one of six verdicts:
 `absent` may only be claimed when the evidence actually establishes absence:
 the endpoint itself answered, with a 2xx status, in a form we could read. A
 timeout, an unreachable host, a 429, a gateway error, an HTML query console, an
-unparseable body — anything we never got to interpret — is `indeterminate`.
+unparseable body (anything we never got to interpret) is `indeterminate`.
 There is deliberately no composite score and no ranking, here or downstream.
 
 All judgement lives in one pure function, `resolve()` in `src/resolve.rs`. The
@@ -59,8 +59,8 @@ run reproducible: same `--at`, same output identifiers. It is validated before
 any probing starts, because it is interpolated into IRIs and published as an
 `xsd:dateTime`.
 
-Three nested budgets bound the work — per request (30s), per metric (60s), per
-endpoint (600s) — and every one of them cancels the future rather than
+Three nested budgets bound the work, per request (30s), per metric (60s), and per
+endpoint (600s), and every one of them cancels the future rather than
 reporting afterwards that it took too long. A metric the budget never reached
 is `indeterminate` and carries no `elapsedMs`, because nothing was measured.
 
@@ -105,18 +105,19 @@ export https_proxy=$HTTP_PROXY
 export NO_PROXY=localhost,127.0.0.1,.svc,.cluster.local
 ```
 
-`reqwest`'s `system-proxy` feature is load-bearing rather than a convenience —
+`reqwest`'s `system-proxy` feature is load-bearing rather than a convenience:
 without a proxy every endpoint would fail identically, which looks exactly like
 a dead registry.
 
 **Correction to the spec's stage-0 findings.** The finding that "uppercase
 `HTTP_PROXY` is ignored for `http://` URLs" is **curl-specific**: curl ignores
 the uppercase form there because of a CGI variable collision. This client uses
-reqwest, whose documented proxy resolution reads `HTTP_PROXY` *or*
-`http_proxy` (and likewise for HTTPS and `ALL_PROXY`), so that constraint does
-not apply to this code. Setting both cases, as above, is harmless
+reqwest, and hyper-util resolves the proxy with
+`get_first_env(&["HTTP_PROXY", "http_proxy"])` (`matcher.rs:232`, hyper-util
+0.1.20), reading both cases with uppercase first, so that constraint does not
+apply to this code. Setting both cases, as above, is harmless
 belt-and-braces and worth keeping for any sidecar or shell tooling that does
-follow curl's rule — but the spec's note should not be read as binding here.
+follow curl's rule, but the spec's note should not be read as binding here.
 
 ## Known limitations
 

@@ -327,12 +327,18 @@ Three findings that change the prober's configuration:
 
 1. **Uppercase `HTTP_PROXY` is ignored for `http://` URLs (curl-specific).** curl honours only lowercase
    `http_proxy` there (uppercase is deliberately ignored because of CGI collision), while
-   `HTTPS_PROXY` works uppercase. This was the measured finding during the egress spike.
-   **Correction:** this prober uses reqwest, whose documented proxy resolution reads `HTTP_PROXY` *or*
-   `http_proxy` (and likewise for HTTPS and `ALL_PROXY`), so this constraint does not apply here.
-   The finding stands as part of the spike record, but it does not bind the code. Setting both
-   cases of both variables is harmless belt-and-braces and worth keeping for shell tooling that
-   does follow curl's rule.
+   `HTTPS_PROXY` works uppercase. Measured in the spike with curl: with only the uppercase pair
+   set, plain-http endpoints bypassed the proxy and failed *directly on port 80* in 3ms, which
+   looks exactly like a dead endpoint. **472 of 548 LOD Cloud URLs are plain `http://`**, so a
+   client with curl's rule would silently mis-verdict 86% of the registry. Setting lowercase
+   `http_proxy` fixed all of them.
+   **Correction:** the conclusion does not transfer to this prober. It uses reqwest, and
+   hyper-util resolves the proxy with `get_first_env(&["HTTP_PROXY", "http_proxy"])`
+   (`matcher.rs:232`, hyper-util 0.1.20), reading both cases with uppercase first, so the
+   uppercase pair alone is sufficient here. The measurement stands as part of the spike record and the hazard
+   is real for curl; it simply does not bind this code. Setting both cases of both variables is
+   harmless belt-and-braces and worth keeping for sidecars and shell tooling that do follow
+   curl's rule.
 2. **Some hosts fail cluster DNS.** `ontop.certain.ai.ustp.at` gave `SERVFAIL` from the pod
    and `CONNECT tunnel failed, response 503` from Squid, though it resolves fine off-cluster.
    Name resolution is an independent failure mode from egress, and must resolve to
