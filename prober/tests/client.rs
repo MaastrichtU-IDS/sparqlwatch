@@ -100,8 +100,7 @@ async fn select_returns_only_iri_bindings() {
 }
 
 #[tokio::test]
-#[allow(non_snake_case)]
-async fn asWKT_probe_rejects_non_literal_objects() {
+async fn aswkt_probe_rejects_non_literal_objects() {
     // publications.europa.eu passes a naive `ASK { ?s geo:asWKT ?g }` while
     // every object is the IRI rdf:nil, so it holds zero geometry. The literal
     // guard is what stops that becoming a false positive.
@@ -121,8 +120,7 @@ async fn asWKT_probe_rejects_non_literal_objects() {
 }
 
 #[tokio::test]
-#[allow(non_snake_case)]
-async fn asWKT_probe_accepts_a_literal_object() {
+async fn aswkt_probe_accepts_a_literal_object() {
     let server = MockServer::start().await;
     Mock::given(method("GET")).and(path("/sparql"))
         .respond_with(ResponseTemplate::new(200).set_body_string(r#"{
