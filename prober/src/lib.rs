@@ -6,7 +6,7 @@ pub mod observe;
 pub mod metrics;
 pub mod resolve;
 
-use crate::budget::Budget;
+use crate::budget::{Budget, Expired};
 use crate::client::Client;
 use crate::emit::MeasurementRow;
 use crate::metrics::{MetricDef, ProbeKind};
@@ -44,13 +44,15 @@ pub async fn run_sweep(
             tracing::warn!(endpoint = %ep, reached = ep_rows.len(), of = defs.len(),
                            "endpoint budget expired; remaining metrics are indeterminate");
             // The budget expiring tells us nothing about the metrics we never
-            // got to, so they are indeterminate, and we did not measure their
-            // elapsed time either.
+            // got to, and we did not measure their elapsed time either. Route
+            // the verdict through `resolve` rather than writing one here:
+            // judgement belongs in one place, and `resolve` already maps an
+            // expired budget to `Indeterminate`.
             for def in defs.iter().skip(ep_rows.len()) {
                 ep_rows.push(MeasurementRow {
                     endpoint: ep.clone(),
                     metric_id: def.id.clone(),
-                    verdict: Verdict::Indeterminate,
+                    verdict: resolve(def, Declared { claimed: false }, Err(Expired)),
                     level: None,
                     elapsed_ms: None,
                 });
