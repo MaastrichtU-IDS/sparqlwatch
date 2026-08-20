@@ -134,3 +134,53 @@ async fn a_probe_kind_with_no_implementation_issues_no_request() {
     let seen = server.received_requests().await.unwrap();
     assert!(seen.is_empty(), "an unimplemented probe kind must not touch the network: {seen:?}");
 }
+
+/// The third budget level. `Budget::with_endpoint_budget` existed but had no
+/// caller, so an endpoint could burn metric-budget × metrics, and unboundedly
+/// more as metrics are added. When it expires, the metrics not reached must
+/// still produce rows, so the one-row-per-(endpoint, metric) invariant holds
+/// whatever the timing.
+#[tokio::test]
+async fn an_endpoint_budget_expiry_still_yields_one_row_per_metric() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(200)
+            .set_delay(std::time::Duration::from_millis(200))
+            .set_body_string(r#"{"head":{},"boolean":true}"#))
+        .mount(&server).await;
+
+    let defs: Vec<MetricDef> = (0..3)
+        .map(|i| MetricDef {
+            id: format!("liveness-{i}"),
+            label: "answers a trivial query".into(),
+            dimension: "availability".into(),
+            kind: ProbeKind::Liveness,
+            query: Some("SELECT ?s WHERE { ?s ?p ?o } LIMIT 1".into()),
+            expect: None,
+            var: None,
+            graded: false,
+        })
+        .collect();
+
+    let budget = Budget {
+        request: std::time::Duration::from_secs(5),
+        metric: std::time::Duration::from_secs(5),
+        endpoint: std::time::Duration::from_millis(60),
+    };
+    let client = Client::new(budget).unwrap();
+    let url = format!("{}/sparql", server.uri());
+    let started = std::time::Instant::now();
+    let rows = run_sweep(std::slice::from_ref(&url), &defs, &client, budget).await;
+    let took = started.elapsed();
+
+    assert_eq!(rows.len(), defs.len(), "one row per (endpoint, metric) regardless of timing");
+    assert!(took < std::time::Duration::from_millis(400), "endpoint budget did not cut the loop short: {took:?}");
+    assert!(
+        rows.iter().all(|r| r.verdict == Verdict::Indeterminate),
+        "a metric the budget never reached is Indeterminate, never Absent"
+    );
+    for (row, def) in rows.iter().zip(&defs) {
+        assert_eq!(row.metric_id, def.id, "rows stay aligned with the definitions");
+        assert_eq!(row.endpoint, url);
+    }
+}
