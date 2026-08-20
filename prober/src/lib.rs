@@ -30,9 +30,12 @@ pub async fn run_sweep(
     let mut rows = Vec::new();
     for ep in endpoints {
         for def in defs {
-            let q = def.query.clone().unwrap_or_default();
+            // A kind with no implemented probe is skipped before any request
+            // is built: the generic query path would send `?query=` to a real
+            // operator and learn nothing. The row is still emitted so the gap
+            // is visible in the output.
             let needs_var = matches!(def.kind, ProbeKind::AskData | ProbeKind::SelectIris);
-            if needs_var && def.var.is_none() {
+            if !def.kind.has_probe() || (needs_var && def.var.is_none()) {
                 rows.push(MeasurementRow {
                     endpoint: ep.clone(),
                     metric_id: def.id.clone(),
@@ -42,6 +45,7 @@ pub async fn run_sweep(
                 });
                 continue;
             }
+            let q = def.query.clone().unwrap_or_default();
             let var = def.var.clone();
             let fut = async {
                 match def.kind {

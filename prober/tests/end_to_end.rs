@@ -101,3 +101,36 @@ async fn a_binding_probe_with_no_declared_var_is_indeterminate_not_guessed() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].verdict, Verdict::Indeterminate);
 }
+
+/// `FetchWellKnown` has no implemented probe. Falling through to the generic
+/// `ask` path issued `GET <endpoint>?query=` -- a malformed protocol request,
+/// to every endpoint on every sweep, fetching nothing about `.well-known` and
+/// putting noise in real operators' logs. The metric must stay visible in the
+/// output as `Indeterminate`, but no request may leave the process.
+#[tokio::test]
+async fn a_probe_kind_with_no_implementation_issues_no_request() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"boolean":true}"#))
+        .mount(&server).await;
+
+    let def = MetricDef {
+        id: "service-description".into(),
+        label: "service description informativeness".into(),
+        dimension: "documentation".into(),
+        kind: ProbeKind::FetchWellKnown,
+        query: None,
+        expect: None,
+        var: None,
+        graded: true,
+    };
+
+    let client = Client::new(Budget::default()).unwrap();
+    let url = format!("{}/sparql", server.uri());
+    let rows = run_sweep(&[url], &[def], &client, Budget::default()).await;
+
+    assert_eq!(rows.len(), 1, "the gap must stay visible in the output");
+    assert_eq!(rows[0].verdict, Verdict::Indeterminate);
+    let seen = server.received_requests().await.unwrap();
+    assert!(seen.is_empty(), "an unimplemented probe kind must not touch the network: {seen:?}");
+}

@@ -14,6 +14,26 @@ pub enum ProbeKind {
     FetchWellKnown,
 }
 
+impl ProbeKind {
+    /// Whether a probe is actually implemented for this kind. `FetchWellKnown`
+    /// is defined but not yet built (the fetch probe is a later stage), and a
+    /// kind with no probe must be skipped *without issuing a request*: the
+    /// generic query path would send `GET <endpoint>?query=`, a malformed
+    /// protocol request that learns nothing and looks like abuse to the
+    /// operator whose logs it lands in. The metric still gets a row, recorded
+    /// as `Indeterminate`, so the gap stays visible in the published output.
+    pub fn has_probe(&self) -> bool {
+        match self {
+            ProbeKind::Liveness
+            | ProbeKind::Cors
+            | ProbeKind::AskFilter
+            | ProbeKind::AskData
+            | ProbeKind::SelectIris => true,
+            ProbeKind::FetchWellKnown => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetricDef {
     pub id: String,
@@ -82,6 +102,15 @@ query = "ASK { }"
         let ms = load_metrics(include_str!("../metrics.toml")).unwrap();
         assert!(ms.iter().any(|m| m.id == "geo-data"));
         assert!(ms.iter().find(|m| m.id == "service-description").unwrap().graded);
+    }
+
+    #[test]
+    fn fetch_well_known_has_no_probe_yet_and_every_other_kind_does() {
+        assert!(!ProbeKind::FetchWellKnown.has_probe());
+        for k in [ProbeKind::Liveness, ProbeKind::Cors, ProbeKind::AskFilter,
+                  ProbeKind::AskData, ProbeKind::SelectIris] {
+            assert!(k.has_probe(), "{k:?} should have a probe");
+        }
     }
 
     #[test]
