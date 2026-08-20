@@ -1,0 +1,6 @@
+# prober/endpoints.toml
+endpoint = [
+  "https://qlever.dev/api/osm-planet",
+  "https://data.kkg.kadaster.nl/query",
+  "https://ontop.certain.ai.ustp.at/sparql",
+]

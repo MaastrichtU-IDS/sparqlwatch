@@ -1,0 +1,67 @@
+# Metric definitions are DATA, not code. Adding one that fits an existing
+# probe kind needs no Rust change. Each is emitted as a dqv:Metric so the
+# definitions are published, not private config.
+
+[[metric]]
+id = "availability"
+label = "Answers a trivial query"
+dimension = "availability"
+kind = "Liveness"
+query = "SELECT ?s WHERE { ?s ?p ?o } LIMIT 1"
+
+# What is measured is an `access-control-allow-origin` header on a SIMPLE GET.
+# That is weaker than the request a browser editor actually makes: a real
+# cross-origin query is preflighted, so an endpoint that sets ACAO on GET but
+# does not answer OPTIONS would pass this and still fail in the editor. The
+# real check is an OPTIONS preflight probe kind; deferred to a later stage.
+# Until then the label states only what was observed.
+[[metric]]
+id = "cors"
+label = "Sends access-control-allow-origin on a simple GET"
+dimension = "interoperability"
+kind = "Cors"
+query = "SELECT ?s WHERE { ?s ?p ?o } LIMIT 1"
+
+[[metric]]
+id = "geo-functions"
+label = "GeoSPARQL relation functions"
+dimension = "capability"
+kind = "AskFilter"
+expect = true
+query = """
+PREFIX geo: <http://www.opengis.net/ont/geosparql#>
+PREFIX geof: <http://www.opengis.net/def/function/geosparql/>
+ASK { FILTER(geof:sfWithin("POINT(5 52)"^^geo:wktLiteral, "POLYGON((0 50,10 50,10 55,0 55,0 50))"^^geo:wktLiteral)) }
+"""
+
+# The next two queries address only the DEFAULT GRAPH. On engines where the
+# default graph is not the union of the named graphs, an endpoint holding all
+# its data in named graphs answers empty, and reporting that as "holds no
+# geometry" or "no classes" would be a confident wrong answer about an endpoint
+# full of both. The real fix is to probe `GRAPH ?g { ... }` as well and compare;
+# deferred to a later stage. Until then the labels name the graph measured.
+[[metric]]
+id = "geo-data"
+label = "Holds WKT geometry in the default graph"
+dimension = "content"
+kind = "AskData"
+var = "g"
+query = """
+PREFIX geo: <http://www.opengis.net/ont/geosparql#>
+SELECT ?g WHERE { ?s geo:asWKT ?g } LIMIT 1
+"""
+
+[[metric]]
+id = "service-description"
+label = "Service description informativeness"
+dimension = "documentation"
+kind = "FetchWellKnown"
+graded = true
+
+[[metric]]
+id = "classes"
+label = "Distinct classes in the default graph"
+dimension = "content"
+kind = "SelectIris"
+var = "c"
+query = "SELECT DISTINCT ?c WHERE { ?s a ?c } LIMIT 200"
