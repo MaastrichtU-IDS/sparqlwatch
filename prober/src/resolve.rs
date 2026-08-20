@@ -9,6 +9,14 @@ pub struct Declared {
     pub claimed: bool,
 }
 
+/// Whether the request reached the endpoint and got back a successful HTTP
+/// status. Used to tell "the endpoint told us it has nothing" apart from
+/// "something upstream (a proxy, an outage) prevented us from finding out" —
+/// only the former is safe to report as `Absent`.
+fn answered_ok(o: &Observation) -> bool {
+    matches!(o.status, Some(s) if (200..=299).contains(&s))
+}
+
 /// Turn observation plus declaration into a verdict. This is the only place
 /// judgement happens: no probing, no I/O, pure function.
 pub fn resolve(def: &MetricDef, declared: Declared, obs: Result<&Observation, Expired>) -> Verdict {
@@ -25,6 +33,12 @@ pub fn resolve(def: &MetricDef, declared: Declared, obs: Result<&Observation, Ex
 
     match def.kind {
         ProbeKind::AskFilter | ProbeKind::AskData => match (o.boolean, def.expect) {
+            // This arm serves both probe kinds, and the two readings differ:
+            // for `AskFilter` a wrong boolean means broken semantics; for
+            // `AskData` a `false` means the data is absent. It is safe today
+            // only because no shipped `AskData` metric sets `expect` — the
+            // day one does, genuine data absence would silently become
+            // `DeclaredButWrong` instead of `Absent`.
             (Some(got), Some(want)) if got == want => {
                 if declared.claimed { Verdict::Verified } else { Verdict::UndeclaredButVerified }
             }
@@ -40,24 +54,49 @@ pub fn resolve(def: &MetricDef, declared: Declared, obs: Result<&Observation, Ex
         },
         ProbeKind::Cors => {
             if o.cors {
+                // The header proves CORS is configured whatever the status
+                // code, so the positive case is not gated on `answered_ok`.
                 if declared.claimed { Verdict::Verified } else { Verdict::UndeclaredButVerified }
-            } else {
+            } else if answered_ok(o) {
                 Verdict::Absent
+            } else {
+                // A proxy-generated error status cannot be attributed to the
+                // endpoint's own CORS configuration.
+                Verdict::Indeterminate
             }
         }
         ProbeKind::Liveness => {
+            // The entire question this probe asks is "does this answer the
+            // SPARQL protocol". Failing to answer IS the finding, not an
+            // unknown, so this is deliberately not gated on `answered_ok`.
             if o.body_kind == BodyKind::SparqlJson { Verdict::Verified } else { Verdict::Absent }
         }
         ProbeKind::SelectIris => {
-            if !o.bindings.is_empty() { Verdict::Verified } else { Verdict::Absent }
+            if !o.bindings.is_empty() {
+                Verdict::Verified
+            } else if o.body_kind == BodyKind::SparqlJson && answered_ok(o) {
+                // Empty bindings are only evidence of absence when we
+                // actually parsed a result.
+                Verdict::Absent
+            } else {
+                Verdict::Indeterminate
+            }
         }
         ProbeKind::FetchWellKnown => {
+            // A real `.well-known` service description is RDF, which this
+            // client classifies as `BodyKind::Other`, so the `Verified` arm
+            // below is not reachable from a genuine document until a later
+            // stage adds a fetch probe that reports parsed RDF. That
+            // contract is deliberately out of scope here: this change only
+            // stops a good-but-unparsed document being reported as `Absent`.
             if o.body_kind == BodyKind::SparqlJson || !o.bindings.is_empty() {
                 Verdict::Verified
             } else if declared.claimed {
                 Verdict::DeclaredOnly
-            } else {
+            } else if answered_ok(o) && o.body_kind == BodyKind::SparqlJson {
                 Verdict::Absent
+            } else {
+                Verdict::Indeterminate
             }
         }
     }
@@ -92,10 +131,6 @@ pub fn grade_service_description(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::budget::Expired;
-    use crate::metrics::{MetricDef, ProbeKind};
-    use crate::observe::{BodyKind, Observation};
-    use crate::verdict::{Level, Verdict};
 
     fn def(kind: ProbeKind, expect: Option<bool>) -> MetricDef {
         MetricDef {
@@ -174,5 +209,92 @@ mod tests {
         // The brief's tests cover the upper boundary (4, and the rejected 5)
         // but never the lower one.
         assert!(Level::new(0).is_some());
+    }
+
+    #[test]
+    fn a_transport_error_is_indeterminate_not_absent() {
+        // Only the `Html` half of the early guard was pinned before; this
+        // covers the `error.is_some()` half.
+        let mut o = obs(None);
+        o.error = Some("connection reset".into());
+        let v = resolve(&def(ProbeKind::AskFilter, Some(true)), Declared { claimed: false }, Ok(&o));
+        assert_eq!(v, Verdict::Indeterminate);
+    }
+
+    #[test]
+    fn ask_data_false_with_no_expectation_is_absent() {
+        let v = resolve(&def(ProbeKind::AskData, None), Declared { claimed: false }, Ok(&obs(Some(false))));
+        assert_eq!(v, Verdict::Absent);
+    }
+
+    #[test]
+    fn cors_header_present_is_undeclared_but_verified() {
+        // cors: true by default in `obs`, whatever the status.
+        let v = resolve(&def(ProbeKind::Cors, None), Declared { claimed: false }, Ok(&obs(None)));
+        assert_eq!(v, Verdict::UndeclaredButVerified);
+    }
+
+    #[test]
+    fn cors_header_absent_with_a_successful_status_is_absent() {
+        let mut o = obs(None);
+        o.cors = false;
+        let v = resolve(&def(ProbeKind::Cors, None), Declared { claimed: false }, Ok(&o));
+        assert_eq!(v, Verdict::Absent);
+    }
+
+    #[test]
+    fn cors_header_absent_with_a_503_is_indeterminate() {
+        // A proxy-generated error status cannot be attributed to the
+        // endpoint's own CORS configuration.
+        let mut o = obs(None);
+        o.cors = false;
+        o.status = Some(503);
+        let v = resolve(&def(ProbeKind::Cors, None), Declared { claimed: false }, Ok(&o));
+        assert_eq!(v, Verdict::Indeterminate);
+    }
+
+    #[test]
+    fn liveness_sparql_json_is_verified() {
+        let v = resolve(&def(ProbeKind::Liveness, None), Declared { claimed: false }, Ok(&obs(None)));
+        assert_eq!(v, Verdict::Verified);
+    }
+
+    #[test]
+    fn liveness_other_body_is_absent() {
+        let mut o = obs(None);
+        o.body_kind = BodyKind::Other;
+        let v = resolve(&def(ProbeKind::Liveness, None), Declared { claimed: false }, Ok(&o));
+        assert_eq!(v, Verdict::Absent);
+    }
+
+    #[test]
+    fn select_iris_with_bindings_is_verified() {
+        let mut o = obs(None);
+        o.bindings = vec!["http://example.org/x".into()];
+        let v = resolve(&def(ProbeKind::SelectIris, None), Declared { claimed: false }, Ok(&o));
+        assert_eq!(v, Verdict::Verified);
+    }
+
+    #[test]
+    fn select_iris_empty_bindings_from_a_parsed_result_is_absent() {
+        // body_kind SparqlJson and status 200 by default in `obs`.
+        let v = resolve(&def(ProbeKind::SelectIris, None), Declared { claimed: false }, Ok(&obs(None)));
+        assert_eq!(v, Verdict::Absent);
+    }
+
+    #[test]
+    fn select_iris_empty_bindings_from_an_unparsed_body_is_indeterminate() {
+        let mut o = obs(None);
+        o.body_kind = BodyKind::Other;
+        let v = resolve(&def(ProbeKind::SelectIris, None), Declared { claimed: false }, Ok(&o));
+        assert_eq!(v, Verdict::Indeterminate);
+    }
+
+    #[test]
+    fn fetch_well_known_unparsed_body_unclaimed_is_indeterminate_not_absent() {
+        let mut o = obs(None);
+        o.body_kind = BodyKind::Other;
+        let v = resolve(&def(ProbeKind::FetchWellKnown, None), Declared { claimed: false }, Ok(&o));
+        assert_eq!(v, Verdict::Indeterminate);
     }
 }
