@@ -15,7 +15,13 @@ pub struct MeasurementRow {
     pub metric_id: String,
     pub verdict: Verdict,
     pub level: Option<Level>,
-    pub elapsed_ms: u64,
+    /// How long the probe took, when we actually measured it. `None` when the
+    /// measurement came from an expired budget: a timed-out probe that
+    /// published `elapsedMs 0` would read as the fastest observation in the
+    /// dataset. Same principle as `Absent` -- do not state what you did not
+    /// measure -- and `Option` makes the absence representable instead of
+    /// encoding it as a zero.
+    pub elapsed_ms: Option<u64>,
 }
 
 fn nn(s: &str) -> anyhow::Result<NamedNode> {
@@ -114,12 +120,14 @@ pub fn emit_nquads(
             Term::NamedNode(activity.clone()),
             graph.clone(),
         ));
-        quads.push(Quad::new(
-            subj.clone(),
-            nn("urn:sparqlwatch:elapsedMs")?,
-            Term::Literal(Literal::new_typed_literal(r.elapsed_ms.to_string(), xsd::INTEGER)),
-            graph.clone(),
-        ));
+        if let Some(ms) = r.elapsed_ms {
+            quads.push(Quad::new(
+                subj.clone(),
+                nn("urn:sparqlwatch:elapsedMs")?,
+                Term::Literal(Literal::new_typed_literal(ms.to_string(), xsd::INTEGER)),
+                graph.clone(),
+            ));
+        }
         if let Some(Level(l)) = r.level {
             quads.push(Quad::new(
                 subj,
@@ -154,14 +162,14 @@ mod tests {
                 metric_id: "geo-functions".into(),
                 verdict: Verdict::UndeclaredButVerified,
                 level: None,
-                elapsed_ms: 210,
+                elapsed_ms: Some(210),
             },
             MeasurementRow {
                 endpoint: "https://data.kkg.kadaster.nl/query".into(),
                 metric_id: "service-description".into(),
                 verdict: Verdict::DeclaredOnly,
                 level: Some(Level(2)),
-                elapsed_ms: 5714,
+                elapsed_ms: Some(5714),
             },
         ]
     }
@@ -251,6 +259,23 @@ mod tests {
     }
 
     #[test]
+    fn an_unmeasured_elapsed_time_emits_no_quad_rather_than_zero() {
+        // A metric that burned its whole budget must not assert it took zero
+        // milliseconds: a "which endpoints are slow" query would read it as
+        // the fastest observation in the dataset. Same principle as `Absent`:
+        // do not state what you did not measure.
+        let mut rs = rows();
+        rs[0].elapsed_ms = None;
+        let qs = emit(&rs);
+        let elapsed: Vec<&Term> = objects(&qs, "urn:sparqlwatch:elapsedMs");
+        assert_eq!(elapsed.len(), 1, "only the measured row carries an elapsed time");
+        assert_eq!(
+            elapsed[0],
+            &Term::Literal(Literal::new_typed_literal("5714", xsd::INTEGER))
+        );
+    }
+
+    #[test]
     fn measurements_endpoints_and_the_run_are_typed() {
         // Without rdf:type quads, a consumer query written against the spec's
         // data model returns zero rows.
@@ -276,7 +301,7 @@ mod tests {
             metric_id: "classes".into(),
             verdict: Verdict::Verified,
             level: None,
-            elapsed_ms: 12,
+            elapsed_ms: Some(12),
         });
         let qs = emit(&rs);
         let services: Vec<&Quad> = qs

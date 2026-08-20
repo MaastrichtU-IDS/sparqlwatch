@@ -149,6 +149,10 @@ async fn an_endpoint_budget_expiry_still_yields_one_row_per_metric() {
         rows.iter().all(|r| r.verdict == Verdict::Indeterminate),
         "a metric the budget never reached is Indeterminate, never Absent"
     );
+    assert!(
+        rows.iter().all(|r| r.elapsed_ms.is_none()),
+        "an unmeasured metric has no elapsed time, not a zero one"
+    );
     for (row, def) in rows.iter().zip(&defs) {
         assert_eq!(row.metric_id, def.id, "rows stay aligned with the definitions");
         assert_eq!(row.endpoint, url);

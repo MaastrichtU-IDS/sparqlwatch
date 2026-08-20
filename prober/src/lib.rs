@@ -52,7 +52,7 @@ pub async fn run_sweep(
                     metric_id: def.id.clone(),
                     verdict: Verdict::Indeterminate,
                     level: None,
-                    elapsed_ms: 0,
+                    elapsed_ms: None,
                 });
             }
         }
@@ -82,7 +82,7 @@ async fn probe_endpoint(
                 metric_id: def.id.clone(),
                 verdict: Verdict::Indeterminate,
                 level: None,
-                elapsed_ms: 0,
+                elapsed_ms: None,
             });
             continue;
         }
@@ -101,7 +101,9 @@ async fn probe_endpoint(
         };
         let observed = budget.with_metric_budget(fut).await;
         let verdict = resolve(def, Declared { claimed: false }, observed.as_ref().map_err(|e| *e));
-        let elapsed = observed.as_ref().map(|o| o.elapsed_ms).unwrap_or(0);
+        // An expired metric budget measured nothing, so it reports no elapsed
+        // time rather than a zero one.
+        let elapsed = observed.as_ref().ok().map(|o| o.elapsed_ms);
         rows.push(MeasurementRow {
             endpoint: ep.to_string(),
             metric_id: def.id.clone(),
