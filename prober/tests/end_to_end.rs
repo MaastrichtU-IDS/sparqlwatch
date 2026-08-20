@@ -7,8 +7,15 @@ use sparqlwatch_prober::verdict::Verdict;
 use oxrdf::{NamedNode, Quad, Term};
 use oxrdfio::{RdfFormat, RdfParser};
 use std::collections::{BTreeMap, BTreeSet};
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{method, path, query_param_is_missing};
 use wiremock::{Mock, MockServer, ResponseTemplate};
+
+/// A minimal, valid service description. Turtle, matching what a queryless
+/// fetch actually receives from a real endpoint (see `tests/fetch.rs`).
+const STUB_TTL: &str = r#"
+@prefix sd: <http://www.w3.org/ns/sparql-service-description#> .
+<http://example.org/sparql> a sd:Service ; sd:feature sd:UnionDefaultGraph .
+"#;
 
 #[tokio::test]
 async fn a_sweep_over_one_mock_endpoint_produces_nquads() {
@@ -115,38 +122,60 @@ async fn a_metric_binding_a_nonstandard_variable_is_extracted_via_its_declared_v
     );
 }
 
-/// `FetchWellKnown` has no implemented probe. Falling through to the generic
-/// `ask` path issued `GET <endpoint>?query=` -- a malformed protocol request,
-/// to every endpoint on every sweep, fetching nothing about `.well-known` and
-/// putting noise in real operators' logs. The metric must stay visible in the
-/// output as `Indeterminate`, but no request may leave the process.
+/// One fetch, not one per metric: six metrics must not mean six identical
+/// queryless GETs in an operator's log. This supersedes an earlier test
+/// (`a_probe_kind_with_no_implementation_issues_no_request`, removed) that
+/// pinned `FetchWellKnown` issuing *no* request at all -- true only while it
+/// had no probe. Now that it does, the invariant worth pinning is "exactly
+/// one", not "zero", and no other kind in the closed set currently lacks a
+/// probe to exercise the old assertion with.
 #[tokio::test]
-async fn a_probe_kind_with_no_implementation_issues_no_request() {
+async fn the_sweep_fetches_the_description_once_per_endpoint() {
     let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/sparql")).and(query_param_is_missing("query"))
+        .respond_with(ResponseTemplate::new(200)
+            .set_body_raw(STUB_TTL.as_bytes().to_vec(), "text/turtle"))
+        .mount(&server).await;
     Mock::given(method("GET")).and(path("/sparql"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"boolean":true}"#))
+        .respond_with(ResponseTemplate::new(200)
+            .set_body_string(r#"{"head":{"vars":["s"]},"results":{"bindings":[]},"boolean":true}"#))
         .mount(&server).await;
 
-    let def = MetricDef {
-        id: "service-description".into(),
-        label: "service description informativeness".into(),
-        dimension: "documentation".into(),
-        kind: ProbeKind::FetchWellKnown,
-        query: None,
-        expect: None,
-        var: None,
-        declared_by: None,
-        graded: true,
-    };
-
+    let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
     let client = Client::new(Budget::default()).unwrap();
     let url = format!("{}/sparql", server.uri());
-    let rows = run_sweep(&[url], &[def], &client, Budget::default()).await;
+    let rows = run_sweep(std::slice::from_ref(&url), &defs, &client, Budget::default()).await;
 
-    assert_eq!(rows.len(), 1, "the gap must stay visible in the output");
-    assert_eq!(rows[0].verdict, Verdict::Indeterminate);
-    let seen = server.received_requests().await.unwrap();
-    assert!(seen.is_empty(), "an unimplemented probe kind must not touch the network: {seen:?}");
+    let queryless = server.received_requests().await.unwrap().iter()
+        .filter(|r| r.url.query().is_none()).count();
+    assert_eq!(queryless, 1, "expected exactly one queryless fetch per endpoint");
+    assert_eq!(rows.len(), defs.len());
+}
+
+/// The first place a `Level` can appear in a row: a fetched, parseable
+/// service description grades itself via `resolve_fetch`, and that grade
+/// must reach the `service-description` row rather than being computed and
+/// discarded.
+#[tokio::test]
+async fn a_fetched_description_puts_a_level_on_its_row() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/sparql")).and(query_param_is_missing("query"))
+        .respond_with(ResponseTemplate::new(200)
+            .set_body_raw(STUB_TTL.as_bytes().to_vec(), "text/turtle"))
+        .mount(&server).await;
+    Mock::given(method("GET")).and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(200)
+            .set_body_string(r#"{"head":{"vars":["s"]},"results":{"bindings":[]},"boolean":true}"#))
+        .mount(&server).await;
+
+    let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
+    let client = Client::new(Budget::default()).unwrap();
+    let url = format!("{}/sparql", server.uri());
+    let rows = run_sweep(std::slice::from_ref(&url), &defs, &client, Budget::default()).await;
+
+    let row = rows.iter().find(|r| r.metric_id == "service-description").unwrap();
+    assert_eq!(row.verdict, Verdict::Verified);
+    assert!(row.level.is_some(), "a graded metric must carry its level");
 }
 
 /// The third budget level. `Budget::with_endpoint_budget` existed but had no

@@ -16,20 +16,23 @@ pub enum ProbeKind {
 
 impl ProbeKind {
     /// Whether a probe is actually implemented for this kind. `FetchWellKnown`
-    /// is defined but not yet built (the fetch probe is a later stage), and a
-    /// kind with no probe must be skipped *without issuing a request*: the
-    /// generic query path would send `GET <endpoint>?query=`, a malformed
-    /// protocol request that learns nothing and looks like abuse to the
-    /// operator whose logs it lands in. The metric still gets a row, recorded
-    /// as `Indeterminate`, so the gap stays visible in the published output.
+    /// now has one too -- a single queryless fetch per endpoint, issued once
+    /// in `probe_endpoint` ahead of this per-metric dispatch rather than
+    /// through it -- so every current kind returns `true`. The mechanism
+    /// stays for a future kind that has no probe yet: it must be skipped
+    /// *without issuing a request*, since the generic query path would send
+    /// `GET <endpoint>?query=`, a malformed protocol request that learns
+    /// nothing and looks like abuse to the operator whose logs it lands in.
+    /// Such a metric still gets a row, recorded as `Indeterminate`, so the
+    /// gap stays visible in the published output.
     pub fn has_probe(&self) -> bool {
         match self {
             ProbeKind::Liveness
             | ProbeKind::Cors
             | ProbeKind::AskFilter
             | ProbeKind::AskData
-            | ProbeKind::SelectIris => true,
-            ProbeKind::FetchWellKnown => false,
+            | ProbeKind::SelectIris
+            | ProbeKind::FetchWellKnown => true,
         }
     }
 }
@@ -160,10 +163,13 @@ query = "ASK { }"
     }
 
     #[test]
-    fn fetch_well_known_has_no_probe_yet_and_every_other_kind_does() {
-        assert!(!ProbeKind::FetchWellKnown.has_probe());
+    fn every_probe_kind_has_a_probe() {
+        // FetchWellKnown's probe is the once-per-endpoint fetch in
+        // `probe_endpoint`, dispatched ahead of this generic per-metric path
+        // rather than through it, but it is implemented now: no kind in the
+        // closed set currently lacks one.
         for k in [ProbeKind::Liveness, ProbeKind::Cors, ProbeKind::AskFilter,
-                  ProbeKind::AskData, ProbeKind::SelectIris] {
+                  ProbeKind::AskData, ProbeKind::SelectIris, ProbeKind::FetchWellKnown] {
             assert!(k.has_probe(), "{k:?} should have a probe");
         }
     }

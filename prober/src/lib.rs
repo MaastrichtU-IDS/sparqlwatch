@@ -9,9 +9,11 @@ pub mod resolve;
 
 use crate::budget::{Budget, Expired};
 use crate::client::Client;
+use crate::declare::{parse_declarations, Declarations};
 use crate::emit::MeasurementRow;
 use crate::metrics::{MetricDef, ProbeKind};
-use crate::resolve::{resolve, Declared};
+use crate::observe::BodyKind;
+use crate::resolve::{resolve, resolve_fetch, Declared};
 use crate::verdict::Verdict;
 
 /// Probe every metric against every endpoint. Endpoints are processed
@@ -75,10 +77,42 @@ async fn probe_endpoint(
     budget: Budget,
     rows: &mut Vec<MeasurementRow>,
 ) {
+    // One queryless fetch per endpoint, not one per metric: six metrics must
+    // not mean six identical GETs landing in an operator's log. Its outcome
+    // feeds two things below: the `Declarations` every metric's `Declared`
+    // is built from, and the `FetchWellKnown` row itself.
+    let fetch_outcome = budget.with_metric_budget(client.fetch_rdf(ep)).await;
+    let declarations = match &fetch_outcome {
+        // Only a body that actually parsed as RDF has anything to declare;
+        // anything else (a transport failure, an HTML console, a body that
+        // didn't parse) yields the same empty `Declarations` as never having
+        // fetched at all.
+        Ok(o) if o.body_kind == BodyKind::Rdf => parse_declarations(o.body.as_deref().unwrap_or(""), None),
+        _ => Declarations::empty(),
+    };
+    let (fetch_verdict, fetch_level) = resolve_fetch(&declarations, fetch_outcome.as_ref().map_err(|e| *e));
+    // Same principle as every other row: an expired or failed fetch measured
+    // nothing, so it reports no elapsed time rather than a zero one.
+    let fetch_elapsed = fetch_outcome.as_ref().ok().map(|o| o.elapsed_ms);
+
     for def in defs {
+        // The description was already fetched once above; this row reports
+        // that outcome rather than issuing a second, redundant fetch.
+        if def.kind == ProbeKind::FetchWellKnown {
+            rows.push(MeasurementRow {
+                endpoint: ep.to_string(),
+                metric_id: def.id.clone(),
+                verdict: fetch_verdict,
+                level: fetch_level,
+                elapsed_ms: fetch_elapsed,
+            });
+            continue;
+        }
         // A kind with no implemented probe is skipped before any request is
         // built: the generic query path would send `?query=` to a real
-        // operator and learn nothing.
+        // operator and learn nothing. No current kind takes this path (even
+        // `FetchWellKnown` is handled above), but the mechanism stays for
+        // whichever future kind arrives without one.
         if !def.kind.has_probe() {
             rows.push(MeasurementRow {
                 endpoint: ep.to_string(),
@@ -106,7 +140,8 @@ async fn probe_endpoint(
             }
         };
         let observed = budget.with_metric_budget(fut).await;
-        let verdict = resolve(def, Declared { claimed: false }, observed.as_ref().map_err(|e| *e));
+        let declared = Declared::from(&declarations, def);
+        let verdict = resolve(def, declared, observed.as_ref().map_err(|e| *e));
         // An expired metric budget measured nothing, so it reports no elapsed
         // time rather than a zero one.
         let elapsed = observed.as_ref().ok().map(|o| o.elapsed_ms);
