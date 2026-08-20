@@ -4,6 +4,9 @@ use sparqlwatch_prober::emit::{emit_nquads, RunId};
 use sparqlwatch_prober::metrics::{load_metrics, MetricDef, ProbeKind};
 use sparqlwatch_prober::run_sweep;
 use sparqlwatch_prober::verdict::Verdict;
+use oxrdf::{NamedNode, Quad, Term};
+use oxrdfio::{RdfFormat, RdfParser};
+use std::collections::{BTreeMap, BTreeSet};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -22,9 +25,48 @@ async fn a_sweep_over_one_mock_endpoint_produces_nquads() {
     let rows = run_sweep(std::slice::from_ref(&url), &defs, &client, Budget::default()).await;
 
     assert_eq!(rows.len(), defs.len(), "one measurement per metric per endpoint");
+
+    // Assert the verdicts themselves, not just the row count: an
+    // implementation that resolved everything to `Absent` -- the exact failure
+    // this project exists to prevent -- passed the old assertions.
+    let got: BTreeMap<&str, Verdict> =
+        rows.iter().map(|r| (r.metric_id.as_str(), r.verdict)).collect();
+    let expected: BTreeMap<&str, Verdict> = BTreeMap::from([
+        // A SPARQL JSON body proves it speaks the protocol.
+        ("availability", Verdict::Verified),
+        // The mock sets access-control-allow-origin.
+        ("cors", Verdict::UndeclaredButVerified),
+        // boolean:true against expect = true.
+        ("geo-functions", Verdict::UndeclaredButVerified),
+        // The mock binds ?s, not ?g, so no WKT literal is present and the 200
+        // makes that a genuine absence rather than an unknown.
+        ("geo-data", Verdict::Absent),
+        // No probe is implemented for this kind yet.
+        ("service-description", Verdict::Indeterminate),
+        // Likewise ?c is unbound, so zero classes, honestly measured.
+        ("classes", Verdict::Absent),
+    ]);
+    assert_eq!(got, expected);
+
     let nq = emit_nquads(&RunId("test".into()), "2026-08-20T08:00:00Z", "test-revision", &rows).unwrap();
-    assert!(nq.contains(&url));
-    assert!(nq.contains("http://www.w3.org/ns/dqv#value"));
+    let quads: Vec<Quad> = RdfParser::from_format(RdfFormat::NQuads)
+        .for_slice(nq.as_bytes())
+        .map(|q| q.expect("the emitted sweep must parse as N-Quads"))
+        .collect();
+    let published: BTreeSet<String> = quads
+        .iter()
+        .filter(|q| q.predicate.as_str() == "http://www.w3.org/ns/dqv#value")
+        .map(|q| match &q.object {
+            Term::Literal(l) => l.value().to_string(),
+            other => panic!("a verdict must be a literal, got {other}"),
+        })
+        .collect();
+    assert_eq!(
+        published,
+        expected.values().map(|v| v.slug().to_string()).collect::<BTreeSet<String>>(),
+        "every resolved verdict reaches the published graph, unchanged"
+    );
+    assert!(quads.iter().any(|q| q.object == Term::NamedNode(NamedNode::new(&url).unwrap())));
 }
 
 #[tokio::test]
