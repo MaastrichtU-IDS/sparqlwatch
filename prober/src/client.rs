@@ -1,10 +1,36 @@
 use crate::budget::Budget;
 use crate::observe::{BodyKind, Observation};
+use oxrdfio::{RdfFormat, RdfParser};
 use std::time::Instant;
 
 /// Announced only by the CORS probe, so the other probes cannot be perturbed
 /// by a server that filters on it.
 const ORIGIN: &str = "https://sparqlwatch.example";
+
+/// The `Accept` header for a queryless RDF fetch (e.g. a service description).
+/// Distinct from the SPARQL-results `Accept` used by `get_with_body`: this
+/// request is not a query at all.
+const RDF_ACCEPT: &str = "text/turtle, application/rdf+xml;q=0.9, application/ld+json;q=0.8";
+
+/// Cap on the retained response body. Kept generous enough for a service
+/// description or small dataset dump, small enough that a misbehaving
+/// endpoint cannot blow up memory across a sweep of hundreds of endpoints.
+const MAX_BODY: usize = 256 * 1024;
+
+/// Truncate `s` to at most `max` bytes, cutting back to the nearest char
+/// boundary so the result is always valid UTF-8.
+fn truncate_body(s: String, max: usize) -> String {
+    if s.len() <= max {
+        return s;
+    }
+    let mut end = max;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut s = s;
+    s.truncate(end);
+    s
+}
 
 pub struct Client {
     http: reqwest::Client,
@@ -77,10 +103,74 @@ impl Client {
             boolean: json.as_ref().and_then(|v| v.get("boolean")).and_then(|b| b.as_bool()),
             bindings: Vec::new(),
             body_kind,
+            body: None,
             elapsed_ms: elapsed,
             error: None,
         };
         (observation, body)
+    }
+
+    /// A queryless GET on the endpoint itself, asking for RDF rather than
+    /// SPARQL results. This is how a SPARQL service description is obtained
+    /// in the wild -- no `?query=` at all, because none is being asked.
+    /// Does not send `Origin`: that header belongs to the CORS probe alone.
+    pub async fn fetch_rdf(&self, url: &str) -> Observation {
+        let start = Instant::now();
+        let resp = self.http.get(url).header("Accept", RDF_ACCEPT).send().await;
+        let elapsed = start.elapsed().as_millis() as u64;
+
+        let resp = match resp {
+            Ok(r) => r,
+            Err(e) => return Observation::failed(e.to_string(), elapsed),
+        };
+        let status = resp.status().as_u16();
+        let cors = resp.headers().contains_key("access-control-allow-origin");
+        let ctype = resp
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        let body = match resp.text().await {
+            Ok(b) => b,
+            Err(e) => return Observation::failed(e.to_string(), elapsed),
+        };
+
+        let looks_html = ctype.to_ascii_lowercase().contains("text/html")
+            || body.trim_start().to_ascii_lowercase().starts_with("<!doctype html")
+            || body.trim_start().to_ascii_lowercase().starts_with("<html");
+        let body_kind = if looks_html {
+            BodyKind::Html
+        } else if RdfFormat::from_media_type(&ctype)
+            .map(|fmt| Self::parses_as_rdf(fmt, &body))
+            .unwrap_or(false)
+        {
+            BodyKind::Rdf
+        } else {
+            BodyKind::Other
+        };
+
+        Observation {
+            status: Some(status),
+            cors,
+            boolean: None,
+            bindings: Vec::new(),
+            body_kind,
+            body: Some(truncate_body(body, MAX_BODY)),
+            elapsed_ms: elapsed,
+            error: None,
+        }
+    }
+
+    /// Whether `body` parses without error under `fmt`. Sniffing the
+    /// `Content-Type` alone is not enough evidence: an endpoint can send
+    /// `text/turtle` and an HTML error page underneath it, and that must not
+    /// be classified as `Rdf`.
+    fn parses_as_rdf(fmt: RdfFormat, body: &str) -> bool {
+        RdfParser::from_format(fmt)
+            .for_reader(body.as_bytes())
+            .collect::<Result<Vec<_>, _>>()
+            .is_ok()
     }
 
     pub async fn ask(&self, url: &str, query: &str) -> Observation {

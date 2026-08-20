@@ -192,7 +192,7 @@ mod tests {
     }
 
     fn obs(boolean: Option<bool>) -> Observation {
-        Observation { status: Some(200), cors: true, boolean, bindings: vec![], body_kind: BodyKind::SparqlJson, elapsed_ms: 5, error: None }
+        Observation { status: Some(200), cors: true, boolean, bindings: vec![], body_kind: BodyKind::SparqlJson, body: None, elapsed_ms: 5, error: None }
     }
 
     #[test]

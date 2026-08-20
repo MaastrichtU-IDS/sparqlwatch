@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BodyKind {
     SparqlJson,
+    Rdf,
     Html,
     Other,
     None,
@@ -18,6 +19,10 @@ pub struct Observation {
     pub boolean: Option<bool>,
     pub bindings: Vec<String>,
     pub body_kind: BodyKind,
+    /// The retained response body, truncated. Kept because "why did this
+    /// endpoint score badly" is the first question a provider asks, and
+    /// because the declaration parser reads it.
+    pub body: Option<String>,
     pub elapsed_ms: u64,
     pub error: Option<String>,
 }
@@ -30,6 +35,7 @@ impl Observation {
             boolean: None,
             bindings: Vec::new(),
             body_kind: BodyKind::None,
+            body: None,
             elapsed_ms,
             error: Some(error),
         }
