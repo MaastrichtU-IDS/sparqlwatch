@@ -1,0 +1,25 @@
+# CI is non-negotiable from the first commit: the absence of it is a large part
+# of why umakadata was rejected as a base. Build, test, lint, every push.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  prober:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: prober
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install stable Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy
+          rustup default stable
+      - run: cargo build
+      - run: cargo test
+      # Warnings are errors here, matching the local contract. The live_smoke
+      # test stays #[ignore]d: CI must not hit third-party endpoints.
+      - run: cargo clippy --all-targets -- -D warnings
