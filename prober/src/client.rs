@@ -31,9 +31,13 @@ const RDF_MEDIA_TYPES: [&str; 6] = [
     "application/n-quads",
 ];
 
-/// Cap on the retained response body. Kept generous enough for a service
-/// description or small dataset dump, small enough that a misbehaving
-/// endpoint cannot blow up memory across a sweep of hundreds of endpoints.
+/// Cap on the *retained* response body, applied after `resp.text().await` has
+/// already buffered the whole response. This bounds what we keep in
+/// `Observation.body` and what later gets hashed into declarations, not peak
+/// memory: a misbehaving endpoint that serves an enormous body still costs
+/// one full in-memory buffer before this cap ever runs. The 30 s request
+/// timeout is the only real bound on that. Kept generous enough for a
+/// service description or small dataset dump.
 const MAX_BODY: usize = 256 * 1024;
 
 /// Truncate `s` to at most `max` bytes, cutting back to the nearest char

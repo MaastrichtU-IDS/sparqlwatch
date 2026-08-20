@@ -157,8 +157,11 @@ pub fn grade_from_declarations(defs: &Declarations) -> Level {
 }
 
 /// Resolve the `FetchWellKnown` probe: did the endpoint publish a
-/// dereferenceable, parseable service description at its well-known URL, and
-/// if so, how informative is it.
+/// dereferenceable, parseable service description, and if so, how informative
+/// is it. The fetch behind this is a queryless GET on the endpoint URL itself
+/// (see `Client::fetch_rdf`), not a request to any `/.well-known/` path; the
+/// probe-kind name is legacy from an earlier design and is kept for now, but
+/// no code here dereferences a well-known URL.
 ///
 /// `Absent` is minted only from a `404` or a `410`: those are the only status
 /// codes that speak to what is published at the URL -- nothing was ever

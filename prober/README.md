@@ -19,11 +19,15 @@ resolves to exactly one of six verdicts:
 | `absent` | Neither claimed nor observed |
 | `indeterminate` | We never got to find out |
 
-`absent` may only be claimed when the evidence actually establishes absence:
-the endpoint itself answered, with a 2xx status, in a form we could read. A
-timeout, an unreachable host, a 429, a gateway error, an HTML query console, an
-unparseable body (anything we never got to interpret) is `indeterminate`.
-There is deliberately no composite score and no ranking, here or downstream.
+`absent` may only be claimed when the evidence actually establishes absence.
+For every probe except the description fetch, that means the endpoint itself
+answered, with a 2xx status, in a form we could read. The description fetch
+has one further exception: a `404` or `410` also counts as absence, because
+those two statuses speak to what is published at the URL itself, not to our
+request or the server's general health. A timeout, an unreachable host, a
+429, a gateway error, an HTML query console, an unparseable body (anything
+else we never got to interpret) is `indeterminate`. There is deliberately no
+composite score and no ranking, here or downstream.
 
 All judgement lives in one pure function, `resolve()` in `src/resolve.rs`. The
 HTTP client returns evidence and no opinion; the emitter is a pure function of
@@ -133,6 +137,23 @@ apply to this code. Setting both cases, as above, is harmless
 belt-and-braces and worth keeping for any sidecar or shell tooling that does
 follow curl's rule, but the spec's note should not be read as binding here.
 
+Two caveats on that correction, neither of which weakens it:
+
+- `get_first_env` decides presence with `std::env::var(name).is_ok()`, so a
+  correctly-set lowercase `http_proxy` is silently shadowed by an uppercase
+  `HTTP_PROXY` that is merely set to an empty string. That is exactly the
+  registry-wide silent-failure shape the spec's own stage-0 finding warns
+  about, and the four-line export block above is precisely what a templated
+  Helm values file could leave empty for one case while filling in the
+  other.
+- hyper-util disables environment-variable proxying entirely, uppercase and
+  lowercase both, when `REQUEST_METHOD` is set (`matcher.rs:230`, with the
+  early return at `matcher.rs:305`). The CGI collision curl guards against
+  therefore exists here too, in a stronger form: it drops the proxy outright
+  rather than merely picking the wrong case. "That constraint does not apply
+  to this code" above is true only for the uppercase-versus-lowercase
+  question, not for the CGI collision itself.
+
 ## Known limitations
 
 The following are deferred deliberately, not oversights:
@@ -155,10 +176,19 @@ The following are deferred deliberately, not oversights:
   follow `sd:defaultDataset` for the VoID partitions), deferred to stage 1c and
   **before any real registry sweep**.
 
-- Grading reads a body truncated at 256 KiB while classification reads the whole
-  body. A description larger than 256 KiB could lose a late
-  `sd:defaultEntailmentRegime` and grade as level 3 instead of level 4. This is
-  acceptable in practice: real descriptions are typically hundreds of bytes.
+- The declaration join reads a body truncated at 256 KiB while classification
+  (`body_kind`, deciding `Rdf` vs. `Other`) reads the whole body. Those two
+  reads can disagree once a description crosses the cut, and the cost is
+  worse than a grading error alone: measured with a 300 KiB Turtle
+  description whose `sd:extensionFunction geof:sfWithin` and
+  `sd:defaultEntailmentRegime` both sit past 256 KiB, the `geo-functions`
+  metric silently lost its declaration and reported
+  `undeclared-but-verified` instead of `verified`, and `service-description`
+  graded `verified level=1` rather than level 4, a three-level miss, not a
+  one-level one. This is acceptable in practice today: real descriptions are
+  typically hundreds of bytes, not hundreds of kilobytes. Unpicking the
+  asymmetry (reading the same, untruncated bytes for both the join and the
+  classification) is stage 1c's job, not this branch's.
 
 ## Tests
 

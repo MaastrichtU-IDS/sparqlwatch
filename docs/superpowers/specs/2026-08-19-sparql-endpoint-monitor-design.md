@@ -339,6 +339,20 @@ Three findings that change the prober's configuration:
    is real for curl; it simply does not bind this code. Setting both cases of both variables is
    harmless belt-and-braces and worth keeping for sidecars and shell tooling that do follow
    curl's rule.
+
+   Two caveats on that correction, neither of which weakens it. First,
+   `get_first_env` decides presence with `std::env::var(name).is_ok()`, so a
+   correctly-set lowercase `http_proxy` is silently shadowed by an uppercase
+   `HTTP_PROXY` that is merely set to an empty string, which by this same
+   stage-0 finding's own logic looks exactly like a dead registry. Second,
+   hyper-util disables environment-variable proxying entirely, uppercase and
+   lowercase both, when `REQUEST_METHOD` is set (`matcher.rs:230`, with the
+   early return at `matcher.rs:305`): the CGI collision curl guards against
+   therefore does exist for this client too, in a stronger form that drops
+   the proxy outright rather than merely picking the wrong case. The
+   correction above, that the constraint does not bind this code, is true
+   only for the uppercase-versus-lowercase question, not for the CGI
+   collision itself.
 2. **Some hosts fail cluster DNS.** `ontop.certain.ai.ustp.at` gave `SERVFAIL` from the pod
    and `CONNECT tunnel failed, response 503` from Squid, though it resolves fine off-cluster.
    Name resolution is an independent failure mode from egress, and must resolve to
