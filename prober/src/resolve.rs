@@ -19,6 +19,14 @@ fn answered_ok(o: &Observation) -> bool {
 
 /// Turn observation plus declaration into a verdict. This is the only place
 /// judgement happens: no probing, no I/O, pure function.
+///
+/// The rule applied uniformly below: **an absence claim requires
+/// `answered_ok`.** `Absent` (and `DeclaredButWrong`, which the spec ranks as
+/// worse still) may only be minted from a response the endpoint itself
+/// authored with a 2xx status. Anything else -- a throttle, a gateway error,
+/// an unparseable body, a response we never got -- is `Indeterminate`. There
+/// is exactly one deliberate exception: the `Cors` *positive* case, because an
+/// `access-control-allow-origin` header proves CORS at any status.
 pub fn resolve(def: &MetricDef, declared: Declared, obs: Result<&Observation, Expired>) -> Verdict {
     let o = match obs {
         Err(Expired) => return Verdict::Indeterminate,
@@ -42,12 +50,19 @@ pub fn resolve(def: &MetricDef, declared: Declared, obs: Result<&Observation, Ex
             (Some(got), Some(want)) if got == want => {
                 if declared.claimed { Verdict::Verified } else { Verdict::UndeclaredButVerified }
             }
-            // Bound but wrong: the function answered, and answered incorrectly.
-            (Some(_), Some(_)) => Verdict::DeclaredButWrong,
+            // Bound but wrong: the function answered, and answered
+            // incorrectly. Only claimable when the endpoint itself answered
+            // with a success status; a 502 body that happens to parse is not
+            // the engine's answer.
+            (Some(_), Some(_)) => {
+                if answered_ok(o) { Verdict::DeclaredButWrong } else { Verdict::Indeterminate }
+            }
             (Some(true), None) => {
                 if declared.claimed { Verdict::Verified } else { Verdict::UndeclaredButVerified }
             }
-            (Some(false), None) => Verdict::Absent,
+            (Some(false), None) => {
+                if answered_ok(o) { Verdict::Absent } else { Verdict::Indeterminate }
+            }
             (None, _) => {
                 if declared.claimed { Verdict::DeclaredOnly } else { Verdict::Indeterminate }
             }
@@ -66,10 +81,20 @@ pub fn resolve(def: &MetricDef, declared: Declared, obs: Result<&Observation, Ex
             }
         }
         ProbeKind::Liveness => {
-            // The entire question this probe asks is "does this answer the
-            // SPARQL protocol". Failing to answer IS the finding, not an
-            // unknown, so this is deliberately not gated on `answered_ok`.
-            if o.body_kind == BodyKind::SparqlJson { Verdict::Verified } else { Verdict::Absent }
+            // A SPARQL JSON body is proof it speaks the protocol. A non-SPARQL
+            // body only establishes absence when the endpoint answered
+            // successfully: a 429 with a plain-text body, a non-HTML 502/503
+            // from an intermediary, or a 401/403 all mean we never got to ask
+            // the question. This metric runs against every endpoint every
+            // sweep and a later stage reads it to decide admission, so a
+            // throttled endpoint must not be tombstoned as unreachable.
+            if o.body_kind == BodyKind::SparqlJson {
+                Verdict::Verified
+            } else if answered_ok(o) {
+                Verdict::Absent
+            } else {
+                Verdict::Indeterminate
+            }
         }
         ProbeKind::SelectIris => {
             if !o.bindings.is_empty() {
@@ -294,6 +319,47 @@ mod tests {
         let mut o = obs(None);
         o.body_kind = BodyKind::Other;
         let v = resolve(&def(ProbeKind::FetchWellKnown, None), Declared { claimed: false }, Ok(&o));
+        assert_eq!(v, Verdict::Indeterminate);
+    }
+
+    #[test]
+    fn liveness_a_429_is_indeterminate_not_absent() {
+        // A throttled endpoint is emphatically alive. Reporting availability
+        // as `Absent` here would tombstone it as unreachable, on the one
+        // metric a later stage reads to decide whether to admit it at all.
+        let mut o = obs(None);
+        o.body_kind = BodyKind::Other;
+        o.status = Some(429);
+        let v = resolve(&def(ProbeKind::Liveness, None), Declared { claimed: false }, Ok(&o));
+        assert_eq!(v, Verdict::Indeterminate);
+    }
+
+    #[test]
+    fn liveness_a_503_from_an_intermediary_is_indeterminate_not_absent() {
+        let mut o = obs(None);
+        o.body_kind = BodyKind::Other;
+        o.status = Some(503);
+        let v = resolve(&def(ProbeKind::Liveness, None), Declared { claimed: false }, Ok(&o));
+        assert_eq!(v, Verdict::Indeterminate);
+    }
+
+    #[test]
+    fn ask_data_false_with_a_non_2xx_status_is_indeterminate_not_absent() {
+        // An error body that happens to parse as SPARQL JSON with no bindings
+        // is not evidence that the data is missing.
+        let mut o = obs(Some(false));
+        o.status = Some(500);
+        let v = resolve(&def(ProbeKind::AskData, None), Declared { claimed: false }, Ok(&o));
+        assert_eq!(v, Verdict::Indeterminate);
+    }
+
+    #[test]
+    fn ask_filter_wrong_boolean_with_a_non_2xx_status_is_indeterminate() {
+        // `DeclaredButWrong` is ranked worse than absent, so minting it from a
+        // response the endpoint never authored is the worst available error.
+        let mut o = obs(Some(false));
+        o.status = Some(502);
+        let v = resolve(&def(ProbeKind::AskFilter, Some(true)), Declared { claimed: false }, Ok(&o));
         assert_eq!(v, Verdict::Indeterminate);
     }
 }
