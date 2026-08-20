@@ -176,7 +176,15 @@ pub fn resolve_fetch(defs: &Declarations, obs: Result<&Observation, Expired>) ->
         return (Verdict::Indeterminate, None);
     }
 
-    if o.body_kind == BodyKind::Rdf {
+    // A parseable RDF body is a published description only when the endpoint
+    // answered with a 2xx. `verified` is as assertive a verdict as `absent`,
+    // so it gets the same gate every other probe kind applies: a 429 throttle
+    // notice, a 500 error document and a 503 maintenance page can all carry an
+    // RDF-ish payload, and none of them is the endpoint publishing a service
+    // description. A non-2xx falls through to the status match below, so 404
+    // and 410 still resolve to a genuine absence and everything else stays
+    // indeterminate.
+    if o.body_kind == BodyKind::Rdf && answered_ok(o) {
         return (Verdict::Verified, Some(grade_from_declarations(defs)));
     }
 
@@ -506,6 +514,48 @@ mod tests {
         let (v, level) = resolve_fetch(&d, Ok(&o));
         assert_eq!(v, Verdict::Verified);
         assert_eq!(level, Some(Level(1)));
+    }
+
+    #[test]
+    fn an_rdf_body_from_a_429_is_indeterminate_not_verified() {
+        // The arm that returns `Verified` on a parsed RDF body used to run
+        // before the status match, so any status with an RDF-ish payload
+        // published a confident `verified` plus a graded level. A throttle
+        // notice is the case where we know least about what is published.
+        let mut o = obs(None);
+        o.status = Some(429);
+        o.body_kind = BodyKind::Rdf;
+        let d = Declarations { triples: 14, ..Declarations::empty() };
+        let (v, level) = resolve_fetch(&d, Ok(&o));
+        assert_eq!(v, Verdict::Indeterminate);
+        assert_eq!(level, None, "an ungated grade is a confident wrong answer");
+    }
+
+    #[test]
+    fn an_rdf_body_from_a_500_or_503_is_indeterminate_not_verified() {
+        for status in [500, 502, 503] {
+            let mut o = obs(None);
+            o.status = Some(status);
+            o.body_kind = BodyKind::Rdf;
+            let d = Declarations { triples: 40, names_dataset: true, ..Declarations::empty() };
+            let (v, level) = resolve_fetch(&d, Ok(&o));
+            assert_eq!(v, Verdict::Indeterminate, "status {status}");
+            assert_eq!(level, None, "status {status}");
+        }
+    }
+
+    #[test]
+    fn an_rdf_body_from_a_404_is_absent_with_level_zero_not_verified() {
+        // A non-2xx with an RDF body must fall through to the status match,
+        // where 404 keeps its genuine absence rather than being overtaken by
+        // the body classification.
+        let mut o = obs(None);
+        o.status = Some(404);
+        o.body_kind = BodyKind::Rdf;
+        let d = Declarations { triples: 14, ..Declarations::empty() };
+        let (v, level) = resolve_fetch(&d, Ok(&o));
+        assert_eq!(v, Verdict::Absent);
+        assert_eq!(level, Some(Level(0)));
     }
 
     #[test]
