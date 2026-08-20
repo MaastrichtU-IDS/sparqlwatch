@@ -104,6 +104,7 @@ impl Client {
             bindings: Vec::new(),
             body_kind,
             body: None,
+            content_type: if ctype.is_empty() { None } else { Some(ctype.clone()) },
             elapsed_ms: elapsed,
             error: None,
         };
@@ -157,6 +158,7 @@ impl Client {
             bindings: Vec::new(),
             body_kind,
             body: Some(truncate_body(body, MAX_BODY)),
+            content_type: if ctype.is_empty() { None } else { Some(ctype.to_ascii_lowercase()) },
             elapsed_ms: elapsed,
             error: None,
         }

@@ -23,6 +23,11 @@ pub struct Observation {
     /// endpoint score badly" is the first question a provider asks, and
     /// because the declaration parser reads it.
     pub body: Option<String>,
+    /// The response's `Content-Type` header, lowercased, when one was sent.
+    /// `parse_declarations` needs this to pick the right RDF syntax; a body
+    /// parsed under the wrong assumed format silently yields near-empty
+    /// declarations, indistinguishable from a genuinely empty description.
+    pub content_type: Option<String>,
     pub elapsed_ms: u64,
     pub error: Option<String>,
 }
@@ -36,6 +41,7 @@ impl Observation {
             bindings: Vec::new(),
             body_kind: BodyKind::None,
             body: None,
+            content_type: None,
             elapsed_ms,
             error: Some(error),
         }

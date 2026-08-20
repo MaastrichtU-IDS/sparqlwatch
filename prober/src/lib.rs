@@ -12,7 +12,6 @@ use crate::client::Client;
 use crate::declare::{parse_declarations, Declarations};
 use crate::emit::MeasurementRow;
 use crate::metrics::{MetricDef, ProbeKind};
-use crate::observe::BodyKind;
 use crate::resolve::{resolve, resolve_fetch, Declared};
 use crate::verdict::Verdict;
 
@@ -83,12 +82,17 @@ async fn probe_endpoint(
     // is built from, and the `FetchWellKnown` row itself.
     let fetch_outcome = budget.with_metric_budget(client.fetch_rdf(ep)).await;
     let declarations = match &fetch_outcome {
-        // Only a body that actually parsed as RDF has anything to declare;
-        // anything else (a transport failure, an HTML console, a body that
-        // didn't parse) yields the same empty `Declarations` as never having
-        // fetched at all.
-        Ok(o) if o.body_kind == BodyKind::Rdf => parse_declarations(o.body.as_deref().unwrap_or(""), None),
-        _ => Declarations::empty(),
+        // `parse_declarations` never panics and yields partial (often empty)
+        // results on anything that isn't real RDF, so the body is passed
+        // unconditionally rather than re-checking `body_kind` here too: an
+        // HTML console parses to ~0 triples either way, and `resolve_fetch`
+        // below is what actually decides `Html`/failure means `Indeterminate`.
+        // Keeping that decision in one place means the two can't disagree.
+        // `content_type` is threaded through so the real serialization
+        // (RDF/XML, JSON-LD, ...) is parsed as itself rather than assumed to
+        // be Turtle.
+        Ok(o) => parse_declarations(o.body.as_deref().unwrap_or(""), o.content_type.as_deref()),
+        Err(Expired) => Declarations::empty(),
     };
     let (fetch_verdict, fetch_level) = resolve_fetch(&declarations, fetch_outcome.as_ref().map_err(|e| *e));
     // Same principle as every other row: an expired or failed fetch measured
@@ -103,7 +107,15 @@ async fn probe_endpoint(
                 endpoint: ep.to_string(),
                 metric_id: def.id.clone(),
                 verdict: fetch_verdict,
-                level: fetch_level,
+                // A level means something only for a metric defined as
+                // `graded`: that flag, not the probe kind, is what
+                // `metrics.toml` uses to say "this one carries a grade", and
+                // metrics are data a config edit can change. Keying off
+                // `graded` here means a future non-graded `FetchWellKnown`
+                // metric (or a graded metric of some other kind, should one
+                // ever exist) gets exactly the row shape its definition asks
+                // for, not one implied by its probe kind.
+                level: if def.graded { fetch_level } else { None },
                 elapsed_ms: fetch_elapsed,
             });
             continue;

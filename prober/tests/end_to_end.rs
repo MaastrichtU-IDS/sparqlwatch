@@ -7,14 +7,21 @@ use sparqlwatch_prober::verdict::Verdict;
 use oxrdf::{NamedNode, Quad, Term};
 use oxrdfio::{RdfFormat, RdfParser};
 use std::collections::{BTreeMap, BTreeSet};
+use wiremock::http::Method;
 use wiremock::matchers::{method, path, query_param_is_missing};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// A minimal, valid service description. Turtle, matching what a queryless
-/// fetch actually receives from a real endpoint (see `tests/fetch.rs`).
+/// fetch actually receives from a real endpoint (see `tests/fetch.rs`). Also
+/// declares `geof:sfWithin` as an `sd:extensionFunction`, the one metric in
+/// `metrics.toml` that names a `declared_by` IRI, so a test that fetches this
+/// stub and finds the probe working can assert `Verified` -- the direction
+/// no other test here exercises.
 const STUB_TTL: &str = r#"
 @prefix sd: <http://www.w3.org/ns/sparql-service-description#> .
-<http://example.org/sparql> a sd:Service ; sd:feature sd:UnionDefaultGraph .
+<http://example.org/sparql> a sd:Service ;
+    sd:feature sd:UnionDefaultGraph ;
+    sd:extensionFunction <http://www.opengis.net/def/function/geosparql/sfWithin> .
 "#;
 
 #[tokio::test]
@@ -48,7 +55,11 @@ async fn a_sweep_over_one_mock_endpoint_produces_nquads() {
         // The mock binds ?s, not ?g, so no WKT literal is present and the 200
         // makes that a genuine absence rather than an unknown.
         ("geo-data", Verdict::Absent),
-        // No probe is implemented for this kind yet.
+        // The mock's single `set_body_string` response is served as
+        // `text/plain` regardless of the request (wiremock 0.6.5 always
+        // overwrites Content-Type on `set_body_string`; see `tests/fetch.rs`),
+        // so the queryless fetch's body_kind is `Other`, not `Rdf`. A 200 with
+        // an unparsed body is `Indeterminate`, never `Absent`.
         ("service-description", Verdict::Indeterminate),
         // Likewise ?c is unbound, so zero classes, honestly measured.
         ("classes", Verdict::Absent),
@@ -147,7 +158,7 @@ async fn the_sweep_fetches_the_description_once_per_endpoint() {
     let rows = run_sweep(std::slice::from_ref(&url), &defs, &client, Budget::default()).await;
 
     let queryless = server.received_requests().await.unwrap().iter()
-        .filter(|r| r.url.query().is_none()).count();
+        .filter(|r| r.method == Method::GET && r.url.query().is_none()).count();
     assert_eq!(queryless, 1, "expected exactly one queryless fetch per endpoint");
     assert_eq!(rows.len(), defs.len());
 }
@@ -176,6 +187,96 @@ async fn a_fetched_description_puts_a_level_on_its_row() {
     let row = rows.iter().find(|r| r.metric_id == "service-description").unwrap();
     assert_eq!(row.verdict, Verdict::Verified);
     assert!(row.level.is_some(), "a graded metric must carry its level");
+}
+
+/// Fix round 1: the reviewer traced that if `lib.rs` were mis-wired to join
+/// `Declared::from(&Declarations::empty(), def)` instead of the real fetched
+/// `Declarations`, every other test in this file would still pass --
+/// `STUB_TTL` originally declared nothing any metric's `declared_by` names,
+/// the once-per-endpoint and level tests never look at `geo-functions`, and
+/// the very first test's plain-JSON mock never serves a parseable
+/// description at all. This test is the one that actually depends on the
+/// join: `STUB_TTL` now declares `geof:sfWithin`, the probe answers `true`
+/// (matching `expect = true`), and only a real join credits that as
+/// `Verified` rather than `UndeclaredButVerified`.
+#[tokio::test]
+async fn a_declared_and_working_capability_resolves_to_verified_through_the_sweep() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/sparql")).and(query_param_is_missing("query"))
+        .respond_with(ResponseTemplate::new(200)
+            .set_body_raw(STUB_TTL.as_bytes().to_vec(), "text/turtle"))
+        .mount(&server).await;
+    Mock::given(method("GET")).and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(200)
+            .set_body_string(r#"{"head":{"vars":["s"]},"results":{"bindings":[]},"boolean":true}"#))
+        .mount(&server).await;
+
+    let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
+    let client = Client::new(Budget::default()).unwrap();
+    let url = format!("{}/sparql", server.uri());
+    let rows = run_sweep(std::slice::from_ref(&url), &defs, &client, Budget::default()).await;
+
+    let row = rows.iter().find(|r| r.metric_id == "geo-functions").unwrap();
+    assert_eq!(
+        row.verdict,
+        Verdict::Verified,
+        "declared in the fetched description and bound by the probe -- both halves of the join must run"
+    );
+}
+
+/// A minimal, valid RDF/XML service description, declaring `geof:sfWithin`
+/// exactly as `STUB_TTL` does in Turtle. `RDF_ACCEPT` in `client.rs` asks for
+/// `application/rdf+xml` as well as Turtle, so an endpoint that actually
+/// serves this format must not have its declarations silently dropped by an
+/// assumed-Turtle reparse.
+const STUB_RDFXML: &str = r#"<?xml version="1.0"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns:sd="http://www.w3.org/ns/sparql-service-description#">
+  <sd:Service rdf:about="http://example.org/sparql">
+    <sd:extensionFunction rdf:resource="http://www.opengis.net/def/function/geosparql/sfWithin"/>
+  </sd:Service>
+</rdf:RDF>
+"#;
+
+/// Fix round 1: `parse_declarations(body, None)` always assumed Turtle, but
+/// `fetch_rdf` asks for (and a real endpoint may serve) RDF/XML or JSON-LD
+/// too. Reparsing an RDF/XML body as Turtle fails immediately and yields
+/// `Declarations::empty()` -- silently indistinguishable from an endpoint
+/// that published nothing at all, and specifically capable of turning an
+/// honest declaration into `UndeclaredButVerified` instead of `Verified`.
+/// `lib.rs` must thread the observed `Content-Type` into `parse_declarations`
+/// so a non-Turtle description is parsed as itself.
+#[tokio::test]
+async fn a_description_served_as_rdf_xml_is_parsed_not_silently_dropped() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/sparql")).and(query_param_is_missing("query"))
+        .respond_with(ResponseTemplate::new(200)
+            .set_body_raw(STUB_RDFXML.as_bytes().to_vec(), "application/rdf+xml"))
+        .mount(&server).await;
+    Mock::given(method("GET")).and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(200)
+            .set_body_string(r#"{"head":{"vars":["s"]},"results":{"bindings":[]},"boolean":true}"#))
+        .mount(&server).await;
+
+    let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
+    let client = Client::new(Budget::default()).unwrap();
+    let url = format!("{}/sparql", server.uri());
+    let rows = run_sweep(std::slice::from_ref(&url), &defs, &client, Budget::default()).await;
+
+    let description = rows.iter().find(|r| r.metric_id == "service-description").unwrap();
+    assert_eq!(description.verdict, Verdict::Verified, "the body did parse, as RDF/XML");
+    assert_ne!(
+        description.level,
+        Some(sparqlwatch_prober::verdict::Level(0)),
+        "a description with a real triple in it must not grade the same as an empty one"
+    );
+
+    let geo = rows.iter().find(|r| r.metric_id == "geo-functions").unwrap();
+    assert_eq!(
+        geo.verdict,
+        Verdict::Verified,
+        "geof:sfWithin was declared in RDF/XML and answered true; a Turtle-only reparse would lose the declaration and report UndeclaredButVerified instead"
+    );
 }
 
 /// The third budget level. `Budget::with_endpoint_budget` existed but had no
