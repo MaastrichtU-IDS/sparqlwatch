@@ -29,8 +29,14 @@ All judgement lives in one pure function, `resolve()` in `src/resolve.rs`. The
 HTTP client returns evidence and no opinion; the emitter is a pure function of
 its inputs, with no clock read and no randomness.
 
-Declaration parsing is not built yet, so nothing is `declared` at this stage:
-every confirmed capability currently reports as `undeclared-but-verified`.
+A service description is fetched once per endpoint with a queryless GET request
+that asks for RDF (`text/turtle, application/rdf+xml;q=0.9, application/ld+json;q=0.8`),
+and its declarations are compared against what the probes observe. Most confirmed
+capabilities report as `undeclared-but-verified`, because almost no endpoint declares
+its capabilities. `Verified` is reachable but will stay rare by design: in the survey
+behind this project, 18 endpoints evaluate `geof:sfWithin` and not one declares it.
+The `service-description` metric now carries a graded level (0 to 4) rather than
+always being indeterminate, grading by informativeness rather than presence.
 
 ## Running it
 
@@ -74,9 +80,11 @@ default. The definitions are hashed into a `metricDefinitionRevision` recorded
 on every run, a pure function of the definitions themselves, so a measurement
 can be read against the definition that produced it.
 
-`FetchWellKnown` has no probe implemented yet. Its metric stays in the file and
-still gets a row — `indeterminate` — so the gap is visible in the output, but
-no request is issued for it.
+`FetchWellKnown` probes by fetching the queryless GET described above. A successful
+fetch with a parseable body (Turtle, RDF/XML, or JSON-LD) returns `Verified` and
+a level reflecting the description's informativeness. A `404` or `410` response
+returns `Absent` with level 0. Any other non-2xx response is `Indeterminate`,
+recording that the request failed rather than that the description is absent.
 
 The labels in that file state only what was actually measured. Two of them are
 narrower than they look: `geo-data` and `classes` query only the **default
@@ -109,6 +117,25 @@ reqwest, whose documented proxy resolution reads `HTTP_PROXY` *or*
 not apply to this code. Setting both cases, as above, is harmless
 belt-and-braces and worth keeping for any sidecar or shell tooling that does
 follow curl's rule — but the spec's note should not be read as binding here.
+
+## Known limitations
+
+The following are deferred deliberately, not oversights:
+
+- A **failed** description fetch and a description that **genuinely declares
+  nothing** currently produce the same result, because the "declared" flag is a
+  simple boolean with no way to express "unknown". An endpoint whose description
+  times out is therefore credited as undeclared rather than unknown. This requires
+  a three-state value in the resolver, deferred to stage 1c.
+
+- The fetch is **unconditional**: an endpoint pays one queryless GET even if no
+  configured metric actually needs the result, because the probe kind doesn't know
+  which metrics use it. This is a small cost traded for simpler logic.
+
+- Grading reads a body truncated at 256 KiB while classification reads the whole
+  body. A description larger than 256 KiB could lose a late
+  `sd:defaultEntailmentRegime` and grade as level 3 instead of level 4. This is
+  acceptable in practice: real descriptions are typically hundreds of bytes.
 
 ## Tests
 

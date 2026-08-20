@@ -325,13 +325,14 @@ restrictions. Namespace deleted afterwards.
 
 Three findings that change the prober's configuration:
 
-1. **Uppercase `HTTP_PROXY` is ignored for `http://` URLs.** curl honours only lowercase
+1. **Uppercase `HTTP_PROXY` is ignored for `http://` URLs (curl-specific).** curl honours only lowercase
    `http_proxy` there (uppercase is deliberately ignored because of CGI collision), while
-   `HTTPS_PROXY` works uppercase. With only the uppercase pair set, plain-http endpoints
-   bypassed the proxy and failed *directly on port 80* in 3ms, which looks exactly like a
-   dead endpoint. **472 of 548 LOD Cloud URLs are plain `http://`**, so this would have
-   silently mis-verdicted 86% of the registry. Setting lowercase `http_proxy` fixed all of
-   them. **Deployment must set both cases of both variables.**
+   `HTTPS_PROXY` works uppercase. This was the measured finding during the egress spike.
+   **Correction:** this prober uses reqwest, whose documented proxy resolution reads `HTTP_PROXY` *or*
+   `http_proxy` (and likewise for HTTPS and `ALL_PROXY`), so this constraint does not apply here.
+   The finding stands as part of the spike record, but it does not bind the code. Setting both
+   cases of both variables is harmless belt-and-braces and worth keeping for shell tooling that
+   does follow curl's rule.
 2. **Some hosts fail cluster DNS.** `ontop.certain.ai.ustp.at` gave `SERVFAIL` from the pod
    and `CONNECT tunnel failed, response 503` from Squid, though it resolves fine off-cluster.
    Name resolution is an independent failure mode from egress, and must resolve to
@@ -349,9 +350,11 @@ that each end in something demonstrable, and each gets its own plan.
 |---|---|---|
 | **0. Egress spike** | Proof that a pod in an egress-locked ids3 namespace can run a SPARQL query against an arbitrary public endpoint through Squid | none, do this first |
 | **1. Data model + prober core** | Metric definitions for an initial set, probe kinds, N-Quads output, tests against a mock endpoint. Runs locally, writes to a local Oxigraph. | stage 0 passes, or the prober is relocated outside the cluster |
-| **2. Scoring as queries** | Score computation as pure SPARQL/functions over stored measurements, with recomputation over history proven | stage 1 |
-| **1b. Registry seeding** | Ingest LOD Cloud + YummyData candidates, resolve front-ends to real endpoints, probe, admit responders | stage 1 |
-| **2b. Content metadata + examples** | Tiered VoID extraction, SIB example ingestion, `/.well-known/sparql-examples` discovery | stage 1 |
+| **1b. Declarations and fetch** | Service description fetch with a queryless GET, declaration parsing, verdict resolution against declarations. A service-description metric with graded levels 0-4. | stage 1 |
+| **1c. Registry seeding prerequisites** | Per-host politeness, `Retry-After` handling, concurrency caps, incremental per-endpoint output writing, cost classes on metrics, an `OPTIONS` preflight probe for CORS, probing `GRAPH ?g` as well as the default graph | stage 1b |
+| **1d. Registry seeding** | Ingest LOD Cloud + YummyData candidates, resolve front-ends to real endpoints, probe with politeness, admit responders | stage 1c |
+| **2. Scoring as queries** | Score computation as pure SPARQL/functions over stored measurements, with recomputation over history proven | stage 1b |
+| **2b. Content metadata + examples** | Tiered VoID extraction, SIB example ingestion, `/.well-known/sparql-examples` discovery | stage 1d |
 | **3. Web read tier** | Faceted search, browse, endpoint pages, metric pages, charts, content negotiation, read-only public SPARQL endpoint | stage 2, 2b |
 | **3b. Embedded editor** | `@sib-swiss/sparql-editor` per endpoint, fed autocomplete metadata from our origin | stage 2b, 3 |
 | **4. ids3 deployment** | `sparqlwatch-dev` project-env: prober CronJob, web, Oxigraph, ingress, egress policy | stage 3 |
@@ -362,6 +365,12 @@ Stage 0 is a spike whose output is an answer, not code. Stages 1 through 3 are t
 minimum for a service worth showing anyone. Stages 5 and 6 are what make it a community
 service rather than a dashboard, but they add the only untrusted input paths, so they
 come after the read side is solid.
+
+**Stage 1b and beyond: dependency-driven splitting.** Stage 1b (declarations and fetch)
+depended on nothing beyond stage 1, while stages 1c and 1d (politeness and seeding)
+depend on infrastructure that 1b does not use. The split reflects the dependency
+order rather than arbitrary chunking, so each stage builds directly on what came
+before.
 
 ## Conformance model
 
