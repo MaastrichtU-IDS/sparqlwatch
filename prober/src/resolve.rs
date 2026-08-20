@@ -187,6 +187,7 @@ mod tests {
             query: None,
             expect,
             var: None,
+            declared_by: None,
             graded: false,
         }
     }

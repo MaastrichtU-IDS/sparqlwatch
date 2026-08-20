@@ -49,6 +49,11 @@ pub struct MetricDef {
     /// Absent for kinds that don't read bindings.
     #[serde(default)]
     pub var: Option<String>,
+    /// The IRI whose presence in the endpoint's own declarations means it
+    /// claims this capability. Absent for metrics no declaration can speak
+    /// for (liveness, response time, CORS headers).
+    #[serde(default)]
+    pub declared_by: Option<String>,
     #[serde(default)]
     pub graded: bool,
 }
@@ -95,7 +100,7 @@ pub fn definitions_revision(defs: &[MetricDef]) -> String {
         // Order and field set are part of the revision: a reordered file is a
         // different definition list, and every field affects what is measured.
         canonical.push_str(&format!(
-            "{}\x1f{}\x1f{}\x1f{:?}\x1f{}\x1f{}\x1f{}\x1f{}\x1e",
+            "{}\x1f{}\x1f{}\x1f{:?}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}\x1e",
             d.id,
             d.label,
             d.dimension,
@@ -103,6 +108,7 @@ pub fn definitions_revision(defs: &[MetricDef]) -> String {
             d.query.as_deref().unwrap_or(""),
             d.expect.map(|b| b.to_string()).unwrap_or_default(),
             d.var.as_deref().unwrap_or(""),
+            d.declared_by.as_deref().unwrap_or(""),
             d.graded,
         ));
     }
@@ -228,5 +234,17 @@ query = "SELECT ?s WHERE { ?s ?p ?o } LIMIT 1"
         assert_eq!(geo_data.var, Some("g".to_string()));
         let cors = ms.iter().find(|m| m.id == "cors").unwrap();
         assert_eq!(cors.var, None);
+    }
+
+    #[test]
+    fn a_metric_can_name_the_declaration_that_would_satisfy_it() {
+        let ms = load_metrics(include_str!("../metrics.toml")).unwrap();
+        let geo = ms.iter().find(|m| m.id == "geo-functions").unwrap();
+        assert_eq!(
+            geo.declared_by.as_deref(),
+            Some("http://www.opengis.net/def/function/geosparql/sfWithin")
+        );
+        // Most metrics have no declaration that could speak for them.
+        assert!(ms.iter().find(|m| m.id == "availability").unwrap().declared_by.is_none());
     }
 }

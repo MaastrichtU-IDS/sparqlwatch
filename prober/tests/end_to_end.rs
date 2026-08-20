@@ -99,6 +99,7 @@ async fn a_metric_binding_a_nonstandard_variable_is_extracted_via_its_declared_v
         query: Some("SELECT ?thing WHERE { ?s ?p ?thing } LIMIT 1".into()),
         expect: None,
         var: Some("thing".into()),
+        declared_by: None,
         graded: false,
     };
 
@@ -134,6 +135,7 @@ async fn a_probe_kind_with_no_implementation_issues_no_request() {
         query: None,
         expect: None,
         var: None,
+        declared_by: None,
         graded: true,
     };
 
@@ -170,6 +172,7 @@ async fn an_endpoint_budget_expiry_still_yields_one_row_per_metric() {
             query: Some("SELECT ?s WHERE { ?s ?p ?o } LIMIT 1".into()),
             expect: None,
             var: None,
+            declared_by: None,
             graded: false,
         })
         .collect();
