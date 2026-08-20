@@ -1,0 +1,55 @@
+# Metric definitions are DATA, not code. Adding one that fits an existing
+# probe kind needs no Rust change. Each is emitted as a dqv:Metric so the
+# definitions are published, not private config.
+
+[[metric]]
+id = "availability"
+label = "Answers a trivial query"
+dimension = "availability"
+kind = "Liveness"
+query = "SELECT ?s WHERE { ?s ?p ?o } LIMIT 1"
+
+[[metric]]
+id = "cors"
+label = "CORS headers"
+dimension = "interoperability"
+kind = "Cors"
+query = "SELECT ?s WHERE { ?s ?p ?o } LIMIT 1"
+
+[[metric]]
+id = "geo-functions"
+label = "GeoSPARQL relation functions"
+dimension = "capability"
+kind = "AskFilter"
+expect = true
+query = """
+PREFIX geo: <http://www.opengis.net/ont/geosparql#>
+PREFIX geof: <http://www.opengis.net/def/function/geosparql/>
+ASK { FILTER(geof:sfWithin("POINT(5 52)"^^geo:wktLiteral, "POLYGON((0 50,10 50,10 55,0 55,0 50))"^^geo:wktLiteral)) }
+"""
+
+[[metric]]
+id = "geo-data"
+label = "Holds WKT geometry"
+dimension = "content"
+kind = "AskData"
+var = "g"
+query = """
+PREFIX geo: <http://www.opengis.net/ont/geosparql#>
+SELECT ?g WHERE { ?s geo:asWKT ?g } LIMIT 1
+"""
+
+[[metric]]
+id = "service-description"
+label = "Service description informativeness"
+dimension = "documentation"
+kind = "FetchWellKnown"
+graded = true
+
+[[metric]]
+id = "classes"
+label = "Distinct classes"
+dimension = "content"
+kind = "SelectIris"
+var = "c"
+query = "SELECT DISTINCT ?c WHERE { ?s a ?c } LIMIT 200"
