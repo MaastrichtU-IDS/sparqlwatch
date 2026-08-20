@@ -1,0 +1,14 @@
+# Pins the OTHER half of the parse-error contract that malformed.ttl cannot
+# reach on its own: a syntax error partway through a graph must not discard
+# the triples already parsed before it. One complete, valid triple appears
+# first (sd:feature sd:UnionDefaultGraph), then a second statement breaks on
+# an unterminated IRI. A naive implementation that throws the whole graph
+# away on any error would report triples == 0 and an empty `features` set
+# here -- identical to malformed.ttl's expected output -- which is exactly
+# the regression this fixture exists to catch.
+@prefix sd: <http://www.w3.org/ns/sparql-service-description#> .
+
+<http://example.org/sparql> sd:feature sd:UnionDefaultGraph .
+
+<http://example.org/sparql
+    sd:feature sd:DereferencesURIs .

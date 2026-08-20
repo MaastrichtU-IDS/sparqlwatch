@@ -25,6 +25,19 @@ fn a_substantial_description_reports_its_richer_signals() {
 }
 
 #[test]
+fn a_syntax_error_partway_through_keeps_what_parsed_before_it() {
+    let d = parse_declarations(include_str!("fixtures/partial.ttl"), Some("text/turtle"));
+    // One complete triple precedes the unterminated IRI that ends the parse.
+    // Both assertions matter: the count alone would also be satisfied by a
+    // naive implementation that discards everything on any error and
+    // happens to have zero valid triples to lose (as malformed.ttl does), so
+    // this fixture puts one triple *before* the error and checks that its
+    // content survived, not just that some number came out.
+    assert_eq!(d.triples, 1);
+    assert!(d.declares(&format!("{SD}UnionDefaultGraph")));
+}
+
+#[test]
 fn a_malformed_body_yields_empty_declarations_rather_than_panicking() {
     let d = parse_declarations(include_str!("fixtures/malformed.ttl"), Some("text/turtle"));
     assert_eq!(d.triples, 0);
