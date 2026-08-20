@@ -136,3 +136,31 @@ async fn aswkt_probe_accepts_a_literal_object() {
     let o = c.ask_literal(&format!("{}/sparql", server.uri()), "SELECT ?g WHERE{}", "g").await;
     assert_eq!(o.boolean, Some(true));
 }
+
+#[tokio::test]
+async fn only_the_cors_probe_sends_an_origin_header() {
+    // One request shape served all six metrics, so every probe carried an
+    // Origin. A server that rejects unknown origins could then perturb the
+    // evidence for the five metrics that are not about CORS at all -- which
+    // compounds the absence-from-a-non-answer problem in resolve().
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(200)
+            .insert_header("access-control-allow-origin", "*")
+            .set_body_string(r#"{"head":{},"boolean":true}"#))
+        .mount(&server).await;
+
+    let c = Client::new(Budget::default()).unwrap();
+    let url = format!("{}/sparql", server.uri());
+    c.ask(&url, "ASK{}").await;
+    c.select_iris(&url, "SELECT ?c WHERE{}", "c").await;
+    c.ask_literal(&url, "SELECT ?g WHERE{}", "g").await;
+    let cors = c.cors(&url, "ASK{}").await;
+    assert!(cors.cors, "the cors probe still reads the header back");
+
+    let seen = server.received_requests().await.unwrap();
+    assert_eq!(seen.len(), 4);
+    let with_origin = seen.iter().filter(|r| r.headers.contains_key("origin")).count();
+    assert_eq!(with_origin, 1, "only the CORS probe may announce an Origin");
+    assert!(seen[3].headers.contains_key("origin"), "and it is the CORS probe that does");
+}

@@ -2,6 +2,10 @@ use crate::budget::Budget;
 use crate::observe::{BodyKind, Observation};
 use std::time::Instant;
 
+/// Announced only by the CORS probe, so the other probes cannot be perturbed
+/// by a server that filters on it.
+const ORIGIN: &str = "https://sparqlwatch.example";
+
 pub struct Client {
     http: reqwest::Client,
 }
@@ -21,16 +25,21 @@ impl Client {
         Ok(Self { http })
     }
 
-    async fn get_with_body(&self, url: &str, query: &str) -> (Observation, String) {
+    /// `send_origin` is true only for the CORS probe. One request shape served
+    /// every metric before, so every probe announced an `Origin`; a server that
+    /// rejects unknown origins could then perturb the evidence for the metrics
+    /// that are not about CORS at all.
+    async fn get_with_body(&self, url: &str, query: &str, send_origin: bool) -> (Observation, String) {
         let start = Instant::now();
-        let resp = self
+        let mut req = self
             .http
             .get(url)
             .query(&[("query", query)])
-            .header("Accept", "application/sparql-results+json")
-            .header("Origin", "https://sparqlwatch.example")
-            .send()
-            .await;
+            .header("Accept", "application/sparql-results+json");
+        if send_origin {
+            req = req.header("Origin", ORIGIN);
+        }
+        let resp = req.send().await;
         let elapsed = start.elapsed().as_millis() as u64;
 
         let resp = match resp {
@@ -74,12 +83,17 @@ impl Client {
         (observation, body)
     }
 
-    async fn get(&self, url: &str, query: &str) -> Observation {
-        self.get_with_body(url, query).await.0
+    pub async fn ask(&self, url: &str, query: &str) -> Observation {
+        self.get_with_body(url, query, false).await.0
     }
 
-    pub async fn ask(&self, url: &str, query: &str) -> Observation {
-        self.get(url, query).await
+    /// The CORS probe: the one request that announces an `Origin`, because the
+    /// question it asks is what the endpoint does with one. Note what this
+    /// measures -- an `access-control-allow-origin` header on a simple GET --
+    /// which is weaker than the preflighted request a real browser editor
+    /// makes. An `OPTIONS` preflight probe is the real check and is deferred.
+    pub async fn cors(&self, url: &str, query: &str) -> Observation {
+        self.get_with_body(url, query, true).await.0
     }
 
     /// Pull binding rows out of a SPARQL JSON body, keeping only the requested
@@ -104,7 +118,7 @@ impl Client {
     /// Collect IRI values of one variable. Literal values are ignored, so a
     /// caller asking for classes cannot be fooled by literals.
     pub async fn select_iris(&self, url: &str, query: &str, var: &str) -> Observation {
-        let (mut o, body) = self.get_with_body(url, query).await;
+        let (mut o, body) = self.get_with_body(url, query, false).await;
         if o.body_kind == BodyKind::SparqlJson {
             o.bindings = Self::extract(&body, var, false);
         }
@@ -122,7 +136,7 @@ impl Client {
     /// bindings are found under that name, so this reports `Some(false)`
     /// exactly as if the data were genuinely absent.
     pub async fn ask_literal(&self, url: &str, query: &str, var: &str) -> Observation {
-        let (mut o, body) = self.get_with_body(url, query).await;
+        let (mut o, body) = self.get_with_body(url, query, false).await;
         if o.body_kind == BodyKind::SparqlJson {
             let lits = Self::extract(&body, var, true);
             o.boolean = Some(!lits.is_empty());

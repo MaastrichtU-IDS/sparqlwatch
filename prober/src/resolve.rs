@@ -129,6 +129,13 @@ pub fn resolve(def: &MetricDef, declared: Declared, obs: Result<&Observation, Ex
 /// Grade a service description by what it actually tells a client, not by its
 /// presence. 21 of 28 descriptions in the wild are the same 14-triple
 /// Virtuoso stub, so a stub must not score the same as a real description.
+///
+/// **Currently unreachable from any production path.** Nothing produces the
+/// four booleans it takes: there is no `.well-known` fetch probe yet, no
+/// `BodyKind::Rdf` to recognise a description body, and `MeasurementRow.level`
+/// is always `None`, so no level is ever emitted. This is blocked on that fetch
+/// probe rather than delivered, and is kept (with its tests) because the
+/// grading rule is the part that was worth pinning down from the survey.
 pub fn grade_service_description(
     triples: usize,
     names_dataset: bool,

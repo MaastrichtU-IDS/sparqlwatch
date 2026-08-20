@@ -96,6 +96,9 @@ async fn probe_endpoint(
             match def.kind {
                 ProbeKind::AskData => client.ask_literal(ep, &q, var.as_deref().expect(VAR_REQUIRED)).await,
                 ProbeKind::SelectIris => client.select_iris(ep, &q, var.as_deref().expect(VAR_REQUIRED)).await,
+                // The only probe that announces an `Origin`, so the others
+                // cannot be perturbed by a server that filters on it.
+                ProbeKind::Cors => client.cors(ep, &q).await,
                 _ => client.ask(ep, &q).await,
             }
         };
