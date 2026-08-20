@@ -19,6 +19,7 @@ const SD_GRAPH: &str = "http://www.w3.org/ns/sparql-service-description#graph";
 const SD_DEFAULT_ENTAILMENT_REGIME: &str =
     "http://www.w3.org/ns/sparql-service-description#defaultEntailmentRegime";
 const VOID_CLASS_PARTITION: &str = "http://rdfs.org/ns/void#classPartition";
+const VOID_EXAMPLE_RESOURCE: &str = "http://rdfs.org/ns/void#exampleResource";
 const VOID_PROPERTY_PARTITION: &str = "http://rdfs.org/ns/void#propertyPartition";
 
 /// What an endpoint claims about itself, reduced from a fetched graph. Every
@@ -41,6 +42,11 @@ pub struct Declarations {
     pub has_void_partitions: bool,
     /// `sd:defaultEntailmentRegime` appeared at least once.
     pub has_entailment: bool,
+    /// `void:exampleResource` appeared at least once. One of the three things
+    /// the spec's level 4 recognises, alongside an entailment regime and
+    /// extension functions: naming a resource a client can actually
+    /// dereference is a description doing more than describing itself.
+    pub has_example_resources: bool,
 }
 
 impl Declarations {
@@ -110,6 +116,7 @@ pub fn parse_declarations(body: &str, content_type: Option<&str>) -> Declaration
             }
             SD_DEFAULT_DATASET | SD_GRAPH => d.names_dataset = true,
             SD_DEFAULT_ENTAILMENT_REGIME => d.has_entailment = true,
+            VOID_EXAMPLE_RESOURCE => d.has_example_resources = true,
             VOID_CLASS_PARTITION | VOID_PROPERTY_PARTITION => d.has_void_partitions = true,
             _ => {}
         }

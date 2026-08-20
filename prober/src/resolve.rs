@@ -145,7 +145,14 @@ pub fn resolve(def: &MetricDef, declared: Declared, obs: Result<&Observation, Ex
 /// Grade a fetched service description by what its own content declares,
 /// mapping the fields straight onto `grade_service_description`.
 pub fn grade_from_declarations(defs: &Declarations) -> Level {
-    grade_service_description(defs.triples, defs.names_dataset, defs.has_void_partitions, defs.has_entailment)
+    grade_service_description(
+        defs.triples,
+        defs.names_dataset,
+        defs.has_void_partitions,
+        defs.has_entailment,
+        !defs.extension_functions.is_empty(),
+        defs.has_example_resources,
+    )
 }
 
 /// Resolve the `FetchWellKnown` probe: did the endpoint publish a
@@ -199,18 +206,27 @@ pub fn resolve_fetch(defs: &Declarations, obs: Result<&Observation, Expired>) ->
 /// Virtuoso stub, so a stub must not score the same as a real description.
 ///
 /// Reached via `grade_from_declarations`, which `resolve_fetch` calls once a
-/// fetch probe reports a parsed `BodyKind::Rdf` body. `MeasurementRow.level`
-/// is still always `None` today: wiring that value out of `resolve_fetch` and
-/// into the emitted row is a later stage's job, not this module's.
+/// fetch probe reports a parsed `BodyKind::Rdf` body from a 2xx. The grade is
+/// carried out of `resolve_fetch` by `run_sweep` and lands on the
+/// `MeasurementRow.level` of any metric its definition marks `graded`.
+///
+/// The ladder is the spec's (design doc line 433): level 4 is "declares an
+/// entailment regime, example resources, or extension functions", so all
+/// three reach it. It is monotonic by construction: every criterion is a
+/// declaration the description either makes or does not, and adding one can
+/// only move a description up the ladder, never down. That is what makes the
+/// number readable as informativeness rather than as a taxonomy.
 pub fn grade_service_description(
     triples: usize,
     names_dataset: bool,
     has_void_partitions: bool,
     has_entailment: bool,
+    has_extension_functions: bool,
+    has_example_resources: bool,
 ) -> Level {
     let n: u8 = if triples == 0 {
         0
-    } else if has_entailment {
+    } else if has_entailment || has_extension_functions || has_example_resources {
         4
     } else if has_void_partitions {
         3
@@ -326,11 +342,68 @@ mod tests {
     fn service_description_grading_separates_stub_from_substance() {
         // 21 of 28 descriptions in the wild are the same 14-triple Virtuoso
         // stub, so a stub must not score the same as a real description.
-        assert_eq!(grade_service_description(14, false, false, false), Level(1));
-        assert_eq!(grade_service_description(40, true, false, false), Level(2));
-        assert_eq!(grade_service_description(7077, true, true, false), Level(3));
-        assert_eq!(grade_service_description(7140, true, true, true), Level(4));
-        assert_eq!(grade_service_description(0, false, false, false), Level(0));
+        assert_eq!(grade_service_description(14, false, false, false, false, false), Level(1));
+        assert_eq!(grade_service_description(40, true, false, false, false, false), Level(2));
+        assert_eq!(grade_service_description(7077, true, true, false, false, false), Level(3));
+        assert_eq!(grade_service_description(7140, true, true, true, false, false), Level(4));
+        assert_eq!(grade_service_description(0, false, false, false, false, false), Level(0));
+    }
+
+    #[test]
+    fn extension_functions_and_example_resources_reach_level_four_like_entailment() {
+        // Spec line 433: level 4 is "declares an entailment regime, example
+        // resources, or extension functions". Only `has_entailment` was
+        // checked, so a description declaring extension functions graded 1,
+        // the same as a stub. That is precisely the rare honest declarer this
+        // ladder exists to reward: 0 of 28 surveyed descriptions declared
+        // anything geospatial, so when one finally does it must be credited.
+        let mut fns = Declarations { triples: 20, ..Declarations::empty() };
+        fns.extension_functions.insert("http://www.opengis.net/def/function/geosparql/sfWithin".into());
+        assert_eq!(grade_from_declarations(&fns), Level(4));
+
+        let examples = Declarations { triples: 20, has_example_resources: true, ..Declarations::empty() };
+        assert_eq!(grade_from_declarations(&examples), Level(4));
+    }
+
+    #[test]
+    fn a_stock_sd_feature_is_not_a_level_four_declaration() {
+        // `sd:feature` is exactly what the 14-triple Virtuoso stub carries, so
+        // widening level 4 must not sweep the stub up with it.
+        let mut stub = Declarations { triples: 14, ..Declarations::empty() };
+        stub.features.insert("http://www.w3.org/ns/sparql-service-description#UnionDefaultGraph".into());
+        assert_eq!(grade_from_declarations(&stub), Level(1));
+    }
+
+    #[test]
+    fn the_ladder_is_monotonic_in_every_declaration() {
+        // A richer description must never grade lower than a poorer one, or
+        // the number stops being readable as informativeness. Exhaustive over
+        // all 32 combinations of the five declaration flags at a fixed
+        // non-zero triple count: adding any one flag can only raise the grade.
+        let grade = |bits: u8| {
+            grade_service_description(
+                20,
+                bits & 1 != 0,
+                bits & 2 != 0,
+                bits & 4 != 0,
+                bits & 8 != 0,
+                bits & 16 != 0,
+            )
+            .0
+        };
+        for bits in 0u8..32 {
+            for flag in [1u8, 2, 4, 8, 16] {
+                if bits & flag != 0 {
+                    continue;
+                }
+                assert!(
+                    grade(bits | flag) >= grade(bits),
+                    "adding flag {flag} to {bits} lowered the grade from {} to {}",
+                    grade(bits),
+                    grade(bits | flag)
+                );
+            }
+        }
     }
 
     #[test]

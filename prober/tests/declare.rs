@@ -56,3 +56,20 @@ fn empty_declarations_declare_nothing() {
     assert!(!d.declares(&format!("{SD}UnionDefaultGraph")));
     assert_eq!(d.triples, 0);
 }
+
+#[test]
+fn a_void_example_resource_is_reported() {
+    // The spec's level 4 is "an entailment regime, example resources, or
+    // extension functions", so the flag the grader reads has to be populated
+    // from the graph, not just declared on the struct.
+    let d = parse_declarations(
+        r#"@prefix void: <http://rdfs.org/ns/void#> .
+<http://example.org/sparql> void:exampleResource <http://example.org/thing> ."#,
+        Some("text/turtle"),
+    );
+    assert!(d.has_example_resources);
+    assert_eq!(d.triples, 1);
+
+    let stub = parse_declarations(include_str!("fixtures/virtuoso-stub.ttl"), Some("text/turtle"));
+    assert!(!stub.has_example_resources, "the stock Virtuoso stub names no example resource");
+}
