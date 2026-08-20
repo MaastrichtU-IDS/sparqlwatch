@@ -3,7 +3,7 @@ use sparqlwatch_prober::client::Client;
 use sparqlwatch_prober::emit::{emit_nquads, RunId};
 use sparqlwatch_prober::metrics::{load_metrics, MetricDef, ProbeKind};
 use sparqlwatch_prober::run_sweep;
-use sparqlwatch_prober::verdict::Verdict;
+use sparqlwatch_prober::verdict::{Level, Verdict};
 use oxrdf::{NamedNode, Quad, Term};
 use oxrdfio::{RdfFormat, RdfParser};
 use std::collections::{BTreeMap, BTreeSet};
@@ -267,7 +267,7 @@ async fn a_description_served_as_rdf_xml_is_parsed_not_silently_dropped() {
     assert_eq!(description.verdict, Verdict::Verified, "the body did parse, as RDF/XML");
     assert_ne!(
         description.level,
-        Some(sparqlwatch_prober::verdict::Level(0)),
+        Some(Level(0)),
         "a description with a real triple in it must not grade the same as an empty one"
     );
 
@@ -332,4 +332,69 @@ async fn an_endpoint_budget_expiry_still_yields_one_row_per_metric() {
         assert_eq!(row.metric_id, def.id, "rows stay aligned with the definitions");
         assert_eq!(row.endpoint, url);
     }
+}
+
+/// A one-triple service description: parseable, so it grades level 1, but it
+/// names no dataset, carries no VoID partition and declares nothing that
+/// reaches level 4.
+const STUB_LEVEL_1: &str = r#"
+@prefix sd: <http://www.w3.org/ns/sparql-service-description#> .
+<http://example.org/bare> a sd:Service .
+"#;
+
+/// The same shape plus an entailment regime, which the spec's ladder puts at
+/// level 4. Deliberately does NOT declare extension functions or example
+/// resources, so this fixture tests one level-4 criterion at a time.
+const STUB_LEVEL_4: &str = r#"
+@prefix sd: <http://www.w3.org/ns/sparql-service-description#> .
+<http://example.org/rich> a sd:Service ;
+    sd:defaultEntailmentRegime <http://www.w3.org/ns/entailment/RDFS> .
+"#;
+
+/// Mount an endpoint that serves `description` to the queryless fetch and an
+/// empty SPARQL result to everything else.
+async fn endpoint_serving(description: &str) -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/sparql")).and(query_param_is_missing("query"))
+        .respond_with(ResponseTemplate::new(200)
+            .set_body_raw(description.as_bytes().to_vec(), "text/turtle"))
+        .mount(&server).await;
+    Mock::given(method("GET")).and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(200)
+            .set_body_string(r#"{"head":{"vars":["s"]},"results":{"bindings":[]},"boolean":true}"#))
+        .mount(&server).await;
+    server
+}
+
+/// Fix round 2: `a_fetched_description_puts_a_level_on_its_row` asserts only
+/// `level.is_some()`, and the reviewer showed that replacing the wiring in
+/// `lib.rs` with a constant `Some(Level(1))` left all 93 tests green. The unit
+/// test `a_fetched_stub_grades_low_and_a_substantial_one_grades_high` pins the
+/// computation, but nothing pinned that the emitted row carries the level
+/// actually computed for *that* endpoint.
+///
+/// Two endpoints, one grading 1 and one grading 4, swept in one run. A
+/// constant fails on whichever endpoint it does not happen to match, and
+/// swapping the two expectations fails too, because each assertion is keyed
+/// on the row's own endpoint.
+#[tokio::test]
+async fn each_endpoints_row_carries_the_level_computed_for_that_endpoint() {
+    let bare = endpoint_serving(STUB_LEVEL_1).await;
+    let rich = endpoint_serving(STUB_LEVEL_4).await;
+    let bare_url = format!("{}/sparql", bare.uri());
+    let rich_url = format!("{}/sparql", rich.uri());
+
+    let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
+    let client = Client::new(Budget::default()).unwrap();
+    let rows = run_sweep(&[bare_url.clone(), rich_url.clone()], &defs, &client, Budget::default()).await;
+
+    let level_at = |url: &str| {
+        let row = rows.iter()
+            .find(|r| r.endpoint == url && r.metric_id == "service-description")
+            .expect("every endpoint gets a service-description row");
+        assert_eq!(row.verdict, Verdict::Verified, "{url} served a parseable description");
+        row.level
+    };
+    assert_eq!(level_at(&bare_url), Some(Level(1)), "a bare one-triple description grades 1");
+    assert_eq!(level_at(&rich_url), Some(Level(4)), "an entailment regime grades 4");
 }
