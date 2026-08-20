@@ -189,6 +189,42 @@ async fn a_fetched_description_puts_a_level_on_its_row() {
     assert!(row.level.is_some(), "a graded metric must carry its level");
 }
 
+/// The level is keyed on the metric definition's `graded` flag, not on the
+/// probe kind: `probe_endpoint` computes a level for every `FetchWellKnown`
+/// fetch internally, but must only put it on the row when the metric that
+/// asked for it is declared `graded = true` in `metrics.toml`. A
+/// `FetchWellKnown` metric that is not graded must carry no level at all,
+/// even though the same fetch resolves to `Verified` and a level was
+/// available to attach.
+#[tokio::test]
+async fn a_non_graded_fetch_metric_carries_no_level() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/sparql")).and(query_param_is_missing("query"))
+        .respond_with(ResponseTemplate::new(200)
+            .set_body_raw(STUB_TTL.as_bytes().to_vec(), "text/turtle"))
+        .mount(&server).await;
+
+    let def = MetricDef {
+        id: "service-description-ungraded".into(),
+        label: "ungraded fetch".into(),
+        dimension: "capability".into(),
+        kind: ProbeKind::FetchWellKnown,
+        query: None,
+        expect: None,
+        var: None,
+        declared_by: None,
+        graded: false,
+    };
+
+    let client = Client::new(Budget::default()).unwrap();
+    let url = format!("{}/sparql", server.uri());
+    let rows = run_sweep(std::slice::from_ref(&url), &[def], &client, Budget::default()).await;
+
+    let row = &rows[0];
+    assert_eq!(row.verdict, Verdict::Verified, "the fetch itself still succeeds");
+    assert!(row.level.is_none(), "a non-graded metric must carry no level, got {:?}", row.level);
+}
+
 /// Fix round 1: the reviewer traced that if `lib.rs` were mis-wired to join
 /// `Declared::from(&Declarations::empty(), def)` instead of the real fetched
 /// `Declarations`, every other test in this file would still pass --

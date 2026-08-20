@@ -215,6 +215,16 @@ query = "SELECT ?thing WHERE {{ ?s ?p ?thing }} LIMIT 1"
         assert_eq!(definitions_revision(&a), definitions_revision(&a), "no clock, no randomness");
         let b = load_metrics(&SRC.replace("ASK { }", "ASK { ?s ?p ?o }")).unwrap();
         assert_ne!(definitions_revision(&a), definitions_revision(&b), "an edited query is a new revision");
+        let c = load_metrics(&SRC.replace(
+            "kind = \"AskFilter\"\nexpect = true",
+            "kind = \"AskFilter\"\nexpect = true\ndeclared_by = \"http://example.org/fn\"",
+        ))
+        .unwrap();
+        assert_ne!(
+            definitions_revision(&a),
+            definitions_revision(&c),
+            "an edited declared_by changes what the metric is read against, so it must be a new revision too"
+        );
         let reordered: Vec<MetricDef> = a.iter().rev().cloned().collect();
         assert_ne!(definitions_revision(&a), definitions_revision(&reordered));
         assert!(definitions_revision(&a).starts_with("fnv1a64:"));

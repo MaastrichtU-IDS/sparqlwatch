@@ -53,6 +53,29 @@ async fn the_fetch_sends_no_query_parameter() {
 }
 
 #[tokio::test]
+async fn the_fetch_sends_no_origin() {
+    // `Origin` is announced by the CORS probe alone (`Client::cors`). A
+    // description fetch that also sent it could have its evidence perturbed
+    // by a server that filters on `Origin`, for metrics that have nothing to
+    // do with CORS.
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(200)
+            .insert_header("content-type", "text/turtle").set_body_string(STUB))
+        .mount(&server).await;
+
+    let c = Client::new(Budget::default()).unwrap();
+    let _ = c.fetch_rdf(&format!("{}/sparql", server.uri())).await;
+    let reqs = server.received_requests().await.unwrap();
+    assert_eq!(reqs.len(), 1);
+    assert!(
+        reqs[0].headers.get("origin").is_none(),
+        "the description fetch must not send Origin, got {:?}",
+        reqs[0].headers.get("origin")
+    );
+}
+
+#[tokio::test]
 async fn the_fetch_asks_for_rdf_not_sparql_results() {
     let server = MockServer::start().await;
     // NOTE: wiremock 0.6.5's single-value `header(key, value)` matcher does not
