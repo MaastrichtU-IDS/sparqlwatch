@@ -136,8 +136,9 @@ pub fn resolve(def: &MetricDef, declared: Declared, obs: Result<&Observation, Ex
         }
         // `resolve()` only carries `declared.claimed`, not the fetched
         // `Declarations` itself, so it cannot grade here; it delegates to
-        // `resolve_fetch` for the verdict and discards the level, which is
-        // read directly from `resolve_fetch` by whatever stage records it.
+        // `resolve_fetch` for the verdict and discards the level. `run_sweep`
+        // calls `resolve_fetch` directly for the graded row, so the level is
+        // never lost, only unavailable on this path.
         ProbeKind::FetchWellKnown => resolve_fetch(&Declarations::empty(), Ok(o)).0,
     }
 }

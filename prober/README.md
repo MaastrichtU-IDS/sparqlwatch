@@ -80,11 +80,25 @@ default. The definitions are hashed into a `metricDefinitionRevision` recorded
 on every run, a pure function of the definitions themselves, so a measurement
 can be read against the definition that produced it.
 
-`FetchWellKnown` probes by fetching the queryless GET described above. A successful
-fetch with a parseable body (Turtle, RDF/XML, or JSON-LD) returns `Verified` and
-a level reflecting the description's informativeness. A `404` or `410` response
-returns `Absent` with level 0. Any other non-2xx response is `Indeterminate`,
-recording that the request failed rather than that the description is absent.
+`FetchWellKnown` probes by fetching the queryless GET described above. It returns
+`Verified`, plus a level reflecting the description's informativeness, only when
+a **2xx** response arrives under an RDF-specific media type (`text/turtle`,
+`application/rdf+xml`, `application/ld+json`, `application/n-triples`,
+`application/trig`, `application/n-quads`) and parses to **at least one triple**.
+All three conditions are load-bearing. `RdfFormat::from_media_type` also accepts
+the generic `text/plain`, `application/json` and `application/xml`, under which
+an empty throttle body, a `{"error":"boom"}` page and a SPARQL-results document
+all parse cleanly, so a generic media type is not a positive identification of
+RDF and neither is a zero-triple parse. A genuine RDF/XML document served as bare
+`application/xml` therefore reports `indeterminate`, which is honest, rather than
+a confident verdict. A `404` or `410` response returns `Absent` with level 0. Any
+other status is `Indeterminate`, recording that the request failed rather than
+that the description is absent.
+
+The level ladder follows the design doc: 0 none served, 1 a stub, 2 names a
+default dataset or graphs, 3 carries VoID class or property partitions, 4
+declares an entailment regime, example resources, or extension functions. It is
+monotonic: a description that declares more never grades lower.
 
 The labels in that file state only what was actually measured. Two of them are
 narrower than they look: `geo-data` and `classes` query only the **default
@@ -132,6 +146,14 @@ The following are deferred deliberately, not oversights:
 - The fetch is **unconditional**: an endpoint pays one queryless GET even if no
   configured metric actually needs the result, because the probe kind doesn't know
   which metrics use it. This is a small cost traded for simpler logic.
+
+- Declarations are collected **graph-wide**, with no scoping to the service
+  actually being probed. A document describing two co-hosted services can
+  therefore credit endpoint A with endpoint B's `sd:extensionFunction`, turning
+  an `undeclared-but-verified` into a `verified` that endpoint never earned.
+  Fixing it needs graph traversal (match the service node by `sd:endpoint`, then
+  follow `sd:defaultDataset` for the VoID partitions), deferred to stage 1c and
+  **before any real registry sweep**.
 
 - Grading reads a body truncated at 256 KiB while classification reads the whole
   body. A description larger than 256 KiB could lose a late
