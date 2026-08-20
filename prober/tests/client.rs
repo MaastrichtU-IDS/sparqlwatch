@@ -115,7 +115,7 @@ async fn aswkt_probe_rejects_non_literal_objects() {
         .mount(&server).await;
 
     let c = Client::new(Budget::default()).unwrap();
-    let o = c.ask_literal(&format!("{}/sparql", server.uri()), "SELECT ?g WHERE{}").await;
+    let o = c.ask_literal(&format!("{}/sparql", server.uri()), "SELECT ?g WHERE{}", "g").await;
     assert_eq!(o.boolean, Some(false), "an IRI object must not count as geometry");
 }
 
@@ -133,6 +133,6 @@ async fn aswkt_probe_accepts_a_literal_object() {
         .mount(&server).await;
 
     let c = Client::new(Budget::default()).unwrap();
-    let o = c.ask_literal(&format!("{}/sparql", server.uri()), "SELECT ?g WHERE{}").await;
+    let o = c.ask_literal(&format!("{}/sparql", server.uri()), "SELECT ?g WHERE{}", "g").await;
     assert_eq!(o.boolean, Some(true));
 }

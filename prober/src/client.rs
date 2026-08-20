@@ -111,15 +111,20 @@ impl Client {
         o
     }
 
-    /// True only when the variable `?g` is bound to a LITERAL at least once.
+    /// True only when the given variable is bound to a LITERAL at least once.
     /// This is the guard against the false positive measured in the wild:
     /// publications.europa.eu passes a naive `ASK { ?s geo:asWKT ?g }` while
     /// every `?g` is the IRI `rdf:nil`, so it holds zero geometry despite the
     /// naive probe reporting success.
-    pub async fn ask_literal(&self, url: &str, query: &str) -> Observation {
+    ///
+    /// `var` must be the actual variable name the query binds. A caller that
+    /// passes the wrong name gets a confident, silent false negative: no
+    /// bindings are found under that name, so this reports `Some(false)`
+    /// exactly as if the data were genuinely absent.
+    pub async fn ask_literal(&self, url: &str, query: &str, var: &str) -> Observation {
         let (mut o, body) = self.get_with_body(url, query).await;
         if o.body_kind == BodyKind::SparqlJson {
-            let lits = Self::extract(&body, "g", true);
+            let lits = Self::extract(&body, var, true);
             o.boolean = Some(!lits.is_empty());
             o.bindings = lits;
         }
