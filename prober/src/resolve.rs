@@ -86,15 +86,14 @@ pub fn resolve(def: &MetricDef, declared: Declared, obs: Result<&Observation, Ex
             // A real `.well-known` service description is RDF, which this
             // client classifies as `BodyKind::Other`, so the `Verified` arm
             // below is not reachable from a genuine document until a later
-            // stage adds a fetch probe that reports parsed RDF. That
-            // contract is deliberately out of scope here: this change only
-            // stops a good-but-unparsed document being reported as `Absent`.
+            // stage adds a fetch probe that reports parsed RDF evidence.
+            // Until then, `Absent` is not achievable for this probe kind at
+            // all: an unparsed or unclaimed well-known document is honestly
+            // `Indeterminate`, never a confirmed absence.
             if o.body_kind == BodyKind::SparqlJson || !o.bindings.is_empty() {
                 Verdict::Verified
             } else if declared.claimed {
                 Verdict::DeclaredOnly
-            } else if answered_ok(o) && o.body_kind == BodyKind::SparqlJson {
-                Verdict::Absent
             } else {
                 Verdict::Indeterminate
             }
