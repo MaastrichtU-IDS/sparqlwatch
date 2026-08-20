@@ -12,6 +12,25 @@ const ORIGIN: &str = "https://sparqlwatch.example";
 /// request is not a query at all.
 const RDF_ACCEPT: &str = "text/turtle, application/rdf+xml;q=0.9, application/ld+json;q=0.8";
 
+/// The media types that positively identify an RDF payload. Deliberately
+/// narrower than `RdfFormat::from_media_type` accepts: that function maps the
+/// generic `text/plain` onto N-Triples, `application/json` onto JSON-LD and
+/// `application/xml` / `text/xml` onto RDF/XML, under which an empty throttle
+/// body, a `{"error":"boom"}` page and a SPARQL-results XML document all parse
+/// without error (measured against oxrdfio directly). Those are exactly the
+/// ambiguous types, so they are rejected here. `RDF_ACCEPT` names three
+/// RDF-specific types, so a cooperating server answers with one of these; a
+/// genuine RDF/XML document served as bare `application/xml` degrades to
+/// `indeterminate`, which is honest, rather than to a confident verdict.
+const RDF_MEDIA_TYPES: [&str; 6] = [
+    "text/turtle",
+    "application/rdf+xml",
+    "application/ld+json",
+    "application/n-triples",
+    "application/trig",
+    "application/n-quads",
+];
+
 /// Cap on the retained response body. Kept generous enough for a service
 /// description or small dataset dump, small enough that a misbehaving
 /// endpoint cannot blow up memory across a sweep of hundreds of endpoints.
@@ -142,10 +161,7 @@ impl Client {
             || body.trim_start().to_ascii_lowercase().starts_with("<html");
         let body_kind = if looks_html {
             BodyKind::Html
-        } else if RdfFormat::from_media_type(&ctype)
-            .map(|fmt| Self::parses_as_rdf(fmt, &body))
-            .unwrap_or(false)
-        {
+        } else if Self::rdf_format_of(&ctype).is_some_and(|fmt| Self::parses_as_rdf(fmt, &body)) {
             BodyKind::Rdf
         } else {
             BodyKind::Other
@@ -164,15 +180,29 @@ impl Client {
         }
     }
 
-    /// Whether `body` parses without error under `fmt`. Sniffing the
-    /// `Content-Type` alone is not enough evidence: an endpoint can send
-    /// `text/turtle` and an HTML error page underneath it, and that must not
-    /// be classified as `Rdf`.
+    /// The RDF format `ctype` announces, but only for a media type that
+    /// identifies RDF specifically (see `RDF_MEDIA_TYPES`). Parameters such as
+    /// `; charset=utf-8` are stripped before the comparison.
+    fn rdf_format_of(ctype: &str) -> Option<RdfFormat> {
+        let essence = ctype.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+        if !RDF_MEDIA_TYPES.contains(&essence.as_str()) {
+            return None;
+        }
+        RdfFormat::from_media_type(&essence)
+    }
+
+    /// Whether `body` parses under `fmt` AND yields at least one triple.
+    /// Sniffing the `Content-Type` alone is not enough evidence: an endpoint
+    /// can send `text/turtle` and an HTML error page underneath it, and that
+    /// must not be classified as `Rdf`. Neither is a clean zero-triple parse:
+    /// an empty `text/turtle` body parses fine and is equally consistent with
+    /// "no description here", so it is not a positive identification of RDF
+    /// content and must not license a graded `verified`.
     fn parses_as_rdf(fmt: RdfFormat, body: &str) -> bool {
         RdfParser::from_format(fmt)
             .for_reader(body.as_bytes())
             .collect::<Result<Vec<_>, _>>()
-            .is_ok()
+            .is_ok_and(|quads| !quads.is_empty())
     }
 
     pub async fn ask(&self, url: &str, query: &str) -> Observation {
