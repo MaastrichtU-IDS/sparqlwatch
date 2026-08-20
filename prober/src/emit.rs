@@ -75,9 +75,24 @@ pub fn emit_nquads(
     let mut typed_endpoints: BTreeSet<String> = BTreeSet::new();
 
     for (i, r) in rows.iter().enumerate() {
+        // A malformed endpoint IRI is one bad row, not a reason to discard a
+        // whole sweep: this runs after all the probing, so aborting here would
+        // turn hours of work into no output at all. The registry is seeded from
+        // a real-world dump known to contain junk URLs.
+        let endpoint = match NamedNode::new(&r.endpoint) {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!(
+                    endpoint = %r.endpoint,
+                    metric = %r.metric_id,
+                    error = %e,
+                    "skipping measurement: endpoint is not a valid IRI"
+                );
+                continue;
+            }
+        };
         let m = nn(&format!("urn:sparqlwatch:measurement:{}:{}", run.0, i))?;
         let subj = NamedOrBlankNode::NamedNode(m.clone());
-        let endpoint = nn(&r.endpoint)?;
 
         if typed_endpoints.insert(r.endpoint.clone()) {
             // The endpoint is the same resource across every metric, so it is
@@ -272,6 +287,35 @@ mod tests {
         assert_eq!(
             elapsed[0],
             &Term::Literal(Literal::new_typed_literal("5714", xsd::INTEGER))
+        );
+    }
+
+    #[test]
+    fn a_row_with_an_invalid_endpoint_iri_is_skipped_not_fatal() {
+        // A later stage seeds 548 real-world URLs from a dump known to contain
+        // junk. Aborting the emission after all the probing is done would mean
+        // hours of work produce no output at all because of one bad string.
+        let mut rs = rows();
+        rs.insert(
+            1,
+            MeasurementRow {
+                endpoint: "not an iri at all".into(),
+                metric_id: "availability".into(),
+                verdict: Verdict::Verified,
+                level: None,
+                elapsed_ms: Some(3),
+            },
+        );
+        let out = emit_nquads(&RunId("r1".into()), "2026-08-20T08:00:00Z", REV, &rs)
+            .expect("one junk endpoint must not discard the sweep");
+        assert!(!out.contains("not an iri at all"));
+        let qs = quads_of(&out);
+        let measured: Vec<&Term> = objects(&qs, "http://www.w3.org/ns/dqv#computedOn");
+        assert_eq!(measured.len(), 2, "the two well-formed rows survive");
+        let vals: Vec<&Term> = objects(&qs, "http://www.w3.org/ns/dqv#value");
+        assert!(
+            !vals.contains(&&Term::Literal(Literal::new_simple_literal("verified"))),
+            "the skipped row publishes no verdict: {vals:?}"
         );
     }
 
