@@ -300,7 +300,7 @@ metric-definition revision, which is versioned data loaded into a named graph.
 
 | Risk | Severity | Handling |
 |---|---|---|
-| Squid egress blocks or throttles arbitrary-host `CONNECT`, so the prober cannot reach endpoints at all | **Project-ending** | Spike it before writing any code. See below. |
+| ~~Squid egress blocks arbitrary-host `CONNECT`~~ | **RESOLVED 2026-08-20** | Spike passed. See [Stage 0 result](#stage-0-egress-spike-result). |
 | Scope creep: monitoring dashboards are deceptively large | High | First release is the leaderboard, endpoint pages, metric pages and submissions. Threads can follow. |
 | Probing looks like abuse to endpoint operators | Medium | Per-host concurrency of 1, delays, honest User-Agent with a contact URL, honour `Retry-After`, published probe schedule |
 | Very large datasets make some metrics intractable, as osm-planet did | Medium | Metrics declare a cost class; expensive ones are opt-in per endpoint and record "not measured" rather than a misleading zero |
@@ -308,11 +308,37 @@ metric-definition revision, which is versioned data loaded into a named graph.
 | Endpoints without CORS cannot run queries in the embedded editor | Low | Autocomplete is served from our origin so it still works; the gap is reported as an actionable finding. Measured 4 of 4 evaluated endpoints already send CORS. |
 | Depending on an external web component (`@sib-swiss/sparql-editor`) | Low | Pin the version, vendor the bundle rather than loading from a CDN, since the ids3 CSP and egress rules make CDN loading unreliable anyway |
 
-The egress risk deserves emphasis. The prober's entire function is reaching arbitrary
-public hosts from inside a namespace whose NetworkPolicy permits only DNS,
-cluster-internal traffic, and the apiserver. If Squid will not pass `CONNECT` to
-several hundred arbitrary HTTPS hosts, the options narrow to running the prober
-outside the cluster and shipping observations in. **This must be settled first.**
+### Stage 0 egress spike: result
+
+Run on 2026-08-20 in a throwaway `sparqlwatch-spike` namespace carrying a verbatim copy
+of `ids3/projects/_base/restrict-egress.yaml`, so the pod had exactly a real project-env's
+restrictions. Namespace deleted afterwards.
+
+**The answer is yes, the prober can run in-cluster.**
+
+| Check | Result |
+|---|---|
+| Direct egress with no proxy | **Blocked**, curl exit 7 in 0.06s, as the policy intends |
+| Via `egress-proxy.platform.svc.cluster.local:3128` | **200 in 0.14s** |
+| Arbitrary-host `CONNECT` | **Not whitelisted.** qlever.dev, data.kkg.kadaster.nl, foodie-cloud.org, query.wikidata.org, sparql.rhea-db.org all returned `application/sparql-results+json` |
+| A real GeoSPARQL probe | `geof:sfWithin` returned `{"boolean": true}` through the proxy |
+
+Three findings that change the prober's configuration:
+
+1. **Uppercase `HTTP_PROXY` is ignored for `http://` URLs.** curl honours only lowercase
+   `http_proxy` there (uppercase is deliberately ignored because of CGI collision), while
+   `HTTPS_PROXY` works uppercase. With only the uppercase pair set, plain-http endpoints
+   bypassed the proxy and failed *directly on port 80* in 3ms, which looks exactly like a
+   dead endpoint. **472 of 548 LOD Cloud URLs are plain `http://`**, so this would have
+   silently mis-verdicted 86% of the registry. Setting lowercase `http_proxy` fixed all of
+   them. **Deployment must set both cases of both variables.**
+2. **Some hosts fail cluster DNS.** `ontop.certain.ai.ustp.at` gave `SERVFAIL` from the pod
+   and `CONNECT tunnel failed, response 503` from Squid, though it resolves fine off-cluster.
+   Name resolution is an independent failure mode from egress, and must resolve to
+   `indeterminate`, not `absent`.
+3. **A 301/303 through the proxy is a real response**, not a proxy error. `opendata.aragon.es`
+   and `dbpedia.org` redirect; the prober must follow or record redirects rather than treat
+   them as failures.
 
 ## Delivery sequence
 
