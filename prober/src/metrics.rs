@@ -60,8 +60,23 @@ struct MetricFile {
 
 /// Parse metric definitions out of TOML. An unrecognized `kind` is a loud
 /// parse error, never a silent default, because the probe-kind set is closed.
+///
+/// The same doctrine applies to a missing `var`: the two kinds that read a
+/// variable's bindings back out of the result cannot work without knowing its
+/// name, and guessing one silently turns a real capability into a false
+/// `Absent`. That is a broken definition, so it fails here rather than
+/// publishing one worthless measurement per endpoint.
 pub fn load_metrics(toml_src: &str) -> anyhow::Result<Vec<MetricDef>> {
     let f: MetricFile = toml::from_str(toml_src)?;
+    for m in &f.metric {
+        if matches!(m.kind, ProbeKind::AskData | ProbeKind::SelectIris) && m.var.is_none() {
+            anyhow::bail!(
+                "metric '{}' of kind {:?} reads a variable's bindings but declares no `var`",
+                m.id,
+                m.kind
+            );
+        }
+    }
     Ok(f.metric)
 }
 
@@ -123,6 +138,42 @@ dimension = "d"
 kind = "Telepathy"
 "#;
         assert!(load_metrics(bad).is_err());
+    }
+
+    #[test]
+    fn a_binding_kind_with_no_var_is_a_load_error_not_a_silent_measurement() {
+        // Same doctrine as the unknown `kind` above: a broken definition is a
+        // loud parse error. Papering over it published N endpoints x one
+        // Indeterminate measurement for a metric that could never work.
+        for kind in ["AskData", "SelectIris"] {
+            let bad = format!(
+                r#"
+[[metric]]
+id = "x"
+label = "x"
+dimension = "d"
+kind = "{kind}"
+query = "SELECT ?thing WHERE {{ ?s ?p ?thing }} LIMIT 1"
+"#
+            );
+            let err = load_metrics(&bad).expect_err("{kind} with no var must be rejected");
+            let msg = err.to_string();
+            assert!(msg.contains("var"), "the error must name the missing field: {msg}");
+            assert!(msg.contains('x'), "the error must name the metric: {msg}");
+        }
+    }
+
+    #[test]
+    fn a_kind_that_reads_no_bindings_needs_no_var() {
+        let ok = r#"
+[[metric]]
+id = "availability"
+label = "answers a trivial query"
+dimension = "availability"
+kind = "Liveness"
+query = "SELECT ?s WHERE { ?s ?p ?o } LIMIT 1"
+"#;
+        assert!(load_metrics(ok).is_ok());
     }
 
     #[test]

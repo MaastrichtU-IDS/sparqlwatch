@@ -72,36 +72,6 @@ async fn a_metric_binding_a_nonstandard_variable_is_extracted_via_its_declared_v
     );
 }
 
-/// A binding-reading probe kind with no declared `var` is a definition error,
-/// not something to paper over by guessing a variable name. It must be
-/// skipped and recorded as `Indeterminate`, never a confident wrong answer.
-#[tokio::test]
-async fn a_binding_probe_with_no_declared_var_is_indeterminate_not_guessed() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET")).and(path("/sparql"))
-        .respond_with(ResponseTemplate::new(200)
-            .set_body_string(r#"{"head":{"vars":["thing"]},"results":{"bindings":[{"thing":{"type":"literal","value":"hello"}}]}}"#))
-        .mount(&server).await;
-
-    let def = MetricDef {
-        id: "undeclared-var".into(),
-        label: "missing var".into(),
-        dimension: "content".into(),
-        kind: ProbeKind::AskData,
-        query: Some("SELECT ?thing WHERE { ?s ?p ?thing } LIMIT 1".into()),
-        expect: None,
-        var: None,
-        graded: false,
-    };
-
-    let client = Client::new(Budget::default()).unwrap();
-    let url = format!("{}/sparql", server.uri());
-    let rows = run_sweep(&[url], &[def], &client, Budget::default()).await;
-
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].verdict, Verdict::Indeterminate);
-}
-
 /// `FetchWellKnown` has no implemented probe. Falling through to the generic
 /// `ask` path issued `GET <endpoint>?query=` -- a malformed protocol request,
 /// to every endpoint on every sweep, fetching nothing about `.well-known` and
