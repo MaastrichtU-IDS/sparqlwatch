@@ -80,6 +80,40 @@ pub fn load_metrics(toml_src: &str) -> anyhow::Result<Vec<MetricDef>> {
     Ok(f.metric)
 }
 
+/// A stable identifier for a set of metric definitions, so a run can record
+/// which revision produced its measurements. Deliberately a pure function of
+/// the definitions themselves -- no clock, no counter, no build metadata -- so
+/// re-running the same definitions yields the same revision, and any edit to
+/// any field yields a different one.
+///
+/// FNV-1a over a canonical rendering, rather than `DefaultHasher`, whose
+/// output Rust explicitly does not promise to keep stable across releases.
+/// This value is published, so it has to outlive the toolchain.
+pub fn definitions_revision(defs: &[MetricDef]) -> String {
+    let mut canonical = String::new();
+    for d in defs {
+        // Order and field set are part of the revision: a reordered file is a
+        // different definition list, and every field affects what is measured.
+        canonical.push_str(&format!(
+            "{}\x1f{}\x1f{}\x1f{:?}\x1f{}\x1f{}\x1f{}\x1f{}\x1e",
+            d.id,
+            d.label,
+            d.dimension,
+            d.kind,
+            d.query.as_deref().unwrap_or(""),
+            d.expect.map(|b| b.to_string()).unwrap_or_default(),
+            d.var.as_deref().unwrap_or(""),
+            d.graded,
+        ));
+    }
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in canonical.as_bytes() {
+        hash ^= u64::from(*b);
+        hash = hash.wrapping_mul(0x1000_0000_01b3);
+    }
+    format!("fnv1a64:{hash:016x}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -161,6 +195,17 @@ query = "SELECT ?thing WHERE {{ ?s ?p ?thing }} LIMIT 1"
             assert!(msg.contains("var"), "the error must name the missing field: {msg}");
             assert!(msg.contains('x'), "the error must name the metric: {msg}");
         }
+    }
+
+    #[test]
+    fn the_revision_is_a_pure_function_of_the_definitions() {
+        let a = load_metrics(SRC).unwrap();
+        assert_eq!(definitions_revision(&a), definitions_revision(&a), "no clock, no randomness");
+        let b = load_metrics(&SRC.replace("ASK { }", "ASK { ?s ?p ?o }")).unwrap();
+        assert_ne!(definitions_revision(&a), definitions_revision(&b), "an edited query is a new revision");
+        let reordered: Vec<MetricDef> = a.iter().rev().cloned().collect();
+        assert_ne!(definitions_revision(&a), definitions_revision(&reordered));
+        assert!(definitions_revision(&a).starts_with("fnv1a64:"));
     }
 
     #[test]

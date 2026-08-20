@@ -22,7 +22,7 @@ async fn a_sweep_over_one_mock_endpoint_produces_nquads() {
     let rows = run_sweep(std::slice::from_ref(&url), &defs, &client, Budget::default()).await;
 
     assert_eq!(rows.len(), defs.len(), "one measurement per metric per endpoint");
-    let nq = emit_nquads(&RunId("test".into()), "2026-08-20T08:00:00Z", &rows).unwrap();
+    let nq = emit_nquads(&RunId("test".into()), "2026-08-20T08:00:00Z", "test-revision", &rows).unwrap();
     assert!(nq.contains(&url));
     assert!(nq.contains("http://www.w3.org/ns/dqv#value"));
 }

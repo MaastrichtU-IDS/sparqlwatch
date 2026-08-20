@@ -3,7 +3,7 @@ use sparqlwatch_prober::{
     budget::Budget,
     client::Client,
     emit::{emit_nquads, RunId},
-    metrics::load_metrics,
+    metrics::{definitions_revision, load_metrics},
     run_sweep,
 };
 
@@ -35,9 +35,13 @@ async fn main() -> anyhow::Result<()> {
     let budget = Budget::default();
     let client = Client::new(budget)?;
 
+    // A pure function of the definitions, so the published revision is
+    // reproducible from the same metrics.toml.
+    let revision = definitions_revision(&defs);
     let rows = run_sweep(&eps.endpoint, &defs, &client, budget).await;
-    let nq = emit_nquads(&RunId(args.at.clone()), &args.at, &rows)?;
+    let nq = emit_nquads(&RunId(args.at.clone()), &args.at, &revision, &rows)?;
     std::fs::write(&args.out, nq)?;
-    tracing::info!(endpoints = eps.endpoint.len(), measurements = rows.len(), out = %args.out, "sweep complete");
+    tracing::info!(endpoints = eps.endpoint.len(), measurements = rows.len(),
+                   revision = %revision, out = %args.out, "sweep complete");
     Ok(())
 }
