@@ -61,3 +61,80 @@ async fn a_connection_failure_becomes_an_error_not_a_panic() {
     assert!(o.error.is_some());
     assert_eq!(o.status, None);
 }
+
+#[tokio::test]
+async fn an_html_body_without_a_content_type_is_still_detected() {
+    // The doctype-sniffing branch: no content-type header at all, but the
+    // body itself starts with `<!doctype html>`.
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(200)
+            .set_body_string("<!doctype html><html><body>YASGUI</body></html>"))
+        .mount(&server).await;
+
+    let c = Client::new(Budget::default()).unwrap();
+    let o = c.ask(&format!("{}/sparql", server.uri()), "ASK{}").await;
+    assert_eq!(o.body_kind, BodyKind::Html);
+}
+
+#[tokio::test]
+async fn select_returns_only_iri_bindings() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{
+          "head": {"vars": ["c"]},
+          "results": {"bindings": [
+            {"c": {"type": "uri", "value": "http://example.org/Feature"}},
+            {"c": {"type": "literal", "value": "not a class"}},
+            {"c": {"type": "uri", "value": "http://example.org/Geometry"}}
+          ]}
+        }"#))
+        .mount(&server).await;
+
+    let c = Client::new(Budget::default()).unwrap();
+    let o = c.select_iris(&format!("{}/sparql", server.uri()), "SELECT ?c WHERE{}", "c").await;
+    assert_eq!(o.bindings, vec![
+        "http://example.org/Feature".to_string(),
+        "http://example.org/Geometry".to_string(),
+    ]);
+}
+
+#[tokio::test]
+#[allow(non_snake_case)]
+async fn asWKT_probe_rejects_non_literal_objects() {
+    // publications.europa.eu passes a naive `ASK { ?s geo:asWKT ?g }` while
+    // every object is the IRI rdf:nil, so it holds zero geometry. The literal
+    // guard is what stops that becoming a false positive.
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{
+          "head": {"vars": ["g"]},
+          "results": {"bindings": [
+            {"g": {"type": "uri", "value": "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil"}}
+          ]}
+        }"#))
+        .mount(&server).await;
+
+    let c = Client::new(Budget::default()).unwrap();
+    let o = c.ask_literal(&format!("{}/sparql", server.uri()), "SELECT ?g WHERE{}").await;
+    assert_eq!(o.boolean, Some(false), "an IRI object must not count as geometry");
+}
+
+#[tokio::test]
+#[allow(non_snake_case)]
+async fn asWKT_probe_accepts_a_literal_object() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{
+          "head": {"vars": ["g"]},
+          "results": {"bindings": [
+            {"g": {"type": "literal", "value": "POINT(5 52)",
+                   "datatype": "http://www.opengis.net/ont/geosparql#wktLiteral"}}
+          ]}
+        }"#))
+        .mount(&server).await;
+
+    let c = Client::new(Budget::default()).unwrap();
+    let o = c.ask_literal(&format!("{}/sparql", server.uri()), "SELECT ?g WHERE{}").await;
+    assert_eq!(o.boolean, Some(true));
+}

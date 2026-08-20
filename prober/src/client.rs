@@ -21,7 +21,7 @@ impl Client {
         Ok(Self { http })
     }
 
-    async fn get(&self, url: &str, query: &str) -> Observation {
+    async fn get_with_body(&self, url: &str, query: &str) -> (Observation, String) {
         let start = Instant::now();
         let resp = self
             .http
@@ -35,7 +35,7 @@ impl Client {
 
         let resp = match resp {
             Ok(r) => r,
-            Err(e) => return Observation::failed(e.to_string(), elapsed),
+            Err(e) => return (Observation::failed(e.to_string(), elapsed), String::new()),
         };
         let status = resp.status().as_u16();
         let cors = resp.headers().contains_key("access-control-allow-origin");
@@ -47,7 +47,7 @@ impl Client {
             .to_ascii_lowercase();
         let body = match resp.text().await {
             Ok(b) => b,
-            Err(e) => return Observation::failed(e.to_string(), elapsed),
+            Err(e) => return (Observation::failed(e.to_string(), elapsed), String::new()),
         };
 
         let looks_html = ctype.contains("text/html")
@@ -62,7 +62,7 @@ impl Client {
             BodyKind::Other
         };
 
-        Observation {
+        let observation = Observation {
             status: Some(status),
             cors,
             boolean: json.as_ref().and_then(|v| v.get("boolean")).and_then(|b| b.as_bool()),
@@ -70,23 +70,59 @@ impl Client {
             body_kind,
             elapsed_ms: elapsed,
             error: None,
-        }
+        };
+        (observation, body)
+    }
+
+    async fn get(&self, url: &str, query: &str) -> Observation {
+        self.get_with_body(url, query).await.0
     }
 
     pub async fn ask(&self, url: &str, query: &str) -> Observation {
         self.get(url, query).await
     }
 
+    /// Pull binding rows out of a SPARQL JSON body, keeping only the requested
+    /// variable and only the requested term type.
+    fn extract(body: &str, var: &str, want_literal: bool) -> Vec<String> {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(body) else {
+            return Vec::new();
+        };
+        let Some(rows) = v.get("results").and_then(|r| r.get("bindings")).and_then(|b| b.as_array()) else {
+            return Vec::new();
+        };
+        rows.iter()
+            .filter_map(|row| row.get(var))
+            .filter(|cell| {
+                let t = cell.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                if want_literal { t == "literal" || t == "typed-literal" } else { t == "uri" }
+            })
+            .filter_map(|cell| cell.get("value").and_then(|s| s.as_str()).map(str::to_string))
+            .collect()
+    }
+
     /// Collect IRI values of one variable. Literal values are ignored, so a
     /// caller asking for classes cannot be fooled by literals.
-    pub async fn select_iris(&self, url: &str, query: &str, _var: &str) -> Observation {
-        let mut o = self.get(url, query).await;
-        if o.body_kind != BodyKind::SparqlJson {
-            return o;
+    pub async fn select_iris(&self, url: &str, query: &str, var: &str) -> Observation {
+        let (mut o, body) = self.get_with_body(url, query).await;
+        if o.body_kind == BodyKind::SparqlJson {
+            o.bindings = Self::extract(&body, var, false);
         }
-        // Re-parse for bindings; `get` only extracts `boolean`.
-        // (Kept simple: one small extra parse instead of threading the Value out.)
-        o.bindings = Vec::new();
+        o
+    }
+
+    /// True only when the variable `?g` is bound to a LITERAL at least once.
+    /// This is the guard against the false positive measured in the wild:
+    /// publications.europa.eu passes a naive `ASK { ?s geo:asWKT ?g }` while
+    /// every `?g` is the IRI `rdf:nil`, so it holds zero geometry despite the
+    /// naive probe reporting success.
+    pub async fn ask_literal(&self, url: &str, query: &str) -> Observation {
+        let (mut o, body) = self.get_with_body(url, query).await;
+        if o.body_kind == BodyKind::SparqlJson {
+            let lits = Self::extract(&body, "g", true);
+            o.boolean = Some(!lits.is_empty());
+            o.bindings = lits;
+        }
         o
     }
 }
