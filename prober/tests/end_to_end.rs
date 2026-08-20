@@ -19,7 +19,7 @@ async fn a_sweep_over_one_mock_endpoint_produces_nquads() {
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
     let client = Client::new(Budget::default()).unwrap();
     let url = format!("{}/sparql", server.uri());
-    let rows = run_sweep(&[url.clone()], &defs, &client, Budget::default()).await;
+    let rows = run_sweep(std::slice::from_ref(&url), &defs, &client, Budget::default()).await;
 
     assert_eq!(rows.len(), defs.len(), "one measurement per metric per endpoint");
     let nq = emit_nquads(&RunId("test".into()), "2026-08-20T08:00:00Z", &rows).unwrap();
