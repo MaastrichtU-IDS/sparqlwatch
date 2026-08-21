@@ -10,6 +10,45 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-19-sparql-endpoint-monitor-design.md`
 
+## SUPERSEDED, and why it is kept
+
+A pre-execution review of this plan found **6 Critical and 19 Important defects
+in the plan itself**. Three were decisive and are recorded here because the
+reasoning is worth more than the file:
+
+1. **The Done criterion "two identical runs produce byte-identical output" is
+   impossible.** `emit.rs:155` publishes `elapsedMs`, a wall-clock measurement, so
+   two runs of the same definitions never produce the same bytes. The property I
+   wanted was deterministic ORDER and stable identifiers; I wrote an
+   unachievable stand-in for it.
+2. **`emit_endpoint_nquads` would have corrupted the salvage file.** `emit.rs:108`
+   builds each measurement IRI from a running row index, so per-endpoint chunks
+   each restart at `:0` and different endpoints' measurements collapse into
+   single nodes. Stable, content-derived identifiers are a prerequisite for
+   incremental writing, not a detail of it.
+3. **"A metric above the cost ceiling produces no row" contradicts the binding
+   spec**, which twice requires recording `not measured` rather than a misleading
+   zero (metadata tier 3, and the risk table's cost-class row). The
+   run-level ceiling quad cannot disambiguate either, because metric definitions
+   are not published yet, so a missing row is indistinguishable from a metric
+   that never existed in that revision.
+
+Most of the Criticals were about the four items **interacting**: cost filtering
+sitting where tests cannot reach it, concurrency versus the politeness gate,
+politeness versus the retry and redirect paths that re-enter it, and incremental
+writing versus identifier generation. That is a plan too coupled to review, so
+stage 1c-b is split along the same dependency seam that worked for 1c, and each
+slice is planned immediately before it is executed rather than all four up front:
+
+- **1c-b1** cost class, the `not measured` record, and the class-metric split
+- **1c-b2** per-host politeness and `Retry-After`
+- **1c-b3** stable measurement identifiers, then bounded concurrency with
+  deterministic output
+- **1c-b4** crash-safe incremental writing, which needs 1c-b3's identifiers
+
+The measurement in the next section stands and still drives 1c-b1. Everything
+below it is superseded by the slice plans.
+
 ## Why this plan exists
 
 Stage 1c-a made the published metrics mean what they say. This half makes it
