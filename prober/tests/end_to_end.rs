@@ -59,8 +59,10 @@ async fn a_sweep_over_one_mock_endpoint_produces_nquads() {
         // The mock sets access-control-allow-origin.
         ("cors", Verdict::UndeclaredButVerified),
         // And it answers the OPTIONS preflight with a wildcard grant that
-        // lists GET, so a browser would be allowed to query it too.
-        ("cors-preflight", Verdict::Verified),
+        // lists GET, so a browser would be allowed to query it too. Confirmed
+        // but not declared: no service-description term can declare CORS, so
+        // this settles where the `cors` row does.
+        ("cors-preflight", Verdict::UndeclaredButVerified),
         // boolean:true against expect = true.
         ("geo-functions", Verdict::UndeclaredButVerified),
         // The mock binds ?s, not ?g, so no WKT literal is present and the 200

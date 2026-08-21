@@ -191,7 +191,22 @@ pub fn resolve(def: &MetricDef, declared: Declared, obs: Result<&Observation, Ex
                 // 2xx: now, and only now, the headers decide.
                 Some(_) => {
                     if grants_our_origin(o.allow_origin.as_deref()) && allows_get(o.allow_methods.as_deref()) {
-                        Verdict::Verified
+                        // Routed through `declared.claimed` for the same reason
+                        // the `Cors` arm is: `verified` means confirmed AND
+                        // declared, and no term in the service-description
+                        // vocabulary can declare CORS, so `declared_by` is
+                        // absent and this settles on
+                        // `UndeclaredButVerified`. Returning a bare `Verified`
+                        // here made the two CORS metrics publish different
+                        // verdicts for one endpoint for a reason that says
+                        // nothing about the endpoint. If a declaration for
+                        // preflight CORS ever enters the vocabulary, adding
+                        // `declared_by` upgrades this with no code change.
+                        if declared.claimed {
+                            Verdict::Verified
+                        } else {
+                            Verdict::UndeclaredButVerified
+                        }
                     } else {
                         // The endpoint answered the preflight and did not grant
                         // us the request we would make.

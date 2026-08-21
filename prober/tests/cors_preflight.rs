@@ -52,7 +52,7 @@ async fn preflight_answering(template: ResponseTemplate) -> MockServer {
 }
 
 #[tokio::test]
-async fn a_wildcard_grant_listing_get_is_verified() {
+async fn a_wildcard_grant_listing_get_is_confirmed() {
     let server = preflight_answering(
         ResponseTemplate::new(204)
             .insert_header("access-control-allow-origin", "*")
@@ -62,7 +62,10 @@ async fn a_wildcard_grant_listing_get_is_verified() {
     .await;
 
     let (v, o) = preflight_and_resolve(&format!("{}/sparql", server.uri())).await;
-    assert_eq!(v, Verdict::Verified);
+    // `UndeclaredButVerified`, not `Verified`: no term in the
+    // service-description vocabulary can declare CORS, and `verified` means
+    // confirmed AND declared. The `cors` metric settles the same way.
+    assert_eq!(v, Verdict::UndeclaredButVerified);
     assert_eq!(o.status, Some(204));
     // The header's VALUE is recorded, not merely its presence: presence is not
     // a grant, and the resolver has to be able to tell the two apart.
@@ -75,14 +78,17 @@ async fn a_wildcard_grant_listing_get_is_verified() {
 }
 
 #[tokio::test]
-async fn a_grant_with_no_methods_header_is_verified() {
+async fn a_grant_with_no_methods_header_is_confirmed() {
     // `access-control-allow-methods` is optional for a simple method: a
     // preflight that answered without it refused nothing.
     let server =
         preflight_answering(ResponseTemplate::new(200).insert_header("access-control-allow-origin", "*")).await;
 
     let (v, o) = preflight_and_resolve(&format!("{}/sparql", server.uri())).await;
-    assert_eq!(v, Verdict::Verified);
+    // `UndeclaredButVerified`, not `Verified`: no term in the
+    // service-description vocabulary can declare CORS, and `verified` means
+    // confirmed AND declared. The `cors` metric settles the same way.
+    assert_eq!(v, Verdict::UndeclaredButVerified);
     assert_eq!(o.allow_methods, None);
 }
 
@@ -96,7 +102,10 @@ async fn an_exact_echo_of_our_own_origin_is_a_grant_to_us() {
     .await;
 
     let (v, _) = preflight_and_resolve(&format!("{}/sparql", server.uri())).await;
-    assert_eq!(v, Verdict::Verified);
+    // `UndeclaredButVerified`, not `Verified`: no term in the
+    // service-description vocabulary can declare CORS, and `verified` means
+    // confirmed AND declared. The `cors` metric settles the same way.
+    assert_eq!(v, Verdict::UndeclaredButVerified);
 }
 
 #[tokio::test]
@@ -246,7 +255,7 @@ async fn the_request_really_is_a_preflight() {
         .await;
 
     let (v, _) = preflight_and_resolve(&format!("{}/sparql", server.uri())).await;
-    assert_eq!(v, Verdict::Verified, "the mock only answers a real preflight");
+    assert_eq!(v, Verdict::UndeclaredButVerified, "the mock only answers a real preflight");
 
     let seen = server.received_requests().await.unwrap();
     assert_eq!(seen.len(), 1);
