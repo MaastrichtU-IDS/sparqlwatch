@@ -108,6 +108,56 @@ async fn a_sweep_over_one_mock_endpoint_produces_nquads() {
     assert!(quads.iter().any(|q| q.object == Term::NamedNode(NamedNode::new(&url).unwrap())));
 }
 
+/// I5. The two CORS metrics ask genuinely different questions, and the closed
+/// `match` in `probe_endpoint` makes forgetting to dispatch a kind a compile
+/// error but says nothing about dispatching one to the WRONG probe. Re-routing
+/// `ProbeKind::Cors` to `client.preflight` used to cause zero test failures,
+/// which would publish the preflight's header under the label "Sends
+/// access-control-allow-origin on a simple GET".
+///
+/// This is the endpoint shape the pair exists to distinguish, and the commonest
+/// one in the wild: a front-end filter sets the header on a simple GET while the
+/// handler refuses `OPTIONS` outright, so a `curl` user sees CORS and a browser
+/// gets nothing. Either mis-route flips one of these two verdicts.
+#[tokio::test]
+async fn the_two_cors_metrics_are_not_the_same_probe() {
+    let server = MockServer::start().await;
+    // A simple GET is answered, with the header.
+    Mock::given(method("GET")).and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(200)
+            .insert_header("access-control-allow-origin", "*")
+            .set_body_string(WORKING_QUERY_RESPONSE))
+        .mount(&server).await;
+    // The browser's preflight is refused. 405 is the endpoint answering the
+    // question we asked, which is what licenses an absence claim.
+    Mock::given(method("OPTIONS")).and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(405))
+        .mount(&server).await;
+
+    let defs = load_shipped_metrics();
+    let client = Client::new(Budget::default()).unwrap();
+    let url = format!("{}/sparql", server.uri());
+    let (rows, _read) = run_sweep(std::slice::from_ref(&url), &defs, &client, Budget::default()).await;
+    let verdict = |id: &str| rows.iter().find(|r| r.metric_id == id).unwrap().verdict;
+
+    assert_eq!(
+        verdict("cors"),
+        Verdict::Verified,
+        "the simple GET carried access-control-allow-origin; routing this metric at the preflight sees only the 405"
+    );
+    assert_eq!(
+        verdict("cors-preflight"),
+        Verdict::Absent,
+        "the endpoint refused OPTIONS; routing this metric at the simple GET would publish a grant it never made"
+    );
+
+    // And the probes really did send the two different requests, rather than
+    // agreeing by accident on one.
+    let sent = server.received_requests().await.unwrap();
+    assert!(sent.iter().any(|r| r.method == Method::OPTIONS), "no preflight was ever sent");
+    assert!(sent.iter().any(|r| r.method == Method::GET), "no simple GET was ever sent");
+}
+
 #[tokio::test]
 async fn an_unreachable_endpoint_yields_indeterminate_not_a_panic() {
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
