@@ -12,7 +12,7 @@ pub mod resolve;
 use crate::budget::{Budget, Expired};
 use crate::client::Client;
 use crate::declare::{parse_declarations_for, Declarations};
-use crate::emit::{DeclarationsRead, MeasurementRow};
+use crate::emit::{DeclarationsRead, MeasurementRow, NotMeasured, NotMeasuredReason};
 use crate::metrics::{MetricDef, ProbeKind};
 use crate::resolve::{resolve, resolve_fetch, Declared};
 use crate::verdict::Verdict;
@@ -42,14 +42,25 @@ use crate::verdict::Verdict;
 /// `Declarations` are known, so an endpoint whose budget expires before that
 /// point (never fetched at all) still gets a fact, honestly `false`, rather
 /// than none.
+///
+/// `declined` is the other half of the definition list: metrics the caller
+/// decided not to run. This function does not filter and does not know what a
+/// ceiling is -- `main.rs` calls `metrics::within_cost` and passes both halves
+/// -- it simply records one `NotMeasured` per (endpoint, declined metric) so
+/// the gap is published as a fact rather than left as a missing row. Keeping
+/// the policy in one place and the mechanism in another is deliberate: a
+/// second reason for declining a metric changes `main.rs` and the reason enum,
+/// not this loop.
 pub async fn run_sweep(
     endpoints: &[String],
     defs: &[MetricDef],
+    declined: &[MetricDef],
     client: &Client,
     budget: Budget,
-) -> (Vec<MeasurementRow>, Vec<DeclarationsRead>) {
+) -> (Vec<MeasurementRow>, Vec<DeclarationsRead>, Vec<NotMeasured>) {
     let mut rows = Vec::new();
     let mut declarations_read = Vec::new();
+    let mut not_measured = Vec::new();
     for ep in endpoints {
         let mut ep_rows: Vec<MeasurementRow> = Vec::new();
         let mut read = false;
@@ -76,8 +87,19 @@ pub async fn run_sweep(
         }
         declarations_read.push(DeclarationsRead { endpoint: ep.clone(), read });
         rows.extend(ep_rows);
+        // One fact per (endpoint, declined metric), recorded whatever the
+        // budget did: the reason is the ceiling, which was decided before any
+        // probing started, so an endpoint whose budget expired still owes the
+        // reader an account of the metrics it was never going to run.
+        for def in declined {
+            not_measured.push(NotMeasured {
+                endpoint: ep.clone(),
+                metric_id: def.id.clone(),
+                reason: NotMeasuredReason::CostCeiling,
+            });
+        }
     }
-    (rows, declarations_read)
+    (rows, declarations_read, not_measured)
 }
 
 const VAR_REQUIRED: &str = "a bindings-reading probe kind requires `var`; load_metrics enforces it";

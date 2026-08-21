@@ -12,7 +12,7 @@ async fn probes_three_real_endpoints() {
         "https://data.kkg.kadaster.nl/query".to_string(),
         "https://ontop.certain.ai.ustp.at/sparql".to_string(),
     ];
-    let (rows, declarations_read) = run_sweep(&eps, &defs, &client, Budget::default()).await;
+    let (rows, declarations_read, _not_measured) = run_sweep(&eps, &defs, &[], &client, Budget::default()).await;
     for r in &rows {
         println!("{} {} -> {}", r.endpoint, r.metric_id, r.verdict.slug());
     }

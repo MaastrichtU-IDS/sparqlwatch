@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 
 /// The closed set of probe kinds. A metric definition names one of these plus
 /// its parameters, which is what makes metrics data rather than code.
@@ -80,7 +81,42 @@ impl ProbeKind {
     }
 }
 
+/// What a metric costs the endpoint we point it at. A closed set, like
+/// `ProbeKind`: an unknown value is a load error, because guessing silently
+/// changes what a sweep costs somebody else's server.
+///
+/// `Cheap` means the query can stop at its first match. `Expensive` means it
+/// forces a scan. The line is not a guess: measured on qlever.dev's
+/// planet-scale OSM endpoint, the same class query answers in 0.166s with
+/// `LIMIT 1` and no `DISTINCT`, and times out past 45s with
+/// `DISTINCT ... LIMIT 200`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum Cost {
+    #[default]
+    Cheap,
+    Expensive,
+}
+
+impl Cost {
+    /// The published slug, also the value accepted on the command line. One
+    /// spelling for the TOML field, the CLI flag and the emitted literal, so
+    /// a run cannot record a ceiling under a name no flag can set.
+    pub fn slug(&self) -> &'static str {
+        match self {
+            Cost::Cheap => "cheap",
+            Cost::Expensive => "expensive",
+        }
+    }
+}
+
+/// `deny_unknown_fields`: an unrecognised key is a load error, never a key
+/// serde quietly drops. Same doctrine as an unknown `kind` and an unknown
+/// `cost`. A definition file that looks like it says something and does not is
+/// the worst outcome here: `cost_class = "expensive"` loaded as `cheap` and
+/// silently ran a planet-scale scan against every endpoint in the registry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MetricDef {
     pub id: String,
     pub label: String,
@@ -102,9 +138,17 @@ pub struct MetricDef {
     pub declared_by: Option<String>,
     #[serde(default)]
     pub graded: bool,
+    /// What this metric costs the endpoint it points at. Silent about cost
+    /// means cheap, but an unrecognized value is a load error, not a guess.
+    #[serde(default)]
+    pub cost: Cost,
 }
 
+/// Same reason as `MetricDef` above: a stray table at the top level (a second
+/// `[[metrics]]` section next to the real `[[metric]]` ones, say) must not be
+/// dropped in silence.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct MetricFile {
     metric: Vec<MetricDef>,
 }
@@ -117,9 +161,33 @@ struct MetricFile {
 /// name, and guessing one silently turns a real capability into a false
 /// `Absent`. That is a broken definition, so it fails here rather than
 /// publishing one worthless measurement per endpoint.
+///
+/// A repeated `id` fails here too. It is not a situation to resolve at runtime:
+/// the id is the metric's published identity, so two definitions sharing one can
+/// land on opposite sides of the cost ceiling and give the same (endpoint,
+/// metric) pair both a verdict and a not-measured fact, in one run graph. A
+/// consumer joining on the metric IRI then reads a pair that both was and was
+/// not measured.
+///
+/// Note the deliberate contrast with `registry::dedupe`, which drops a duplicate
+/// endpoint with a warning instead of failing. A registry is seeded from
+/// real-world dumps (LOD Cloud plus YummyData) that certainly contain the same
+/// endpoint twice, and refusing to load would mean refusing to monitor anything;
+/// dropping the repeat loses nothing, because the survivor says the same thing.
+/// `metrics.toml` is written by hand, a repeated id says two different things
+/// under one name, and there is no honest way to guess which was meant. So the
+/// registry deduplicates and this refuses.
 pub fn load_metrics(toml_src: &str) -> anyhow::Result<Vec<MetricDef>> {
     let f: MetricFile = toml::from_str(toml_src)?;
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
     for m in &f.metric {
+        if !seen.insert(m.id.as_str()) {
+            anyhow::bail!(
+                "metric id '{}' is defined more than once; an id is a metric's published identity, \
+                 so two definitions under one id would publish contradictory facts about the same pair",
+                m.id
+            );
+        }
         if matches!(m.kind, ProbeKind::AskData | ProbeKind::SelectIris) && m.var.is_none() {
             anyhow::bail!(
                 "metric '{}' of kind {:?} reads a variable's bindings but declares no `var`",
@@ -129,6 +197,27 @@ pub fn load_metrics(toml_src: &str) -> anyhow::Result<Vec<MetricDef>> {
         }
     }
     Ok(f.metric)
+}
+
+/// Split `defs` into those to run against a sweep whose ceiling is
+/// `ceiling`, and those declined because their cost exceeds it. Both halves
+/// preserve the input order: a reordered result would make "declined"
+/// harder to line up against the file that declared it.
+pub fn within_cost(defs: &[MetricDef], ceiling: Cost) -> (Vec<MetricDef>, Vec<MetricDef>) {
+    let mut run = Vec::new();
+    let mut declined = Vec::new();
+    for d in defs {
+        let within = match ceiling {
+            Cost::Cheap => d.cost == Cost::Cheap,
+            Cost::Expensive => true,
+        };
+        if within {
+            run.push(d.clone());
+        } else {
+            declined.push(d.clone());
+        }
+    }
+    (run, declined)
 }
 
 /// A stable identifier for a set of metric definitions, so a run can record
@@ -145,17 +234,40 @@ pub fn definitions_revision(defs: &[MetricDef]) -> String {
     for d in defs {
         // Order and field set are part of the revision: a reordered file is a
         // different definition list, and every field affects what is measured.
+        //
+        // Destructured rather than field-accessed on purpose. A struct pattern
+        // with no `..` fails to compile the moment `MetricDef` gains a field, so
+        // a new field cannot join the definitions without somebody deciding here
+        // whether it belongs in the revision. The alternative, ten field
+        // accesses, lets a new field be forgotten in silence, and the cost of
+        // forgetting is not a failing test: `metricDefinitionRevision` is a
+        // published literal in immutable per-run graphs, so two definition sets
+        // that measure different things would share one revision forever, with
+        // no way to reinterpret the history afterwards.
+        let MetricDef {
+            id,
+            label,
+            dimension,
+            kind,
+            query,
+            expect,
+            var,
+            declared_by,
+            graded,
+            cost,
+        } = d;
         canonical.push_str(&format!(
-            "{}\x1f{}\x1f{}\x1f{:?}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}\x1e",
-            d.id,
-            d.label,
-            d.dimension,
-            d.kind,
-            d.query.as_deref().unwrap_or(""),
-            d.expect.map(|b| b.to_string()).unwrap_or_default(),
-            d.var.as_deref().unwrap_or(""),
-            d.declared_by.as_deref().unwrap_or(""),
-            d.graded,
+            "{}\x1f{}\x1f{}\x1f{:?}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{:?}\x1e",
+            id,
+            label,
+            dimension,
+            kind,
+            query.as_deref().unwrap_or(""),
+            expect.map(|b| b.to_string()).unwrap_or_default(),
+            var.as_deref().unwrap_or(""),
+            declared_by.as_deref().unwrap_or(""),
+            graded,
+            cost,
         ));
     }
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
@@ -277,23 +389,197 @@ query = "SELECT ?thing WHERE {{ ?s ?p ?thing }} LIMIT 1"
 
     #[test]
     fn the_revision_is_a_pure_function_of_the_definitions() {
+        // The revision exists so a published measurement can be read against the
+        // definition that produced it, and it is a published literal inside
+        // immutable per-run graphs. A field that stops contributing therefore
+        // cannot be fixed later: two definition sets that measure different
+        // things would share one revision in history that is already out. So
+        // every field gets a guard, not just the three that happened to have one.
+        //
+        // Written as a loop over per-field variants, and the variants are built
+        // from a destructured base on purpose. A struct pattern with no `..`
+        // fails to compile when `MetricDef` gains a field, and every binding
+        // below is used exactly once to build a variant, so a field that is
+        // named but left uncovered is an unused-variable warning. CI runs
+        // `cargo clippy --all-targets -- -D warnings`, so that warning is an
+        // error there: the same completeness-by-construction chain
+        // `ProbeKind::ALL` uses, rather than a hand-maintained list of
+        // assertions that a new field can slip past.
+        let base = load_metrics(
+            "[[metric]]\nid=\"m\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"Liveness\"\nquery=\"ASK{}\"\n",
+        )
+        .unwrap();
+        let rev = definitions_revision(&base);
+        let d = base[0].clone();
+        let MetricDef {
+            id,
+            label,
+            dimension,
+            kind,
+            query,
+            expect,
+            var,
+            declared_by,
+            graded,
+            cost,
+        } = d.clone();
+
+        let variants: Vec<(&str, MetricDef)> = vec![
+            ("id", MetricDef { id: format!("{id}-renamed"), ..d.clone() }),
+            ("label", MetricDef { label: format!("{label} (reworded)"), ..d.clone() }),
+            ("dimension", MetricDef { dimension: format!("{dimension}-other"), ..d.clone() }),
+            // The field this branch just proved publishes a confident false
+            // `absent` when it drifts: `SelectIris` reads IRI bindings where
+            // `AskData` reads a boolean.
+            (
+                "kind",
+                MetricDef {
+                    kind: if kind == ProbeKind::Liveness { ProbeKind::Cors } else { ProbeKind::Liveness },
+                    ..d.clone()
+                },
+            ),
+            (
+                "query",
+                MetricDef {
+                    query: Some(format!("{} # edited", query.as_deref().unwrap_or(""))),
+                    ..d.clone()
+                },
+            ),
+            ("expect", MetricDef { expect: Some(!expect.unwrap_or(false)), ..d.clone() }),
+            // The other field whose drift publishes a false `absent`: a probe
+            // that reads the wrong variable's bindings finds nothing.
+            (
+                "var",
+                MetricDef {
+                    var: Some(var.as_deref().map(|v| format!("{v}2")).unwrap_or_else(|| "c".into())),
+                    ..d.clone()
+                },
+            ),
+            (
+                "declared_by",
+                MetricDef {
+                    declared_by: Some(
+                        declared_by.as_deref().unwrap_or("http://example.org/fn").to_string(),
+                    ),
+                    ..d.clone()
+                },
+            ),
+            ("graded", MetricDef { graded: !graded, ..d.clone() }),
+            (
+                "cost",
+                MetricDef {
+                    cost: match cost {
+                        Cost::Cheap => Cost::Expensive,
+                        Cost::Expensive => Cost::Cheap,
+                    },
+                    ..d.clone()
+                },
+            ),
+        ];
+
+        for (field, variant) in &variants {
+            assert_ne!(
+                rev,
+                definitions_revision(std::slice::from_ref(variant)),
+                "editing `{field}` changes what is measured or where, so it must be a new revision"
+            );
+        }
+        // Each variant differs from the base in exactly one field, so no two
+        // variants may share a revision either: that would mean two fields land
+        // in the same place in the canonical string.
+        let revisions: std::collections::BTreeSet<String> =
+            variants.iter().map(|(_, v)| definitions_revision(std::slice::from_ref(v))).collect();
+        assert_eq!(
+            revisions.len(),
+            variants.len(),
+            "two single-field edits collided, so some field is not in its own position"
+        );
+
+        // The rest of the contract, which is not per-field: same definitions in,
+        // same revision out (no clock, no counter, no build metadata), a
+        // reordered file is a different definition list, and the value names the
+        // algorithm so a future one can be told apart from this one.
         let a = load_metrics(SRC).unwrap();
         assert_eq!(definitions_revision(&a), definitions_revision(&a), "no clock, no randomness");
-        let b = load_metrics(&SRC.replace("ASK { }", "ASK { ?s ?p ?o }")).unwrap();
-        assert_ne!(definitions_revision(&a), definitions_revision(&b), "an edited query is a new revision");
-        let c = load_metrics(&SRC.replace(
-            "kind = \"AskFilter\"\nexpect = true",
-            "kind = \"AskFilter\"\nexpect = true\ndeclared_by = \"http://example.org/fn\"",
-        ))
-        .unwrap();
+        let reordered: Vec<MetricDef> = a.iter().rev().cloned().collect();
         assert_ne!(
             definitions_revision(&a),
-            definitions_revision(&c),
-            "an edited declared_by changes what the metric is read against, so it must be a new revision too"
+            definitions_revision(&reordered),
+            "a reordered file is a different definition list"
         );
-        let reordered: Vec<MetricDef> = a.iter().rev().cloned().collect();
-        assert_ne!(definitions_revision(&a), definitions_revision(&reordered));
         assert!(definitions_revision(&a).starts_with("fnv1a64:"));
+    }
+
+    #[test]
+    fn a_mistyped_key_is_a_load_error_not_a_silently_dropped_field() {
+        // Serde drops unknown fields by default, which turns a spelling mistake
+        // into a definition that looks like it says something and does not.
+        // `cost_class = "expensive"` used to load as `cheap`, so the typo did not
+        // merely lose the field: it silently ran a planet-scale scan against
+        // every endpoint in the registry, which is the exact harm the closed
+        // `Cost` set exists to prevent.
+        for (typo, key) in [
+            ("cost_class = \"expensive\"", "cost_class"),
+            ("declaredBy = \"http://example.org/fn\"", "declaredBy"),
+        ] {
+            let bad = format!(
+                "[[metric]]\nid=\"m\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"Liveness\"\nquery=\"ASK{{}}\"\n{typo}\n"
+            );
+            let err = load_metrics(&bad)
+                .err()
+                .unwrap_or_else(|| panic!("`{key}` is not a field of MetricDef and must be refused"));
+            assert!(
+                err.to_string().contains(key),
+                "the error must name the key that was not understood: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_duplicate_metric_id_is_a_load_error_not_a_contradiction_in_the_graph() {
+        // A repeated id lands the same metric in both halves of the cost split:
+        // once in `run`, once in `declined`. Emission then publishes, for one
+        // endpoint in one run graph, a measurement with a verdict AND a
+        // not-measured fact for `urn:sparqlwatch:metric:classes`, so a consumer
+        // joining on the metric IRI sees a pair that both was and was not
+        // measured. Refuse the file instead of guessing which definition was
+        // meant.
+        //
+        // Contrast `registry::dedupe`, which warns and drops. That list comes
+        // from real-world dumps that contain duplicates by nature and whose
+        // repeats say the same thing; this file is written by hand and its
+        // repeats say different things.
+        let dup = concat!(
+            "[[metric]]\nid=\"classes\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"Liveness\"\nquery=\"ASK{}\"\ncost=\"cheap\"\n",
+            "[[metric]]\nid=\"classes\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"Liveness\"\nquery=\"ASK{}\"\ncost=\"expensive\"\n",
+        );
+        let err = load_metrics(dup).expect_err("a repeated metric id must be refused");
+        let msg = err.to_string();
+        assert!(msg.contains("classes"), "the error must name the duplicate: {msg}");
+
+        // Non-adjacent repeats too: the check is over the whole file, not over
+        // neighbouring pairs.
+        let far = concat!(
+            "[[metric]]\nid=\"a\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"Liveness\"\nquery=\"ASK{}\"\n",
+            "[[metric]]\nid=\"b\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"Liveness\"\nquery=\"ASK{}\"\n",
+            "[[metric]]\nid=\"a\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"Liveness\"\nquery=\"ASK{}\"\n",
+        );
+        assert!(load_metrics(far).is_err(), "a repeat anywhere in the file is a repeat");
+
+        // And the shipped file is not accidentally in breach.
+        assert!(load_metrics(include_str!("../metrics.toml")).is_ok());
+    }
+
+    #[test]
+    fn a_stray_top_level_table_is_a_load_error_too() {
+        // Same doctrine one level up: `[[metrics]]` alongside the real
+        // `[[metric]]` tables would otherwise be dropped, and the reader would
+        // never learn that half the file was ignored.
+        let bad = concat!(
+            "[[metric]]\nid=\"m\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"Liveness\"\nquery=\"ASK{}\"\n",
+            "[[metrics]]\nid=\"n\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"Liveness\"\nquery=\"ASK{}\"\n",
+        );
+        assert!(load_metrics(bad).is_err(), "a stray top-level table must not be ignored");
     }
 
     #[test]
@@ -328,5 +614,72 @@ query = "SELECT ?s WHERE { ?s ?p ?o } LIMIT 1"
         );
         // Most metrics have no declaration that could speak for them.
         assert!(ms.iter().find(|m| m.id == "availability").unwrap().declared_by.is_none());
+    }
+
+    #[test]
+    fn a_metric_without_a_cost_is_cheap() {
+        let defs = load_metrics(
+            "[[metric]]\nid=\"m\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"Liveness\"\nquery=\"ASK{}\"\n"
+        ).unwrap();
+        assert_eq!(defs[0].cost, Cost::Cheap, "a definition silent about cost is cheap");
+    }
+
+    #[test]
+    fn an_unknown_cost_is_a_load_error_not_a_silent_default() {
+        // Same doctrine as an unknown `kind`: the set is closed, and guessing
+        // silently changes what a sweep costs somebody else's server.
+        assert!(load_metrics(
+            "[[metric]]\nid=\"m\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"Liveness\"\nquery=\"ASK{}\"\ncost=\"free\"\n"
+        ).is_err());
+    }
+
+    #[test]
+    fn within_cost_splits_and_keeps_order() {
+        let defs = load_metrics(concat!(
+            "[[metric]]\nid=\"a\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"Liveness\"\nquery=\"ASK{}\"\ncost=\"cheap\"\n",
+            "[[metric]]\nid=\"b\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"Liveness\"\nquery=\"ASK{}\"\ncost=\"expensive\"\n",
+            "[[metric]]\nid=\"c\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"Liveness\"\nquery=\"ASK{}\"\ncost=\"cheap\"\n",
+        )).unwrap();
+
+        let (run, declined) = within_cost(&defs, Cost::Cheap);
+        assert_eq!(run.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(), ["a", "c"]);
+        assert_eq!(declined.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(), ["b"]);
+
+        let (run, declined) = within_cost(&defs, Cost::Expensive);
+        assert_eq!(run.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(), ["a", "b", "c"],
+                   "the higher ceiling runs everything, still in file order");
+        assert!(declined.is_empty());
+    }
+
+    #[test]
+    fn cost_is_part_of_the_definitions_revision() {
+        // The revision exists so a measurement can be read against the definition
+        // that produced it, and cost changes which metrics run at all.
+        let one = "[[metric]]\nid=\"m\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"Liveness\"\nquery=\"ASK{}\"\ncost=\"cheap\"\n";
+        let two = "[[metric]]\nid=\"m\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"Liveness\"\nquery=\"ASK{}\"\ncost=\"expensive\"\n";
+        assert_ne!(
+            definitions_revision(&load_metrics(one).unwrap()),
+            definitions_revision(&load_metrics(two).unwrap())
+        );
+    }
+
+    #[test]
+    fn a_cost_slug_is_the_spelling_the_toml_and_the_cli_both_use() {
+        // The slug is published on the run's activity, so it has to be the same
+        // token `cost = "..."` accepts and the same one `--max-cost` accepts.
+        // Three spellings of one ceiling would make the published value
+        // unjoinable against the definitions that produced it.
+        for c in [Cost::Cheap, Cost::Expensive] {
+            let src = format!(
+                "[[metric]]\nid=\"m\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"Liveness\"\nquery=\"ASK{{}}\"\ncost=\"{}\"\n",
+                c.slug()
+            );
+            assert_eq!(load_metrics(&src).unwrap()[0].cost, c, "TOML must accept {:?}", c.slug());
+            assert_eq!(
+                clap::ValueEnum::to_possible_value(&c).unwrap().get_name(),
+                c.slug(),
+                "the CLI must accept the same token"
+            );
+        }
     }
 }

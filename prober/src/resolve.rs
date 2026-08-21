@@ -390,6 +390,7 @@ pub fn grade_service_description(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::metrics::Cost;
 
     /// The one IRI any shipped metric names in `declared_by`, and so the one
     /// capability the declared/observed axis can currently apply to.
@@ -406,6 +407,7 @@ mod tests {
             var: None,
             declared_by: None,
             graded: false,
+            cost: Cost::Cheap,
         }
     }
 

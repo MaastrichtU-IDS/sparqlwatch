@@ -159,10 +159,12 @@ the idea but is unusable here: it is Java 17, and its own documentation says to 
 locally on the endpoint without a proxy in between, which is impossible for third-party
 endpoints.
 
+Class discovery is split into two metrics: `has-classes` (cheap, answerable as a fast existence check) and `classes` (expensive, enumerating up to 200 distinct types). Both are measured at tiers 1 and 2 according to this plan.
+
 | Tier | Method | Cost | Recorded as |
 |---|---|---|---|
 | 1 | Fetch what the endpoint publishes: `/.well-known/void`, a VoID graph, the SPARQL service description | one or two requests | authoritative, and its presence is itself a metric |
-| 2 | Bounded sampling: distinct classes, properties per class, counts, each under a hard cancellable budget | tens of queries, capped | **explicitly marked sampled and incomplete** |
+| 2 | Bounded sampling: distinct classes (`classes` metric), properties per class, counts, each under a hard cancellable budget. `has-classes` is a fast existence check that always completes at this tier. | tens of queries, capped | **explicitly marked sampled and incomplete** |
 | 3 | Give up | none | `not measured`, never a zero |
 
 Tier 3 is not a failure mode to be embarrassed about, it is a required outcome. During
@@ -303,7 +305,7 @@ metric-definition revision, which is versioned data loaded into a named graph.
 | ~~Squid egress blocks arbitrary-host `CONNECT`~~ | **RESOLVED 2026-08-20** | Spike passed. See [Stage 0 result](#stage-0-egress-spike-result). |
 | Scope creep: monitoring dashboards are deceptively large | High | First release is the leaderboard, endpoint pages, metric pages and submissions. Threads can follow. |
 | Probing looks like abuse to endpoint operators | Medium | Per-host concurrency of 1, delays, honest User-Agent with a contact URL, honour `Retry-After`, published probe schedule |
-| Very large datasets make some metrics intractable, as osm-planet did | Medium | Metrics declare a cost class; expensive ones are opt-in per endpoint and record "not measured" rather than a misleading zero |
+| Very large datasets make some metrics intractable, as osm-planet did | Medium | **DELIVERED 2026-08-21** (Stage 1c-b1): metrics declare a cost class (`cheap` or `expensive`) and a declined metric records "not measured" rather than a misleading zero. The ceiling is **per run**, set by `--max-cost`, not per endpoint: an expensive metric is opt-in for the whole sweep. Per-endpoint opt-in is a reasonable later refinement and is **not built**, which matters because the measured case (`classes` costs 15.7s on kadaster and exceeds the 30s budget on qlever) is exactly the case a per-endpoint ceiling would serve. |
 | Duplicating a live service (SPARQLES or a successor) | Medium | Survey prior art before building. Not yet done. |
 | Endpoints without CORS cannot run queries in the embedded editor | Low | Autocomplete is served from our origin so it still works; the gap is reported as an actionable finding. Measured 4 of 4 evaluated endpoints already send CORS. |
 | Depending on an external web component (`@sib-swiss/sparql-editor`) | Low | Pin the version, vendor the bundle rather than loading from a CDN, since the ids3 CSP and egress rules make CDN loading unreliable anyway |
@@ -371,8 +373,11 @@ that each end in something demonstrable, and each gets its own plan.
 | **0. Egress spike** | Proof that a pod in an egress-locked ids3 namespace can run a SPARQL query against an arbitrary public endpoint through Squid | none, do this first |
 | **1. Data model + prober core** | Metric definitions for an initial set, probe kinds, N-Quads output, tests against a mock endpoint. Runs locally, writes to a local Oxigraph. | stage 0 passes, or the prober is relocated outside the cluster |
 | **1b. Declarations and fetch** | Service description fetch with a queryless GET, declaration parsing, verdict resolution against declarations. A service-description metric with graded levels 0-4. | stage 1 |
-| **1c. Registry seeding prerequisites** | Per-host politeness, `Retry-After` handling, concurrency caps, incremental per-endpoint output writing, cost classes on metrics, an `OPTIONS` preflight probe for CORS, probing `GRAPH ?g` as well as the default graph | stage 1b |
-| **1d. Registry seeding** | Ingest LOD Cloud + YummyData candidates, resolve front-ends to real endpoints, probe with politeness, admit responders | stage 1c |
+| **1c-b1** | **DELIVERED 2026-08-21**: Cost class on metrics, split the class metric, and the `not measured` record for declined metrics. See the plan file `docs/superpowers/plans/2026-08-21-safe-at-scale.md` for the superseded original plan and why it was split. | stage 1b |
+| **1c-b2** | Per-host politeness and `Retry-After` handling | stage 1c-b1 |
+| **1c-b3** | Stable measurement identifiers and bounded concurrency with deterministic output | stage 1c-b2 |
+| **1c-b4** | Crash-safe incremental writing | stage 1c-b3 |
+| **1d. Registry seeding** | Ingest LOD Cloud + YummyData candidates, resolve front-ends to real endpoints, probe with politeness, admit responders | stage 1c-b4 |
 | **2. Scoring as queries** | Score computation as pure SPARQL/functions over stored measurements, with recomputation over history proven | stage 1b |
 | **2b. Content metadata + examples** | Tiered VoID extraction, SIB example ingestion, `/.well-known/sparql-examples` discovery | stage 1d |
 | **3. Web read tier** | Faceted search, browse, endpoint pages, metric pages, charts, content negotiation, read-only public SPARQL endpoint | stage 2, 2b |

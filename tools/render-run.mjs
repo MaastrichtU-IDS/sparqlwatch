@@ -1,5 +1,5 @@
 // Render a prober run (.nq) as a standalone local page, using the design's
-// verdict encoding. This is NOT the web tier (stage 3) — it is a read-only
+// verdict encoding. This is NOT the web tier (stage 3): it is a read-only
 // viewer so a real run can be looked at before that exists.
 //
 //   node tools/render-run.mjs run.nq out.html
@@ -30,7 +30,7 @@ const lit = (t) => {
 };
 
 // Verdict presentation. Mirrors the design: colour never carries the meaning
-// alone — dashed borders mark "works but undeclared" and "indeterminate", and
+// alone. Dashed borders mark "works but undeclared" and "indeterminate", and
 // `absent` has no border at all so it reads as empty rather than as another grey.
 const VERDICT = {
   'verified':                { label: 'verified',            token: 'good',  style: 'solid'  },
@@ -39,11 +39,18 @@ const VERDICT = {
   'absent':                  { label: 'absent',              token: 'dim',   style: 'none'   },
   'declared-but-wrong':      { label: 'declared but wrong',  token: 'crit',  style: 'solid'  },
   'indeterminate':           { label: 'indeterminate',       token: 'warn',  style: 'dashed' },
+  // Not a verdict. A declined metric was never measured, so it has no verdict at
+  // all; this row exists so the viewer can show that state instead of an empty
+  // gap that reads as "this metric does not exist". Dotted, so it is distinct
+  // from solid (measured), dashed (undeclared or indeterminate) and from
+  // `absent`, which alone has no border.
+  'not-measured':            { label: 'not measured',        token: 'dim',   style: 'dotted' },
 };
 
 const ABBR = {
   availability: 'A', cors: 'C', 'service-description': 'S',
   'geo-functions': 'G', 'geo-data': 'D', classes: 'K', 'cors-preflight': 'P',
+  'has-classes': 'T',
 };
 
 // The metrics this viewer knows about, in a fixed display order. A run can
@@ -53,14 +60,19 @@ const ABBR = {
 // from the page. A viewer that hides measurements is worse than one that
 // looks untidy.
 const KNOWN_METRICS = [
-  'availability', 'cors', 'cors-preflight', 'service-description', 'geo-functions', 'geo-data', 'classes',
+  'availability', 'cors', 'cors-preflight', 'service-description', 'geo-functions', 'geo-data',
+  'has-classes', 'classes',
 ];
 
 // Every metric actually present in `rows`: the known ones first, in the fixed
 // order above, then anything unrecognised, alphabetically, so a run is never
 // silently under-reported just because this script predates its metric.
-function metricsIn(rows) {
-  const present = new Set(rows.map((r) => r.metric));
+function metricsIn(rows, declined = []) {
+  // Declined metrics count as present. A metric declined on every endpoint has
+  // no measurement row anywhere, so taking the column set from `rows` alone
+  // would drop it from the page entirely, which reads as "this metric does not
+  // exist" rather than "we chose not to run it".
+  const present = new Set([...rows.map((r) => r.metric), ...declined.map((d) => d.metric)]);
   const known = KNOWN_METRICS.filter((m) => present.has(m));
   const unknown = [...present].filter((m) => !KNOWN_METRICS.includes(m)).sort();
   return [...known, ...unknown];
@@ -78,9 +90,19 @@ function collect(quads) {
     else if (q.p === `${PROV}generatedAtTime`) run.at = lit(q.o);
     else if (q.p === `${SW}proberVersion`) run.version = lit(q.o);
     else if (q.p === `${SW}metricDefinitionRevision`) run.revision = lit(q.o);
+    // A not-measured fact carries sparqlwatch-owned predicates only: reusing
+    // `dqv:computedOn` would entail that it IS a quality measurement, which is
+    // exactly what it is not. So it needs its own arms here.
+    else if (q.p === `${SW}notMeasuredOn`) row(q.s).nmEndpoint = iri(q.o);
+    else if (q.p === `${SW}notMeasuredMetric`) row(q.s).nmMetric = iri(q.o).replace(`${SW}metric:`, '');
+    else if (q.p === `${SW}notMeasuredReason`) row(q.s).nmReason = lit(q.o);
   }
-  const rows = [...m.values()].filter((r) => r.endpoint && r.metric && r.verdict);
-  return { run, rows };
+  const all = [...m.values()];
+  const rows = all.filter((r) => r.endpoint && r.metric && r.verdict);
+  const declined = all
+    .filter((r) => r.nmEndpoint && r.nmMetric)
+    .map((r) => ({ endpoint: r.nmEndpoint, metric: r.nmMetric, reason: r.nmReason }));
+  return { run, rows, declined };
 }
 
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -88,36 +110,45 @@ const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replac
 function chip(metric, verdict) {
   const v = VERDICT[verdict] ?? { label: verdict, token: 'dim', style: 'none' };
   const border = v.style === 'none' ? 'transparent'
-    : v.style === 'dashed' ? `1px dashed var(--${v.token})` : `1px solid var(--${v.token})`;
+    : v.style === 'dashed' ? `1px dashed var(--${v.token})`
+    : v.style === 'dotted' ? `1px dotted var(--${v.token})` : `1px solid var(--${v.token})`;
   const b = v.style === 'none' ? 'border: 1px solid transparent' : `border: ${border}`;
   const bg = verdict === 'verified' ? 'background: var(--overlay);' : '';
   return `<span class="chip" title="${esc(ABBR[metric] ? metric : metric)}: ${esc(v.label)}"
     style="${b}; ${bg} color: var(--${v.token})">${esc(ABBR[metric] ?? metric[0].toUpperCase())}</span>`;
 }
 
-function render({ run, rows }) {
-  const endpoints = [...new Set(rows.map((r) => r.endpoint))].sort();
-  const metrics = metricsIn(rows);
+function render({ run, rows, declined = [] }) {
+  const endpoints = [...new Set([...rows.map((r) => r.endpoint), ...declined.map((d) => d.endpoint)])].sort();
+  const metrics = metricsIn(rows, declined);
+  const wasDeclined = (ep, m) => declined.some((d) => d.endpoint === ep && d.metric === m);
 
   const counts = {};
   for (const r of rows) counts[r.verdict] = (counts[r.verdict] ?? 0) + 1;
+  counts['not-measured'] = declined.length;
 
   const body = endpoints.map((ep) => {
     const mine = metrics.map((m) => rows.find((r) => r.endpoint === ep && r.metric === m));
     const times = mine.filter((r) => r && r.ms !== undefined).map((r) => r.ms);
     const slowest = times.length ? Math.max(...times) : null;
-    const unmeasured = mine.filter((r) => r && r.ms === undefined).length;
+    // Named for what it counts. "not measured" now has a specific published
+    // meaning (a metric declined by the cost ceiling), so it cannot also mean
+    // "measured, but reported no elapsed time".
+    const untimed = mine.filter((r) => r && r.ms === undefined).length;
     return `<tr>
       <td><div class="name">${esc(ep.replace(/^https?:\/\//, ''))}</div></td>
-      <td><div class="chips">${mine.map((r, i) => r ? chip(metrics[i], r.verdict) : '<span class="chip" style="border:1px solid transparent"></span>').join('')}</div></td>
+      <td><div class="chips">${mine.map((r, i) => r ? chip(metrics[i], r.verdict)
+        : wasDeclined(ep, metrics[i]) ? chip(metrics[i], 'not-measured')
+        : '<span class="chip" style="border:1px solid transparent"></span>').join('')}</div></td>
       <td class="num">${slowest === null ? '&mdash;' : slowest + ' ms'}</td>
-      <td class="num dim">${unmeasured ? unmeasured + ' not measured' : ''}</td>
+      <td class="num dim">${untimed ? untimed + ' untimed' : ''}</td>
     </tr>`;
   }).join('\n');
 
   const legend = Object.entries(VERDICT).map(([k, v]) => {
     const b = v.style === 'none' ? '1px solid transparent'
-      : v.style === 'dashed' ? `1px dashed var(--${v.token})` : `1px solid var(--${v.token})`;
+      : v.style === 'dashed' ? `1px dashed var(--${v.token})`
+    : v.style === 'dotted' ? `1px dotted var(--${v.token})` : `1px solid var(--${v.token})`;
     const bg = k === 'verified' || k === 'absent' ? 'background: var(--overlay);' : '';
     return `<span class="leg"><i style="border:${b}; ${bg}"></i>${esc(v.label)} <b>${counts[k] ?? 0}</b></span>`;
   }).join('');
@@ -189,4 +220,4 @@ if (!inPath) { console.error('usage: node tools/render-run.mjs <run.nq> [out.htm
 const data = collect(parse(readFileSync(inPath, 'utf8')));
 if (!data.rows.length) { console.error(`no measurements found in ${inPath}`); process.exit(1); }
 writeFileSync(outPath, render(data));
-console.log(`wrote ${outPath} — ${data.rows.length} measurements, ${new Set(data.rows.map(r => r.endpoint)).size} endpoints`);
+console.log(`wrote ${outPath}, ${data.rows.length} measurements, ${new Set(data.rows.map(r => r.endpoint)).size} endpoints`);

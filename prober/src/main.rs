@@ -3,7 +3,7 @@ use sparqlwatch_prober::{
     budget::Budget,
     client::Client,
     emit::{emit_nquads, RunId},
-    metrics::{definitions_revision, load_metrics},
+    metrics::{definitions_revision, load_metrics, within_cost, Cost},
     registry::load_endpoints,
     run_sweep,
 };
@@ -20,6 +20,13 @@ struct Args {
     /// ISO-8601 timestamp for the run. Passed in so runs are reproducible.
     #[arg(long)]
     at: String,
+    /// The most a single metric may cost the endpoint it points at. Metrics
+    /// declared more expensive than this are not run and not measured: they are
+    /// published as a `NotMeasured` fact naming the ceiling as the reason,
+    /// never as a zero or an `indeterminate` verdict. Defaults to `cheap`,
+    /// because the default has to be safe to point at somebody else's server.
+    #[arg(long, value_enum, default_value_t = Cost::Cheap)]
+    max_cost: Cost,
 }
 
 /// `--at` is interpolated into two IRIs and published as an `xsd:dateTime`, so
@@ -95,19 +102,37 @@ async fn main() -> anyhow::Result<()> {
     let client = Client::new(budget)?;
 
     // A pure function of the definitions, so the published revision is
-    // reproducible from the same metrics.toml.
+    // reproducible from the same metrics.toml. It identifies the definitions,
+    // all of them, not the subset this
+    // run chose to probe: the ceiling is published separately, on the
+    // activity, so two runs of one file at different ceilings stay comparable.
     let revision = definitions_revision(&defs);
-    let (rows, declarations_read) = run_sweep(&endpoints, &defs, &client, budget).await;
-    let nq = emit_nquads(&RunId(args.at.clone()), &args.at, &revision, &rows, &declarations_read)?;
+    // The policy lives here, in one place. `run_sweep` receives both halves as
+    // data and never learns what a ceiling is.
+    let (run, declined) = within_cost(&defs, args.max_cost);
+    let (rows, declarations_read, not_measured) =
+        run_sweep(&endpoints, &run, &declined, &client, budget).await;
+    let nq = emit_nquads(
+        &RunId(args.at.clone()),
+        &args.at,
+        &revision,
+        &rows,
+        &declarations_read,
+        &not_measured,
+        args.max_cost,
+    )?;
     std::fs::write(&args.out, nq)?;
     tracing::info!(endpoints = endpoints.len(), measurements = rows.len(),
+                   not_measured = not_measured.len(), max_cost = args.max_cost.slug(),
                    revision = %revision, out = %args.out, "sweep complete");
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::validate_instant;
+    use super::{validate_instant, Args};
+    use clap::Parser;
+    use sparqlwatch_prober::metrics::Cost;
 
     #[test]
     fn a_well_formed_instant_is_accepted() {
@@ -140,5 +165,20 @@ mod tests {
         ] {
             assert!(validate_instant(bad).is_err(), "{bad:?} should be rejected");
         }
+    }
+
+    /// The default ceiling is the whole safety property of the cost class:
+    /// somebody who runs this without reading the flags must not fire a
+    /// 45-second scan at 548 strangers' servers. Asserting on the PARSED args
+    /// rather than on `Cost::default()` is deliberate: the latter would still
+    /// pass if `default_value_t` were changed to name something else.
+    #[test]
+    fn the_default_cost_ceiling_is_cheap() {
+        let args = Args::parse_from(["prober", "--at", "2026-01-01T00:00:00Z"]);
+        assert_eq!(
+            args.max_cost,
+            Cost::Cheap,
+            "a plain run must not include expensive metrics"
+        );
     }
 }
