@@ -923,6 +923,37 @@ async fn an_unreadable_description_never_manufactures_a_declaration() {
     }
 }
 
+/// The `{ ... }` group that opens after a `GRAPH ?var`, brace-balanced, or
+/// `None` if what follows is not a balanced block. Text-level, because the
+/// suite has no SPARQL engine in it: see the named-graph gap in
+/// `README.md`'s known limitations for what that cannot establish.
+fn graph_block_after(after_graph_var: &str) -> Option<&str> {
+    let open = after_graph_var.find('{')?;
+    let mut depth = 0usize;
+    for (i, c) in after_graph_var[open..].char_indices() {
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&after_graph_var[open..open + i + 1]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Whether `block` uses `?var` as a whole variable rather than as the prefix of
+/// a longer name: `?g` must not be found inside `?geometry`.
+fn binds(block: &str, var: &str) -> bool {
+    let needle = format!("?{var}");
+    block.match_indices(&needle).any(|(i, _)| {
+        block[i + needle.len()..].chars().next().is_none_or(|c| !c.is_alphanumeric() && c != '_')
+    })
+}
+
 /// Pin both halves of the fix, reading the shipped definitions rather than a
 /// fixture so editing the file cannot silently narrow them again.
 #[test]
@@ -941,6 +972,14 @@ fn the_content_metrics_reach_named_graphs_without_colliding_variables() {
         // match: the graph name is joined against the geometry literal. The
         // result is an empty binding set, which resolves to `absent`, which is
         // the exact false negative this metric change exists to remove.
+        //
+        // And the block itself must BIND the result variable, which is the only
+        // thing that makes the named-graph branch capable of contributing a row
+        // at all. Without this, `GRAPH ?anyg { ?s a ?other }` satisfies every
+        // other assertion here (it contains `GRAPH ?`, its graph variable is
+        // not the result variable) while contributing nothing, and a
+        // named-graph-only endpoint still publishes `absent`.
+        let mut graph_blocks = 0;
         for (i, _) in q.match_indices("GRAPH ?") {
             let rest = &q[i + "GRAPH ?".len()..];
             let g: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
@@ -949,7 +988,15 @@ fn the_content_metrics_reach_named_graphs_without_colliding_variables() {
                 g, var,
                 "{id} binds ?{var} as its result AND as its graph name, so it can never match"
             );
+            let block = graph_block_after(&rest[g.len()..])
+                .unwrap_or_else(|| panic!("{id}'s GRAPH ?{g} is not followed by a balanced block"));
+            assert!(
+                binds(block, var),
+                "{id}'s GRAPH ?{g} block does not bind ?{var}, so it can never contribute a row: {block}"
+            );
+            graph_blocks += 1;
         }
+        assert_eq!(graph_blocks, 1, "{id} should look in named graphs in exactly one branch");
 
         assert!(
             !d.label.to_lowercase().contains("default graph"),

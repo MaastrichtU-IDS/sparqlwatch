@@ -151,6 +151,9 @@ graphs is not reported as holding nothing. The graph variable is never the
 metric's own result variable: `GRAPH ?g { ?s geo:asWKT ?g }` would join the
 graph name against the geometry literal, match nothing, and publish a silent
 false `absent`, which is exactly the failure this widening exists to remove.
+What the suite checks about those two queries is structural only; see the
+named-graph entry under Known limitations for what that does and does not
+establish.
 
 The two CORS metrics are deliberately separate facts, and neither subsumes the
 other. `cors` observes an `access-control-allow-origin` header on a **simple
@@ -248,6 +251,21 @@ The following are deferred deliberately, not oversights:
   errs in on purpose. Whether to raise the cap, stream the parse, or leave it is
   stage 1c's call; real descriptions are typically hundreds of bytes, not
   hundreds of kilobytes.
+
+- The **named-graph half of the `geo-data` and `classes` queries is unverified
+  by execution.** The suite contains no SPARQL engine, so what it can check
+  about those queries is structural: `the_content_metrics_reach_named_graphs_without_colliding_variables`
+  asserts that each query has exactly one `GRAPH ?g { ... }` branch, that the
+  graph variable is not the metric's result variable, and that the block binds
+  that result variable, so a branch incapable of contributing a row fails the
+  test. That is correctness by reading, not by execution. `endpoints.toml` holds
+  no endpoint known to keep its data in named graphs (the live test's
+  `data.kkg.kadaster.nl` answers both branches from its default graph, so it
+  would pass with the `GRAPH` branch deleted), so nothing here demonstrates that
+  a partitioned endpoint is actually reached. Closing that gap needs an endpoint
+  that holds its data that way. It becomes testable at stage 1d, where the
+  registry is seeded from 548 real endpoints, some of which are certainly
+  partitioned.
 
 ## Tests
 
