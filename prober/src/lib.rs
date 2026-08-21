@@ -5,6 +5,7 @@ pub mod client;
 pub mod declare;
 pub mod media;
 pub mod observe;
+pub mod politeness;
 pub mod metrics;
 pub mod registry;
 pub mod resolve;
