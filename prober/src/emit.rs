@@ -64,6 +64,7 @@ impl NotMeasuredReason {
 /// type, carrying no `dqv:value` and no `sw:level`, so a consumer asking "what
 /// is the verdict" gets nothing (which is correct) while a consumer asking
 /// "why is there no verdict" gets an answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NotMeasured {
     pub endpoint: String,
     pub metric_id: String,

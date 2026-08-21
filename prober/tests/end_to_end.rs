@@ -1285,3 +1285,36 @@ async fn a_declined_metric_reaches_the_published_graph_with_no_verdict() {
     // ...while the cheap counterpart is a real measurement with a real verdict.
     assert_eq!(verdict_of(&nq, "has-classes"), Verdict::Verified);
 }
+
+/// A declined metric produces one not-measured fact PER ENDPOINT, and every
+/// existing test uses a single endpoint, which cannot tell per-endpoint apart
+/// from per-run or per-declined-metric. Two endpoints and one declined metric
+/// must yield exactly two facts, one naming each.
+///
+/// This matters at registry scale rather than here: with 548 endpoints and one
+/// expensive metric, a per-run fanout would publish 1 fact instead of 548, so a
+/// consumer asking "was `classes` measured for THIS endpoint" would get nothing
+/// back for 547 of them and could not distinguish that from the metric not
+/// existing.
+#[tokio::test]
+async fn a_declined_metric_is_recorded_once_per_endpoint() {
+    let a = an_endpoint_that_answers_everything().await;
+    let b = an_endpoint_that_answers_everything().await;
+    let (run, declined) = within_cost(&load_shipped_metrics(), Cost::Cheap);
+    assert_eq!(declined.len(), 1, "the fixture assumes exactly one expensive metric");
+
+    let client = Client::new(Budget::default()).unwrap();
+    let urls = vec![format!("{}/sparql", a.uri()), format!("{}/sparql", b.uri())];
+    let (_rows, _read, not_measured) =
+        run_sweep(&urls, &run, &declined, &client, Budget::default()).await;
+
+    assert_eq!(
+        not_measured.len(),
+        2,
+        "one fact per (endpoint, declined metric), not one per run: {not_measured:?}"
+    );
+    let named: std::collections::BTreeSet<&str> =
+        not_measured.iter().map(|n| n.endpoint.as_str()).collect();
+    let expected: std::collections::BTreeSet<&str> = urls.iter().map(|u| u.as_str()).collect();
+    assert_eq!(named, expected, "each endpoint is named by exactly one fact");
+}
