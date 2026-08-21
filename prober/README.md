@@ -153,11 +153,22 @@ When a metric is `expensive`, a sweep with `--max-cost cheap` (the default) skip
 it. That skip is published as a fact, not as an omission. Per declined (endpoint, metric)
 the run emits a resource of type `urn:sparqlwatch:NotMeasured`, with:
 
-- `dqv:computedOn` pointing to the endpoint
-- `dqv:isMeasurementOf` pointing to the metric definition
+- `urn:sparqlwatch:notMeasuredOn` pointing to the endpoint
+- `urn:sparqlwatch:notMeasuredMetric` pointing to the metric definition
 - `urn:sparqlwatch:notMeasuredReason` set to `"cost-ceiling"`
 - **no** `dqv:value`
 - **no** level
+
+Those first two are sparqlwatch's own predicates on purpose, and no DQV or Data
+Cube predicate appears on the fact at all. `dqv:computedOn` is declared with
+domain `dqv:QualityMeasurement` and `dqv:isMeasurementOf` with domain
+`qb:Observation`, so either one here would entail, under plain RDFS, that a
+quality measurement exists for a pair we deliberately did not measure: a
+consumer materialising domains would read a value-less measurement rather than a
+declined one. Reusing a predicate whose declared domain is a class you are not is
+an assertion, not a convenience. Sparqlwatch declares no domain and no range for
+its own two, because an undeclared predicate entails nothing, and endpoint and
+metric stay just as joinable.
 
 This is not a seventh verdict. The verdict vocabulary stays at six: this fact says a
 measurement did not happen, while a verdict says what was learned about a capability.

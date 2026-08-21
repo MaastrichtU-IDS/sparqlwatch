@@ -255,15 +255,29 @@ pub fn emit_nquads(
             Term::NamedNode(nn("urn:sparqlwatch:NotMeasured")?),
             graph.clone(),
         ));
+        // Sparqlwatch-owned predicates, deliberately NOT `dqv:computedOn` and
+        // `dqv:isMeasurementOf`. Reusing a predicate whose declared domain is a
+        // class we are not is an assertion, not a convenience: DQV gives
+        // `dqv:computedOn` the domain `dqv:QualityMeasurement` and
+        // `dqv:isMeasurementOf` the domain `qb:Observation`, so either one on
+        // this subject entails, under plain RDFS, that a quality measurement
+        // exists here. It does not. A consumer materialising domains would then
+        // read every declined pair as a measurement whose `dqv:value` went
+        // missing, which is the exact confusion this fact type was minted to
+        // prevent, published once per declined (endpoint, metric) pair.
+        //
+        // These two carry no `rdfs:domain` and no `rdfs:range` anywhere,
+        // because an undeclared predicate entails nothing. Endpoint and metric
+        // stay joinable; nothing about a measurement is claimed.
         quads.push(Quad::new(
             subj.clone(),
-            nn(&format!("{DQV}computedOn"))?,
+            nn("urn:sparqlwatch:notMeasuredOn")?,
             Term::NamedNode(endpoint),
             graph.clone(),
         ));
         quads.push(Quad::new(
             subj.clone(),
-            nn(&format!("{DQV}isMeasurementOf"))?,
+            nn("urn:sparqlwatch:notMeasuredMetric")?,
             Term::NamedNode(nn(&format!("urn:sparqlwatch:metric:{}", fact.metric_id))?),
             graph.clone(),
         ));
@@ -611,10 +625,10 @@ mod tests {
         // marks what kind of fact it is. Do NOT filter on a substring of one
         // IRI shape: `"measurement"` is not a substring of
         // `urn:sparqlwatch:not-measured:...`, so a single filter silently sees
-        // only half the graph and the assertion becomes unfalsifiable. Nor on
-        // `dqv#isMeasurementOf`, which BOTH kinds of fact carry: that would put
-        // the not-measured subject in the `measured` set and make the disjointness
-        // claim false for a correct implementation.
+        // only half the graph and the assertion becomes unfalsifiable. The two
+        // fact types now share no predicate at all (see
+        // `no_dqv_or_qb_predicate_ever_lands_on_a_not_measured_subject`), so
+        // typing is the only honest way to tell them apart anyway.
         let subject = |line: &str| line.split_whitespace().next().unwrap_or("").to_string();
         let measured: std::collections::HashSet<String> = nq.lines()
             .filter(|l| l.contains("dqv#QualityMeasurement"))
@@ -655,11 +669,11 @@ mod tests {
                 .collect()
         };
         assert_eq!(
-            of("http://www.w3.org/ns/dqv#computedOn"),
+            of("urn:sparqlwatch:notMeasuredOn"),
             vec![&Term::NamedNode(NamedNode::new("http://example.org/sparql").unwrap())]
         );
         assert_eq!(
-            of("http://www.w3.org/ns/dqv#isMeasurementOf"),
+            of("urn:sparqlwatch:notMeasuredMetric"),
             vec![&Term::NamedNode(NamedNode::new("urn:sparqlwatch:metric:classes").unwrap())]
         );
         assert_eq!(
@@ -678,6 +692,72 @@ mod tests {
             && q.object == Term::NamedNode(NamedNode::new("http://www.w3.org/ns/dcat#DataService").unwrap())));
         assert!(qs.iter().all(|q| q.graph_name
             == GraphName::NamedNode(NamedNode::new("urn:sparqlwatch:run:r1").unwrap())));
+    }
+
+    #[test]
+    fn no_dqv_or_qb_predicate_ever_lands_on_a_not_measured_subject() {
+        // Reusing a predicate whose declared domain is a class we are not is an
+        // assertion, not a convenience. DQV declares `dqv:computedOn` with
+        // domain `dqv:QualityMeasurement` and `dqv:isMeasurementOf` with domain
+        // `qb:Observation`, so either one on a `NotMeasured` subject entails, by
+        // `rdfs:domain` alone, that a quality measurement exists for a pair we
+        // deliberately did not measure. Any consumer materialising domains then
+        // sees a measurement missing its `dqv:value`, indistinguishable from
+        // data we lost.
+        //
+        // Written as a scan over whole namespaces rather than as a check for the
+        // two predicate names that once caused this, so a later addition to the
+        // fact cannot quietly reintroduce it. A test that names today's mistake
+        // cannot catch tomorrow's.
+        const QB: &str = "http://purl.org/linked-data/cube#";
+        // Measurements and not-measured facts in one document, so the scan runs
+        // against a graph that genuinely contains `dqv:` predicates.
+        let nm = vec![
+            NotMeasured {
+                endpoint: "http://example.org/sparql".into(),
+                metric_id: "classes".into(),
+                reason: NotMeasuredReason::CostCeiling,
+            },
+            NotMeasured {
+                endpoint: "http://b.example/sparql".into(),
+                metric_id: "classes".into(),
+                reason: NotMeasuredReason::CostCeiling,
+            },
+        ];
+        let out = emit_nquads(&RunId("r1".into()), AT, REV, &rows(), &[], &nm, Cost::Cheap).unwrap();
+        let qs = quads_of(&out);
+
+        let declined: BTreeSet<String> = qs
+            .iter()
+            .filter(|q| {
+                q.predicate.as_ref() == rdf::TYPE
+                    && q.object
+                        == Term::NamedNode(NamedNode::new("urn:sparqlwatch:NotMeasured").unwrap())
+            })
+            .map(|q| q.subject.to_string())
+            .collect();
+        assert_eq!(declined.len(), 2, "the fixture must actually contain declined facts, or this scan proves nothing");
+
+        for q in &qs {
+            if !declined.contains(&q.subject.to_string()) {
+                continue;
+            }
+            let p = q.predicate.as_str();
+            assert!(
+                !p.starts_with(DQV) && !p.starts_with(QB),
+                "a NotMeasured subject must carry no DQV or Data Cube predicate, \
+                 whose domains would entail it is a measurement: {q}"
+            );
+        }
+
+        // And the control: the measurement subjects in the very same document do
+        // carry DQV predicates, so the loop above is scanning a real graph and
+        // not passing because nothing in it uses DQV at all.
+        assert!(
+            qs.iter().any(|q| q.predicate.as_str().starts_with(DQV)
+                && !declined.contains(&q.subject.to_string())),
+            "measurements still use DQV; only the declined facts must not"
+        );
     }
 
     #[test]

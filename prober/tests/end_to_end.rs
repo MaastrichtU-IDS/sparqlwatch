@@ -1261,11 +1261,17 @@ async fn a_declined_metric_reaches_the_published_graph_with_no_verdict() {
 
     let classes = NamedNode::new("urn:sparqlwatch:metric:classes").unwrap();
     let subjects: Vec<&oxrdf::NamedOrBlankNode> = quads.iter()
-        .filter(|q| q.predicate.as_str() == "http://www.w3.org/ns/dqv#isMeasurementOf"
+        .filter(|q| q.predicate.as_str() == "urn:sparqlwatch:notMeasuredMetric"
                     && q.object == Term::NamedNode(classes.clone()))
         .map(|q| &q.subject)
         .collect();
     assert_eq!(subjects.len(), 1, "the declined metric appears exactly once, as a fact about not measuring it");
+    // And no measurement claims it: the two halves are disjoint on the metric
+    // as well as on the subject, so a consumer joining on the metric IRI cannot
+    // see a pair that both was and was not measured.
+    assert!(!quads.iter().any(|q| q.predicate.as_str() == "http://www.w3.org/ns/dqv#isMeasurementOf"
+                && q.object == Term::NamedNode(classes.clone())),
+            "a declined metric must never also be the subject of a measurement");
     let subject = subjects[0];
     assert!(quads.iter().any(|q| &q.subject == subject
                 && q.object == Term::NamedNode(NamedNode::new("urn:sparqlwatch:NotMeasured").unwrap())),
