@@ -434,3 +434,53 @@ async fn each_endpoints_row_carries_the_level_computed_for_that_endpoint() {
     assert_eq!(level_at(&bare_url), Some(Level(1)), "a bare one-triple description grades 1");
     assert_eq!(level_at(&rich_url), Some(Level(4)), "an entailment regime grades 4");
 }
+
+/// The other direction, and the one that motivates the whole change: a host
+/// serving two datasets from one description must not credit the dataset we
+/// probed with its neighbour's extension functions. Before scoping, this
+/// reported `Verified` for a service whose description declares nothing.
+#[tokio::test]
+async fn a_neighbouring_datasets_declaration_is_not_credited_to_this_endpoint() {
+    let server = MockServer::start().await;
+    let description = format!(
+        r#"
+@prefix sd: <http://www.w3.org/ns/sparql-service-description#> .
+<http://example.org/geo> a sd:Service ;
+    sd:endpoint <{uri}/geo/sparql> ;
+    sd:extensionFunction <http://www.opengis.net/def/function/geosparql/sfWithin> .
+<http://example.org/plain> a sd:Service ;
+    sd:endpoint <{uri}/plain/sparql> .
+"#,
+        uri = server.uri()
+    );
+    Mock::given(method("GET")).and(path("/plain/sparql")).and(query_param_is_missing("query"))
+        .respond_with(ResponseTemplate::new(200)
+            .set_body_raw(description.into_bytes(), "text/turtle"))
+        .mount(&server).await;
+    Mock::given(method("GET")).and(path("/plain/sparql"))
+        .respond_with(ResponseTemplate::new(200)
+            .set_body_string(r#"{"head":{"vars":["s"]},"results":{"bindings":[]},"boolean":true}"#))
+        .mount(&server).await;
+
+    let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
+    let client = Client::new(Budget::default()).unwrap();
+    let url = format!("{}/plain/sparql", server.uri());
+    let rows = run_sweep(std::slice::from_ref(&url), &defs, &client, Budget::default()).await;
+
+    let geo = rows.iter().find(|r| r.metric_id == "geo-functions").unwrap();
+    assert_eq!(
+        geo.verdict,
+        Verdict::UndeclaredButVerified,
+        "the endpoint evaluates sfWithin but never declared it; its neighbour did"
+    );
+
+    // And the grade is untouched by that, because the document as published is
+    // what the grade is about.
+    let description_row = rows.iter().find(|r| r.metric_id == "service-description").unwrap();
+    assert_eq!(description_row.verdict, Verdict::Verified);
+    assert!(
+        description_row.level.is_some() && description_row.level != Some(Level(0)),
+        "a real two-service description is not graded as if nothing were served, got {:?}",
+        description_row.level
+    );
+}

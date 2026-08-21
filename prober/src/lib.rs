@@ -9,7 +9,7 @@ pub mod resolve;
 
 use crate::budget::{Budget, Expired};
 use crate::client::Client;
-use crate::declare::{parse_declarations, Declarations};
+use crate::declare::{parse_declarations_for, Declarations};
 use crate::emit::MeasurementRow;
 use crate::metrics::{MetricDef, ProbeKind};
 use crate::resolve::{resolve, resolve_fetch, Declared};
@@ -90,8 +90,10 @@ async fn probe_endpoint(
         // Keeping that decision in one place means the two can't disagree.
         // `content_type` is threaded through so the real serialization
         // (RDF/XML, JSON-LD, ...) is parsed as itself rather than assumed to
-        // be Turtle.
-        Ok(o) => parse_declarations(o.body.as_deref().unwrap_or(""), o.content_type.as_deref()),
+        // be Turtle. The endpoint URLs are threaded through because a
+        // document may describe several services and a capability claim may
+        // only be read from the one we probed.
+        Ok(o) => parse_declarations_for(o.body.as_deref().unwrap_or(""), o.content_type.as_deref(), &[ep]),
         Err(Expired) => Declarations::empty(),
     };
     let (fetch_verdict, fetch_level) = resolve_fetch(&declarations, fetch_outcome.as_ref().map_err(|e| *e));

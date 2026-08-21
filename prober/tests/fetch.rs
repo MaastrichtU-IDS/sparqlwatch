@@ -154,8 +154,9 @@ async fn fetch_and_resolve(status: u16, ctype: Option<&str>, body: &str) -> (Ver
     Mock::given(method("GET")).and(path("/sparql")).respond_with(template).mount(&server).await;
 
     let c = Client::new(Budget::default()).unwrap();
-    let o = c.fetch_rdf(&format!("{}/sparql", server.uri())).await;
-    let declarations = parse_declarations(o.body.as_deref().unwrap_or(""), o.content_type.as_deref());
+    let url = format!("{}/sparql", server.uri());
+    let o = c.fetch_rdf(&url).await;
+    let declarations = parse_declarations(o.body.as_deref().unwrap_or(""), o.content_type.as_deref(), &url);
     let (verdict, level) = resolve_fetch(&declarations, Ok(&o));
     (verdict, level, o.body_kind)
 }
