@@ -435,6 +435,57 @@ async fn each_endpoints_row_carries_the_level_computed_for_that_endpoint() {
     assert_eq!(level_at(&rich_url), Some(Level(4)), "an entailment regime grades 4");
 }
 
+/// Scoping reads the endpoint URL, so the URL it reads has to be the one we
+/// actually ended on. A registry entry pointing at `http://host/a` that
+/// redirects to `/b` is ordinary, and the description then names `/b`.
+///
+/// The document describes TWO services on purpose. With only one, the
+/// single-service fallback would read it whole and this test would pass
+/// without the post-redirect URL ever being consulted. With two, a probe that
+/// compares only the pre-redirect URL matches neither service, gets an empty
+/// scope, and reports `UndeclaredButVerified` instead of `Verified`.
+#[tokio::test]
+async fn a_description_reached_through_a_redirect_is_still_scoped_to_us() {
+    let server = MockServer::start().await;
+    let description = format!(
+        r#"
+@prefix sd: <http://www.w3.org/ns/sparql-service-description#> .
+<http://example.org/mine> a sd:Service ;
+    sd:endpoint <{}/b> ;
+    sd:extensionFunction <http://www.opengis.net/def/function/geosparql/sfWithin> .
+<http://example.org/theirs> a sd:Service ;
+    sd:endpoint <http://elsewhere.example/sparql> .
+"#,
+        server.uri()
+    );
+    // Only the queryless description fetch is redirected; the query probes
+    // are answered at `/a` directly, because a 301 drops the query string and
+    // this test is about the fetch, not about redirect semantics for queries.
+    Mock::given(method("GET")).and(path("/a")).and(query_param_is_missing("query"))
+        .respond_with(ResponseTemplate::new(301).insert_header("location", "/b"))
+        .mount(&server).await;
+    Mock::given(method("GET")).and(path("/b"))
+        .respond_with(ResponseTemplate::new(200)
+            .set_body_raw(description.into_bytes(), "text/turtle"))
+        .mount(&server).await;
+    Mock::given(method("GET")).and(path("/a"))
+        .respond_with(ResponseTemplate::new(200)
+            .set_body_string(r#"{"head":{"vars":["s"]},"results":{"bindings":[]},"boolean":true}"#))
+        .mount(&server).await;
+
+    let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
+    let client = Client::new(Budget::default()).unwrap();
+    let url = format!("{}/a", server.uri());
+    let rows = run_sweep(std::slice::from_ref(&url), &defs, &client, Budget::default()).await;
+
+    let geo = rows.iter().find(|r| r.metric_id == "geo-functions").unwrap();
+    assert_eq!(
+        geo.verdict,
+        Verdict::Verified,
+        "the service that declared sfWithin is the one we probed, reached through a redirect"
+    );
+}
+
 /// The other direction, and the one that motivates the whole change: a host
 /// serving two datasets from one description must not credit the dataset we
 /// probed with its neighbour's extension functions. Before scoping, this

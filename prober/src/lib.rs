@@ -93,7 +93,19 @@ async fn probe_endpoint(
         // be Turtle. The endpoint URLs are threaded through because a
         // document may describe several services and a capability claim may
         // only be read from the one we probed.
-        Ok(o) => parse_declarations_for(o.body.as_deref().unwrap_or(""), o.content_type.as_deref(), &[ep]),
+        Ok(o) => {
+            // Both URLs name the same service: the one the registry gave us
+            // and, if the fetch was redirected, the one it landed on. A
+            // description that states only its post-redirect `sd:endpoint`
+            // would otherwise look like somebody else's document.
+            let mut urls: Vec<&str> = vec![ep];
+            if let Some(landed) = o.final_url.as_deref() {
+                if landed != ep {
+                    urls.push(landed);
+                }
+            }
+            parse_declarations_for(o.body.as_deref().unwrap_or(""), o.content_type.as_deref(), &urls)
+        }
         Err(Expired) => Declarations::empty(),
     };
     let (fetch_verdict, fetch_level) = resolve_fetch(&declarations, fetch_outcome.as_ref().map_err(|e| *e));

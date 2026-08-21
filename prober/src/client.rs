@@ -130,6 +130,9 @@ impl Client {
             bindings: Vec::new(),
             body_kind,
             body: None,
+            // Not a fetch: `final_url` is the description fetch's evidence
+            // alone, and nothing downstream scopes a query result by URL.
+            final_url: None,
             content_type: if ctype.is_empty() { None } else { Some(ctype.clone()) },
             elapsed_ms: elapsed,
             error: None,
@@ -152,6 +155,11 @@ impl Client {
         };
         let status = resp.status().as_u16();
         let cors = resp.headers().contains_key("access-control-allow-origin");
+        // Read before `resp.text()` consumes the response. After reqwest has
+        // followed its redirects this is where we actually landed, which is
+        // the URL a redirected description is most likely to name as its
+        // `sd:endpoint`.
+        let final_url = resp.url().to_string();
         let ctype = resp
             .headers()
             .get("content-type")
@@ -190,6 +198,7 @@ impl Client {
             bindings: Vec::new(),
             body_kind,
             body: Some(body),
+            final_url: Some(final_url),
             content_type: if ctype.is_empty() { None } else { Some(ctype.to_ascii_lowercase()) },
             elapsed_ms: elapsed,
             error: None,

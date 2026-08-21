@@ -23,6 +23,13 @@ pub struct Observation {
     /// endpoint score badly" is the first question a provider asks, and
     /// because the declaration parser reads it.
     pub body: Option<String>,
+    /// The URL the fetch ended on after redirects, when this observation came
+    /// from one. `None` for every probe that is not a fetch, and for a fetch
+    /// that never got a response. A description commonly states its
+    /// post-redirect URL as `sd:endpoint` while the registry holds the
+    /// pre-redirect one, so scoping a declaration to the service we probed
+    /// needs both strings, not just the one we asked for.
+    pub final_url: Option<String>,
     /// The response's `Content-Type` header, lowercased, when one was sent.
     /// `parse_declarations` needs this to pick the right RDF syntax; a body
     /// parsed under the wrong assumed format silently yields near-empty
@@ -41,6 +48,7 @@ impl Observation {
             bindings: Vec::new(),
             body_kind: BodyKind::None,
             body: None,
+            final_url: None,
             content_type: None,
             elapsed_ms,
             error: Some(error),
