@@ -254,26 +254,42 @@ fn a_multi_service_document_that_matches_nothing_declares_nothing() {
     assert!(d.triples > 0, "the document is still graded, only the claim is withheld");
 }
 
-/// Scoping must reach the dataset and graph nodes a service points at, or every
-/// scoped description loses its VoID partitions. `sd:defaultGraph` is included
-/// because real descriptions hang partitions off it, not only `defaultDataset`.
+/// The grade describes the document as published, so it must not move with the
+/// scope. Two services and a probed URL matching neither, so the capability
+/// scope is genuinely EMPTY (a single-service document would fall back to
+/// whole-document and prove nothing). If a grade input were ever scoped, an
+/// empty scope would zero it and this fails.
 #[test]
-fn a_scoped_services_dataset_and_default_graph_stay_in_scope() {
+fn a_grade_input_survives_an_empty_capability_scope() {
     const DOC: &str = r#"
 @prefix sd: <http://www.w3.org/ns/sparql-service-description#> .
 @prefix void: <http://rdfs.org/ns/void#> .
 @prefix geof: <http://www.opengis.net/def/function/geosparql/> .
 <http://example.org/svc> a sd:Service ;
-    sd:endpoint <http://example.org/sparql> ;
+    sd:endpoint <http://internal.lan/one> ;
     sd:defaultDataset <http://example.org/ds> .
 <http://example.org/ds> sd:defaultGraph <http://example.org/g> .
 <http://example.org/g> void:propertyPartition [ void:property geof:sfWithin ] .
+<http://example.org/other> a sd:Service ; sd:endpoint <http://internal.lan/two> .
 "#;
-    let d = parse_declarations(DOC, Some("text/turtle"), "http://example.org/sparql");
-    assert!(d.has_void_partitions, "partitions two links deep are still this service's");
+    // Probed as a URL that matches nothing in the document, deliberately: the
+    // grade describes what the operator published, so it must not move with the
+    // scope. Asserting this from a NON-matching endpoint is what makes the test
+    // say something; asserting it from the matching one held either way.
+    let d = parse_declarations(DOC, Some("text/turtle"), "http://elsewhere.example/sparql");
+    assert!(
+        !d.declares("http://www.opengis.net/def/function/geosparql/sfWithin"),
+        "the fixture must produce an EMPTY capability scope or the grade assertion proves nothing"
+    );
+    assert!(
+        d.has_void_partitions,
+        "a grade input two links deep is part of the published document, whatever we probed"
+    );
+    assert!(d.triples > 0, "and so is the triple count");
 }
 
-/// The load-bearing half of the test above. `has_void_partitions` is a grade
+/// The load-bearing counterpart to the grade test above. `has_void_partitions`
+/// is a grade
 /// input, so it is unscoped and would be true however scoping behaved; only a
 /// CAPABILITY reached through the linking predicates can show that the
 /// transitive expansion runs, and that it stops at the right service. Two

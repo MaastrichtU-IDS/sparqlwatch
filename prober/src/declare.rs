@@ -254,5 +254,10 @@ fn same_endpoint(a: &str, b: &str) -> bool {
         let host = host.strip_prefix("www.").unwrap_or(host);
         format!("{host}{path}")
     }
-    norm(a) == norm(b)
+    let (a, b) = (norm(a), norm(b));
+    // Two URLs that normalise to nothing are not "the same endpoint". Today
+    // endpoint URLs are validated before a sweep, so this cannot fire, but the
+    // failure mode of a matcher that returns true on empty input is a false
+    // capability credit, which is the one outcome this module must never cause.
+    !a.is_empty() && a == b
 }
