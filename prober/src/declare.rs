@@ -244,9 +244,12 @@ fn scope_of(quads: &[Quad], endpoints: &[&str]) -> Option<HashSet<NamedOrBlankNo
     }
 
     // A service's subtree is whatever it points at through `LINKING`, and
-    // whatever that points at in turn, which is what makes a VoID partition
-    // hung off a default graph (or off a blank node under one) this service's
-    // own.
+    // whatever that points at in turn: a CAPABILITY hung off a blank node,
+    // as in `sd:defaultDataset [ sd:defaultGraph [ sd:extensionFunction ...
+    // ] ]`, is this service's own because of it. A VoID partition hung the
+    // same way is not an example of this mattering: `has_void_partitions` is
+    // a grade input, read unscoped in pass one, so it never reaches this
+    // expansion at all, scoped or not.
     //
     // Indexed once, subject to what it points at, then walked as a worklist
     // from the matched services, so each subject is expanded at most once and
@@ -268,8 +271,9 @@ fn scope_of(quads: &[Quad], endpoints: &[&str]) -> Option<HashSet<NamedOrBlankNo
         }
         let linked = match &quad.object {
             Term::NamedNode(n) => NamedOrBlankNode::NamedNode(n.clone()),
-            // The arm that makes `sd:defaultDataset [ sd:defaultGraph [ ... ] ]`
-            // and every other blank-node-hung subtree part of the service.
+            // The arm that makes a capability hung off a blank node (e.g.
+            // `sd:defaultDataset [ sd:defaultGraph [ sd:extensionFunction
+            // ... ] ]`) part of the service that points at it.
             Term::BlankNode(b) => NamedOrBlankNode::BlankNode(b.clone()),
             _ => continue,
         };

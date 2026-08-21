@@ -572,3 +572,114 @@ fn a_query_string_difference_is_a_different_endpoint() {
         "and the matching one still matches: the query is kept, not made to fail every comparison"
     );
 }
+
+/// All six `LINKING` predicates, not only `defaultDataset` and `defaultGraph`,
+/// must carry a service's subtree to what it points at. One service, one
+/// probed URL that matches it, so `matched` is non-empty and pass two is
+/// already scoped to the expansion below: renaming any single predicate in
+/// `LINKING` to a nonsense IRI drops that predicate's row without touching
+/// the others, which is what a table-driven test over all six is for. (The
+/// existing cyclic-chain test also uses `sd:graph`, but reaches its capability
+/// via `defaultDataset` then `defaultGraph`, so `sd:graph` there is
+/// decorative, not coverage.)
+#[test]
+fn each_linking_predicate_carries_a_capability_behind_it() {
+    for predicate in ["defaultDataset", "availableGraphs", "namedGraph", "defaultGraph", "graph", "graphCollection"] {
+        let doc = format!(
+            r#"
+@prefix sd: <http://www.w3.org/ns/sparql-service-description#> .
+@prefix geof: <http://www.opengis.net/def/function/geosparql/> .
+<http://example.org/svc> a sd:Service ;
+    sd:endpoint <http://example.org/sparql> ;
+    sd:{predicate} <http://example.org/via> .
+<http://example.org/via> sd:extensionFunction geof:sfWithin .
+"#
+        );
+        let d = parse_declarations(&doc, Some("text/turtle"), "http://example.org/sparql");
+        assert!(
+            d.declares(SFWITHIN),
+            "sd:{predicate} must carry the service's subtree to what it points at"
+        );
+    }
+}
+
+/// The blank-node arm of the expansion (`Term::BlankNode(b) => ...`) is what
+/// makes a CAPABILITY hung off a blank node the probed service's own. VoID
+/// partitions do not exercise this arm at all: they feed a grade input, read
+/// unscoped in pass one, so a blank node under `void:propertyPartition` never
+/// reaches pass two's expansion either way. Two services, each with its
+/// capability two blank nodes deep under its own `sd:defaultDataset`, so the
+/// assertion fails if the arm is missing (`sfWithin` lost) and fails the other
+/// way if blank nodes were not scoped at all (`sfContains` leaks).
+#[test]
+fn a_capability_behind_a_blank_node_belongs_to_the_service_that_points_at_it() {
+    const DOC: &str = r#"
+@prefix sd: <http://www.w3.org/ns/sparql-service-description#> .
+@prefix geof: <http://www.opengis.net/def/function/geosparql/> .
+<http://example.org/mine> a sd:Service ;
+    sd:endpoint <http://example.org/mine/sparql> ;
+    sd:defaultDataset [ sd:defaultGraph [ sd:extensionFunction geof:sfWithin ] ] .
+<http://example.org/theirs> a sd:Service ;
+    sd:endpoint <http://example.org/theirs/sparql> ;
+    sd:defaultDataset [ sd:defaultGraph [ sd:extensionFunction geof:sfContains ] ] .
+"#;
+    const SFCONTAINS: &str = "http://www.opengis.net/def/function/geosparql/sfContains";
+    let mine = parse_declarations(DOC, Some("text/turtle"), "http://example.org/mine/sparql");
+    assert!(mine.declares(SFWITHIN), "a capability behind its own blank-node subtree is its own");
+    assert!(!mine.declares(SFCONTAINS), "and must not leak the neighbour's blank-node subtree");
+}
+
+/// The guard against a matcher that returns true on empty input: two URLs
+/// that both normalise to nothing must not be "the same endpoint". Without
+/// the guard, a document that (mis)states `sd:endpoint <http://>` would be
+/// credited to a probe of `""` or `"http://"`, because both normalise to the
+/// empty string and plain `norm(a) == norm(b)` would then hold. A multi-service
+/// document, so a false match here is visible as a real capability credit
+/// rather than the single-service fallback masking it.
+#[test]
+fn two_urls_that_normalise_to_nothing_are_not_the_same_endpoint() {
+    const DOC: &str = r#"
+@prefix sd: <http://www.w3.org/ns/sparql-service-description#> .
+@prefix geof: <http://www.opengis.net/def/function/geosparql/> .
+<http://example.org/degenerate> a sd:Service ;
+    sd:endpoint <http://> ;
+    sd:extensionFunction geof:sfWithin .
+<http://example.org/real> a sd:Service ;
+    sd:endpoint <http://example.org/real/sparql> ;
+    sd:extensionFunction geof:sfContains .
+"#;
+    const SFCONTAINS: &str = "http://www.opengis.net/def/function/geosparql/sfContains";
+    for probed in ["", "http://"] {
+        let d = parse_declarations(DOC, Some("text/turtle"), probed);
+        assert!(
+            !d.declares(SFWITHIN),
+            "a degenerate probed URL {probed:?} must not match a degenerate stated sd:endpoint"
+        );
+        assert!(!d.declares(SFCONTAINS), "and must not fall back to reading the document whole either");
+    }
+}
+
+/// A subject whose `sd:endpoint` object is not an IRI (a literal here) still
+/// counts towards the service count, even though a non-IRI object can never
+/// match a probed URL. That is the safe choice: moving the `services.insert`
+/// inside the `if let Term::NamedNode` guard would make this look like ONE
+/// service to `scope_of` (only "real" would count), which for a probed URL
+/// that matches neither falls back to reading the document whole and leaks
+/// the malformed service's function to a probe that matches nothing.
+#[test]
+fn a_non_iri_endpoint_still_counts_as_a_service_so_the_document_is_not_read_whole() {
+    const DOC: &str = r#"
+@prefix sd: <http://www.w3.org/ns/sparql-service-description#> .
+@prefix geof: <http://www.opengis.net/def/function/geosparql/> .
+<http://example.org/malformed> sd:endpoint "not-a-url" ;
+    sd:extensionFunction geof:sfWithin .
+<http://example.org/real> a sd:Service ;
+    sd:endpoint <http://example.org/real/sparql> ;
+    sd:extensionFunction geof:sfContains .
+"#;
+    const SFCONTAINS: &str = "http://www.opengis.net/def/function/geosparql/sfContains";
+    let d = parse_declarations(DOC, Some("text/turtle"), "http://elsewhere.example/sparql");
+    assert!(!d.declares(SFWITHIN), "the malformed service's function must not leak");
+    assert!(!d.declares(SFCONTAINS), "nor must the real service's: nothing matched, so the scope is empty");
+    assert!(d.triples > 0, "the document is still graded, only the claim is withheld");
+}
