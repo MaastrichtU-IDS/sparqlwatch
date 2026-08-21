@@ -159,8 +159,25 @@ fn cost_is_part_of_the_definitions_revision() {
 
 - [ ] **Step 2: Run to verify they fail**
 
-Run: `cargo test --manifest-path prober/Cargo.toml --lib`
+Run: `cargo test --manifest-path prober/Cargo.toml` (the whole suite, **not**
+`--lib`: adding a field to `MetricDef` breaks struct literals in the integration
+tests, and `--lib` hides five of the six breaks).
 Expected: compile errors, no `Cost`, no `cost`, no `within_cost`.
+
+**Adding `cost` to `MetricDef` breaks every struct literal that builds one.**
+`MetricDef` derives no `Default`, and it should not (a defaulted `kind` would
+violate the closed-set doctrine), so each site needs `cost: Cost::Cheap` added
+explicitly. The sites, so none is a surprise:
+
+- `prober/src/resolve.rs:399`
+- `prober/tests/cors_preflight.rs:25`
+- `prober/tests/end_to_end.rs:183`
+- `prober/tests/end_to_end.rs:278`
+- `prober/tests/end_to_end.rs:504`
+- `prober/tests/end_to_end.rs:568`
+
+Verify the list yourself with `grep -rn "MetricDef {" prober/src prober/tests`
+before you start: line numbers drift.
 
 - [ ] **Step 3: Implement**
 
@@ -210,7 +227,104 @@ git commit -m "feat(prober): metrics declare what they cost the endpoint"
 
 ---
 
-## Task 2: Record `not measured`, with its reason
+## Task ordering, corrected
+
+A review of this plan's first draft found two ordering defects worth stating
+plainly, because the corrected order looks arbitrary otherwise:
+
+1. The `not measured` tests assert on `has-classes` and on `classes` being
+   expensive, and neither exists until `metrics.toml` is split. As first drafted,
+   a **correct** implementation of the not-measured task still failed its own
+   checkpoint.
+2. `run_sweep` and `emit_nquads` both gain parameters, hitting roughly 23 and 13
+   call sites. Drafted across two tasks, `main.rs` stayed unfixed through the
+   first of them, so the crate's bin target did not compile, and therefore
+   neither did `cargo test`, for a whole task cycle.
+
+So: the definitions come first (Task 2), and every signature change lands
+together with its callers in one task (Task 3).
+
+---
+
+## Task 2: Split the class metric, and state every cost
+
+Do this before the `not measured` work: those tests reference `has-classes` and
+`classes`, and neither exists yet. This task changes data and one test, no
+signatures, so the crate compiles throughout.
+
+**Files:**
+- Modify: `prober/metrics.toml`
+- Modify: `prober/tests/end_to_end.rs` (extend the existing collision test)
+
+- [ ] **Step 1: Extend the collision test first**
+
+`the_content_metrics_reach_named_graphs_without_colliding_variables` covers
+`geo-data` and `classes`. Extend it to `has-classes`, which has the same
+graph-variable collision hazard and the same silent false `absent` if it is got
+wrong. Add an assertion that every metric in the shipped file states a `cost`
+explicitly rather than relying on the default, so the file can be read without
+cross-referencing a default in the code.
+
+Run it: it must fail, because `has-classes` does not exist yet.
+
+- [ ] **Step 2: Split the metric**
+
+```toml
+# Two class metrics, because one query cannot answer both questions at a price we
+# can pay everywhere. Measured on qlever.dev/api/osm-planet: the DISTINCT
+# enumeration times out past 45s, while the existence probe answers in 0.166s.
+# So existence runs everywhere and enumeration is opt-in.
+[[metric]]
+id = "has-classes"
+label = "Holds typed resources"
+dimension = "content"
+# `SelectIris`, NOT `AskData`. `AskData` routes through `Client::ask_literal`,
+# which extracts with the literal guard on (`client.rs:472`), and `?c` in
+# `?s a ?c` binds an IRI. Under `AskData` the guard would find no literal,
+# report `boolean = false`, and publish `absent` for an endpoint full of typed
+# resources: a silent false negative of exactly the kind this project exists to
+# prevent.
+kind = "SelectIris"
+var = "c"
+cost = "cheap"
+query = """
+SELECT ?c WHERE { { ?s a ?c } UNION { GRAPH ?anyg { ?s a ?c } } } LIMIT 1
+"""
+
+[[metric]]
+id = "classes"
+label = "Distinct classes"
+dimension = "content"
+kind = "SelectIris"
+var = "c"
+cost = "expensive"
+query = """
+SELECT DISTINCT ?c WHERE { { ?s a ?c } UNION { GRAPH ?anyg { ?s a ?c } } } LIMIT 200
+"""
+```
+
+State `cost` on every other metric too. `geo-data` is `cheap`: already `LIMIT 1`
+with no `DISTINCT`.
+
+Adding a metric changes `metricDefinitionRevision`, which is correct.
+
+- [ ] **Step 3: Prove the SelectIris choice is pinned**
+
+Mutation: change `has-classes` to `kind = "AskData"`, the mistake its own comment
+warns about, and confirm a test fails rather than the metric quietly reporting
+`absent`. **If nothing catches it, that is a finding**: report it and add a test
+that does. Restore, `touch`, re-run.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add prober/metrics.toml prober/tests
+git commit -m "feat(prober): an existence probe that is not a full scan"
+```
+
+---
+
+## Task 3: Record `not measured`, with its reason, and wire the ceiling
 
 The spec requires this outcome twice: metadata tier 3 is
 `` `not measured`, never a zero ``, and the risk table says expensive metrics
@@ -277,15 +391,26 @@ fn a_not_measured_fact_does_not_collide_with_a_measurement() {
         reason: NotMeasuredReason::CostCeiling,
     }];
     let nq = emit_nquads(&RunId(AT.into()), AT, REV, &rows, &[], &nm).unwrap();
-    let subjects: Vec<&str> = nq.lines()
-        .filter_map(|l| l.split_whitespace().next())
-        .filter(|s| s.contains("measurement"))
+
+    // Collect the two subject sets separately. Do NOT filter on a substring of
+    // one IRI shape: `"measurement"` is not a substring of
+    // `urn:sparqlwatch:not-measured:...`, so a single filter silently sees only
+    // half the graph and the assertion becomes unfalsifiable.
+    let subject = |line: &str| line.split_whitespace().next().unwrap_or("").to_string();
+    let measured: std::collections::HashSet<String> = nq.lines()
+        .filter(|l| l.contains("dqv#isMeasurementOf"))
+        .map(|l| subject(l))
         .collect();
-    let unique: std::collections::HashSet<_> = subjects.iter().collect();
-    assert_eq!(subjects.len() > 0, true);
-    assert_eq!(
-        unique.len(), 2,
-        "one measurement subject and one not-measured subject, never shared"
+    let not_measured: std::collections::HashSet<String> = nq.lines()
+        .filter(|l| l.contains("urn:sparqlwatch:NotMeasured"))
+        .map(|l| subject(l))
+        .collect();
+
+    assert_eq!(measured.len(), 1, "the fixture has one measurement");
+    assert_eq!(not_measured.len(), 1, "and one not-measured fact");
+    assert!(
+        measured.is_disjoint(&not_measured),
+        "a measurement and a not-measured fact must never share a subject IRI: {measured:?} vs {not_measured:?}"
     );
 }
 ```
@@ -344,110 +469,41 @@ fail); build the not-measured IRI from the same counter as measurements (the
 collision test must fail); have `run_sweep` probe the declined metrics anyway
 (the no-request test must fail). Restore, `touch`, re-run.
 
-- [ ] **Step 5: Commit**
-
-```bash
-git add prober/src prober/tests
-git commit -m "feat(prober): record not measured, with its reason, rather than a missing row"
-```
-
----
-
-## Task 3: Split the class metric, and wire the ceiling to the CLI
-
-**Files:**
-- Modify: `prober/metrics.toml`
-- Modify: `prober/src/main.rs` (`--max-cost`, and the provenance quad)
-- Modify: `prober/src/emit.rs` (the ceiling on the activity)
-- Modify: `prober/tests/end_to_end.rs` (the existing collision test)
-- Test: `prober/tests/end_to_end.rs`
-
-- [ ] **Step 1: Write the failing test**
-
-Extend `the_content_metrics_reach_named_graphs_without_colliding_variables` to
-cover `has-classes` as well as `geo-data` and `classes`: it has the same
-graph-variable collision hazard, and the same silent false `absent` if it is got
-wrong.
-
-Add an assertion that the shipped `metrics.toml` states a cost for **every**
-metric explicitly, rather than relying on the default. A file that states its
-costs can be read; one that omits them has to be cross-referenced against a
-default in the code.
-
-- [ ] **Step 2: Split the metric**
-
-```toml
-# Two class metrics, because one query cannot answer both questions at a price we
-# can pay everywhere. Measured on qlever.dev/api/osm-planet: the DISTINCT
-# enumeration times out past 45s, while the existence probe answers in 0.166s.
-# So existence runs everywhere and enumeration is opt-in.
-[[metric]]
-id = "has-classes"
-label = "Holds typed resources"
-dimension = "content"
-# `SelectIris`, NOT `AskData`. `AskData` routes through `Client::ask_literal`,
-# which extracts with the literal guard on (`client.rs:472`), and `?c` in
-# `?s a ?c` binds an IRI. Under `AskData` the guard would find no literal,
-# report `boolean = false`, and publish `absent` for an endpoint full of typed
-# resources: a silent false negative of exactly the kind this project exists to
-# prevent.
-kind = "SelectIris"
-var = "c"
-cost = "cheap"
-query = """
-SELECT ?c WHERE { { ?s a ?c } UNION { GRAPH ?anyg { ?s a ?c } } } LIMIT 1
-"""
-
-[[metric]]
-id = "classes"
-label = "Distinct classes"
-dimension = "content"
-kind = "SelectIris"
-var = "c"
-cost = "expensive"
-query = """
-SELECT DISTINCT ?c WHERE { { ?s a ?c } UNION { GRAPH ?anyg { ?s a ?c } } } LIMIT 200
-"""
-```
-
-State `cost` on every other metric too. `geo-data` is `cheap`: it is already
-`LIMIT 1` with no `DISTINCT`.
-
-- [ ] **Step 3: The flag and the provenance**
+- [ ] **Step 5: The flag, the provenance, and every caller**
 
 `--max-cost cheap|expensive`, default `cheap`. `main.rs` calls `within_cost` and
 passes both halves to `run_sweep`.
 
 Emit one quad on the run's activity recording the ceiling:
 `<activity> urn:sparqlwatch:maxCost "cheap"`. `emit.rs` stays pure: pass the
-ceiling in as a parameter, do not read it from anywhere global.
+ceiling in as a parameter, never read it from anywhere global.
 
-- [ ] **Step 4: Run a real sweep and compare**
+**Both signature changes and all their callers land in this one task**, so the
+crate never sits non-compiling. `run_sweep` has roughly 23 call sites and
+`emit_nquads` roughly 13, including `main.rs`. Count them yourself first
+(`grep -rn "run_sweep\|emit_nquads" prober/src prober/tests`) and expect the
+whole suite to be red until the last one is updated. That is normal for this task
+and not a signal to change approach.
+
+- [ ] **Step 6: Run a real sweep and compare**
 
 Run: `cargo run --manifest-path prober/Cargo.toml -- --at 2026-08-21T13:00:00Z --out <scratchpad>/run-b1.nq`
 
-Expected, against the three endpoints in `endpoints.toml`: `classes` no longer
+Expected against the three endpoints in `endpoints.toml`: `classes` no longer
 appears as a measurement and appears as a `not measured` fact for each endpoint;
 `has-classes` appears with a verdict; every other verdict is unchanged from the
-previous stage. Report the full verdict table. Then run again with
-`--max-cost expensive` and report what `classes` does, including how long it
-takes, since one of the three endpoints is the one where it times out.
+previous stage. Report the full verdict table. Then run with
+`--max-cost expensive` and report what `classes` does, including elapsed time,
+since one of the three is the endpoint where it times out.
 
-Note that `ontop.certain.ai.ustp.at` has been failing DNS resolution, so all its
-rows read `indeterminate` regardless. Say so rather than reporting it as a result.
+`ontop.certain.ai.ustp.at` has been failing DNS resolution, so all its rows read
+`indeterminate` either way. Say so rather than reporting it as a result.
 
-- [ ] **Step 5: Prove the test is load-bearing**
-
-Mutation: change `has-classes` to `kind = "AskData"`, which is the mistake the
-comment warns about, and confirm a test fails rather than the metric quietly
-reporting `absent`. If no test catches it, that is a finding: report it and add
-one. Restore, `touch`, re-run.
-
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add prober/src prober/metrics.toml prober/tests
-git commit -m "feat(prober): an existence probe that is not a full scan, behind a cost ceiling"
+git add prober/src prober/tests
+git commit -m "feat(prober): record not measured, with its reason, and a cost ceiling on the CLI"
 ```
 
 ---
