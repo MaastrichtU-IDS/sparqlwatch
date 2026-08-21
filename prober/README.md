@@ -12,22 +12,40 @@ resolves to exactly one of six verdicts:
 
 | Verdict | Meaning |
 | --- | --- |
-| `verified` | A probe confirms it works, and the endpoint declares it |
-| `undeclared-but-verified` | Works, but the endpoint advertises nothing |
+| `verified` | A probe confirms it works, and where a declaration is possible, the endpoint declares it |
+| `undeclared-but-verified` | Works, and the endpoint could have declared it but did not (see the endpoint's `declarationsRead` fact for whether we could read its description) |
 | `declared-but-wrong` | Answered, and answered incorrectly |
 | `declared-only` | Claimed, not confirmable by probe |
 | `absent` | Neither claimed nor observed |
 | `indeterminate` | We never got to find out |
 
-`absent` may only be claimed when the evidence actually establishes absence.
-For every probe except the description fetch, that means the endpoint itself
-answered, with a 2xx status, in a form we could read. The description fetch
-has one further exception: a `404` or `410` also counts as absence, because
-those two statuses speak to what is published at the URL itself, not to our
-request or the server's general health. A timeout, an unreachable host, a
-429, a gateway error, an HTML query console, an unparseable body (anything
-else we never got to interpret) is `indeterminate`. There is deliberately no
-composite score and no ranking, here or downstream.
+The declared/observed axis applies only where a declaration is possible, so
+only a metric carrying a `declared_by` in `metrics.toml` can ever produce
+`undeclared-but-verified`. `geo-functions` is the only one today. For every
+other metric there is no term in the service-description vocabulary that could
+advertise the capability (liveness, CORS headers, class counts), so "the
+endpoint declares nothing" would say nothing about the endpoint, and a
+confirmed probe reads simply `verified`.
+
+`absent` may only be claimed when the evidence actually establishes absence:
+the endpoint itself has to have answered the question we asked. For most
+probes that means it answered with a 2xx status, in a form we could read. Two
+probes have a further exception, in both cases because the status code *is* the
+answer to their question rather than a fact about our request:
+
+- the description fetch, where a `404` or `410` counts as absence, because
+  those two statuses speak to what is published at the URL itself;
+- the CORS preflight, where a `405` or a `501` counts as absence, because a
+  browser's `fetch` requires the preflight to answer with an ok status, so
+  those statuses are the endpoint saying it will not serve a cross-origin
+  query. A redirect is not one of them: the probe resolves the chain and
+  judges the response at the end of it, and a chain it could not resolve is
+  `indeterminate`.
+
+A timeout, an unreachable host, a 429, a gateway error, an HTML query console,
+an unparseable body (anything else we never got to interpret) is
+`indeterminate`. There is deliberately no composite score and no ranking, here
+or downstream.
 
 All judgement lives in one pure function, `resolve()` in `src/resolve.rs`. The
 HTTP client returns evidence and no opinion; the emitter is a pure function of
@@ -35,10 +53,13 @@ its inputs, with no clock read and no randomness.
 
 A service description is fetched once per endpoint with a queryless GET request
 that asks for RDF (`text/turtle, application/rdf+xml;q=0.9, application/ld+json;q=0.8`),
-and its declarations are compared against what the probes observe. Most confirmed
-capabilities report as `undeclared-but-verified`, because almost no endpoint declares
-its capabilities. `Verified` is reachable but will stay rare by design: in the survey
-behind this project, 18 endpoints evaluate `geof:sfWithin` and not one declares it.
+and its declarations are compared against what the probes observe. Where a
+declaration is possible, a confirmed capability usually reports as
+`undeclared-but-verified`, because almost no endpoint declares its
+capabilities: in the survey behind this project, 18 endpoints evaluate
+`geof:sfWithin` and not one declares it. That is the finding this verdict
+exists to publish, which is why metrics nothing could declare are kept out of
+it.
 The `service-description` metric now carries a graded level (0 to 4) rather than
 always being indeterminate, grading by informativeness rather than presence.
 
@@ -75,9 +96,21 @@ a valid IRI is warned about and skipped at emission time, not fatal: the
 registry is seeded from a real-world dump known to contain junk, and one bad
 string must not discard a whole sweep's work.
 
+The list is deduplicated at load, first-seen order preserved, with a warning
+naming each entry dropped. One row per (endpoint, metric) and one
+`declarationsRead` fact per endpoint held per list ENTRY, not per endpoint, so a
+URL listed twice published two facts about one endpoint IRI in one run graph,
+and two differing fetches made them contradict each other with nothing in the
+graph to resolve it. Deduplicating at load also stops the sweep sending one
+stranger's server two identical sets of requests. The comparison is on the
+exact string: `http://x/sparql` and `http://x/sparql/` stay two entries, even
+though the declaration scoper treats them as one service, because two spellings
+in a registry are a registry problem to see rather than one to collapse
+silently.
+
 **`metrics.toml`** is the metric definitions, as *data*. Each names a probe
-kind from a closed set (`Liveness`, `Cors`, `AskFilter`, `AskData`,
-`SelectIris`, `FetchWellKnown`) plus its parameters, so adding a metric that
+kind from a closed set (`Liveness`, `Cors`, `CorsPreflight`, `AskFilter`,
+`AskData`, `SelectIris`, `FetchWellKnown`) plus its parameters, so adding a metric that
 fits an existing kind needs no Rust change. An unknown kind, or a
 bindings-reading kind with no `var`, is a loud load error rather than a silent
 default. The definitions are hashed into a `metricDefinitionRevision` recorded
@@ -95,7 +128,14 @@ an empty throttle body, a `{"error":"boom"}` page and a SPARQL-results document
 all parse cleanly, so a generic media type is not a positive identification of
 RDF and neither is a zero-triple parse. A genuine RDF/XML document served as bare
 `application/xml` therefore reports `indeterminate`, which is honest, rather than
-a confident verdict. A `404` or `410` response returns `Absent` with level 0. Any
+a confident verdict. The media type is read through one shared function
+(`src/media.rs`), which strips the header's parameters (`; charset=utf-8`)
+before matching, because that decision has to be identical here and in the
+declaration parser: when there were two copies they drifted, and an RDF/XML
+description served with a charset parameter classified as RDF, then got
+reparsed as Turtle, publishing `verified` with level 0 (which means "none
+served"), `declarationsRead false` for a document we had read, and losing every
+declaration in it. A `404` or `410` response returns `Absent` with level 0. Any
 other status is `Indeterminate`, recording that the request failed rather than
 that the description is absent.
 
@@ -104,12 +144,41 @@ default dataset or graphs, 3 carries VoID class or property partitions, 4
 declares an entailment regime, example resources, or extension functions. It is
 monotonic: a description that declares more never grades lower.
 
-The labels in that file state only what was actually measured. Two of them are
-narrower than they look: `geo-data` and `classes` query only the **default
-graph**, so an endpoint holding everything in named graphs answers empty; and
-`cors` observes an `access-control-allow-origin` header on a **simple GET**,
-which is weaker than the preflighted request a browser editor makes. Probing
-`GRAPH ?g` and an `OPTIONS` preflight are the real checks and are deferred.
+The labels in that file state only what was actually measured. `geo-data` and
+`classes` query the default graph AND every named graph, via a `UNION` with a
+`GRAPH ?anyg { ... }` branch, so an endpoint holding everything in named
+graphs is not reported as holding nothing. The graph variable is never the
+metric's own result variable: `GRAPH ?g { ?s geo:asWKT ?g }` would join the
+graph name against the geometry literal, match nothing, and publish a silent
+false `absent`, which is exactly the failure this widening exists to remove.
+What the suite checks about those two queries is structural only; see the
+named-graph entry under Known limitations for what that does and does not
+establish.
+
+The two CORS metrics are deliberately separate facts, and neither subsumes the
+other. `cors` observes an `access-control-allow-origin` header on a **simple
+GET**: what a `curl` user sees. `cors-preflight` sends the `OPTIONS` preflight a
+browser sends before a cross-origin query (`Origin`,
+`Access-Control-Request-Method: GET`, `Access-Control-Request-Headers:
+content-type`) and is what decides whether an embedded query editor can talk to
+the endpoint at all. An endpoint that sets the header on GET and refuses
+`OPTIONS` is common, and it reports `verified` on the first and `absent` on the
+second, which is the honest pair of answers, and the shape
+`the_two_cors_metrics_are_not_the_same_probe` pins end to end. The preflight
+probe never follows a redirect implicitly: a `303` would rewrite the `OPTIONS`
+into a `GET` and hand back exactly the simple-GET header we already have,
+publishing a grant for that endpoint. It resolves the chain deliberately
+instead, re-issuing the same `OPTIONS` at each `Location` for up to 5 hops, and
+draws the verdict from the response at the end. A chain with no usable
+`Location`, a cycle, or more hops than that is `indeterminate`: we never
+reached a preflight answer. Minting a redirect itself as `absent` published
+"does not answer a browser preflight" for services that answer one one hop
+away, contradicting the `cors` row in the same run, which had followed the very
+same redirect. `verified` on `cors-preflight` requires a 2xx
+whose `access-control-allow-origin` is `*` or our own origin
+(`https://sparqlwatch.dev.k8s.semanticscience.org`, the same host the
+`User-Agent` names) and whose `access-control-allow-methods`, if it sends one,
+lists GET. A header naming somebody else's origin is a grant to somebody else.
 
 ## Proxy environment
 
@@ -158,23 +227,9 @@ Two caveats on that correction, neither of which weakens it:
 
 The following are deferred deliberately, not oversights:
 
-- A **failed** description fetch and a description that **genuinely declares
-  nothing** currently produce the same result, because the "declared" flag is a
-  simple boolean with no way to express "unknown". An endpoint whose description
-  times out is therefore credited as undeclared rather than unknown. This requires
-  a three-state value in the resolver, deferred to stage 1c.
-
 - The fetch is **unconditional**: an endpoint pays one queryless GET even if no
   configured metric actually needs the result, because the probe kind doesn't know
   which metrics use it. This is a small cost traded for simpler logic.
-
-- Declarations are collected **graph-wide**, with no scoping to the service
-  actually being probed. A document describing two co-hosted services can
-  therefore credit endpoint A with endpoint B's `sd:extensionFunction`, turning
-  an `undeclared-but-verified` into a `verified` that endpoint never earned.
-  Fixing it needs graph traversal (match the service node by `sd:endpoint`, then
-  follow `sd:defaultDataset` for the VoID partitions), deferred to stage 1c and
-  **before any real registry sweep**.
 
 - A description larger than the 256 KiB body cap is never graded: it reports
   `indeterminate`, because we did not read it. Classification and the
@@ -196,6 +251,21 @@ The following are deferred deliberately, not oversights:
   errs in on purpose. Whether to raise the cap, stream the parse, or leave it is
   stage 1c's call; real descriptions are typically hundreds of bytes, not
   hundreds of kilobytes.
+
+- The **named-graph half of the `geo-data` and `classes` queries is unverified
+  by execution.** The suite contains no SPARQL engine, so what it can check
+  about those queries is structural: `the_content_metrics_reach_named_graphs_without_colliding_variables`
+  asserts that each query has exactly one `GRAPH ?g { ... }` branch, that the
+  graph variable is not the metric's result variable, and that the block binds
+  that result variable, so a branch incapable of contributing a row fails the
+  test. That is correctness by reading, not by execution. `endpoints.toml` holds
+  no endpoint known to keep its data in named graphs (the live test's
+  `data.kkg.kadaster.nl` answers both branches from its default graph, so it
+  would pass with the `GRAPH` branch deleted), so nothing here demonstrates that
+  a partitioned endpoint is actually reached. Closing that gap needs an endpoint
+  that holds its data that way. It becomes testable at stage 1d, where the
+  registry is seeded from 548 real endpoints, some of which are certainly
+  partitioned.
 
 ## Tests
 

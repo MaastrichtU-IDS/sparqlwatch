@@ -43,8 +43,28 @@ const VERDICT = {
 
 const ABBR = {
   availability: 'A', cors: 'C', 'service-description': 'S',
-  'geo-functions': 'G', 'geo-data': 'D', classes: 'K',
+  'geo-functions': 'G', 'geo-data': 'D', classes: 'K', 'cors-preflight': 'P',
 };
+
+// The metrics this viewer knows about, in a fixed display order. A run can
+// carry a metric not in this list (an older or newer prober version, or a
+// metrics.toml this script has not been told about); `metricsIn` below still
+// renders it, with a fallback abbreviation and label, rather than dropping it
+// from the page. A viewer that hides measurements is worse than one that
+// looks untidy.
+const KNOWN_METRICS = [
+  'availability', 'cors', 'cors-preflight', 'service-description', 'geo-functions', 'geo-data', 'classes',
+];
+
+// Every metric actually present in `rows`: the known ones first, in the fixed
+// order above, then anything unrecognised, alphabetically, so a run is never
+// silently under-reported just because this script predates its metric.
+function metricsIn(rows) {
+  const present = new Set(rows.map((r) => r.metric));
+  const known = KNOWN_METRICS.filter((m) => present.has(m));
+  const unknown = [...present].filter((m) => !KNOWN_METRICS.includes(m)).sort();
+  return [...known, ...unknown];
+}
 
 function collect(quads) {
   const m = new Map();
@@ -77,8 +97,7 @@ function chip(metric, verdict) {
 
 function render({ run, rows }) {
   const endpoints = [...new Set(rows.map((r) => r.endpoint))].sort();
-  const metrics = ['availability', 'cors', 'service-description', 'geo-functions', 'geo-data', 'classes']
-    .filter((m) => rows.some((r) => r.metric === m));
+  const metrics = metricsIn(rows);
 
   const counts = {};
   for (const r of rows) counts[r.verdict] = (counts[r.verdict] ?? 0) + 1;
@@ -157,7 +176,8 @@ function render({ run, rows }) {
   <div class="panel">
     <h2>Verdicts in this run</h2>
     ${legend}
-    <div class="note">Chips are A availability, C CORS, S service description, G GeoSPARQL functions, D geometry data, K classes.
+    <div class="note">Chips are A availability, C CORS, P CORS preflight, S service description, G GeoSPARQL functions, D geometry data, K classes.
+    A metric this page does not recognise still renders, labelled by its own id with its first letter as the chip.
     Dashed means the capability works but is not declared, or could not be determined. Absent has no border: it is the only verdict
     that claims a negative, and it is claimed only where a parsed answer established one.</div>
   </div>

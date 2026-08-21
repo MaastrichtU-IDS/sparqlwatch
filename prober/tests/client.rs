@@ -138,16 +138,25 @@ async fn aswkt_probe_accepts_a_literal_object() {
 }
 
 #[tokio::test]
-async fn only_the_cors_probe_sends_an_origin_header() {
+async fn only_the_two_cors_probes_announce_an_origin() {
     // One request shape served all six metrics, so every probe carried an
     // Origin. A server that rejects unknown origins could then perturb the
-    // evidence for the five metrics that are not about CORS at all -- which
+    // evidence for the metrics that are not about CORS at all -- which
     // compounds the absence-from-a-non-answer problem in resolve().
+    //
+    // Two probes ask a CORS question and so must announce an origin: the
+    // simple-GET `cors` probe and the `preflight` one. Every other probe must
+    // not. This test was `only_the_cors_probe_sends_an_origin_header` while
+    // there was one; the invariant is unchanged, the count is not.
     let server = MockServer::start().await;
     Mock::given(method("GET")).and(path("/sparql"))
         .respond_with(ResponseTemplate::new(200)
             .insert_header("access-control-allow-origin", "*")
             .set_body_string(r#"{"head":{},"boolean":true}"#))
+        .mount(&server).await;
+    Mock::given(method("OPTIONS")).and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(204)
+            .insert_header("access-control-allow-origin", "*"))
         .mount(&server).await;
 
     let c = Client::new(Budget::default()).unwrap();
@@ -155,12 +164,16 @@ async fn only_the_cors_probe_sends_an_origin_header() {
     c.ask(&url, "ASK{}").await;
     c.select_iris(&url, "SELECT ?c WHERE{}", "c").await;
     c.ask_literal(&url, "SELECT ?g WHERE{}", "g").await;
+    c.fetch_rdf(&url).await;
     let cors = c.cors(&url, "ASK{}").await;
     assert!(cors.cors, "the cors probe still reads the header back");
+    let preflight = c.preflight(&url).await;
+    assert_eq!(preflight.allow_origin.as_deref(), Some("*"), "the preflight still reads its headers back");
 
     let seen = server.received_requests().await.unwrap();
-    assert_eq!(seen.len(), 4);
+    assert_eq!(seen.len(), 6);
     let with_origin = seen.iter().filter(|r| r.headers.contains_key("origin")).count();
-    assert_eq!(with_origin, 1, "only the CORS probe may announce an Origin");
-    assert!(seen[3].headers.contains_key("origin"), "and it is the CORS probe that does");
+    assert_eq!(with_origin, 2, "only the two CORS probes may announce an Origin");
+    assert!(seen[4].headers.contains_key("origin"), "the simple-GET CORS probe announces one");
+    assert!(seen[5].headers.contains_key("origin"), "and so does the preflight");
 }

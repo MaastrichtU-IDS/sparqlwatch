@@ -1,11 +1,24 @@
 use crate::budget::Budget;
+use crate::media;
 use crate::observe::{BodyKind, Observation};
 use oxrdfio::{RdfFormat, RdfParser};
+use std::collections::HashSet;
 use std::time::Instant;
 
-/// Announced only by the CORS probe, so the other probes cannot be perturbed
-/// by a server that filters on it.
-const ORIGIN: &str = "https://sparqlwatch.example";
+/// Announced only by the two CORS probes, so the other probes cannot be
+/// perturbed by a server that filters on it.
+///
+/// Public because `resolve` compares an endpoint's
+/// `access-control-allow-origin` against it: an exact echo of our origin is a
+/// grant to us, anything else is a grant to somebody else. Sharing the one
+/// constant is what stops the announced origin and the compared origin from
+/// drifting apart.
+///
+/// It has to be a domain that actually resolves. We announce it to every
+/// endpoint we probe, and an operator running an origin allowlist cannot
+/// allowlist a name that does not exist. Same defect as the placeholder
+/// `User-Agent` corrected in 8c22c1e, in the other header we send strangers.
+pub const ORIGIN: &str = "https://sparqlwatch.dev.k8s.semanticscience.org";
 
 /// The `Accept` header for a queryless RDF fetch (e.g. a service description).
 /// Distinct from the SPARQL-results `Accept` used by `get_with_body`: this
@@ -30,6 +43,17 @@ const RDF_MEDIA_TYPES: [&str; 6] = [
     "application/trig",
     "application/n-quads",
 ];
+
+/// How many redirects a preflight chain resolves before we give up on it.
+///
+/// The preflight never follows a redirect implicitly (see `preflight`): each
+/// hop is a deliberate re-issue of the same `OPTIONS` at the `Location`
+/// target, so the method is never rewritten into a `GET`. The bound is what
+/// stops a redirect cycle from costing an unbounded number of requests
+/// against somebody else's server; a chain that needs more than this many
+/// hops is one we did not reach the end of, which is `indeterminate` rather
+/// than an answer.
+const MAX_PREFLIGHT_HOPS: usize = 5;
 
 /// Cap on the *retained* response body, applied after `resp.text().await` has
 /// already buffered the whole response. This bounds what we keep in
@@ -57,6 +81,10 @@ fn truncate_body(s: String, max: usize) -> String {
 
 pub struct Client {
     http: reqwest::Client,
+    /// Used by `preflight` and nothing else, because reqwest's redirect policy
+    /// is per-Client and this probe is the one that must not follow one. See
+    /// `preflight` for why.
+    no_redirect: reqwest::Client,
 }
 
 impl Client {
@@ -74,10 +102,22 @@ impl Client {
                 " (+https://sparqlwatch.dev.k8s.semanticscience.org/about)"
             ))
             .build()?;
-        Ok(Self { http })
+        // Same settings, minus redirect following. A separate Client rather
+        // than a per-request setting because reqwest's redirect policy is a
+        // Client-level property.
+        let no_redirect = reqwest::Client::builder()
+            .timeout(budget.request)
+            .redirect(reqwest::redirect::Policy::none())
+            .user_agent(concat!(
+                "sparqlwatch/", env!("CARGO_PKG_VERSION"),
+                " (+https://sparqlwatch.dev.k8s.semanticscience.org/about)"
+            ))
+            .build()?;
+        Ok(Self { http, no_redirect })
     }
 
-    /// `send_origin` is true only for the CORS probe. One request shape served
+    /// `send_origin` is true only for the simple-GET CORS probe (the preflight
+    /// does not go through this path). One request shape served
     /// every metric before, so every probe announced an `Origin`; a server that
     /// rejects unknown origins could then perturb the evidence for the metrics
     /// that are not about CORS at all.
@@ -130,7 +170,14 @@ impl Client {
             bindings: Vec::new(),
             body_kind,
             body: None,
+            // Not a fetch: `final_url` is the description fetch's evidence
+            // alone, and nothing downstream scopes a query result by URL.
+            final_url: None,
             content_type: if ctype.is_empty() { None } else { Some(ctype.clone()) },
+            // CORS preflight evidence belongs to `preflight` alone.
+            allow_origin: None,
+            allow_methods: None,
+            allow_headers: None,
             elapsed_ms: elapsed,
             error: None,
         };
@@ -152,6 +199,11 @@ impl Client {
         };
         let status = resp.status().as_u16();
         let cors = resp.headers().contains_key("access-control-allow-origin");
+        // Read before `resp.text()` consumes the response. After reqwest has
+        // followed its redirects this is where we actually landed, which is
+        // the URL a redirected description is most likely to name as its
+        // `sd:endpoint`.
+        let final_url = resp.url().to_string();
         let ctype = resp
             .headers()
             .get("content-type")
@@ -190,7 +242,11 @@ impl Client {
             bindings: Vec::new(),
             body_kind,
             body: Some(body),
+            final_url: Some(final_url),
             content_type: if ctype.is_empty() { None } else { Some(ctype.to_ascii_lowercase()) },
+            allow_origin: None,
+            allow_methods: None,
+            allow_headers: None,
             elapsed_ms: elapsed,
             error: None,
         }
@@ -198,13 +254,20 @@ impl Client {
 
     /// The RDF format `ctype` announces, but only for a media type that
     /// identifies RDF specifically (see `RDF_MEDIA_TYPES`). Parameters such as
-    /// `; charset=utf-8` are stripped before the comparison.
+    /// `; charset=utf-8` are stripped by `media::essence`, which is shared
+    /// with `declare.rs` so the classification and the declaration parse can
+    /// never again disagree about what a body is.
+    ///
+    /// The allowlist stays here and is not pushed down into `media`: this
+    /// function's answer decides whether a body is CLASSIFIED as RDF, which is
+    /// an assertive claim, while `declare.rs` only needs a parser for a body it
+    /// is going to read either way.
     fn rdf_format_of(ctype: &str) -> Option<RdfFormat> {
-        let essence = ctype.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+        let essence = media::essence(ctype);
         if !RDF_MEDIA_TYPES.contains(&essence.as_str()) {
             return None;
         }
-        RdfFormat::from_media_type(&essence)
+        media::rdf_format_of(&essence)
     }
 
     /// Whether `body` parses under `fmt` AND yields at least one triple.
@@ -225,13 +288,143 @@ impl Client {
         self.get_with_body(url, query, false).await.0
     }
 
-    /// The CORS probe: the one request that announces an `Origin`, because the
-    /// question it asks is what the endpoint does with one. Note what this
-    /// measures -- an `access-control-allow-origin` header on a simple GET --
-    /// which is weaker than the preflighted request a real browser editor
-    /// makes. An `OPTIONS` preflight probe is the real check and is deferred.
+    /// The simple-GET CORS probe: a query request that announces an `Origin`,
+    /// because the question it asks is what the endpoint does with one. Note
+    /// what this measures -- an `access-control-allow-origin` header on a
+    /// simple GET -- which is what a `curl` user sees and is weaker than the
+    /// preflighted request a real browser editor makes. `preflight` below is
+    /// the browser's question. Both facts are published; neither subsumes the
+    /// other, because an endpoint can genuinely have one and not the other.
     pub async fn cors(&self, url: &str, query: &str) -> Observation {
         self.get_with_body(url, query, true).await.0
+    }
+
+    /// The preflight a browser sends before a cross-origin SPARQL query: an
+    /// `OPTIONS` request carrying `Origin`, `Access-Control-Request-Method`
+    /// and `Access-Control-Request-Headers`. Without the request-method header
+    /// this is not a preflight at all and a correct server may ignore it,
+    /// which would make every verdict the resolver draws from it meaningless.
+    ///
+    /// Issued on `no_redirect`, so a redirect is never followed implicitly. A
+    /// `303` otherwise rewrites the `OPTIONS` into a `GET`, and an endpoint
+    /// that refuses `OPTIONS` but sets `access-control-allow-origin` on a
+    /// simple GET would then publish a grant: precisely the endpoint this
+    /// metric exists to catch.
+    ///
+    /// A 3xx is nevertheless not an answer about the endpoint. Every other
+    /// probe reaches the endpoint through its redirect (`self.http` follows up
+    /// to 10), so treating the redirect itself as the preflight's answer
+    /// published `absent` for a service that answers a preflight perfectly one
+    /// hop away, in the same run whose `cors` row followed that same hop. So
+    /// the chain is resolved DELIBERATELY here instead: read `Location`,
+    /// resolve it against the URL we asked, and re-issue the same `OPTIONS`
+    /// there, up to `MAX_PREFLIGHT_HOPS`. The method is never rewritten, and
+    /// the hops are ours to see and to log rather than reqwest's to take
+    /// invisibly.
+    ///
+    /// What comes back is the response at the end of the chain. A 3xx that
+    /// still stands at that point (no usable `Location`, a cycle, or more hops
+    /// than the bound) is returned as itself, and the resolver reads it as
+    /// `indeterminate`: we never reached a preflight answer.
+    ///
+    /// Records the header VALUES, not just presence, because presence is not a
+    /// grant. No body is read or classified: a preflight response has no
+    /// meaningful body, and a `204` has none at all.
+    pub async fn preflight(&self, url: &str) -> Observation {
+        let start = Instant::now();
+        let mut target = url.to_string();
+        // Canonicalised, because every hop after the first is a parsed and
+        // rejoined URL, and a cycle check has to compare like with like.
+        let mut seen: HashSet<String> = HashSet::new();
+        seen.insert(Self::canonical(&target));
+
+        let (mut o, mut location) = self.preflight_once(&target).await;
+        let mut hops = 0usize;
+        while o.status.is_some_and(|s| (300..=399).contains(&s)) {
+            if hops == MAX_PREFLIGHT_HOPS {
+                tracing::warn!(url, hops, "preflight redirect chain longer than the hop bound; not resolved");
+                break;
+            }
+            let Some(next) = location.as_deref().and_then(|l| Self::resolve_location(&target, l)) else {
+                tracing::warn!(url, status = ?o.status, "preflight redirect carried no usable Location; not resolved");
+                break;
+            };
+            if !seen.insert(next.clone()) {
+                tracing::warn!(url, next = %next, "preflight redirect chain loops; not resolved");
+                break;
+            }
+            tracing::debug!(from = %target, to = %next, "re-issuing the preflight at a redirect target");
+            target = next;
+            hops += 1;
+            (o, location) = self.preflight_once(&target).await;
+        }
+        // The whole chain is what this measurement cost, not just its last
+        // hop: the row publishes one duration for one metric.
+        o.elapsed_ms = start.elapsed().as_millis() as u64;
+        o
+    }
+
+    /// One `OPTIONS` preflight, no redirect resolution. Returns the
+    /// observation and the response's `Location` header, which is evidence the
+    /// chain resolution needs and no verdict rule reads, so it stays out of
+    /// `Observation`.
+    async fn preflight_once(&self, url: &str) -> (Observation, Option<String>) {
+        let start = Instant::now();
+        let resp = self
+            .no_redirect
+            .request(reqwest::Method::OPTIONS, url)
+            .header("Origin", ORIGIN)
+            .header("Access-Control-Request-Method", "GET")
+            .header("Access-Control-Request-Headers", "content-type")
+            .send()
+            .await;
+        let elapsed = start.elapsed().as_millis() as u64;
+
+        let resp = match resp {
+            Ok(r) => r,
+            Err(e) => return (Observation::failed(e.to_string(), elapsed), None),
+        };
+        let headers = resp.headers();
+        let value = |name: &str| {
+            headers.get(name).and_then(|v| v.to_str().ok()).map(str::to_string)
+        };
+
+        let observation = Observation {
+            status: Some(resp.status().as_u16()),
+            cors: headers.contains_key("access-control-allow-origin"),
+            boolean: None,
+            bindings: Vec::new(),
+            body_kind: BodyKind::None,
+            body: None,
+            final_url: None,
+            content_type: None,
+            allow_origin: value("access-control-allow-origin"),
+            allow_methods: value("access-control-allow-methods"),
+            allow_headers: value("access-control-allow-headers"),
+            elapsed_ms: elapsed,
+            error: None,
+        };
+        let location = value("location");
+        (observation, location)
+    }
+
+    /// `location` resolved against `base`, absolute or relative, or `None` if
+    /// there is nothing usable to resolve: an empty header, or a value no URL
+    /// parser will take. `None` is what makes such a redirect
+    /// `indeterminate` rather than an answer.
+    fn resolve_location(base: &str, location: &str) -> Option<String> {
+        let location = location.trim();
+        if location.is_empty() {
+            return None;
+        }
+        reqwest::Url::parse(base).ok()?.join(location).ok().map(|u| u.to_string())
+    }
+
+    /// `url` as its parser writes it back, so two spellings of one URL compare
+    /// equal in the cycle check. An unparseable string is returned unchanged:
+    /// the request will fail on it anyway, and the failure is the evidence.
+    fn canonical(url: &str) -> String {
+        reqwest::Url::parse(url).map(|u| u.to_string()).unwrap_or_else(|_| url.to_string())
     }
 
     /// Pull binding rows out of a SPARQL JSON body, keeping only the requested

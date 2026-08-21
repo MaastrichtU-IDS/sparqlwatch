@@ -423,8 +423,8 @@ because each state was observed in the survey.
 
 | Verdict | Meaning | Observed example |
 |---|---|---|
-| `verified` | A probe confirms it works | 18 endpoints evaluating `geof:sfWithin` |
-| `undeclared-but-verified` | Works, but the endpoint does not advertise it | the same 18, none of which mentions geo |
+| `verified` | A probe confirms it works, and where a declaration is possible, the endpoint declares it | 18 endpoints evaluating `geof:sfWithin` |
+| `undeclared-but-verified` | Works, and the endpoint could have declared it but did not | the same 18, none of which mentions geo |
 | `declared-but-wrong` | Claimed or bound, but behaves incorrectly | the 9 answering `false` |
 | `declared-only` | Claimed, not confirmable by probe | e.g. entailment regimes |
 | `absent` | Neither claimed nor observed | |
@@ -432,6 +432,15 @@ because each state was observed in the survey.
 
 `declared-but-wrong` ranks as worse than `absent`, because a false claim misleads a
 client that trusts it. `indeterminate` is a required outcome, never a silent zero.
+
+The declared/observed axis applies only where a declaration is possible: only an
+attribute for which some term in the service-description vocabulary could speak
+(a metric carrying a `declared_by`) can resolve to `undeclared-but-verified`.
+For liveness, CORS headers or a class count there is no such term, so
+"undeclared" would say nothing about the endpoint, and a confirming probe
+resolves to `verified` on its own. Keeping those attributes out of
+`undeclared-but-verified` is what keeps that verdict readable as the finding it
+records, that declaration and behaviour are decoupled.
 
 ### Graded levels where binary misleads
 

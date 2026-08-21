@@ -154,8 +154,9 @@ async fn fetch_and_resolve(status: u16, ctype: Option<&str>, body: &str) -> (Ver
     Mock::given(method("GET")).and(path("/sparql")).respond_with(template).mount(&server).await;
 
     let c = Client::new(Budget::default()).unwrap();
-    let o = c.fetch_rdf(&format!("{}/sparql", server.uri())).await;
-    let declarations = parse_declarations(o.body.as_deref().unwrap_or(""), o.content_type.as_deref());
+    let url = format!("{}/sparql", server.uri());
+    let o = c.fetch_rdf(&url).await;
+    let declarations = parse_declarations(o.body.as_deref().unwrap_or(""), o.content_type.as_deref(), &url);
     let (verdict, level) = resolve_fetch(&declarations, Ok(&o));
     (verdict, level, o.body_kind)
 }
@@ -307,4 +308,66 @@ async fn a_description_whose_triples_sit_past_the_truncation_cut_is_indeterminat
     assert_eq!(kind, BodyKind::Other, "a body we only partly read is not identified RDF");
     assert_eq!(verdict, Verdict::Indeterminate, "we never read the description, so we cannot verify it");
     assert_eq!(level, None, "no level, rather than the level 0 that means 'none served'");
+}
+
+#[tokio::test]
+async fn a_redirected_fetch_records_the_url_it_landed_on() {
+    // `fetch_rdf` follows redirects and used to keep no record of where it
+    // ended up, so a description that names its post-redirect URL as
+    // `sd:endpoint` looked like a document about somebody else's service.
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/a"))
+        .respond_with(ResponseTemplate::new(301).insert_header("location", "/b"))
+        .mount(&server).await;
+    Mock::given(method("GET")).and(path("/b"))
+        .respond_with(ResponseTemplate::new(200)
+            .set_body_raw(STUB.as_bytes().to_vec(), "text/turtle"))
+        .mount(&server).await;
+
+    let c = Client::new(Budget::default()).unwrap();
+    let o = c.fetch_rdf(&format!("{}/a", server.uri())).await;
+    assert_eq!(o.status, Some(200), "the redirect was followed");
+    assert_eq!(o.final_url.as_deref(), Some(format!("{}/b", server.uri()).as_str()),
+               "the observation must carry the URL the fetch ended on, not the one it started at");
+}
+
+#[tokio::test]
+async fn a_fetch_that_was_not_redirected_records_the_url_it_asked_for() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(200)
+            .set_body_raw(STUB.as_bytes().to_vec(), "text/turtle"))
+        .mount(&server).await;
+
+    let c = Client::new(Budget::default()).unwrap();
+    let url = format!("{}/sparql", server.uri());
+    let o = c.fetch_rdf(&url).await;
+    assert_eq!(o.final_url.as_deref(), Some(url.as_str()));
+}
+
+#[tokio::test]
+async fn a_probe_that_is_not_a_fetch_records_no_final_url() {
+    // `final_url` is the description fetch's evidence alone. A query probe
+    // that reported one would invite a later stage to scope a query result by
+    // URL, which is not what any of these fields mean.
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"head":{},"boolean":true}"#))
+        .mount(&server).await;
+
+    let c = Client::new(Budget::default()).unwrap();
+    let url = format!("{}/sparql", server.uri());
+    assert!(c.ask(&url, "ASK {}").await.final_url.is_none());
+    assert!(c.cors(&url, "ASK {}").await.final_url.is_none());
+}
+
+#[tokio::test]
+async fn a_failed_fetch_records_no_final_url() {
+    // Nothing was reached, so there is no URL we landed on. `None` here and a
+    // `Some` on every answered fetch is what lets a reader tell the two apart.
+    let c = Client::new(Budget::default()).unwrap();
+    // Port 0 is unconnectable, so this fails in transport without a server.
+    let o = c.fetch_rdf("http://127.0.0.1:0/sparql").await;
+    assert!(o.error.is_some(), "the fetch must have failed for this test to mean anything");
+    assert!(o.final_url.is_none());
 }

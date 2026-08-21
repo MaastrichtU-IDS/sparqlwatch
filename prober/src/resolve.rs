@@ -1,10 +1,23 @@
 use crate::budget::Expired;
+use crate::client::ORIGIN;
 use crate::declare::Declarations;
 use crate::metrics::{MetricDef, ProbeKind};
 use crate::observe::{BodyKind, Observation};
 use crate::verdict::{Level, Verdict};
 
 /// What the endpoint says about itself, from its service description.
+///
+/// `claimed: false` covers two situations this type cannot tell apart on its
+/// own: the description genuinely declares nothing, or we never managed to
+/// read one at all (no fetch reached it, the fetch found an empty body, or
+/// the body failed to parse). The two are distinguished by the endpoint's
+/// `declarationsRead` fact, one boolean published per endpoint per run (see
+/// `emit::DeclarationsRead`), computed in `run_sweep` as
+/// `declarations.triples > 0`. A partially parsed description is the
+/// concrete case where the distinction matters: `declare.rs` keeps whatever
+/// declarations it read before a syntax error, so `claimed` can be `true`
+/// there while `service-description`'s own row grades `Indeterminate`
+/// because the body never classified as RDF.
 #[derive(Debug, Clone, Copy)]
 pub struct Declared {
     pub claimed: bool,
@@ -23,22 +36,96 @@ impl Declared {
 
 /// Whether the request reached the endpoint and got back a successful HTTP
 /// status. Used to tell "the endpoint told us it has nothing" apart from
-/// "something upstream (a proxy, an outage) prevented us from finding out" —
+/// "something upstream (a proxy, an outage) prevented us from finding out":
 /// only the former is safe to report as `Absent`.
 fn answered_ok(o: &Observation) -> bool {
     matches!(o.status, Some(s) if (200..=299).contains(&s))
 }
 
+/// The verdict for a probe that CONFIRMED the capability, and the only place
+/// that decision is made. Every arm below routes its positive outcome through
+/// here, so the declared/observed axis reads the same way on every published
+/// row.
+///
+/// The rule: the axis applies only where a declaration is possible. A metric
+/// carrying no `declared_by` names nothing in the service-description
+/// vocabulary that could ever speak for it (liveness, response time, CORS
+/// headers, class counts), so "undeclared" says nothing about the endpoint and
+/// the confirmation stands on its own as `Verified`. A metric that does carry
+/// one is the case the second verdict exists for: `geo-functions` is the only
+/// shipped example, and it carries this project's headline finding, that 18
+/// surveyed endpoints evaluate `geof:sfWithin` and none of them declares it.
+///
+/// This REVERSES commit d4ff4f4, which read `verified` as "confirmed AND
+/// declared" and moved the `CorsPreflight` arm to `UndeclaredButVerified` on
+/// that reading. Publishing "works, but advertises nothing" about a capability
+/// no vocabulary term can advertise is a category error, and it dilutes the one
+/// verdict where the distinction carries a finding. If a declaration for CORS
+/// (or for liveness, or for class counts) ever enters the vocabulary, adding
+/// `declared_by` to that metric upgrades it here with no code change.
+fn confirmed(def: &MetricDef, declared: Declared) -> Verdict {
+    if def.declared_by.is_none() || declared.claimed {
+        Verdict::Verified
+    } else {
+        Verdict::UndeclaredButVerified
+    }
+}
+
+/// Whether `access-control-allow-methods` permits the GET we would send. An
+/// absent header is a grant: the header is optional and a preflight that
+/// answered without it refused nothing. An empty header is NOT a grant, because
+/// the server stated a list and GET is not in it.
+///
+/// Comparison is per comma-separated entry, never a substring search: a list of
+/// `POSTGET` (or, in the wild, a header value mangled by a proxy) contains the
+/// three letters of GET and permits nothing.
+fn allows_get(allow_methods: Option<&str>) -> bool {
+    let Some(list) = allow_methods else {
+        return true;
+    };
+    if list.trim() == "*" {
+        return true;
+    }
+    list.split(',').any(|m| m.trim().eq_ignore_ascii_case("GET"))
+}
+
+/// Whether `access-control-allow-origin` grants OUR origin. A wildcard grants
+/// everyone; an exact echo of our origin grants us. Anything else is a grant to
+/// somebody else, and reporting it as ours would publish `verified` for an
+/// endpoint that would refuse us in a browser.
+///
+/// `None` (no header at all) is not a grant, which is why the probe records the
+/// header's value and not merely `Observation.cors`.
+fn grants_our_origin(allow_origin: Option<&str>) -> bool {
+    let Some(value) = allow_origin else {
+        return false;
+    };
+    let value = value.trim();
+    value == "*" || value.eq_ignore_ascii_case(ORIGIN)
+}
+
 /// Turn observation plus declaration into a verdict. This is the only place
 /// judgement happens: no probing, no I/O, pure function.
 ///
-/// The rule applied uniformly below: **an absence claim requires
-/// `answered_ok`.** `Absent` (and `DeclaredButWrong`, which the spec ranks as
-/// worse still) may only be minted from a response the endpoint itself
-/// authored with a 2xx status. Anything else -- a throttle, a gateway error,
-/// an unparseable body, a response we never got -- is `Indeterminate`. There
-/// is exactly one deliberate exception: the `Cors` *positive* case, because an
-/// `access-control-allow-origin` header proves CORS at any status.
+/// The rule applied uniformly below: **an absence claim requires the endpoint
+/// to have answered the question we asked.** `Absent` (and
+/// `DeclaredButWrong`, which the spec ranks as worse still) may only be minted
+/// from a response the endpoint itself authored. For most probe kinds that
+/// means `answered_ok`: a 2xx, in a form we could read. Anything else -- a
+/// throttle, a gateway error, an unparseable body, a response we never got --
+/// is `Indeterminate`.
+///
+/// Two deliberate departures, both because the status IS the answer for the
+/// question being asked:
+///
+/// - the `Cors` *positive* case, because an `access-control-allow-origin`
+///   header proves CORS is configured at any status;
+/// - `CorsPreflight`, where a `405` or a `501` is the endpoint telling us it
+///   will not serve a browser's preflight, so those statuses are an absence
+///   rather than an unknown. A `3xx` is not: `Client::preflight` resolves the
+///   redirect chain and this verdict is drawn from its end, so a `3xx` here
+///   means we never reached an answer. `resolve_fetch` has the third such
+///   case, a `404`/`410` on the description.
 pub fn resolve(def: &MetricDef, declared: Declared, obs: Result<&Observation, Expired>) -> Verdict {
     let o = match obs {
         Err(Expired) => return Verdict::Indeterminate,
@@ -56,20 +143,14 @@ pub fn resolve(def: &MetricDef, declared: Declared, obs: Result<&Observation, Ex
             // This arm serves both probe kinds, and the two readings differ:
             // for `AskFilter` a wrong boolean means broken semantics; for
             // `AskData` a `false` means the data is absent. It is safe today
-            // only because no shipped `AskData` metric sets `expect` — the
+            // only because no shipped `AskData` metric sets `expect`, and the
             // day one does, genuine data absence would silently become
             // `DeclaredButWrong` instead of `Absent`.
             // A capability claim needs the endpoint's own successful answer just
             // as much as an absence claim does: a 500 body that happens to carry
             // {"boolean": true} is not the engine confirming anything.
             (Some(got), Some(want)) if got == want => {
-                if !answered_ok(o) {
-                    Verdict::Indeterminate
-                } else if declared.claimed {
-                    Verdict::Verified
-                } else {
-                    Verdict::UndeclaredButVerified
-                }
+                if answered_ok(o) { confirmed(def, declared) } else { Verdict::Indeterminate }
             }
             // Bound but wrong: the function answered, and answered
             // incorrectly. Only claimable when the endpoint itself answered
@@ -79,13 +160,7 @@ pub fn resolve(def: &MetricDef, declared: Declared, obs: Result<&Observation, Ex
                 if answered_ok(o) { Verdict::DeclaredButWrong } else { Verdict::Indeterminate }
             }
             (Some(true), None) => {
-                if !answered_ok(o) {
-                    Verdict::Indeterminate
-                } else if declared.claimed {
-                    Verdict::Verified
-                } else {
-                    Verdict::UndeclaredButVerified
-                }
+                if answered_ok(o) { confirmed(def, declared) } else { Verdict::Indeterminate }
             }
             (Some(false), None) => {
                 if answered_ok(o) { Verdict::Absent } else { Verdict::Indeterminate }
@@ -98,13 +173,71 @@ pub fn resolve(def: &MetricDef, declared: Declared, obs: Result<&Observation, Ex
             if o.cors {
                 // The header proves CORS is configured whatever the status
                 // code, so the positive case is not gated on `answered_ok`.
-                if declared.claimed { Verdict::Verified } else { Verdict::UndeclaredButVerified }
+                confirmed(def, declared)
             } else if answered_ok(o) {
                 Verdict::Absent
             } else {
                 // A proxy-generated error status cannot be attributed to the
                 // endpoint's own CORS configuration.
                 Verdict::Indeterminate
+            }
+        }
+        ProbeKind::CorsPreflight => {
+            // ORDER IS PART OF THE SPECIFICATION HERE, and the status gate
+            // comes FIRST. An earlier draft of these rules was a table, the
+            // natural implementation checked the headers before the status,
+            // and it returned `Verified` for a `405` carrying
+            // `access-control-allow-origin: *` -- a blanket header from a
+            // front-end filter over a handler that refuses OPTIONS, which is
+            // exactly the endpoint this metric exists to catch. Do not hoist
+            // the header check above this match.
+            //
+            // Rule 1 (expired budget, transport error) is handled by the
+            // guards at the top of this function.
+            match o.status {
+                // Fetch requires the preflight to answer with an ok status, so
+                // a 405/501 fails the preflight whatever headers ride along.
+                // This is the endpoint answering the question we asked, which
+                // is what licenses an absence claim.
+                Some(405) | Some(501) => Verdict::Absent,
+                // A 3xx that survives as far as this rule is a chain
+                // `Client::preflight` could not resolve: no usable `Location`,
+                // a cycle, or more hops than its bound. A resolvable redirect
+                // never arrives here, because that client re-issues the
+                // `OPTIONS` at the target and this verdict is drawn from the
+                // response at the end of the chain.
+                //
+                // It was `Absent` once, on the reasoning that a browser fails
+                // a redirected preflight. True of the browser, but wrong about
+                // the endpoint: every other probe reaches the endpoint through
+                // its redirect, so one run published `cors =
+                // undeclared-but-verified` and `cors-preflight = absent` for
+                // one service, and the contradiction came from our redirect
+                // policy rather than from anything the endpoint did. An
+                // unresolvable chain means we never got a preflight answer,
+                // which is exactly what `Indeterminate` says.
+                Some(s) if (300..=399).contains(&s) => Verdict::Indeterminate,
+                // Any other non-2xx describes our request or the server's
+                // state, not its CORS policy.
+                Some(s) if !(200..=299).contains(&s) => Verdict::Indeterminate,
+                // 2xx: now, and only now, the headers decide.
+                Some(_) => {
+                    if grants_our_origin(o.allow_origin.as_deref()) && allows_get(o.allow_methods.as_deref()) {
+                        // Through the same helper as every other arm, so the
+                        // two CORS rows and every other confirmation read
+                        // alike. `cors-preflight` carries no `declared_by`, so
+                        // today this is `Verified`.
+                        confirmed(def, declared)
+                    } else {
+                        // The endpoint answered the preflight and did not grant
+                        // us the request we would make.
+                        Verdict::Absent
+                    }
+                }
+                // No status and no error is not a state `Client::preflight` can
+                // produce, but a status is the evidence every rule above rests
+                // on, so its absence is an unknown rather than an absence.
+                None => Verdict::Indeterminate,
             }
         }
         ProbeKind::Liveness => {
@@ -116,7 +249,7 @@ pub fn resolve(def: &MetricDef, declared: Declared, obs: Result<&Observation, Ex
             // sweep and a later stage reads it to decide admission, so a
             // throttled endpoint must not be tombstoned as unreachable.
             if o.body_kind == BodyKind::SparqlJson {
-                Verdict::Verified
+                confirmed(def, declared)
             } else if answered_ok(o) {
                 Verdict::Absent
             } else {
@@ -125,7 +258,12 @@ pub fn resolve(def: &MetricDef, declared: Declared, obs: Result<&Observation, Ex
         }
         ProbeKind::SelectIris => {
             if !o.bindings.is_empty() {
-                Verdict::Verified
+                // Gated like `AskData`'s positive case, and for the same
+                // reason: a 500 body that happens to carry a populated
+                // `results.bindings` is not the engine confirming anything.
+                // Two metrics reading the same evidence shape must apply the
+                // same rule to it.
+                if answered_ok(o) { confirmed(def, declared) } else { Verdict::Indeterminate }
             } else if o.body_kind == BodyKind::SparqlJson && answered_ok(o) {
                 // Empty bindings are only evidence of absence when we
                 // actually parsed a result.
@@ -151,7 +289,9 @@ pub fn grade_from_declarations(defs: &Declarations) -> Level {
         defs.names_dataset,
         defs.has_void_partitions,
         defs.has_entailment,
-        !defs.extension_functions.is_empty(),
+        // The DOCUMENT-wide flag, never the scoped set: the grade describes
+        // what the operator published, not what one service claims.
+        defs.doc_declares_extension_functions,
         defs.has_example_resources,
     )
 }
@@ -164,7 +304,9 @@ pub fn grade_from_declarations(defs: &Declarations) -> Level {
 /// no code here dereferences a well-known URL.
 ///
 /// `Absent` is minted only from a `404` or a `410`: those are the only status
-/// codes that speak to what is published at the URL -- nothing was ever
+/// codes that speak to what is published at the URL, and they are one of the
+/// three places in this module where a non-2xx status licenses an absence,
+/// alongside the `405`/`501` of a refused `CorsPreflight` -- nothing was ever
 /// there, or it was and has since been removed. Every other non-2xx status,
 /// `401`/`403` included, describes our request or the server's state, not
 /// the endpoint's published metadata, so it stays `Indeterminate`. This is
@@ -249,6 +391,10 @@ pub fn grade_service_description(
 mod tests {
     use super::*;
 
+    /// The one IRI any shipped metric names in `declared_by`, and so the one
+    /// capability the declared/observed axis can currently apply to.
+    const SF_WITHIN: &str = "http://www.opengis.net/def/function/geosparql/sfWithin";
+
     fn def(kind: ProbeKind, expect: Option<bool>) -> MetricDef {
         MetricDef {
             id: "t".into(),
@@ -264,7 +410,7 @@ mod tests {
     }
 
     fn obs(boolean: Option<bool>) -> Observation {
-        Observation { status: Some(200), cors: true, boolean, bindings: vec![], body_kind: BodyKind::SparqlJson, body: None, content_type: None, elapsed_ms: 5, error: None }
+        Observation { status: Some(200), cors: true, boolean, bindings: vec![], body_kind: BodyKind::SparqlJson, body: None, final_url: None, content_type: None, allow_origin: None, allow_methods: None, allow_headers: None, elapsed_ms: 5, error: None }
     }
 
     #[test]
@@ -276,8 +422,12 @@ mod tests {
     #[test]
     fn works_but_undeclared_is_its_own_verdict() {
         // The commonest real case: 18 endpoints evaluate geof:sfWithin and
-        // none of them declares it.
-        let v = resolve(&def(ProbeKind::AskFilter, Some(true)), Declared { claimed: false }, Ok(&obs(Some(true))));
+        // none of them declares it. The metric has to carry a `declared_by`
+        // for the verdict to mean anything: the declared/observed axis applies
+        // only where a declaration was possible in the first place.
+        let mut d = def(ProbeKind::AskFilter, Some(true));
+        d.declared_by = Some(SF_WITHIN.into());
+        let v = resolve(&d, Declared { claimed: false }, Ok(&obs(Some(true))));
         assert_eq!(v, Verdict::UndeclaredButVerified);
     }
 
@@ -337,9 +487,10 @@ mod tests {
 
     #[test]
     fn a_matching_boolean_from_a_2xx_is_still_a_capability_claim() {
-        // The gate must not swallow the ordinary success case.
+        // The gate must not swallow the ordinary success case. This `def`
+        // carries no `declared_by`, so the confirmation stands on its own.
         let v = resolve(&def(ProbeKind::AskFilter, Some(true)), Declared { claimed: false }, Ok(&obs(Some(true))));
-        assert_eq!(v, Verdict::UndeclaredButVerified);
+        assert_eq!(v, Verdict::Verified);
     }
 
     #[test]
@@ -361,9 +512,26 @@ mod tests {
         // the same as a stub. That is precisely the rare honest declarer this
         // ladder exists to reward: 0 of 28 surveyed descriptions declared
         // anything geospatial, so when one finally does it must be credited.
-        let mut fns = Declarations { triples: 20, ..Declarations::empty() };
-        fns.extension_functions.insert("http://www.opengis.net/def/function/geosparql/sfWithin".into());
+        // The grade reads the document-wide flag, not the scoped set: a two
+        // service document must grade the same from either endpoint.
+        let fns = Declarations {
+            triples: 20,
+            doc_declares_extension_functions: true,
+            ..Declarations::empty()
+        };
         assert_eq!(grade_from_declarations(&fns), Level(4));
+
+        // And the scoped set alone must NOT reach level 4, or the grade moves
+        // with the probed endpoint and one document publishes two grades.
+        let mut scoped_only = Declarations { triples: 20, ..Declarations::empty() };
+        scoped_only
+            .extension_functions
+            .insert("http://www.opengis.net/def/function/geosparql/sfWithin".into());
+        assert_eq!(
+            grade_from_declarations(&scoped_only),
+            Level(1),
+            "the scoped capability set must not drive the document's grade"
+        );
 
         let examples = Declarations { triples: 20, has_example_resources: true, ..Declarations::empty() };
         assert_eq!(grade_from_declarations(&examples), Level(4));
@@ -434,10 +602,12 @@ mod tests {
     }
 
     #[test]
-    fn cors_header_present_is_undeclared_but_verified() {
-        // cors: true by default in `obs`, whatever the status.
+    fn cors_header_present_is_verified() {
+        // cors: true by default in `obs`, whatever the status. No term in the
+        // service-description vocabulary can declare CORS, so the metric
+        // carries no `declared_by` and a confirmation is simply `Verified`.
         let v = resolve(&def(ProbeKind::Cors, None), Declared { claimed: false }, Ok(&obs(None)));
-        assert_eq!(v, Verdict::UndeclaredButVerified);
+        assert_eq!(v, Verdict::Verified);
     }
 
     #[test]
@@ -460,6 +630,94 @@ mod tests {
     }
 
     #[test]
+    fn allows_get_reads_a_method_list_entry_by_entry() {
+        // An absent header is a grant: it is optional for a simple method, so a
+        // preflight that answered without it refused nothing.
+        assert!(allows_get(None), "an absent allow-methods header refuses nothing");
+        assert!(allows_get(Some("*")));
+        assert!(allows_get(Some("GET")));
+        assert!(allows_get(Some("get")), "method names compare case-insensitively");
+        assert!(allows_get(Some("GET, POST")));
+        assert!(!allows_get(Some("POST")));
+        // An empty header is NOT a grant: the server stated a list and GET is
+        // not in it.
+        assert!(!allows_get(Some("")), "an empty list grants nothing");
+        // The case a naive `contains` gets wrong.
+        assert!(!allows_get(Some("POSTGET")), "GET must be a list entry, not a substring");
+    }
+
+    #[test]
+    fn grants_our_origin_accepts_only_a_wildcard_or_us() {
+        assert!(!grants_our_origin(None), "no header is no grant");
+        assert!(grants_our_origin(Some("*")));
+        assert!(grants_our_origin(Some(ORIGIN)));
+        assert!(
+            grants_our_origin(Some(&ORIGIN.to_ascii_uppercase())),
+            "an origin is host-insensitive to case, so an uppercased echo is still us"
+        );
+        // A grant to somebody else. Publishing `verified` off this would be a
+        // confident wrong answer about an endpoint that would refuse us.
+        assert!(!grants_our_origin(Some("https://example.com")));
+        assert!(!grants_our_origin(Some("")));
+    }
+
+    /// The ordered status gate, at the unit level: the header check must not be
+    /// reachable for a 405, whatever the headers say.
+    #[test]
+    fn a_preflight_405_is_absent_even_with_a_wildcard_grant() {
+        let mut o = obs(None);
+        o.body_kind = BodyKind::None;
+        o.status = Some(405);
+        o.allow_origin = Some("*".into());
+        o.allow_methods = Some("GET, POST, OPTIONS".into());
+        let v = resolve(&def(ProbeKind::CorsPreflight, None), Declared { claimed: false }, Ok(&o));
+        assert_eq!(v, Verdict::Absent, "the status gate must be consulted before any header");
+    }
+
+    /// A 3xx reaching the resolver is a chain `Client::preflight` could not
+    /// resolve, and an unresolved chain is not an answer. It was `Absent`
+    /// until C1: every other probe measures the endpoint through its redirect,
+    /// so minting the redirect as an absence made one run publish `cors =
+    /// undeclared-but-verified` and `cors-preflight = absent` about one
+    /// service, from our own redirect policy rather than from the endpoint.
+    /// Note that a wildcard grant rides along on each of these and changes
+    /// nothing: the status gate still comes first.
+    #[test]
+    fn a_preflight_3xx_is_indeterminate_and_a_4xx_or_5xx_is_indeterminate() {
+        for status in [301, 302, 303, 307, 308] {
+            let mut o = obs(None);
+            o.body_kind = BodyKind::None;
+            o.status = Some(status);
+            o.allow_origin = Some("*".into());
+            let v = resolve(&def(ProbeKind::CorsPreflight, None), Declared { claimed: false }, Ok(&o));
+            assert_eq!(
+                v,
+                Verdict::Indeterminate,
+                "an unresolved redirect chain never reached a preflight answer: {status}"
+            );
+        }
+        for status in [400, 401, 403, 404, 429, 500, 502, 503] {
+            let mut o = obs(None);
+            o.body_kind = BodyKind::None;
+            o.status = Some(status);
+            o.allow_origin = Some("*".into());
+            let v = resolve(&def(ProbeKind::CorsPreflight, None), Declared { claimed: false }, Ok(&o));
+            assert_eq!(v, Verdict::Indeterminate, "status {status} describes our request, not a CORS policy");
+        }
+    }
+
+    #[test]
+    fn an_expired_or_failed_preflight_is_indeterminate_never_absent() {
+        let d = def(ProbeKind::CorsPreflight, None);
+        assert_eq!(resolve(&d, Declared { claimed: false }, Err(Expired)), Verdict::Indeterminate);
+        let mut o = obs(None);
+        o.body_kind = BodyKind::None;
+        o.status = None;
+        o.error = Some("connection reset".into());
+        assert_eq!(resolve(&d, Declared { claimed: false }, Ok(&o)), Verdict::Indeterminate);
+    }
+
+    #[test]
     fn liveness_sparql_json_is_verified() {
         let v = resolve(&def(ProbeKind::Liveness, None), Declared { claimed: false }, Ok(&obs(None)));
         assert_eq!(v, Verdict::Verified);
@@ -479,6 +737,69 @@ mod tests {
         o.bindings = vec!["http://example.org/x".into()];
         let v = resolve(&def(ProbeKind::SelectIris, None), Declared { claimed: false }, Ok(&o));
         assert_eq!(v, Verdict::Verified);
+    }
+
+    #[test]
+    fn select_iris_bindings_from_a_500_is_indeterminate_not_verified() {
+        // M1. `AskData`'s positive case has been gated on `answered_ok` since
+        // the same argument was made about it: a 500 body that happens to
+        // carry a populated `results.bindings` is not the engine confirming
+        // that the endpoint holds classes. Two metrics reading the same
+        // evidence shape must not apply different rules to it.
+        let mut o = obs(None);
+        o.status = Some(500);
+        o.bindings = vec!["http://example.org/C".into()];
+        let v = resolve(&def(ProbeKind::SelectIris, None), Declared { claimed: false }, Ok(&o));
+        assert_eq!(v, Verdict::Indeterminate);
+    }
+
+    /// One rule for what a confirmation publishes, in every arm that can
+    /// confirm one. A metric no declaration could speak for is `Verified` on
+    /// the probe alone; a metric that names a `declared_by` is
+    /// `UndeclaredButVerified` until the description actually says so. An arm
+    /// that hardcodes either verdict fails here.
+    #[test]
+    fn every_confirming_arm_reads_the_declaration_axis_the_same_way() {
+        // (kind, expect, the observation that confirms it)
+        let cases: Vec<(ProbeKind, Option<bool>, Observation)> = vec![
+            (ProbeKind::AskFilter, Some(true), obs(Some(true))),
+            (ProbeKind::AskData, None, obs(Some(true))),
+            (ProbeKind::Cors, None, obs(None)),
+            (ProbeKind::CorsPreflight, None, {
+                let mut o = obs(None);
+                o.body_kind = BodyKind::None;
+                o.allow_origin = Some("*".into());
+                o
+            }),
+            (ProbeKind::Liveness, None, obs(None)),
+            (ProbeKind::SelectIris, None, {
+                let mut o = obs(None);
+                o.bindings = vec!["http://example.org/C".into()];
+                o
+            }),
+        ];
+        for (kind, expect, o) in cases {
+            // Nothing in the vocabulary could declare this one.
+            let undeclarable = def(kind, expect);
+            assert_eq!(
+                resolve(&undeclarable, Declared { claimed: false }, Ok(&o)),
+                Verdict::Verified,
+                "{kind:?}: a confirmation of a capability nothing could declare is Verified"
+            );
+
+            let mut declarable = def(kind, expect);
+            declarable.declared_by = Some(SF_WITHIN.into());
+            assert_eq!(
+                resolve(&declarable, Declared { claimed: false }, Ok(&o)),
+                Verdict::UndeclaredButVerified,
+                "{kind:?}: a declarable capability confirmed but not declared is undeclared-but-verified"
+            );
+            assert_eq!(
+                resolve(&declarable, Declared { claimed: true }, Ok(&o)),
+                Verdict::Verified,
+                "{kind:?}: declared and confirmed is Verified"
+            );
+        }
     }
 
     #[test]

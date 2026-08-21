@@ -5,7 +5,13 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProbeKind {
     Liveness,
+    /// An `access-control-allow-origin` header on a simple GET: what a `curl`
+    /// user sees.
     Cors,
+    /// An `OPTIONS` preflight for a cross-origin GET: what a browser sees.
+    /// Deliberately separate from `Cors`, because an endpoint can genuinely
+    /// have one and not the other and neither subsumes the other.
+    CorsPreflight,
     /// A data-free filter, testing whether a function is bound.
     AskFilter,
     /// An ASK over data, testing presence. Uses the literal guard.
@@ -15,6 +21,42 @@ pub enum ProbeKind {
 }
 
 impl ProbeKind {
+    /// Every probe kind, for tests that must cover the whole closed set.
+    ///
+    /// Kept honest by `sequence` below rather than by discipline: a
+    /// hand-maintained list in a test looks like it enforces coverage and does
+    /// not, which is the defect shape this crate keeps finding in itself.
+    pub const ALL: [ProbeKind; 7] = [
+        ProbeKind::Liveness,
+        ProbeKind::Cors,
+        ProbeKind::CorsPreflight,
+        ProbeKind::AskFilter,
+        ProbeKind::AskData,
+        ProbeKind::SelectIris,
+        ProbeKind::FetchWellKnown,
+    ];
+
+    /// This kind's position in `ALL`. The match is exhaustive with no catch-all,
+    /// so adding a variant fails to compile here; the new variant then gets the
+    /// next index, and `all_is_every_variant_in_order` fails until it is added
+    /// to `ALL`. That chain is what makes `ALL` complete by construction.
+    ///
+    /// Test-only: it exists to be checked, not called. CI runs both `cargo test`
+    /// and `cargo clippy --all-targets`, so the compile-time half of the guard
+    /// still fires there.
+    #[cfg(test)]
+    fn sequence(self) -> usize {
+        match self {
+            ProbeKind::Liveness => 0,
+            ProbeKind::Cors => 1,
+            ProbeKind::CorsPreflight => 2,
+            ProbeKind::AskFilter => 3,
+            ProbeKind::AskData => 4,
+            ProbeKind::SelectIris => 5,
+            ProbeKind::FetchWellKnown => 6,
+        }
+    }
+
     /// Whether a probe is actually implemented for this kind. `FetchWellKnown`
     /// now has one too -- a single queryless fetch per endpoint, issued once
     /// in `probe_endpoint` ahead of this per-metric dispatch rather than
@@ -29,6 +71,7 @@ impl ProbeKind {
         match self {
             ProbeKind::Liveness
             | ProbeKind::Cors
+            | ProbeKind::CorsPreflight
             | ProbeKind::AskFilter
             | ProbeKind::AskData
             | ProbeKind::SelectIris
@@ -160,6 +203,17 @@ query = "ASK { }"
         let ms = load_metrics(include_str!("../metrics.toml")).unwrap();
         assert!(ms.iter().any(|m| m.id == "geo-data"));
         assert!(ms.iter().find(|m| m.id == "service-description").unwrap().graded);
+        // The two CORS facts are both shipped, and they are different kinds.
+        // A `cors-preflight` metric accidentally defined as `kind = "Cors"`
+        // would publish the simple-GET header under the preflight's label,
+        // which is the exact mislabelling this metric exists to end.
+        assert_eq!(ms.iter().find(|m| m.id == "cors").unwrap().kind, ProbeKind::Cors);
+        let preflight = ms.iter().find(|m| m.id == "cors-preflight").expect("cors-preflight must be shipped");
+        assert_eq!(preflight.kind, ProbeKind::CorsPreflight);
+        // A preflight carries no query, and no declaration speaks for a CORS
+        // policy, so neither field may be set on it.
+        assert_eq!(preflight.query, None);
+        assert_eq!(preflight.declared_by, None);
     }
 
     #[test]
@@ -168,9 +222,21 @@ query = "ASK { }"
         // `probe_endpoint`, dispatched ahead of this generic per-metric path
         // rather than through it, but it is implemented now: no kind in the
         // closed set currently lacks one.
-        for k in [ProbeKind::Liveness, ProbeKind::Cors, ProbeKind::AskFilter,
-                  ProbeKind::AskData, ProbeKind::SelectIris, ProbeKind::FetchWellKnown] {
+        for k in ProbeKind::ALL {
             assert!(k.has_probe(), "{k:?} should have a probe");
+        }
+    }
+
+    #[test]
+    fn all_is_every_variant_in_order() {
+        // The guard that makes `ProbeKind::ALL` trustworthy. Adding a variant
+        // breaks `sequence`'s exhaustive match at compile time, and then this
+        // fails until the variant is in `ALL` at its own index. Without it,
+        // `ALL` is just another hand-maintained list that a new kind can slip
+        // past, and every test iterating it would silently stop covering the
+        // set it claims to cover.
+        for (i, k) in ProbeKind::ALL.into_iter().enumerate() {
+            assert_eq!(k.sequence(), i, "{k:?} is at the wrong index in ALL");
         }
     }
 
