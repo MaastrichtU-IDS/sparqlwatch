@@ -112,9 +112,24 @@ silently.
 **`metrics.toml`** is the metric definitions, as *data*. Each names a probe
 kind from a closed set (`Liveness`, `Cors`, `CorsPreflight`, `AskFilter`,
 `AskData`, `SelectIris`, `FetchWellKnown`) plus its parameters, so adding a metric that
-fits an existing kind needs no Rust change. An unknown kind, a
-bindings-reading kind with no `var`, or a metric with no `cost` field is a loud load error rather than a silent
-default. Every metric declares a cost of `cheap` or `expensive`, stating whether
+fits an existing kind needs no Rust change. An unknown kind, an unrecognised
+`cost` value, a bindings-reading kind with no `var`, a key the loader does not
+recognise, and an `id` defined twice are each a loud load error rather than a
+silent default. A metric that says nothing about `cost` is `cheap`, which is the
+one silent default that remains, so state the cost explicitly.
+
+An unrecognised key matters more than it sounds: before the loader refused them,
+`cost_class = "expensive"` loaded as `cheap` and ran a planet-scale scan against
+every endpoint in the registry. A duplicate `id` matters because the id is the
+metric's published identity: two definitions under one id can land on opposite
+sides of the cost ceiling and give the same (endpoint, metric) pair both a
+verdict and a not-measured fact. Note the contrast with the endpoint registry
+above, which drops a duplicate with a warning: that list is seeded from
+real-world dumps whose repeats say the same thing, while `metrics.toml` is
+written by hand and its repeats say different things, so there is nothing
+honest to guess.
+
+Every metric declares a cost of `cheap` or `expensive`, stating whether
 probing it is inexpensive enough to run everywhere or should be opt-in (via `--max-cost expensive`).
 The definitions are hashed into a `metricDefinitionRevision` recorded
 on every run, a pure function of the definitions themselves, so a measurement

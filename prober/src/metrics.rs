@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 
 /// The closed set of probe kinds. A metric definition names one of these plus
 /// its parameters, which is what makes metrics data rather than code.
@@ -160,9 +161,33 @@ struct MetricFile {
 /// name, and guessing one silently turns a real capability into a false
 /// `Absent`. That is a broken definition, so it fails here rather than
 /// publishing one worthless measurement per endpoint.
+///
+/// A repeated `id` fails here too. It is not a situation to resolve at runtime:
+/// the id is the metric's published identity, so two definitions sharing one can
+/// land on opposite sides of the cost ceiling and give the same (endpoint,
+/// metric) pair both a verdict and a not-measured fact, in one run graph. A
+/// consumer joining on the metric IRI then reads a pair that both was and was
+/// not measured.
+///
+/// Note the deliberate contrast with `registry::dedupe`, which drops a duplicate
+/// endpoint with a warning instead of failing. A registry is seeded from
+/// real-world dumps (LOD Cloud plus YummyData) that certainly contain the same
+/// endpoint twice, and refusing to load would mean refusing to monitor anything;
+/// dropping the repeat loses nothing, because the survivor says the same thing.
+/// `metrics.toml` is written by hand, a repeated id says two different things
+/// under one name, and there is no honest way to guess which was meant. So the
+/// registry deduplicates and this refuses.
 pub fn load_metrics(toml_src: &str) -> anyhow::Result<Vec<MetricDef>> {
     let f: MetricFile = toml::from_str(toml_src)?;
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
     for m in &f.metric {
+        if !seen.insert(m.id.as_str()) {
+            anyhow::bail!(
+                "metric id '{}' is defined more than once; an id is a metric's published identity, \
+                 so two definitions under one id would publish contradictory facts about the same pair",
+                m.id
+            );
+        }
         if matches!(m.kind, ProbeKind::AskData | ProbeKind::SelectIris) && m.var.is_none() {
             anyhow::bail!(
                 "metric '{}' of kind {:?} reads a variable's bindings but declares no `var`",
@@ -508,6 +533,41 @@ query = "SELECT ?thing WHERE {{ ?s ?p ?thing }} LIMIT 1"
                 "the error must name the key that was not understood: {err}"
             );
         }
+    }
+
+    #[test]
+    fn a_duplicate_metric_id_is_a_load_error_not_a_contradiction_in_the_graph() {
+        // A repeated id lands the same metric in both halves of the cost split:
+        // once in `run`, once in `declined`. Emission then publishes, for one
+        // endpoint in one run graph, a measurement with a verdict AND a
+        // not-measured fact for `urn:sparqlwatch:metric:classes`, so a consumer
+        // joining on the metric IRI sees a pair that both was and was not
+        // measured. Refuse the file instead of guessing which definition was
+        // meant.
+        //
+        // Contrast `registry::dedupe`, which warns and drops. That list comes
+        // from real-world dumps that contain duplicates by nature and whose
+        // repeats say the same thing; this file is written by hand and its
+        // repeats say different things.
+        let dup = concat!(
+            "[[metric]]\nid=\"classes\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"Liveness\"\nquery=\"ASK{}\"\ncost=\"cheap\"\n",
+            "[[metric]]\nid=\"classes\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"Liveness\"\nquery=\"ASK{}\"\ncost=\"expensive\"\n",
+        );
+        let err = load_metrics(dup).expect_err("a repeated metric id must be refused");
+        let msg = err.to_string();
+        assert!(msg.contains("classes"), "the error must name the duplicate: {msg}");
+
+        // Non-adjacent repeats too: the check is over the whole file, not over
+        // neighbouring pairs.
+        let far = concat!(
+            "[[metric]]\nid=\"a\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"Liveness\"\nquery=\"ASK{}\"\n",
+            "[[metric]]\nid=\"b\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"Liveness\"\nquery=\"ASK{}\"\n",
+            "[[metric]]\nid=\"a\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"Liveness\"\nquery=\"ASK{}\"\n",
+        );
+        assert!(load_metrics(far).is_err(), "a repeat anywhere in the file is a repeat");
+
+        // And the shipped file is not accidentally in breach.
+        assert!(load_metrics(include_str!("../metrics.toml")).is_ok());
     }
 
     #[test]
