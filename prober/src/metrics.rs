@@ -109,7 +109,13 @@ impl Cost {
     }
 }
 
+/// `deny_unknown_fields`: an unrecognised key is a load error, never a key
+/// serde quietly drops. Same doctrine as an unknown `kind` and an unknown
+/// `cost`. A definition file that looks like it says something and does not is
+/// the worst outcome here: `cost_class = "expensive"` loaded as `cheap` and
+/// silently ran a planet-scale scan against every endpoint in the registry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MetricDef {
     pub id: String,
     pub label: String,
@@ -137,7 +143,11 @@ pub struct MetricDef {
     pub cost: Cost,
 }
 
+/// Same reason as `MetricDef` above: a stray table at the top level (a second
+/// `[[metrics]]` section next to the real `[[metric]]` ones, say) must not be
+/// dropped in silence.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct MetricFile {
     metric: Vec<MetricDef>,
 }
@@ -360,6 +370,43 @@ query = "SELECT ?thing WHERE {{ ?s ?p ?thing }} LIMIT 1"
             definitions_revision(&d),
             "an edited cost changes which metrics a sweep runs, so it must be a new revision too"
         );
+    }
+
+    #[test]
+    fn a_mistyped_key_is_a_load_error_not_a_silently_dropped_field() {
+        // Serde drops unknown fields by default, which turns a spelling mistake
+        // into a definition that looks like it says something and does not.
+        // `cost_class = "expensive"` used to load as `cheap`, so the typo did not
+        // merely lose the field: it silently ran a planet-scale scan against
+        // every endpoint in the registry, which is the exact harm the closed
+        // `Cost` set exists to prevent.
+        for (typo, key) in [
+            ("cost_class = \"expensive\"", "cost_class"),
+            ("declaredBy = \"http://example.org/fn\"", "declaredBy"),
+        ] {
+            let bad = format!(
+                "[[metric]]\nid=\"m\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"Liveness\"\nquery=\"ASK{{}}\"\n{typo}\n"
+            );
+            let err = load_metrics(&bad)
+                .err()
+                .unwrap_or_else(|| panic!("`{key}` is not a field of MetricDef and must be refused"));
+            assert!(
+                err.to_string().contains(key),
+                "the error must name the key that was not understood: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_stray_top_level_table_is_a_load_error_too() {
+        // Same doctrine one level up: `[[metrics]]` alongside the real
+        // `[[metric]]` tables would otherwise be dropped, and the reader would
+        // never learn that half the file was ignored.
+        let bad = concat!(
+            "[[metric]]\nid=\"m\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"Liveness\"\nquery=\"ASK{}\"\n",
+            "[[metrics]]\nid=\"n\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"Liveness\"\nquery=\"ASK{}\"\n",
+        );
+        assert!(load_metrics(bad).is_err(), "a stray top-level table must not be ignored");
     }
 
     #[test]
