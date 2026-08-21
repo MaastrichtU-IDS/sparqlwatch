@@ -62,10 +62,11 @@ async fn a_wildcard_grant_listing_get_is_confirmed() {
     .await;
 
     let (v, o) = preflight_and_resolve(&format!("{}/sparql", server.uri())).await;
-    // `UndeclaredButVerified`, not `Verified`: no term in the
-    // service-description vocabulary can declare CORS, and `verified` means
-    // confirmed AND declared. The `cors` metric settles the same way.
-    assert_eq!(v, Verdict::UndeclaredButVerified);
+    // `Verified`: the probe confirmed it, and the declared/observed axis
+    // applies only where a declaration is possible. No term in the
+    // service-description vocabulary can declare CORS, so `cors-preflight`
+    // carries no `declared_by`. The `cors` metric settles the same way.
+    assert_eq!(v, Verdict::Verified);
     assert_eq!(o.status, Some(204));
     // The header's VALUE is recorded, not merely its presence: presence is not
     // a grant, and the resolver has to be able to tell the two apart.
@@ -85,10 +86,11 @@ async fn a_grant_with_no_methods_header_is_confirmed() {
         preflight_answering(ResponseTemplate::new(200).insert_header("access-control-allow-origin", "*")).await;
 
     let (v, o) = preflight_and_resolve(&format!("{}/sparql", server.uri())).await;
-    // `UndeclaredButVerified`, not `Verified`: no term in the
-    // service-description vocabulary can declare CORS, and `verified` means
-    // confirmed AND declared. The `cors` metric settles the same way.
-    assert_eq!(v, Verdict::UndeclaredButVerified);
+    // `Verified`: the probe confirmed it, and the declared/observed axis
+    // applies only where a declaration is possible. No term in the
+    // service-description vocabulary can declare CORS, so `cors-preflight`
+    // carries no `declared_by`. The `cors` metric settles the same way.
+    assert_eq!(v, Verdict::Verified);
     assert_eq!(o.allow_methods, None);
 }
 
@@ -102,10 +104,11 @@ async fn an_exact_echo_of_our_own_origin_is_a_grant_to_us() {
     .await;
 
     let (v, _) = preflight_and_resolve(&format!("{}/sparql", server.uri())).await;
-    // `UndeclaredButVerified`, not `Verified`: no term in the
-    // service-description vocabulary can declare CORS, and `verified` means
-    // confirmed AND declared. The `cors` metric settles the same way.
-    assert_eq!(v, Verdict::UndeclaredButVerified);
+    // `Verified`: the probe confirmed it, and the declared/observed axis
+    // applies only where a declaration is possible. No term in the
+    // service-description vocabulary can declare CORS, so `cors-preflight`
+    // carries no `declared_by`. The `cors` metric settles the same way.
+    assert_eq!(v, Verdict::Verified);
 }
 
 #[tokio::test]
@@ -177,7 +180,7 @@ async fn a_303_to_a_granting_path_reaches_the_grant_instead_of_publishing_absent
         .await;
 
     let (v, o) = preflight_and_resolve(&format!("{}/sparql", server.uri())).await;
-    assert_eq!(v, Verdict::UndeclaredButVerified, "the preflight was answered at the end of the chain");
+    assert_eq!(v, Verdict::Verified, "the preflight was answered at the end of the chain");
     assert_eq!(o.status, Some(204), "the verdict is drawn from the final response, not the redirect");
     assert_eq!(o.allow_origin.as_deref(), Some("*"));
 
@@ -382,7 +385,7 @@ async fn the_request_really_is_a_preflight() {
         .await;
 
     let (v, _) = preflight_and_resolve(&format!("{}/sparql", server.uri())).await;
-    assert_eq!(v, Verdict::UndeclaredButVerified, "the mock only answers a real preflight");
+    assert_eq!(v, Verdict::Verified, "the mock only answers a real preflight");
 
     let seen = server.received_requests().await.unwrap();
     assert_eq!(seen.len(), 1);

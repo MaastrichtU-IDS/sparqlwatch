@@ -57,14 +57,19 @@ async fn a_sweep_over_one_mock_endpoint_produces_nquads() {
     let expected: BTreeMap<&str, Verdict> = BTreeMap::from([
         // A SPARQL JSON body proves it speaks the protocol.
         ("availability", Verdict::Verified),
-        // The mock sets access-control-allow-origin.
-        ("cors", Verdict::UndeclaredButVerified),
+        // The mock sets access-control-allow-origin. No term in the
+        // service-description vocabulary can declare CORS, so `cors` carries
+        // no `declared_by` and a confirmation is simply `verified`: the
+        // declared/observed axis applies only where a declaration is possible.
+        ("cors", Verdict::Verified),
         // And it answers the OPTIONS preflight with a wildcard grant that
-        // lists GET, so a browser would be allowed to query it too. Confirmed
-        // but not declared: no service-description term can declare CORS, so
-        // this settles where the `cors` row does.
-        ("cors-preflight", Verdict::UndeclaredButVerified),
-        // boolean:true against expect = true.
+        // lists GET, so a browser would be allowed to query it too. Same
+        // reasoning, same verdict as the `cors` row.
+        ("cors-preflight", Verdict::Verified),
+        // boolean:true against expect = true. The only shipped metric with a
+        // `declared_by`, and this mock serves no parseable description, so the
+        // capability is confirmed and undeclared: the one row in this sweep
+        // where `undeclared-but-verified` says something about the endpoint.
         ("geo-functions", Verdict::UndeclaredButVerified),
         // The mock binds ?s, not ?g, so no WKT literal is present and the 200
         // makes that a genuine absence rather than an unknown.
@@ -144,7 +149,7 @@ async fn a_metric_binding_a_nonstandard_variable_is_extracted_via_its_declared_v
     assert_eq!(rows.len(), 1);
     assert_eq!(
         rows[0].verdict,
-        Verdict::UndeclaredButVerified,
+        Verdict::Verified,
         "a bound ?thing literal must be found via the metric's declared var, not silently reported absent"
     );
 }

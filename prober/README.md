@@ -12,12 +12,20 @@ resolves to exactly one of six verdicts:
 
 | Verdict | Meaning |
 | --- | --- |
-| `verified` | A probe confirms it works, and the endpoint declares it |
-| `undeclared-but-verified` | Works; no declaration was seen (see the endpoint's `declarationsRead` fact for whether we could read its description) |
+| `verified` | A probe confirms it works, and where a declaration is possible, the endpoint declares it |
+| `undeclared-but-verified` | Works, and the endpoint could have declared it but did not (see the endpoint's `declarationsRead` fact for whether we could read its description) |
 | `declared-but-wrong` | Answered, and answered incorrectly |
 | `declared-only` | Claimed, not confirmable by probe |
 | `absent` | Neither claimed nor observed |
 | `indeterminate` | We never got to find out |
+
+The declared/observed axis applies only where a declaration is possible, so
+only a metric carrying a `declared_by` in `metrics.toml` can ever produce
+`undeclared-but-verified`. `geo-functions` is the only one today. For every
+other metric there is no term in the service-description vocabulary that could
+advertise the capability (liveness, CORS headers, class counts), so "the
+endpoint declares nothing" would say nothing about the endpoint, and a
+confirmed probe reads simply `verified`.
 
 `absent` may only be claimed when the evidence actually establishes absence:
 the endpoint itself has to have answered the question we asked. For most
@@ -45,10 +53,13 @@ its inputs, with no clock read and no randomness.
 
 A service description is fetched once per endpoint with a queryless GET request
 that asks for RDF (`text/turtle, application/rdf+xml;q=0.9, application/ld+json;q=0.8`),
-and its declarations are compared against what the probes observe. Most confirmed
-capabilities report as `undeclared-but-verified`, because almost no endpoint declares
-its capabilities. `Verified` is reachable but will stay rare by design: in the survey
-behind this project, 18 endpoints evaluate `geof:sfWithin` and not one declares it.
+and its declarations are compared against what the probes observe. Where a
+declaration is possible, a confirmed capability usually reports as
+`undeclared-but-verified`, because almost no endpoint declares its
+capabilities: in the survey behind this project, 18 endpoints evaluate
+`geof:sfWithin` and not one declares it. That is the finding this verdict
+exists to publish, which is why metrics nothing could declare are kept out of
+it.
 The `service-description` metric now carries a graded level (0 to 4) rather than
 always being indeterminate, grading by informativeness rather than presence.
 
@@ -148,8 +159,9 @@ browser sends before a cross-origin query (`Origin`,
 `Access-Control-Request-Method: GET`, `Access-Control-Request-Headers:
 content-type`) and is what decides whether an embedded query editor can talk to
 the endpoint at all. An endpoint that sets the header on GET and refuses
-`OPTIONS` is common, and it reports `undeclared-but-verified` on the first and
-`absent` on the second, which is the honest pair of answers. The preflight
+`OPTIONS` is common, and it reports `verified` on the first and `absent` on the
+second, which is the honest pair of answers, and the shape
+`the_two_cors_metrics_are_not_the_same_probe` pins end to end. The preflight
 probe never follows a redirect implicitly: a `303` would rewrite the `OPTIONS`
 into a `GET` and hand back exactly the simple-GET header we already have,
 publishing a grant for that endpoint. It resolves the chain deliberately

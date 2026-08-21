@@ -42,6 +42,35 @@ fn answered_ok(o: &Observation) -> bool {
     matches!(o.status, Some(s) if (200..=299).contains(&s))
 }
 
+/// The verdict for a probe that CONFIRMED the capability, and the only place
+/// that decision is made. Every arm below routes its positive outcome through
+/// here, so the declared/observed axis reads the same way on every published
+/// row.
+///
+/// The rule: the axis applies only where a declaration is possible. A metric
+/// carrying no `declared_by` names nothing in the service-description
+/// vocabulary that could ever speak for it (liveness, response time, CORS
+/// headers, class counts), so "undeclared" says nothing about the endpoint and
+/// the confirmation stands on its own as `Verified`. A metric that does carry
+/// one is the case the second verdict exists for: `geo-functions` is the only
+/// shipped example, and it carries this project's headline finding, that 18
+/// surveyed endpoints evaluate `geof:sfWithin` and none of them declares it.
+///
+/// This REVERSES commit d4ff4f4, which read `verified` as "confirmed AND
+/// declared" and moved the `CorsPreflight` arm to `UndeclaredButVerified` on
+/// that reading. Publishing "works, but advertises nothing" about a capability
+/// no vocabulary term can advertise is a category error, and it dilutes the one
+/// verdict where the distinction carries a finding. If a declaration for CORS
+/// (or for liveness, or for class counts) ever enters the vocabulary, adding
+/// `declared_by` to that metric upgrades it here with no code change.
+fn confirmed(def: &MetricDef, declared: Declared) -> Verdict {
+    if def.declared_by.is_none() || declared.claimed {
+        Verdict::Verified
+    } else {
+        Verdict::UndeclaredButVerified
+    }
+}
+
 /// Whether `access-control-allow-methods` permits the GET we would send. An
 /// absent header is a grant: the header is optional and a preflight that
 /// answered without it refused nothing. An empty header is NOT a grant, because
@@ -121,13 +150,7 @@ pub fn resolve(def: &MetricDef, declared: Declared, obs: Result<&Observation, Ex
             // as much as an absence claim does: a 500 body that happens to carry
             // {"boolean": true} is not the engine confirming anything.
             (Some(got), Some(want)) if got == want => {
-                if !answered_ok(o) {
-                    Verdict::Indeterminate
-                } else if declared.claimed {
-                    Verdict::Verified
-                } else {
-                    Verdict::UndeclaredButVerified
-                }
+                if answered_ok(o) { confirmed(def, declared) } else { Verdict::Indeterminate }
             }
             // Bound but wrong: the function answered, and answered
             // incorrectly. Only claimable when the endpoint itself answered
@@ -137,13 +160,7 @@ pub fn resolve(def: &MetricDef, declared: Declared, obs: Result<&Observation, Ex
                 if answered_ok(o) { Verdict::DeclaredButWrong } else { Verdict::Indeterminate }
             }
             (Some(true), None) => {
-                if !answered_ok(o) {
-                    Verdict::Indeterminate
-                } else if declared.claimed {
-                    Verdict::Verified
-                } else {
-                    Verdict::UndeclaredButVerified
-                }
+                if answered_ok(o) { confirmed(def, declared) } else { Verdict::Indeterminate }
             }
             (Some(false), None) => {
                 if answered_ok(o) { Verdict::Absent } else { Verdict::Indeterminate }
@@ -156,7 +173,7 @@ pub fn resolve(def: &MetricDef, declared: Declared, obs: Result<&Observation, Ex
             if o.cors {
                 // The header proves CORS is configured whatever the status
                 // code, so the positive case is not gated on `answered_ok`.
-                if declared.claimed { Verdict::Verified } else { Verdict::UndeclaredButVerified }
+                confirmed(def, declared)
             } else if answered_ok(o) {
                 Verdict::Absent
             } else {
@@ -206,22 +223,11 @@ pub fn resolve(def: &MetricDef, declared: Declared, obs: Result<&Observation, Ex
                 // 2xx: now, and only now, the headers decide.
                 Some(_) => {
                     if grants_our_origin(o.allow_origin.as_deref()) && allows_get(o.allow_methods.as_deref()) {
-                        // Routed through `declared.claimed` for the same reason
-                        // the `Cors` arm is: `verified` means confirmed AND
-                        // declared, and no term in the service-description
-                        // vocabulary can declare CORS, so `declared_by` is
-                        // absent and this settles on
-                        // `UndeclaredButVerified`. Returning a bare `Verified`
-                        // here made the two CORS metrics publish different
-                        // verdicts for one endpoint for a reason that says
-                        // nothing about the endpoint. If a declaration for
-                        // preflight CORS ever enters the vocabulary, adding
-                        // `declared_by` upgrades this with no code change.
-                        if declared.claimed {
-                            Verdict::Verified
-                        } else {
-                            Verdict::UndeclaredButVerified
-                        }
+                        // Through the same helper as every other arm, so the
+                        // two CORS rows and every other confirmation read
+                        // alike. `cors-preflight` carries no `declared_by`, so
+                        // today this is `Verified`.
+                        confirmed(def, declared)
                     } else {
                         // The endpoint answered the preflight and did not grant
                         // us the request we would make.
@@ -243,7 +249,7 @@ pub fn resolve(def: &MetricDef, declared: Declared, obs: Result<&Observation, Ex
             // sweep and a later stage reads it to decide admission, so a
             // throttled endpoint must not be tombstoned as unreachable.
             if o.body_kind == BodyKind::SparqlJson {
-                Verdict::Verified
+                confirmed(def, declared)
             } else if answered_ok(o) {
                 Verdict::Absent
             } else {
@@ -252,7 +258,12 @@ pub fn resolve(def: &MetricDef, declared: Declared, obs: Result<&Observation, Ex
         }
         ProbeKind::SelectIris => {
             if !o.bindings.is_empty() {
-                Verdict::Verified
+                // Gated like `AskData`'s positive case, and for the same
+                // reason: a 500 body that happens to carry a populated
+                // `results.bindings` is not the engine confirming anything.
+                // Two metrics reading the same evidence shape must apply the
+                // same rule to it.
+                if answered_ok(o) { confirmed(def, declared) } else { Verdict::Indeterminate }
             } else if o.body_kind == BodyKind::SparqlJson && answered_ok(o) {
                 // Empty bindings are only evidence of absence when we
                 // actually parsed a result.
@@ -380,6 +391,10 @@ pub fn grade_service_description(
 mod tests {
     use super::*;
 
+    /// The one IRI any shipped metric names in `declared_by`, and so the one
+    /// capability the declared/observed axis can currently apply to.
+    const SF_WITHIN: &str = "http://www.opengis.net/def/function/geosparql/sfWithin";
+
     fn def(kind: ProbeKind, expect: Option<bool>) -> MetricDef {
         MetricDef {
             id: "t".into(),
@@ -407,8 +422,12 @@ mod tests {
     #[test]
     fn works_but_undeclared_is_its_own_verdict() {
         // The commonest real case: 18 endpoints evaluate geof:sfWithin and
-        // none of them declares it.
-        let v = resolve(&def(ProbeKind::AskFilter, Some(true)), Declared { claimed: false }, Ok(&obs(Some(true))));
+        // none of them declares it. The metric has to carry a `declared_by`
+        // for the verdict to mean anything: the declared/observed axis applies
+        // only where a declaration was possible in the first place.
+        let mut d = def(ProbeKind::AskFilter, Some(true));
+        d.declared_by = Some(SF_WITHIN.into());
+        let v = resolve(&d, Declared { claimed: false }, Ok(&obs(Some(true))));
         assert_eq!(v, Verdict::UndeclaredButVerified);
     }
 
@@ -468,9 +487,10 @@ mod tests {
 
     #[test]
     fn a_matching_boolean_from_a_2xx_is_still_a_capability_claim() {
-        // The gate must not swallow the ordinary success case.
+        // The gate must not swallow the ordinary success case. This `def`
+        // carries no `declared_by`, so the confirmation stands on its own.
         let v = resolve(&def(ProbeKind::AskFilter, Some(true)), Declared { claimed: false }, Ok(&obs(Some(true))));
-        assert_eq!(v, Verdict::UndeclaredButVerified);
+        assert_eq!(v, Verdict::Verified);
     }
 
     #[test]
@@ -582,10 +602,12 @@ mod tests {
     }
 
     #[test]
-    fn cors_header_present_is_undeclared_but_verified() {
-        // cors: true by default in `obs`, whatever the status.
+    fn cors_header_present_is_verified() {
+        // cors: true by default in `obs`, whatever the status. No term in the
+        // service-description vocabulary can declare CORS, so the metric
+        // carries no `declared_by` and a confirmation is simply `Verified`.
         let v = resolve(&def(ProbeKind::Cors, None), Declared { claimed: false }, Ok(&obs(None)));
-        assert_eq!(v, Verdict::UndeclaredButVerified);
+        assert_eq!(v, Verdict::Verified);
     }
 
     #[test]
@@ -715,6 +737,69 @@ mod tests {
         o.bindings = vec!["http://example.org/x".into()];
         let v = resolve(&def(ProbeKind::SelectIris, None), Declared { claimed: false }, Ok(&o));
         assert_eq!(v, Verdict::Verified);
+    }
+
+    #[test]
+    fn select_iris_bindings_from_a_500_is_indeterminate_not_verified() {
+        // M1. `AskData`'s positive case has been gated on `answered_ok` since
+        // the same argument was made about it: a 500 body that happens to
+        // carry a populated `results.bindings` is not the engine confirming
+        // that the endpoint holds classes. Two metrics reading the same
+        // evidence shape must not apply different rules to it.
+        let mut o = obs(None);
+        o.status = Some(500);
+        o.bindings = vec!["http://example.org/C".into()];
+        let v = resolve(&def(ProbeKind::SelectIris, None), Declared { claimed: false }, Ok(&o));
+        assert_eq!(v, Verdict::Indeterminate);
+    }
+
+    /// One rule for what a confirmation publishes, in every arm that can
+    /// confirm one. A metric no declaration could speak for is `Verified` on
+    /// the probe alone; a metric that names a `declared_by` is
+    /// `UndeclaredButVerified` until the description actually says so. An arm
+    /// that hardcodes either verdict fails here.
+    #[test]
+    fn every_confirming_arm_reads_the_declaration_axis_the_same_way() {
+        // (kind, expect, the observation that confirms it)
+        let cases: Vec<(ProbeKind, Option<bool>, Observation)> = vec![
+            (ProbeKind::AskFilter, Some(true), obs(Some(true))),
+            (ProbeKind::AskData, None, obs(Some(true))),
+            (ProbeKind::Cors, None, obs(None)),
+            (ProbeKind::CorsPreflight, None, {
+                let mut o = obs(None);
+                o.body_kind = BodyKind::None;
+                o.allow_origin = Some("*".into());
+                o
+            }),
+            (ProbeKind::Liveness, None, obs(None)),
+            (ProbeKind::SelectIris, None, {
+                let mut o = obs(None);
+                o.bindings = vec!["http://example.org/C".into()];
+                o
+            }),
+        ];
+        for (kind, expect, o) in cases {
+            // Nothing in the vocabulary could declare this one.
+            let undeclarable = def(kind, expect);
+            assert_eq!(
+                resolve(&undeclarable, Declared { claimed: false }, Ok(&o)),
+                Verdict::Verified,
+                "{kind:?}: a confirmation of a capability nothing could declare is Verified"
+            );
+
+            let mut declarable = def(kind, expect);
+            declarable.declared_by = Some(SF_WITHIN.into());
+            assert_eq!(
+                resolve(&declarable, Declared { claimed: false }, Ok(&o)),
+                Verdict::UndeclaredButVerified,
+                "{kind:?}: a declarable capability confirmed but not declared is undeclared-but-verified"
+            );
+            assert_eq!(
+                resolve(&declarable, Declared { claimed: true }, Ok(&o)),
+                Verdict::Verified,
+                "{kind:?}: declared and confirmed is Verified"
+            );
+        }
     }
 
     #[test]
