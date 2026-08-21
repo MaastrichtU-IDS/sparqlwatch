@@ -1,3 +1,4 @@
+use crate::metrics::Cost;
 use crate::verdict::{Level, Verdict};
 use oxrdf::vocab::{rdf, xsd};
 use oxrdf::{GraphName, Literal, NamedNode, NamedOrBlankNode, Quad, Term};
@@ -37,6 +38,38 @@ pub struct DeclarationsRead {
     pub read: bool,
 }
 
+/// Why a metric was never measured. An enum, not a string, so a second reason
+/// added later cannot be spelled two ways by two call sites.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotMeasuredReason {
+    /// The metric's cost exceeded the ceiling the sweep was run with.
+    CostCeiling,
+}
+
+impl NotMeasuredReason {
+    /// The published slug. Stable: it goes into the graph.
+    pub fn slug(&self) -> &'static str {
+        match self {
+            NotMeasuredReason::CostCeiling => "cost-ceiling",
+        }
+    }
+}
+
+/// A metric that was deliberately not run against an endpoint, and why.
+///
+/// Deliberately NOT a seventh `Verdict`. A verdict says what we found out
+/// about a capability; this says that no measurement happened at all. Folding
+/// it into the verdict vocabulary would force every consumer that filters on
+/// verdicts to know about a value that is not one. It is published as its own
+/// type, carrying no `dqv:value` and no `sw:level`, so a consumer asking "what
+/// is the verdict" gets nothing (which is correct) while a consumer asking
+/// "why is there no verdict" gets an answer.
+pub struct NotMeasured {
+    pub endpoint: String,
+    pub metric_id: String,
+    pub reason: NotMeasuredReason,
+}
+
 fn nn(s: &str) -> anyhow::Result<NamedNode> {
     Ok(NamedNode::new(s)?)
 }
@@ -50,12 +83,19 @@ fn nn(s: &str) -> anyhow::Result<NamedNode> {
 /// It must be a pure function of the definitions (see
 /// `metrics::definitions_revision`), never a clock or a counter, so that
 /// re-running the same definitions yields the same revision.
+///
+/// `max_cost` is the ceiling the sweep was run with, recorded on the run's
+/// activity. It is a parameter rather than something this function discovers:
+/// `emit_nquads` reads no clock, no environment and no global, so the same
+/// inputs always produce the same document.
 pub fn emit_nquads(
     run: &RunId,
     generated_at: &str,
     metric_revision: &str,
     rows: &[MeasurementRow],
     declarations_read: &[DeclarationsRead],
+    not_measured: &[NotMeasured],
+    max_cost: Cost,
 ) -> anyhow::Result<String> {
     let graph = GraphName::NamedNode(nn(&format!("urn:sparqlwatch:run:{}", run.0))?);
     let activity = nn(&format!("urn:sparqlwatch:activity:{}", run.0))?;
@@ -83,6 +123,16 @@ pub fn emit_nquads(
         NamedOrBlankNode::NamedNode(activity.clone()),
         nn("urn:sparqlwatch:metricDefinitionRevision")?,
         Term::Literal(Literal::new_simple_literal(metric_revision)),
+        graph.clone(),
+    ));
+    // Which metrics ran is a property of the run, not of any one measurement:
+    // without it a run that declined `classes` is indistinguishable from one
+    // that ran it, and the not-measured facts below say which metrics were
+    // declined but not what policy declined them.
+    quads.push(Quad::new(
+        NamedOrBlankNode::NamedNode(activity.clone()),
+        nn("urn:sparqlwatch:maxCost")?,
+        Term::Literal(Literal::new_simple_literal(max_cost.slug())),
         graph.clone(),
     ));
 
@@ -167,6 +217,66 @@ pub fn emit_nquads(
         }
     }
 
+    // A separate IRI space from a measurement's, deliberately: these two must
+    // never share a subject, or a consumer joining on the measurement IRI
+    // lands on a node that both has and has not a verdict. It also does not
+    // reuse the row counter above, so the two cannot collide by arithmetic
+    // accident when one of the lists is empty.
+    for (i, fact) in not_measured.iter().enumerate() {
+        // Same non-fatal handling as a measurement row: one junk endpoint
+        // string must not cost the whole sweep its output.
+        let endpoint = match NamedNode::new(&fact.endpoint) {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!(
+                    endpoint = %fact.endpoint,
+                    metric = %fact.metric_id,
+                    error = %e,
+                    "skipping not-measured fact: endpoint is not a valid IRI"
+                );
+                continue;
+            }
+        };
+        let subj = NamedOrBlankNode::NamedNode(nn(&format!(
+            "urn:sparqlwatch:not-measured:{}:{}",
+            run.0, i
+        ))?);
+        if typed_endpoints.insert(fact.endpoint.clone()) {
+            quads.push(Quad::new(
+                NamedOrBlankNode::NamedNode(endpoint.clone()),
+                rdf::TYPE.into_owned(),
+                Term::NamedNode(nn(&format!("{DCAT}DataService"))?),
+                graph.clone(),
+            ));
+        }
+        quads.push(Quad::new(
+            subj.clone(),
+            rdf::TYPE.into_owned(),
+            Term::NamedNode(nn("urn:sparqlwatch:NotMeasured")?),
+            graph.clone(),
+        ));
+        quads.push(Quad::new(
+            subj.clone(),
+            nn(&format!("{DQV}computedOn"))?,
+            Term::NamedNode(endpoint),
+            graph.clone(),
+        ));
+        quads.push(Quad::new(
+            subj.clone(),
+            nn(&format!("{DQV}isMeasurementOf"))?,
+            Term::NamedNode(nn(&format!("urn:sparqlwatch:metric:{}", fact.metric_id))?),
+            graph.clone(),
+        ));
+        // No `dqv:value` and no `sw:level`: nothing was measured, so there is
+        // nothing to state. The reason is all the new information there is.
+        quads.push(Quad::new(
+            subj,
+            nn("urn:sparqlwatch:notMeasuredReason")?,
+            Term::Literal(Literal::new_simple_literal(fact.reason.slug())),
+            graph.clone(),
+        ));
+    }
+
     for fact in declarations_read {
         // Same non-fatal handling as a measurement row above: one bad
         // endpoint string must not cost every other endpoint its fact.
@@ -212,10 +322,22 @@ pub fn emit_nquads(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::metrics::Cost;
     use crate::verdict::{Level, Verdict};
     use oxrdfio::RdfParser;
 
     const REV: &str = "abc123";
+    const AT: &str = "2026-08-20T08:00:00Z";
+
+    fn row(endpoint: &str, metric_id: &str, verdict: Verdict) -> MeasurementRow {
+        MeasurementRow {
+            endpoint: endpoint.into(),
+            metric_id: metric_id.into(),
+            verdict,
+            level: None,
+            elapsed_ms: Some(1),
+        }
+    }
 
     fn rows() -> Vec<MeasurementRow> {
         vec![
@@ -247,7 +369,7 @@ mod tests {
     }
 
     fn emit(rows: &[MeasurementRow]) -> Vec<Quad> {
-        let out = emit_nquads(&RunId("r1".into()), "2026-08-20T08:00:00Z", REV, rows, &[]).unwrap();
+        let out = emit_nquads(&RunId("r1".into()), "2026-08-20T08:00:00Z", REV, rows, &[], &[], Cost::Cheap).unwrap();
         quads_of(&out)
     }
 
@@ -257,7 +379,7 @@ mod tests {
 
     #[test]
     fn every_quad_lands_in_the_run_graph() {
-        let out = emit_nquads(&RunId("2026-08-20T08:00:00Z".into()), "2026-08-20T08:00:00Z", REV, &rows(), &[]).unwrap();
+        let out = emit_nquads(&RunId("2026-08-20T08:00:00Z".into()), "2026-08-20T08:00:00Z", REV, &rows(), &[], &[], Cost::Cheap).unwrap();
         let expected = GraphName::NamedNode(
             NamedNode::new("urn:sparqlwatch:run:2026-08-20T08:00:00Z").unwrap(),
         );
@@ -353,7 +475,7 @@ mod tests {
                 elapsed_ms: Some(3),
             },
         );
-        let out = emit_nquads(&RunId("r1".into()), "2026-08-20T08:00:00Z", REV, &rs, &[])
+        let out = emit_nquads(&RunId("r1".into()), "2026-08-20T08:00:00Z", REV, &rs, &[], &[], Cost::Cheap)
             .expect("one junk endpoint must not discard the sweep");
         assert!(!out.contains("not an iri at all"));
         let qs = quads_of(&out);
@@ -421,7 +543,7 @@ mod tests {
     #[test]
     fn declarations_read_emits_a_boolean_quad_shaped_for_the_run() {
         let facts = vec![DeclarationsRead { endpoint: "https://qlever.dev/api/osm-planet".into(), read: true }];
-        let out = emit_nquads(&RunId("r1".into()), "2026-08-20T08:00:00Z", REV, &[], &facts).unwrap();
+        let out = emit_nquads(&RunId("r1".into()), "2026-08-20T08:00:00Z", REV, &[], &facts, &[], Cost::Cheap).unwrap();
         let qs = quads_of(&out);
         let q = qs
             .iter()
@@ -450,10 +572,166 @@ mod tests {
             DeclarationsRead { endpoint: "https://a.example/sparql".into(), read: true },
             DeclarationsRead { endpoint: "https://b.example/sparql".into(), read: false },
         ];
-        let out = emit_nquads(&RunId("r1".into()), "2026-08-20T08:00:00Z", REV, &[], &facts).unwrap();
+        let out = emit_nquads(&RunId("r1".into()), "2026-08-20T08:00:00Z", REV, &[], &facts, &[], Cost::Cheap).unwrap();
         let qs = quads_of(&out);
         let read_quads: Vec<&Quad> =
             qs.iter().filter(|q| q.predicate.as_str() == "urn:sparqlwatch:declarationsRead").collect();
         assert_eq!(read_quads.len(), 2, "one quad per endpoint, whatever the boolean");
+    }
+
+    #[test]
+    fn a_not_measured_fact_carries_no_verdict_and_no_level() {
+        let nq = emit_nquads(&RunId(AT.into()), AT, REV, &[], &[], &[NotMeasured {
+            endpoint: "http://example.org/sparql".into(),
+            metric_id: "classes".into(),
+            reason: NotMeasuredReason::CostCeiling,
+        }], Cost::Cheap).unwrap();
+
+        assert!(nq.contains("urn:sparqlwatch:NotMeasured"));
+        assert!(nq.contains("cost-ceiling"));
+        assert!(!nq.contains("dqv#value"),
+                "nothing was measured, so there is no value to publish");
+        assert!(!nq.contains("urn:sparqlwatch:level"));
+    }
+
+    #[test]
+    fn a_not_measured_fact_does_not_collide_with_a_measurement() {
+        // Both are subjects in the same graph. If they share an IRI, a consumer
+        // joining on the measurement IRI gets a node that both has and has not a
+        // verdict.
+        let rows = vec![row("http://example.org/sparql", "availability", Verdict::Verified)];
+        let nm = vec![NotMeasured {
+            endpoint: "http://example.org/sparql".into(),
+            metric_id: "classes".into(),
+            reason: NotMeasuredReason::CostCeiling,
+        }];
+        let nq = emit_nquads(&RunId(AT.into()), AT, REV, &rows, &[], &nm, Cost::Cheap).unwrap();
+
+        // Collect the two subject sets separately, each by the rdf:type that
+        // marks what kind of fact it is. Do NOT filter on a substring of one
+        // IRI shape: `"measurement"` is not a substring of
+        // `urn:sparqlwatch:not-measured:...`, so a single filter silently sees
+        // only half the graph and the assertion becomes unfalsifiable. Nor on
+        // `dqv#isMeasurementOf`, which BOTH kinds of fact carry: that would put
+        // the not-measured subject in the `measured` set and make the disjointness
+        // claim false for a correct implementation.
+        let subject = |line: &str| line.split_whitespace().next().unwrap_or("").to_string();
+        let measured: std::collections::HashSet<String> = nq.lines()
+            .filter(|l| l.contains("dqv#QualityMeasurement"))
+            .map(&subject)
+            .collect();
+        let not_measured: std::collections::HashSet<String> = nq.lines()
+            .filter(|l| l.contains("urn:sparqlwatch:NotMeasured"))
+            .map(&subject)
+            .collect();
+
+        assert_eq!(measured.len(), 1, "the fixture has one measurement");
+        assert_eq!(not_measured.len(), 1, "and one not-measured fact");
+        assert!(
+            measured.is_disjoint(&not_measured),
+            "a measurement and a not-measured fact must never share a subject IRI: {measured:?} vs {not_measured:?}"
+        );
+    }
+
+    #[test]
+    fn a_not_measured_fact_names_the_endpoint_and_the_metric_it_skipped() {
+        // The four quads the spec asks for, read back as quads rather than as
+        // text: a consumer asking "why is there no verdict for classes here"
+        // must be able to join endpoint and metric.
+        let nm = vec![NotMeasured {
+            endpoint: "http://example.org/sparql".into(),
+            metric_id: "classes".into(),
+            reason: NotMeasuredReason::CostCeiling,
+        }];
+        let out = emit_nquads(&RunId("r1".into()), AT, REV, &[], &[], &nm, Cost::Cheap).unwrap();
+        let qs = quads_of(&out);
+        let subj = NamedOrBlankNode::NamedNode(
+            NamedNode::new("urn:sparqlwatch:not-measured:r1:0").unwrap(),
+        );
+        let of = |p: &str| -> Vec<&Term> {
+            qs.iter()
+                .filter(|q| q.subject == subj && q.predicate.as_str() == p)
+                .map(|q| &q.object)
+                .collect()
+        };
+        assert_eq!(
+            of("http://www.w3.org/ns/dqv#computedOn"),
+            vec![&Term::NamedNode(NamedNode::new("http://example.org/sparql").unwrap())]
+        );
+        assert_eq!(
+            of("http://www.w3.org/ns/dqv#isMeasurementOf"),
+            vec![&Term::NamedNode(NamedNode::new("urn:sparqlwatch:metric:classes").unwrap())]
+        );
+        assert_eq!(
+            of("urn:sparqlwatch:notMeasuredReason"),
+            vec![&Term::Literal(Literal::new_simple_literal("cost-ceiling"))],
+            "the reason is a slug from a closed set, not a free-text string"
+        );
+        assert_eq!(
+            of(rdf::TYPE.as_str()),
+            vec![&Term::NamedNode(NamedNode::new("urn:sparqlwatch:NotMeasured").unwrap())]
+        );
+        // Its endpoint is still a service, even in a run where nothing was
+        // measured against it: a consumer joining dcat:DataService must not
+        // lose the endpoint just because every one of its metrics was declined.
+        assert!(qs.iter().any(|q| q.predicate.as_ref() == rdf::TYPE
+            && q.object == Term::NamedNode(NamedNode::new("http://www.w3.org/ns/dcat#DataService").unwrap())));
+        assert!(qs.iter().all(|q| q.graph_name
+            == GraphName::NamedNode(NamedNode::new("urn:sparqlwatch:run:r1").unwrap())));
+    }
+
+    #[test]
+    fn several_not_measured_facts_each_get_their_own_subject() {
+        let nm = vec![
+            NotMeasured { endpoint: "http://a.example/sparql".into(), metric_id: "classes".into(), reason: NotMeasuredReason::CostCeiling },
+            NotMeasured { endpoint: "http://b.example/sparql".into(), metric_id: "classes".into(), reason: NotMeasuredReason::CostCeiling },
+        ];
+        let out = emit_nquads(&RunId("r1".into()), AT, REV, &[], &[], &nm, Cost::Cheap).unwrap();
+        let qs = quads_of(&out);
+        let subjects: BTreeSet<String> = qs
+            .iter()
+            .filter(|q| q.predicate.as_str() == "urn:sparqlwatch:notMeasuredReason")
+            .map(|q| q.subject.to_string())
+            .collect();
+        assert_eq!(subjects.len(), 2, "two declined (endpoint, metric) pairs are two facts");
+    }
+
+    #[test]
+    fn a_not_measured_fact_with_an_invalid_endpoint_iri_is_skipped_not_fatal() {
+        // Same doctrine as a measurement row: one junk URL out of 548 must not
+        // cost the sweep its output.
+        let nm = vec![
+            NotMeasured { endpoint: "not an iri at all".into(), metric_id: "classes".into(), reason: NotMeasuredReason::CostCeiling },
+            NotMeasured { endpoint: "http://b.example/sparql".into(), metric_id: "classes".into(), reason: NotMeasuredReason::CostCeiling },
+        ];
+        let out = emit_nquads(&RunId("r1".into()), AT, REV, &[], &[], &nm, Cost::Cheap)
+            .expect("one junk endpoint must not discard the sweep");
+        assert!(!out.contains("not an iri at all"));
+        let qs = quads_of(&out);
+        assert_eq!(objects(&qs, "urn:sparqlwatch:notMeasuredReason").len(), 1,
+                   "the one well-formed fact survives");
+    }
+
+    #[test]
+    fn the_run_records_the_cost_ceiling_it_was_given() {
+        // Without it, a consumer cannot tell a run that declined `classes`
+        // from one that ran it: the not-measured facts say which metrics were
+        // declined, and this says what policy declined them.
+        for (ceiling, slug) in [(Cost::Cheap, "cheap"), (Cost::Expensive, "expensive")] {
+            let out = emit_nquads(&RunId("r1".into()), AT, REV, &rows(), &[], &[], ceiling).unwrap();
+            let qs = quads_of(&out);
+            assert_eq!(
+                objects(&qs, "urn:sparqlwatch:maxCost"),
+                vec![&Term::Literal(Literal::new_simple_literal(slug))],
+                "the ceiling is a parameter of the emission, never read from anywhere global"
+            );
+            let activity = qs
+                .iter()
+                .find(|q| q.predicate.as_str() == "urn:sparqlwatch:maxCost")
+                .map(|q| q.subject.to_string())
+                .unwrap();
+            assert_eq!(activity, "<urn:sparqlwatch:activity:r1>",
+                       "the ceiling is a property of the run's activity, not of a measurement");
+        }
     }
 }

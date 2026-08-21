@@ -89,12 +89,24 @@ impl ProbeKind {
 /// planet-scale OSM endpoint, the same class query answers in 0.166s with
 /// `LIMIT 1` and no `DISTINCT`, and times out past 45s with
 /// `DISTINCT ... LIMIT 200`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum Cost {
     #[default]
     Cheap,
     Expensive,
+}
+
+impl Cost {
+    /// The published slug, also the value accepted on the command line. One
+    /// spelling for the TOML field, the CLI flag and the emitted literal, so
+    /// a run cannot record a ceiling under a name no flag can set.
+    pub fn slug(&self) -> &'static str {
+        match self {
+            Cost::Cheap => "cheap",
+            Cost::Expensive => "expensive",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -429,5 +441,25 @@ query = "SELECT ?s WHERE { ?s ?p ?o } LIMIT 1"
             definitions_revision(&load_metrics(one).unwrap()),
             definitions_revision(&load_metrics(two).unwrap())
         );
+    }
+
+    #[test]
+    fn a_cost_slug_is_the_spelling_the_toml_and_the_cli_both_use() {
+        // The slug is published on the run's activity, so it has to be the same
+        // token `cost = "..."` accepts and the same one `--max-cost` accepts.
+        // Three spellings of one ceiling would make the published value
+        // unjoinable against the definitions that produced it.
+        for c in [Cost::Cheap, Cost::Expensive] {
+            let src = format!(
+                "[[metric]]\nid=\"m\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"Liveness\"\nquery=\"ASK{{}}\"\ncost=\"{}\"\n",
+                c.slug()
+            );
+            assert_eq!(load_metrics(&src).unwrap()[0].cost, c, "TOML must accept {:?}", c.slug());
+            assert_eq!(
+                clap::ValueEnum::to_possible_value(&c).unwrap().get_name(),
+                c.slug(),
+                "the CLI must accept the same token"
+            );
+        }
     }
 }

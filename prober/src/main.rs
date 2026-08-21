@@ -3,7 +3,7 @@ use sparqlwatch_prober::{
     budget::Budget,
     client::Client,
     emit::{emit_nquads, RunId},
-    metrics::{definitions_revision, load_metrics},
+    metrics::{definitions_revision, load_metrics, within_cost, Cost},
     registry::load_endpoints,
     run_sweep,
 };
@@ -20,6 +20,13 @@ struct Args {
     /// ISO-8601 timestamp for the run. Passed in so runs are reproducible.
     #[arg(long)]
     at: String,
+    /// The most a single metric may cost the endpoint it points at. Metrics
+    /// declared more expensive than this are not run and not measured: they are
+    /// published as a `NotMeasured` fact naming the ceiling as the reason,
+    /// never as a zero or an `indeterminate` verdict. Defaults to `cheap`,
+    /// because the default has to be safe to point at somebody else's server.
+    #[arg(long, value_enum, default_value_t = Cost::Cheap)]
+    max_cost: Cost,
 }
 
 /// `--at` is interpolated into two IRIs and published as an `xsd:dateTime`, so
@@ -95,12 +102,28 @@ async fn main() -> anyhow::Result<()> {
     let client = Client::new(budget)?;
 
     // A pure function of the definitions, so the published revision is
-    // reproducible from the same metrics.toml.
+    // reproducible from the same metrics.toml. It identifies the definitions,
+    // all of them, not the subset this
+    // run chose to probe: the ceiling is published separately, on the
+    // activity, so two runs of one file at different ceilings stay comparable.
     let revision = definitions_revision(&defs);
-    let (rows, declarations_read) = run_sweep(&endpoints, &defs, &client, budget).await;
-    let nq = emit_nquads(&RunId(args.at.clone()), &args.at, &revision, &rows, &declarations_read)?;
+    // The policy lives here, in one place. `run_sweep` receives both halves as
+    // data and never learns what a ceiling is.
+    let (run, declined) = within_cost(&defs, args.max_cost);
+    let (rows, declarations_read, not_measured) =
+        run_sweep(&endpoints, &run, &declined, &client, budget).await;
+    let nq = emit_nquads(
+        &RunId(args.at.clone()),
+        &args.at,
+        &revision,
+        &rows,
+        &declarations_read,
+        &not_measured,
+        args.max_cost,
+    )?;
     std::fs::write(&args.out, nq)?;
     tracing::info!(endpoints = endpoints.len(), measurements = rows.len(),
+                   not_measured = not_measured.len(), max_cost = args.max_cost.slug(),
                    revision = %revision, out = %args.out, "sweep complete");
     Ok(())
 }
