@@ -82,6 +82,8 @@ async fn a_sweep_over_one_mock_endpoint_produces_nquads() {
         ("service-description", Verdict::Indeterminate),
         // Likewise ?c is unbound, so zero classes, honestly measured.
         ("classes", Verdict::Absent),
+        // Same unbound ?c, same honest absence, at the cheap end of the split.
+        ("has-classes", Verdict::Absent),
     ]);
     assert_eq!(got, expected);
 
@@ -1074,7 +1076,7 @@ fn binds(block: &str, var: &str) -> bool {
 #[test]
 fn the_content_metrics_reach_named_graphs_without_colliding_variables() {
     let defs = load_shipped_metrics();
-    for id in ["geo-data", "classes"] {
+    for id in ["geo-data", "classes", "has-classes"] {
         let d = defs.iter().find(|d| d.id == id).expect("metric must exist");
         let q = d.query.as_deref().unwrap_or("");
         let var = d.var.as_deref().expect("both metrics read a bound variable");
@@ -1118,4 +1120,53 @@ fn the_content_metrics_reach_named_graphs_without_colliding_variables() {
             "{id}'s label still claims default-graph-only scope"
         );
     }
+
+    // Every metric in the shipped file must state its cost explicitly. A
+    // reader of the file has no access to the code's default, so a metric
+    // silent about cost is unreadable on its own terms even though it still
+    // loads as cheap.
+    let raw = include_str!("../metrics.toml");
+    for block in raw.split("[[metric]]").skip(1) {
+        let id = block
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("id = \"").and_then(|s| s.strip_suffix('"')))
+            .unwrap_or("<unknown>");
+        let states_cost = block.lines().any(|l| {
+            let l = l.trim();
+            !l.starts_with('#') && l.starts_with("cost")
+        });
+        assert!(states_cost, "metric {id} does not state cost explicitly in metrics.toml");
+    }
+}
+
+/// Pins the `SelectIris` choice on `has-classes` against the exact mistake its
+/// own comment in `metrics.toml` warns about. Every other fixture in this file
+/// leaves `?c` unbound, so `has-classes` reads `absent` under either probe
+/// kind and no existing test can tell `SelectIris` from `AskData`. Only a mock
+/// that actually binds `?c` to a URI can separate them: `SelectIris` collects
+/// it and confirms the metric, while `AskData` would route it through
+/// `Client::ask_literal`'s literal guard, find no literal because the value is
+/// an IRI, and quietly publish `absent` for an endpoint that plainly holds
+/// typed resources.
+#[tokio::test]
+async fn has_classes_reads_the_iri_c_binds_through_select_iris_not_ask_data() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            r#"{"head":{"vars":["c"]},"results":{"bindings":[{"c":{"type":"uri","value":"http://example.org/Thing"}}]},"boolean":true}"#,
+        ))
+        .mount(&server).await;
+
+    let defs = load_shipped_metrics();
+    let client = Client::new(Budget::default()).unwrap();
+    let url = format!("{}/sparql", server.uri());
+    let (rows, read) = run_sweep(std::slice::from_ref(&url), &defs, &client, Budget::default()).await;
+    let run = emit_nquads(&RunId("test".into()), "2026-08-20T08:00:00Z", "test-revision", &rows, &read).unwrap();
+
+    assert_eq!(
+        verdict_of(&run, "has-classes"),
+        Verdict::Verified,
+        "has-classes must be confirmed from an IRI bound to ?c; a metric routed through \
+         AskData's literal guard would see no literal here and report absent instead"
+    );
 }

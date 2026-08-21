@@ -7,6 +7,7 @@ id = "availability"
 label = "Answers a trivial query"
 dimension = "availability"
 kind = "Liveness"
+cost = "cheap"
 query = "SELECT ?s WHERE { ?s ?p ?o } LIMIT 1"
 
 # Two CORS facts, deliberately separate. `cors` is what a curl user sees: an
@@ -19,6 +20,7 @@ id = "cors"
 label = "Sends access-control-allow-origin on a simple GET"
 dimension = "interoperability"
 kind = "Cors"
+cost = "cheap"
 query = "SELECT ?s WHERE { ?s ?p ?o } LIMIT 1"
 
 [[metric]]
@@ -26,12 +28,14 @@ id = "cors-preflight"
 label = "Answers a CORS preflight for a cross-origin GET"
 dimension = "interoperability"
 kind = "CorsPreflight"
+cost = "cheap"
 
 [[metric]]
 id = "geo-functions"
 label = "GeoSPARQL relation functions"
 dimension = "capability"
 kind = "AskFilter"
+cost = "cheap"
 expect = true
 query = """
 PREFIX geo: <http://www.opengis.net/ont/geosparql#>
@@ -68,6 +72,7 @@ label = "Holds WKT geometry"
 dimension = "content"
 kind = "AskData"
 var = "g"
+cost = "cheap"
 query = """
 PREFIX geo: <http://www.opengis.net/ont/geosparql#>
 SELECT ?g WHERE { { ?s geo:asWKT ?g } UNION { GRAPH ?anyg { ?s geo:asWKT ?g } } } LIMIT 1
@@ -78,7 +83,29 @@ id = "service-description"
 label = "Service description informativeness"
 dimension = "documentation"
 kind = "FetchWellKnown"
+cost = "cheap"
 graded = true
+
+# Two class metrics, because one query cannot answer both questions at a price we
+# can pay everywhere. Measured on qlever.dev/api/osm-planet: the DISTINCT
+# enumeration times out past 45s, while the existence probe answers in 0.166s.
+# So existence runs everywhere and enumeration is opt-in.
+[[metric]]
+id = "has-classes"
+label = "Holds typed resources"
+dimension = "content"
+# `SelectIris`, NOT `AskData`. `AskData` routes through `Client::ask_literal`,
+# which extracts with the literal guard on (`client.rs:472`), and `?c` in
+# `?s a ?c` binds an IRI. Under `AskData` the guard would find no literal,
+# report `boolean = false`, and publish `absent` for an endpoint full of typed
+# resources: a silent false negative of exactly the kind this project exists to
+# prevent.
+kind = "SelectIris"
+var = "c"
+cost = "cheap"
+query = """
+SELECT ?c WHERE { { ?s a ?c } UNION { GRAPH ?anyg { ?s a ?c } } } LIMIT 1
+"""
 
 [[metric]]
 id = "classes"
@@ -86,4 +113,7 @@ label = "Distinct classes"
 dimension = "content"
 kind = "SelectIris"
 var = "c"
-query = "SELECT DISTINCT ?c WHERE { { ?s a ?c } UNION { GRAPH ?anyg { ?s a ?c } } } LIMIT 200"
+cost = "expensive"
+query = """
+SELECT DISTINCT ?c WHERE { { ?s a ?c } UNION { GRAPH ?anyg { ?s a ?c } } } LIMIT 200
+"""
