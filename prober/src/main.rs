@@ -130,7 +130,9 @@ async fn main() -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_instant;
+    use super::{validate_instant, Args};
+    use clap::Parser;
+    use sparqlwatch_prober::metrics::Cost;
 
     #[test]
     fn a_well_formed_instant_is_accepted() {
@@ -163,5 +165,20 @@ mod tests {
         ] {
             assert!(validate_instant(bad).is_err(), "{bad:?} should be rejected");
         }
+    }
+
+    /// The default ceiling is the whole safety property of the cost class:
+    /// somebody who runs this without reading the flags must not fire a
+    /// 45-second scan at 548 strangers' servers. Asserting on the PARSED args
+    /// rather than on `Cost::default()` is deliberate: the latter would still
+    /// pass if `default_value_t` were changed to name something else.
+    #[test]
+    fn the_default_cost_ceiling_is_cheap() {
+        let args = Args::parse_from(["prober", "--at", "2026-01-01T00:00:00Z"]);
+        assert_eq!(
+            args.max_cost,
+            Cost::Cheap,
+            "a plain run must not include expensive metrics"
+        );
     }
 }
