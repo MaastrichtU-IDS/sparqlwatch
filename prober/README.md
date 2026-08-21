@@ -75,6 +75,7 @@ cargo run -- --at 2026-08-20T12:00:00Z --out run.nq
 | `--endpoints` | `endpoints.toml` | Endpoint list to sweep |
 | `--metrics` | `metrics.toml` | Metric definitions to apply |
 | `--out` | `run.nq` | Where to write the N-Quads |
+| `--max-cost` | `cheap` | Only run metrics with cost at or below this value (`cheap` or `expensive`) |
 
 `--at` is required and is **not** read from the clock, deliberately. It names
 the run graph, it is published as the activity's `prov:generatedAtTime`, and a
@@ -111,9 +112,11 @@ silently.
 **`metrics.toml`** is the metric definitions, as *data*. Each names a probe
 kind from a closed set (`Liveness`, `Cors`, `CorsPreflight`, `AskFilter`,
 `AskData`, `SelectIris`, `FetchWellKnown`) plus its parameters, so adding a metric that
-fits an existing kind needs no Rust change. An unknown kind, or a
-bindings-reading kind with no `var`, is a loud load error rather than a silent
-default. The definitions are hashed into a `metricDefinitionRevision` recorded
+fits an existing kind needs no Rust change. An unknown kind, a
+bindings-reading kind with no `var`, or a metric with no `cost` field is a loud load error rather than a silent
+default. Every metric declares a cost of `cheap` or `expensive`, stating whether
+probing it is inexpensive enough to run everywhere or should be opt-in (via `--max-cost expensive`).
+The definitions are hashed into a `metricDefinitionRevision` recorded
 on every run, a pure function of the definitions themselves, so a measurement
 can be read against the definition that produced it.
 
@@ -144,14 +147,33 @@ default dataset or graphs, 3 carries VoID class or property partitions, 4
 declares an entailment regime, example resources, or extension functions. It is
 monotonic: a description that declares more never grades lower.
 
+## Cost ceilings and not measured
+
+When a metric is `expensive`, a sweep with `--max-cost cheap` (the default) skips
+it. That skip is published as a fact, not as an omission. Per declined (endpoint, metric)
+the run emits a resource of type `urn:sparqlwatch:NotMeasured`, with:
+
+- `dqv:computedOn` pointing to the endpoint
+- `dqv:isMeasurementOf` pointing to the metric definition
+- `urn:sparqlwatch:notMeasuredReason` set to `"cost-ceiling"`
+- **no** `dqv:value`
+- **no** level
+
+This is not a seventh verdict. The verdict vocabulary stays at six: this fact says a
+measurement did not happen, while a verdict says what was learned about a capability.
+Someone querying for verdicts will never encounter a value that is not one of the six.
+Someone asking why a verdict is missing gets an answer: either it was declined, or the
+budget was exhausted. The run's PROV activity also records `urn:sparqlwatch:maxCost`
+naming the ceiling used.
+
 The labels in that file state only what was actually measured. `geo-data` and
-`classes` query the default graph AND every named graph, via a `UNION` with a
+`has-classes` and `classes` query the default graph AND every named graph, via a `UNION` with a
 `GRAPH ?anyg { ... }` branch, so an endpoint holding everything in named
 graphs is not reported as holding nothing. The graph variable is never the
 metric's own result variable: `GRAPH ?g { ?s geo:asWKT ?g }` would join the
 graph name against the geometry literal, match nothing, and publish a silent
 false `absent`, which is exactly the failure this widening exists to remove.
-What the suite checks about those two queries is structural only; see the
+What the suite checks about those queries is structural only; see the
 named-graph entry under Known limitations for what that does and does not
 establish.
 
@@ -179,6 +201,18 @@ whose `access-control-allow-origin` is `*` or our own origin
 (`https://sparqlwatch.dev.k8s.semanticscience.org`, the same host the
 `User-Agent` names) and whose `access-control-allow-methods`, if it sends one,
 lists GET. A header naming somebody else's origin is a grant to somebody else.
+
+The two class metrics (`has-classes` and `classes`) are also deliberately separate,
+for a reason worth recording: they answer different questions at vastly different costs.
+On qlever.dev/api/osm-planet (planet-scale OpenStreetMap), `SELECT DISTINCT ?c WHERE { ?s a ?c } LIMIT 200`
+timed out past 45 seconds, while `SELECT ?c WHERE { ?s a ?c } LIMIT 1` answered in 0.166 seconds.
+The cost is `DISTINCT` scanning every class name in the endpoint, not the named-graph
+`UNION`. So `has-classes` (cheap, "this endpoint holds typed resources") runs everywhere,
+while `classes` (expensive, "here are up to 200 distinct resource types") is opt-in.
+`has-classes` uses probe kind `SelectIris`, never `AskData`, and this choice matters:
+`AskData` extracts bindings with a literal guard, and since `?c` in `?s a ?c` binds an IRI,
+the guard would find no literal and the metric would publish `absent` for an endpoint full of
+typed resources. `SelectIris` has no such guard and returns `verified` when any type is found.
 
 ## Proxy environment
 
