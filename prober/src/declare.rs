@@ -299,19 +299,51 @@ fn scope_of(quads: &[Quad], endpoints: &[&str]) -> Option<HashSet<NamedOrBlankNo
 }
 
 /// Compare two endpoint URLs the way an operator means them, not byte for
-/// byte. Ignores scheme, a trailing slash, a default port, host case, and a
-/// leading `www.`. Every one of those disagreements is common between a
-/// registry URL and a published `sd:endpoint`, and treating them as different
-/// services strips a real description down to nothing.
+/// byte. Ignores scheme, a trailing slash, a default port, host case, a
+/// leading `www.`, a `#fragment`, and userinfo (the `user@` in an authority).
+/// Every one of those disagreements is common between a registry URL and a
+/// published `sd:endpoint`, and treating them as different services strips a
+/// real description down to nothing.
+///
+/// The query string is deliberately kept. `?db=a` and `?db=b` on one path can
+/// be two genuinely different services, and unioning them would be a false
+/// capability credit; a lost declaration only softens a verdict (`Verified` to
+/// `UndeclaredButVerified`, `DeclaredOnly` to `Indeterminate`) and can never
+/// mint an `Absent`, so it is the safe direction.
+///
+/// Two consequences of the leniency, accepted rather than overlooked:
+///
+/// - Dropping the scheme and a leading `www.` means one document declaring two
+///   services at `http://x/sparql` and `https://www.x/sparql` has them unioned,
+///   because the scope is the union of every subject that matches. Byte
+///   equality would instead lose a real declaration on every http-to-https
+///   redirect, which the survey shows is routine (472 of 548 registry URLs are
+///   plain `http://`), while two same-host services differing only by scheme or
+///   `www.` is pathological.
+/// - Scope selection compares subjects only and ignores the graph name, so a
+///   TriG or N-Quads description stating two services in two named graphs is
+///   read as one flat graph. Real descriptions are served as Turtle or RDF/XML,
+///   so this is a known narrowing rather than a live leak.
 fn same_endpoint(a: &str, b: &str) -> bool {
     fn norm(u: &str) -> String {
         let s = u.trim();
         let s = s.strip_prefix("https://").or_else(|| s.strip_prefix("http://")).unwrap_or(s);
-        let (host, path) = match s.find('/') {
+        // A fragment is never sent to the server, so it cannot distinguish two
+        // endpoints. Stripped before the path split, since a fragment normally
+        // sits at the end of the path.
+        let s = s.split('#').next().unwrap_or(s);
+        let (authority, path) = match s.find('/') {
             Some(i) => (&s[..i], s[i..].trim_end_matches('/')),
             None => (s, ""),
         };
-        let host = host.to_ascii_lowercase();
+        // Userinfo is credentials, not identity: everything up to and including
+        // the last `@`. A raw `@` cannot appear in a host, so the last one
+        // delimits.
+        let authority = match authority.rfind('@') {
+            Some(i) => &authority[i + 1..],
+            None => authority,
+        };
+        let host = authority.to_ascii_lowercase();
         let host = host.strip_suffix(":443").or_else(|| host.strip_suffix(":80")).unwrap_or(&host);
         let host = host.strip_prefix("www.").unwrap_or(host);
         format!("{host}{path}")

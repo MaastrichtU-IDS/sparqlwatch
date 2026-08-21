@@ -509,3 +509,66 @@ fn a_long_reversed_linking_chain_is_walked_once_not_rescanned_per_link() {
         "the whole chain is one service's subtree, so the capability at its end is found"
     );
 }
+
+/// A `#fragment` is never sent to the server and userinfo is credentials, not
+/// identity, so neither can make a genuinely identical endpoint a different
+/// service. Both directions, since either side may carry it.
+#[test]
+fn a_fragment_or_userinfo_is_the_same_endpoint() {
+    const DOC: &str = r#"
+@prefix sd: <http://www.w3.org/ns/sparql-service-description#> .
+@prefix geof: <http://www.opengis.net/def/function/geosparql/> .
+<http://example.org/svc> a sd:Service ;
+    sd:endpoint <http://example.org/sparql> ;
+    sd:extensionFunction geof:sfWithin .
+<http://example.org/other> a sd:Service ;
+    sd:endpoint <http://elsewhere.example/sparql> .
+"#;
+    for probed in [
+        "http://example.org/sparql#frag",
+        "http://user@example.org/sparql",
+        "http://user:pw@example.org/sparql#frag",
+    ] {
+        assert!(
+            parse_declarations(DOC, Some("text/turtle"), probed).declares(SFWITHIN),
+            "{probed} is the same service as the published sd:endpoint"
+        );
+    }
+    // And the other way round: the document carries them, we probe the bare URL.
+    const STATED: &str = r#"
+@prefix sd: <http://www.w3.org/ns/sparql-service-description#> .
+@prefix geof: <http://www.opengis.net/def/function/geosparql/> .
+<http://example.org/svc> a sd:Service ;
+    sd:endpoint <http://admin@example.org/sparql#service> ;
+    sd:extensionFunction geof:sfWithin .
+<http://example.org/other> a sd:Service ;
+    sd:endpoint <http://elsewhere.example/sparql> .
+"#;
+    assert!(parse_declarations(STATED, Some("text/turtle"), "http://example.org/sparql").declares(SFWITHIN));
+    // The guard: two services, so a match is a match rather than a fallback.
+    assert!(!parse_declarations(DOC, Some("text/turtle"), "http://elsewhere.example/sparql").declares(SFWITHIN));
+}
+
+/// The query string is deliberately NOT normalised away. `?db=a` and `?db=b`
+/// can be two genuinely different services on one path, and crediting one with
+/// the other's capability is worse than losing a declaration.
+#[test]
+fn a_query_string_difference_is_a_different_endpoint() {
+    const DOC: &str = r#"
+@prefix sd: <http://www.w3.org/ns/sparql-service-description#> .
+@prefix geof: <http://www.opengis.net/def/function/geosparql/> .
+<http://example.org/a> a sd:Service ;
+    sd:endpoint <http://example.org/sparql?db=a> ;
+    sd:extensionFunction geof:sfWithin .
+<http://example.org/b> a sd:Service ;
+    sd:endpoint <http://example.org/sparql?db=b> .
+"#;
+    assert!(
+        !parse_declarations(DOC, Some("text/turtle"), "http://example.org/sparql?db=b").declares(SFWITHIN),
+        "a different query string is a different service, so its function is not ours"
+    );
+    assert!(
+        parse_declarations(DOC, Some("text/turtle"), "http://example.org/sparql?db=a").declares(SFWITHIN),
+        "and the matching one still matches: the query is kept, not made to fail every comparison"
+    );
+}
