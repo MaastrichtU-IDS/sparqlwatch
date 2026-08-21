@@ -60,6 +60,15 @@ pub struct Declarations {
     /// extension functions: naming a resource a client can actually
     /// dereference is a description doing more than describing itself.
     pub has_example_resources: bool,
+    /// Whether the DOCUMENT declares any `sd:extensionFunction`, regardless of
+    /// which service declares it. Deliberately separate from
+    /// `extension_functions`, which is scoped to the service we probed: that
+    /// set answers "does this service claim the capability", this flag answers
+    /// "how informative is the document the operator published". Feeding the
+    /// scoped set into the grade published Level(1), meaning "a stub", for one
+    /// service of a two-service document and Level(4) for the other, from the
+    /// same bytes.
+    pub doc_declares_extension_functions: bool,
 }
 
 impl Declarations {
@@ -137,6 +146,7 @@ pub fn parse_declarations_for(body: &str, content_type: Option<&str>, endpoints:
             SD_DEFAULT_DATASET | SD_GRAPH => d.names_dataset = true,
             SD_DEFAULT_ENTAILMENT_REGIME => d.has_entailment = true,
             VOID_EXAMPLE_RESOURCE => d.has_example_resources = true,
+            SD_EXTENSION_FUNCTION => d.doc_declares_extension_functions = true,
             VOID_CLASS_PARTITION | VOID_PROPERTY_PARTITION => d.has_void_partitions = true,
             _ => {}
         }

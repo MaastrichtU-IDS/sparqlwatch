@@ -151,7 +151,9 @@ pub fn grade_from_declarations(defs: &Declarations) -> Level {
         defs.names_dataset,
         defs.has_void_partitions,
         defs.has_entailment,
-        !defs.extension_functions.is_empty(),
+        // The DOCUMENT-wide flag, never the scoped set: the grade describes
+        // what the operator published, not what one service claims.
+        defs.doc_declares_extension_functions,
         defs.has_example_resources,
     )
 }
@@ -361,9 +363,26 @@ mod tests {
         // the same as a stub. That is precisely the rare honest declarer this
         // ladder exists to reward: 0 of 28 surveyed descriptions declared
         // anything geospatial, so when one finally does it must be credited.
-        let mut fns = Declarations { triples: 20, ..Declarations::empty() };
-        fns.extension_functions.insert("http://www.opengis.net/def/function/geosparql/sfWithin".into());
+        // The grade reads the document-wide flag, not the scoped set: a two
+        // service document must grade the same from either endpoint.
+        let fns = Declarations {
+            triples: 20,
+            doc_declares_extension_functions: true,
+            ..Declarations::empty()
+        };
         assert_eq!(grade_from_declarations(&fns), Level(4));
+
+        // And the scoped set alone must NOT reach level 4, or the grade moves
+        // with the probed endpoint and one document publishes two grades.
+        let mut scoped_only = Declarations { triples: 20, ..Declarations::empty() };
+        scoped_only
+            .extension_functions
+            .insert("http://www.opengis.net/def/function/geosparql/sfWithin".into());
+        assert_eq!(
+            grade_from_declarations(&scoped_only),
+            Level(1),
+            "the scoped capability set must not drive the document's grade"
+        );
 
         let examples = Declarations { triples: 20, has_example_resources: true, ..Declarations::empty() };
         assert_eq!(grade_from_declarations(&examples), Level(4));

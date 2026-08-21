@@ -337,3 +337,35 @@ fn a_cyclic_linking_chain_terminates() {
     let d = parse_declarations(DOC, Some("text/turtle"), "http://example.org/sparql");
     assert!(d.declares(SFWITHIN));
 }
+
+/// The grade must not move with the probed endpoint. A two-service document
+/// where only the NEIGHBOUR declares an extension function is still a document
+/// that declares one, so both endpoints see the same document-wide flag while
+/// only the neighbour gets the capability claim. Feeding the scoped set into the
+/// grade published Level(1), meaning "a stub", for one endpoint and Level(4) for
+/// the other, from identical bytes.
+#[test]
+fn the_document_wide_extension_function_flag_does_not_move_with_the_probed_endpoint() {
+    const DOC: &str = r#"
+@prefix sd: <http://www.w3.org/ns/sparql-service-description#> .
+@prefix geof: <http://www.opengis.net/def/function/geosparql/> .
+<http://example.org/geo> a sd:Service ;
+    sd:endpoint <http://example.org/geo/sparql> ;
+    sd:extensionFunction geof:sfWithin .
+<http://example.org/plain> a sd:Service ;
+    sd:endpoint <http://example.org/plain/sparql> .
+"#;
+    const SFWITHIN: &str = "http://www.opengis.net/def/function/geosparql/sfWithin";
+
+    let geo = parse_declarations(DOC, Some("text/turtle"), "http://example.org/geo/sparql");
+    let plain = parse_declarations(DOC, Some("text/turtle"), "http://example.org/plain/sparql");
+
+    assert!(
+        geo.doc_declares_extension_functions && plain.doc_declares_extension_functions,
+        "the document declares an extension function whichever service we probed"
+    );
+    // And the claim still belongs to exactly one of them, which is the whole
+    // point of keeping the two separate.
+    assert!(geo.declares(SFWITHIN));
+    assert!(!plain.declares(SFWITHIN));
+}
