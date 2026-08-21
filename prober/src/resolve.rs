@@ -249,7 +249,23 @@ pub fn resolve(def: &MetricDef, declared: Declared, obs: Result<&Observation, Ex
             // sweep and a later stage reads it to decide admission, so a
             // throttled endpoint must not be tombstoned as unreachable.
             if o.body_kind == BodyKind::SparqlJson {
-                confirmed(def, declared)
+                // Gated, like `AskData` and `SelectIris`, and for the reason
+                // `SelectIris` already states: two metrics reading the same
+                // evidence shape must apply the same rule to it. A 429 or a 503
+                // carrying a SPARQL-results body is the endpoint refusing to
+                // serve us, whatever its body parses as, and `verified` is an
+                // assertive verdict that its own status contradicts.
+                //
+                // The safe direction here is `Indeterminate`, not `Absent`, so
+                // this does NOT reintroduce the tombstoning the paragraph above
+                // guards against: a throttled endpoint still reads "we never got
+                // to ask", never "it does not answer".
+                //
+                // `Cors` remains the one deliberate exception in this function,
+                // because an `access-control-allow-origin` header proves CORS is
+                // configured whatever status carries it. A parsed body proves
+                // only that something answered.
+                if answered_ok(o) { confirmed(def, declared) } else { Verdict::Indeterminate }
             } else if answered_ok(o) {
                 Verdict::Absent
             } else {

@@ -1319,3 +1319,37 @@ async fn a_declined_metric_is_recorded_once_per_endpoint() {
     let expected: std::collections::BTreeSet<&str> = urls.iter().map(|u| u.as_str()).collect();
     assert_eq!(named, expected, "each endpoint is named by exactly one fact");
 }
+
+/// `availability` must not report `verified` for an endpoint that refused to
+/// serve us. A throttle carrying a SPARQL-results body was resolving to a
+/// confirmation, because the Liveness positive case was the only one in
+/// `resolve()` reading a parsed body without checking the status alongside it.
+/// `Cors` is the one deliberate exception, and it is header-justified.
+#[tokio::test]
+async fn a_throttled_endpoint_is_not_reported_available_even_with_a_parseable_body() {
+    for status in [429u16, 503] {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(status)
+                    .insert_header("content-type", "application/sparql-results+json")
+                    .set_body_raw(r#"{"head":{"vars":["s"]},"results":{"bindings":[]}}"#,
+                                  "application/sparql-results+json"),
+            )
+            .mount(&server)
+            .await;
+
+        let defs = load_shipped_metrics();
+        let def = defs.iter().find(|d| d.id == "availability").unwrap().clone();
+        let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
+        let url = format!("{}/sparql", server.uri());
+        let (rows, _read, _nm) =
+            run_sweep(std::slice::from_ref(&url), &[def], &[], &client, Budget::default()).await;
+
+        assert_eq!(
+            rows[0].verdict,
+            Verdict::Indeterminate,
+            "status {status} means it refused to answer, so availability is unknown, not confirmed"
+        );
+    }
+}
