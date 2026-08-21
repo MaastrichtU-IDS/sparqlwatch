@@ -541,6 +541,67 @@ async fn an_endpoint_budget_expiry_still_yields_one_row_per_metric() {
     }
 }
 
+/// I6. The whole justification for `declarations_read: &mut bool` is that the
+/// flag must be written as soon as the `Declarations` are known, because
+/// `run_sweep` wraps `probe_endpoint` in the endpoint budget and a cancelled
+/// future returns nothing. Moving that assignment to after the metric loop used
+/// to cause zero test failures, while making this endpoint publish
+/// `declarationsRead = false` about a description we had just read: exactly the
+/// dishonest fact the flag exists to prevent.
+///
+/// The shape: the queryless description fetch answers at once, then the first
+/// metric's query hangs long enough for the endpoint budget to expire, so the
+/// loop is cut short after the fetch and before any row.
+#[tokio::test]
+async fn a_budget_expiry_after_the_fetch_still_publishes_declarations_read() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/sparql")).and(query_param_is_missing("query"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(STUB_TTL.as_bytes().to_vec(), "text/turtle"))
+        .mount(&server).await;
+    Mock::given(method("GET")).and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(200)
+            .set_delay(std::time::Duration::from_millis(400))
+            .set_body_string(WORKING_QUERY_RESPONSE))
+        .mount(&server).await;
+
+    let defs: Vec<MetricDef> = (0..3)
+        .map(|i| MetricDef {
+            id: format!("liveness-{i}"),
+            label: "answers a trivial query".into(),
+            dimension: "availability".into(),
+            kind: ProbeKind::Liveness,
+            query: Some("SELECT ?s WHERE { ?s ?p ?o } LIMIT 1".into()),
+            expect: None,
+            var: None,
+            declared_by: None,
+            graded: false,
+        })
+        .collect();
+
+    let budget = Budget {
+        request: std::time::Duration::from_secs(5),
+        metric: std::time::Duration::from_secs(5),
+        endpoint: std::time::Duration::from_millis(100),
+    };
+    let client = Client::new(budget).unwrap();
+    let url = format!("{}/sparql", server.uri());
+    let (rows, read) = run_sweep(std::slice::from_ref(&url), &defs, &client, budget).await;
+
+    // The budget really did cut the loop short, or this proves nothing about
+    // the write position.
+    assert_eq!(rows.len(), defs.len(), "one row per (endpoint, metric) regardless of timing");
+    assert!(
+        rows.iter().all(|r| r.verdict == Verdict::Indeterminate),
+        "the metric loop must have been cut short for this test to say anything"
+    );
+
+    assert_eq!(read.len(), 1);
+    assert!(
+        read[0].read,
+        "the description was fetched and parsed before the budget expired, so the published fact must say so"
+    );
+}
+
 /// A one-triple service description: parseable, so it grades level 1, but it
 /// names no dataset, carries no VoID partition and declares nothing that
 /// reaches level 4.
