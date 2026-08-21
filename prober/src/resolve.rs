@@ -23,7 +23,7 @@ impl Declared {
 
 /// Whether the request reached the endpoint and got back a successful HTTP
 /// status. Used to tell "the endpoint told us it has nothing" apart from
-/// "something upstream (a proxy, an outage) prevented us from finding out" —
+/// "something upstream (a proxy, an outage) prevented us from finding out":
 /// only the former is safe to report as `Absent`.
 fn answered_ok(o: &Observation) -> bool {
     matches!(o.status, Some(s) if (200..=299).contains(&s))
@@ -56,7 +56,7 @@ pub fn resolve(def: &MetricDef, declared: Declared, obs: Result<&Observation, Ex
             // This arm serves both probe kinds, and the two readings differ:
             // for `AskFilter` a wrong boolean means broken semantics; for
             // `AskData` a `false` means the data is absent. It is safe today
-            // only because no shipped `AskData` metric sets `expect` — the
+            // only because no shipped `AskData` metric sets `expect`, and the
             // day one does, genuine data absence would silently become
             // `DeclaredButWrong` instead of `Absent`.
             // A capability claim needs the endpoint's own successful answer just
