@@ -1,8 +1,17 @@
-//! Per-host politeness: a server identity to serialise requests against, and
-//! a reader for the `Retry-After` response header. Both are pure functions,
-//! tested here on their own before Task 3 puts either behind a lock.
+//! Per-host politeness: a server identity to serialise requests against, a
+//! reader for the `Retry-After` response header, and the gate that actually
+//! holds a host and spaces our requests to it.
+//!
+//! The pure functions come first and are tested on their own, so the identity
+//! and header decisions can be read without any locking in the way. The gate
+//! below is the only stateful thing here, and the two guarantees it gives
+//! (never two requests in flight to one host, and a minimum pause between
+//! consecutive requests to one host) are what stand between this crate and an
+//! operator who blocks us.
 
-use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// The politeness identity of a URL: lowercased host plus port, ignoring
 /// scheme, path, query and userinfo. Two URLs with the same key are one
@@ -119,6 +128,161 @@ pub fn honour(requested: Duration, cap: Duration) -> Honour {
         Honour::TooLong
     } else {
         Honour::Wait(requested)
+    }
+}
+
+
+/// The default cap on a `Retry-After` we are willing to wait out.
+///
+/// Twenty seconds, not two minutes: the wait happens inside the 60s metric
+/// budget alongside a request that may itself take 30s, and `cap + request
+/// budget` has to stay under the metric budget or tokio cancels the honoured
+/// wait and reports `Indeterminate` after burning the whole budget for
+/// nothing. 20 + 30 = 50 < 60. Raising the cap means moving a budget, which
+/// is a deliberate decision rather than a side effect of one.
+pub const DEFAULT_RETRY_AFTER_CAP: Duration = Duration::from_secs(20);
+
+/// The gate every probe passes through, and the two settings that decide how
+/// we treat somebody else's server: the minimum pause between consecutive
+/// requests to one host, and the longest `Retry-After` we will wait out.
+///
+/// Both live on one type on purpose. An earlier draft had the gap in a gate
+/// and the cap in no type at all, so the two halves of "how polite are we"
+/// could drift apart and a caller could set one without noticing the other
+/// existed.
+///
+/// The gate itself gives two guarantees, and the second does not imply the
+/// first: a gap alone would let two tasks both observe it elapsed and proceed
+/// together, so exclusion is a lock, not a calculation.
+///
+/// 1. Never two requests in flight to one host.
+/// 2. At least `min_gap` between one request's release and the next one's
+///    start on that host.
+pub struct Politeness {
+    /// Host key to per-host state. A `std::sync::Mutex` on purpose: its guard
+    /// is not `Send`, so holding it across an `await` fails to compile in a
+    /// future that must be `Send`. That makes "the map lock is held while
+    /// waiting for a host", which would silently serialise the whole sweep
+    /// behind one slow server, a build error rather than a stall no test would
+    /// catch. Hold it only long enough to clone the `Arc` out.
+    ///
+    /// The map only grows, one entry per distinct host key. With a registry of
+    /// a few hundred endpoints that is a few hundred small entries for the
+    /// life of a sweep, so there is nothing to evict and no eviction to get
+    /// wrong.
+    hosts: std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<Option<Instant>>>>>,
+    /// The pause between consecutive requests to one host, measured from
+    /// release.
+    min_gap: Duration,
+    /// The longest `Retry-After` we will wait out. Read by the client, which
+    /// is what actually honours a header (see `honour` above); the gate itself
+    /// never consumes it.
+    retry_after_cap: Duration,
+}
+
+impl Politeness {
+    /// A gate with the given gap and the default `Retry-After` cap.
+    pub fn new(min_gap: Duration) -> Politeness {
+        Politeness::with_retry_after_cap(min_gap, DEFAULT_RETRY_AFTER_CAP)
+    }
+
+    /// A gate with both settings stated. This is what `main.rs` uses, so the
+    /// two numbers a sweep runs with both come from flags a reader can see
+    /// rather than one of them from a constant in here.
+    pub fn with_retry_after_cap(min_gap: Duration, retry_after_cap: Duration) -> Politeness {
+        Politeness {
+            hosts: std::sync::Mutex::new(HashMap::new()),
+            min_gap,
+            retry_after_cap,
+        }
+    }
+
+    /// No gap and no willingness to wait out a `Retry-After`. **For tests
+    /// only**, and it must never appear in a sweep: a constructor whose
+    /// default is impoliteness, in a crate whose whole thesis is being a
+    /// tolerable guest, is the silent default this project refuses everywhere
+    /// else wearing different clothes. Tests use it because 2 seconds per
+    /// request across the suite would take minutes and somebody would
+    /// eventually delete the politeness rather than the slowness.
+    pub fn unlimited() -> Politeness {
+        Politeness::with_retry_after_cap(Duration::ZERO, Duration::ZERO)
+    }
+
+    /// The minimum pause between consecutive requests to one host.
+    pub fn min_gap(&self) -> Duration {
+        self.min_gap
+    }
+
+    /// The longest `Retry-After` a caller should wait out. Pair it with
+    /// `honour` to decide.
+    pub fn retry_after_cap(&self) -> Duration {
+        self.retry_after_cap
+    }
+
+    /// Wait until this URL's host is free **and** the minimum gap since that
+    /// host's last release has elapsed, then take it. The returned guard holds
+    /// the host until it is dropped, and dropping it stamps the release time.
+    ///
+    /// The gap is measured from **release**, not from acquisition, so a slow
+    /// request does not eat the pause that follows it: a 30-second query
+    /// followed immediately by another request is exactly the case the pause
+    /// exists for, and measuring from the start would let it through.
+    ///
+    /// The sleep happens while holding the per-host lock, which is what makes
+    /// the two guarantees one thing: a waiter cannot slip in during another
+    /// waiter's pause.
+    pub async fn acquire(&self, url: &str) -> HostGuard {
+        let key = host_key(url);
+        // Cloning the `Arc` out is the entire critical section for the map
+        // lock. Everything that waits happens after the guard is dropped.
+        let host = {
+            // A poisoned map lock means a panic happened elsewhere while
+            // holding it. The guarded work is a `HashMap` lookup with no user
+            // code in it, so there is nothing here for a panic to have left
+            // inconsistent, and refusing every later acquire would turn one
+            // panic into a sweep that probes nothing.
+            let mut hosts = self.hosts.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            Arc::clone(
+                hosts
+                    .entry(key)
+                    .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(None))),
+            )
+        };
+        let guard = host.lock_owned().await;
+        if let Some(released) = *guard {
+            // `checked_sub` rather than a subtraction: `Duration` subtraction
+            // panics on underflow, and a release older than the gap is the
+            // common case, not an error.
+            if let Some(remaining) = self.min_gap.checked_sub(released.elapsed()) {
+                if !remaining.is_zero() {
+                    tokio::time::sleep(remaining).await;
+                }
+            }
+        }
+        HostGuard { guard }
+    }
+}
+
+/// Exclusive use of one host. Drop it when the request is done.
+///
+/// The guard is `OwnedMutexGuard`, not a borrowed `MutexGuard`, and that is
+/// forced rather than stylistic: a guard that owned the `Arc` and borrowed a
+/// `MutexGuard` from it would be a self-reference, and `acquire` would fail to
+/// compile with `E0515: cannot return value referencing local variable`.
+/// `lock_owned` consumes the `Arc` and hands back a guard with no borrow left
+/// to outlive.
+pub struct HostGuard {
+    guard: tokio::sync::OwnedMutexGuard<Option<Instant>>,
+}
+
+impl Drop for HostGuard {
+    fn drop(&mut self) {
+        // A synchronous write through a guard we already hold, so no await is
+        // needed and `Drop` can do it. Stamping here rather than in `acquire`
+        // is what makes the gap a pause *between* requests: stamped at
+        // acquisition, a request that took longer than the gap would leave no
+        // pause at all.
+        *self.guard = Some(Instant::now());
     }
 }
 
