@@ -2,6 +2,7 @@ use sparqlwatch_prober::budget::Budget;
 use sparqlwatch_prober::client::Client;
 use sparqlwatch_prober::emit::{emit_nquads, RunId};
 use sparqlwatch_prober::metrics::{load_metrics, MetricDef, ProbeKind};
+use sparqlwatch_prober::registry::load_endpoints;
 use sparqlwatch_prober::run_sweep;
 use sparqlwatch_prober::verdict::{Level, Verdict};
 use oxrdf::{NamedNode, Quad, Term};
@@ -820,6 +821,72 @@ async fn a_partially_parsed_description_still_reports_its_declarations_as_read()
 async fn an_unreadable_description_reports_declarations_as_not_read() {
     let run = sweep_with_status(500).await;
     assert_eq!(declarations_read(&run), Some(false));
+}
+
+/// I3. `run_sweep` emits one `declarationsRead` fact per LIST ENTRY, so a URL
+/// listed twice put two of them on one endpoint IRI in one run graph, and with
+/// two differing fetches they disagreed: `ASK { ?ep :declarationsRead false }`
+/// and its negation both succeeded, with nothing in the graph to resolve it.
+/// The registry loader is where that is stopped, so this test goes through the
+/// loader exactly as `main.rs` does.
+#[tokio::test]
+async fn a_registry_that_lists_one_url_twice_probes_it_once() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/sparql")).and(query_param_is_missing("query"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(STUB_TTL.as_bytes().to_vec(), "text/turtle"))
+        .mount(&server).await;
+    Mock::given(method("GET")).and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(WORKING_QUERY_RESPONSE))
+        .mount(&server).await;
+
+    let url = format!("{}/sparql", server.uri());
+    let endpoints = load_endpoints(&format!("endpoint = [{url:?}, {url:?}]")).unwrap();
+    assert_eq!(endpoints.len(), 1, "the loader is what drops the duplicate");
+
+    let defs = load_shipped_metrics();
+    let client = Client::new(Budget::default()).unwrap();
+    let (rows, read) = run_sweep(&endpoints, &defs, &client, Budget::default()).await;
+    let run = emit_nquads(&RunId("test".into()), "2026-08-20T08:00:00Z", "test-revision", &rows, &read).unwrap();
+
+    assert_eq!(count_declarations_read_quads(&run), 1, "one endpoint, one fact, whatever the registry said");
+    assert_eq!(rows.len(), defs.len(), "one row per metric, not two");
+    let ids: BTreeSet<&str> = rows.iter().map(|r| r.metric_id.as_str()).collect();
+    assert_eq!(ids.len(), rows.len(), "no metric may appear twice for one endpoint");
+}
+
+/// The other half of the ruling: dedupe is on the exact string, so two
+/// spellings of what `same_endpoint` would call one service stay two registry
+/// entries and are probed and published as two. Collapsing them would hide a
+/// registry problem and publish an endpoint IRI the registry does not contain.
+#[tokio::test]
+async fn a_near_duplicate_differing_by_a_trailing_slash_stays_two_entries() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/sparql")).and(query_param_is_missing("query"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(STUB_TTL.as_bytes().to_vec(), "text/turtle"))
+        .mount(&server).await;
+    Mock::given(method("GET")).and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(WORKING_QUERY_RESPONSE))
+        .mount(&server).await;
+
+    let url = format!("{}/sparql", server.uri());
+    let slashed = format!("{url}/");
+    let endpoints = load_endpoints(&format!("endpoint = [{url:?}, {slashed:?}]")).unwrap();
+    assert_eq!(endpoints, vec![url.clone(), slashed.clone()], "these are two entries");
+
+    let defs = load_shipped_metrics();
+    let client = Client::new(Budget::default()).unwrap();
+    let (rows, read) = run_sweep(&endpoints, &defs, &client, Budget::default()).await;
+    let run = emit_nquads(&RunId("test".into()), "2026-08-20T08:00:00Z", "test-revision", &rows, &read).unwrap();
+
+    assert_eq!(count_declarations_read_quads(&run), 2, "two entries, two facts");
+    assert_eq!(rows.len(), 2 * defs.len(), "one row per metric per entry");
+    for ep in [&url, &slashed] {
+        assert_eq!(
+            rows.iter().filter(|r| &r.endpoint == ep).count(),
+            defs.len(),
+            "{ep} must carry a full set of rows of its own"
+        );
+    }
 }
 
 #[tokio::test]

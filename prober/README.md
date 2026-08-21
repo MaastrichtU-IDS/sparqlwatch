@@ -85,6 +85,18 @@ a valid IRI is warned about and skipped at emission time, not fatal: the
 registry is seeded from a real-world dump known to contain junk, and one bad
 string must not discard a whole sweep's work.
 
+The list is deduplicated at load, first-seen order preserved, with a warning
+naming each entry dropped. One row per (endpoint, metric) and one
+`declarationsRead` fact per endpoint held per list ENTRY, not per endpoint, so a
+URL listed twice published two facts about one endpoint IRI in one run graph,
+and two differing fetches made them contradict each other with nothing in the
+graph to resolve it. Deduplicating at load also stops the sweep sending one
+stranger's server two identical sets of requests. The comparison is on the
+exact string: `http://x/sparql` and `http://x/sparql/` stay two entries, even
+though the declaration scoper treats them as one service, because two spellings
+in a registry are a registry problem to see rather than one to collapse
+silently.
+
 **`metrics.toml`** is the metric definitions, as *data*. Each names a probe
 kind from a closed set (`Liveness`, `Cors`, `CorsPreflight`, `AskFilter`,
 `AskData`, `SelectIris`, `FetchWellKnown`) plus its parameters, so adding a metric that

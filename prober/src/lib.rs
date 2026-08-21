@@ -6,6 +6,7 @@ pub mod declare;
 pub mod media;
 pub mod observe;
 pub mod metrics;
+pub mod registry;
 pub mod resolve;
 
 use crate::budget::{Budget, Expired};

@@ -1,0 +1,192 @@
+//! Loading `endpoints.toml`: the list of endpoints one sweep probes.
+//!
+//! The only rule here beyond parsing is that the list holds each entry once.
+//! `run_sweep` emits exactly one `declarationsRead` fact per LIST ENTRY, so a
+//! URL listed twice put two of those facts on one endpoint IRI in one run
+//! graph, and if the two fetches differed they disagreed: `ASK { ?ep
+//! :declarationsRead false }` and its negation both succeeded, with nothing in
+//! the graph to tell a consumer which fetch each came from. `emit.rs` cannot
+//! repair that after the fact, because the fact is a bare triple on the
+//! endpoint IRI with no measurement identity to distinguish two of them.
+//!
+//! Deduplicating at load rather than at emission also stops the sweep probing
+//! one stranger's server twice in the same run, and stage 1d seeds this list
+//! from LOD Cloud plus YummyData, two overlapping real-world dumps: duplicates
+//! are the expected case, not the exotic one.
+
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+struct EndpointFile {
+    endpoint: Vec<String>,
+}
+
+/// Parse `endpoints.toml` and return its endpoint list, each entry once, in
+/// first-seen order.
+pub fn load_endpoints(toml_text: &str) -> anyhow::Result<Vec<String>> {
+    let file: EndpointFile = toml::from_str(toml_text)?;
+    Ok(dedupe(&file.endpoint))
+}
+
+/// `endpoints` with later repeats of an entry dropped, first-seen order
+/// preserved, and one warning per entry dropped.
+///
+/// Order is preserved rather than sorted because the registry's order is the
+/// operator's, and a diff between two runs' outputs should not move.
+///
+/// The comparison is EXACT STRING equality, deliberately, and not
+/// `declare::same_endpoint`'s normalisation: `http://x/sparql` and
+/// `http://x/sparql/` are two entries here, not one. That normalisation exists
+/// for a different question, matching a published `sd:endpoint` against the
+/// URL we probed, where leniency loses nothing worse than a declaration. Here
+/// the two strings are two things somebody put in the registry, and collapsing
+/// them silently would hide a registry problem we would rather see: which of
+/// the two spellings the sweep then probed would also be arbitrary, and the
+/// endpoint IRI it published would be one the registry does not contain.
+///
+/// The warning is the point of doing this here rather than quietly: dropping
+/// entries from a registry without saying so is how a seeding bug becomes
+/// invisible.
+pub fn dedupe(endpoints: &[String]) -> Vec<String> {
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut kept: Vec<String> = Vec::with_capacity(endpoints.len());
+    for (position, ep) in endpoints.iter().enumerate() {
+        if seen.insert(ep.as_str()) {
+            kept.push(ep.clone());
+        } else {
+            tracing::warn!(
+                endpoint = %ep,
+                position,
+                "duplicate registry entry dropped; it is probed once and gets one row per metric"
+            );
+        }
+    }
+    kept
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+
+    /// A `MakeWriter` that keeps what a subscriber wrote, so a test can assert
+    /// the warning was actually emitted rather than assume it.
+    #[derive(Clone, Default)]
+    struct Captured(Arc<Mutex<Vec<u8>>>);
+
+    impl Captured {
+        fn text(&self) -> String {
+            String::from_utf8_lossy(&self.0.lock().unwrap()).to_string()
+        }
+    }
+
+    impl Write for Captured {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl tracing_subscriber::fmt::MakeWriter<'_> for Captured {
+        type Writer = Self;
+        fn make_writer(&self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// Run `f` with a subscriber of our own, scoped to this thread, and return
+    /// what it logged.
+    fn logs_of(f: impl FnOnce()) -> String {
+        let captured = Captured::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(captured.clone())
+            .without_time()
+            .with_ansi(false)
+            .finish();
+        tracing::subscriber::with_default(subscriber, f);
+        captured.text()
+    }
+
+    fn v(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn a_repeated_entry_is_kept_once_in_first_seen_order() {
+        let list = v(&["https://b/sparql", "https://a/sparql", "https://b/sparql", "https://c/sparql"]);
+        assert_eq!(dedupe(&list), v(&["https://b/sparql", "https://a/sparql", "https://c/sparql"]));
+    }
+
+    #[test]
+    fn a_url_repeated_many_times_is_still_probed_once() {
+        let list = v(&["https://a/sparql"; 5]);
+        assert_eq!(dedupe(&list), v(&["https://a/sparql"]));
+    }
+
+    /// The ruling, stated as a test: dedupe is on the exact string. Every one
+    /// of these pairs is one service to `declare::same_endpoint`, and two
+    /// registry entries here, because two spellings in a registry are a
+    /// registry problem to see rather than one to collapse silently.
+    #[test]
+    fn a_near_duplicate_is_two_entries_not_one() {
+        for pair in [
+            ["http://x/sparql", "http://x/sparql/"],
+            ["http://x/sparql", "https://x/sparql"],
+            ["http://x/sparql", "http://X/sparql"],
+            ["http://x/sparql", "http://www.x/sparql"],
+        ] {
+            let list = v(&pair);
+            assert_eq!(dedupe(&list).len(), 2, "{pair:?} are two registry entries");
+        }
+    }
+
+    #[test]
+    fn every_dropped_duplicate_is_warned_about() {
+        let list = v(&["https://a/sparql", "https://b/sparql", "https://a/sparql", "https://a/sparql"]);
+        let logs = logs_of(|| {
+            assert_eq!(dedupe(&list).len(), 2);
+        });
+        // Two entries dropped, so two warnings: a count, because a single
+        // warning for a registry that repeated one URL fifty times would hide
+        // the scale of the seeding bug.
+        assert_eq!(logs.matches("duplicate registry entry dropped").count(), 2, "logs were: {logs}");
+        assert_eq!(logs.matches("WARN").count(), 2, "the level has to be WARN: {logs}");
+        assert!(logs.contains("https://a/sparql"), "the warning must name the URL: {logs}");
+        assert!(!logs.contains("https://b/sparql"), "nothing was dropped for b: {logs}");
+    }
+
+    #[test]
+    fn a_clean_list_warns_about_nothing() {
+        let list = v(&["https://a/sparql", "https://b/sparql"]);
+        let logs = logs_of(|| {
+            assert_eq!(dedupe(&list).len(), 2);
+        });
+        assert!(logs.is_empty(), "a clean registry must be quiet, logged: {logs}");
+    }
+
+    #[test]
+    fn the_shipped_registry_file_loads_and_is_already_unique() {
+        let loaded = load_endpoints(include_str!("../endpoints.toml")).unwrap();
+        assert_eq!(loaded.len(), 3);
+        assert_eq!(loaded[0], "https://qlever.dev/api/osm-planet");
+    }
+
+    #[test]
+    fn a_file_listing_one_url_twice_loads_it_once() {
+        let loaded = load_endpoints(
+            r#"endpoint = ["https://a/sparql", "https://b/sparql", "https://a/sparql"]"#,
+        )
+        .unwrap();
+        assert_eq!(loaded, v(&["https://a/sparql", "https://b/sparql"]));
+    }
+
+    #[test]
+    fn a_file_that_is_not_an_endpoint_list_is_a_load_error() {
+        assert!(load_endpoints("nonsense = 1").is_err());
+        assert!(load_endpoints("endpoint = \"not a list\"").is_err());
+    }
+}
