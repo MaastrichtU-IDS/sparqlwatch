@@ -4,9 +4,11 @@ use sparqlwatch_prober::{
     client::Client,
     emit::{emit_nquads, RunId},
     metrics::{definitions_revision, load_metrics, within_cost, Cost},
+    politeness::{Politeness, DEFAULT_MIN_GAP, DEFAULT_RETRY_AFTER_CAP},
     registry::load_endpoints,
     run_sweep,
 };
+use std::time::Duration;
 
 #[derive(Parser)]
 #[command(name = "sparqlwatch-prober")]
@@ -27,6 +29,28 @@ struct Args {
     /// because the default has to be safe to point at somebody else's server.
     #[arg(long, value_enum, default_value_t = Cost::Cheap)]
     max_cost: Cost,
+    /// The minimum pause between two consecutive requests to one host,
+    /// measured from the end of one to the start of the next. Requests to one
+    /// host are also never in flight together, whatever this is set to.
+    #[arg(long, default_value_t = DEFAULT_MIN_GAP.as_millis() as u64)]
+    min_gap_ms: u64,
+    /// The longest `Retry-After` we will wait out before retrying a throttled
+    /// request once. A longer delay than this is a server telling us to come
+    /// back after this sweep, so we report the throttle instead of waiting.
+    ///
+    /// Twenty seconds, and the ceiling is arithmetic rather than taste. The
+    /// wait happens inside the held per-host guard, which sits inside the
+    /// metric budget alongside the retried request:
+    ///
+    ///     cap + request budget < metric budget
+    ///     20s + 30s = 50s < 60s
+    ///
+    /// Above that, `tokio::time::timeout` cancels the honoured wait and the
+    /// metric reports `indeterminate` after burning its whole budget for
+    /// nothing. Raising this cap therefore means raising `Budget::metric`
+    /// too, which is a deliberate decision and not a side effect of this one.
+    #[arg(long, default_value_t = DEFAULT_RETRY_AFTER_CAP.as_secs())]
+    retry_after_cap_s: u64,
 }
 
 /// `--at` is interpolated into two IRIs and published as an `xsd:dateTime`, so
@@ -99,7 +123,13 @@ async fn main() -> anyhow::Result<()> {
     let endpoints = load_endpoints(&std::fs::read_to_string(&args.endpoints)?)?;
     let defs = load_metrics(&std::fs::read_to_string(&args.metrics)?)?;
     let budget = Budget::default();
-    let client = Client::new(budget)?;
+    // The real settings, from flags a reader can see. `Politeness::unlimited()`
+    // exists for tests and must never appear here.
+    let politeness = Politeness::with_retry_after_cap(
+        Duration::from_millis(args.min_gap_ms),
+        Duration::from_secs(args.retry_after_cap_s),
+    );
+    let client = Client::new(budget, politeness)?;
 
     // A pure function of the definitions, so the published revision is
     // reproducible from the same metrics.toml. It identifies the definitions,
@@ -132,7 +162,9 @@ async fn main() -> anyhow::Result<()> {
 mod tests {
     use super::{validate_instant, Args};
     use clap::Parser;
+    use sparqlwatch_prober::budget::Budget;
     use sparqlwatch_prober::metrics::Cost;
+    use std::time::Duration;
 
     #[test]
     fn a_well_formed_instant_is_accepted() {
@@ -172,6 +204,27 @@ mod tests {
     /// 45-second scan at 548 strangers' servers. Asserting on the PARSED args
     /// rather than on `Cost::default()` is deliberate: the latter would still
     /// pass if `default_value_t` were changed to name something else.
+    /// The two politeness defaults, pinned on the PARSED args rather than on
+    /// the constants, for the same reason as the cost ceiling below: asserting
+    /// on `DEFAULT_RETRY_AFTER_CAP` would still pass if `default_value_t` were
+    /// changed to name something else.
+    ///
+    /// The cap in particular is arithmetic, not taste: the honoured wait sits
+    /// inside the held host guard, inside the metric budget, alongside the
+    /// retried request, so `cap + request budget < metric budget` (20 + 30 = 50
+    /// < 60). Anything larger is a wait tokio would cancel.
+    #[test]
+    fn the_default_politeness_is_a_two_second_gap_and_a_twenty_second_cap() {
+        let args = Args::parse_from(["prober", "--at", "2026-01-01T00:00:00Z"]);
+        assert_eq!(args.min_gap_ms, 2000, "a plain run must pause between requests to one host");
+        assert_eq!(args.retry_after_cap_s, 20, "a longer cap than this cannot complete inside the metric budget");
+        let budget = Budget::default();
+        assert!(
+            Duration::from_secs(args.retry_after_cap_s) + budget.request < budget.metric,
+            "cap + request budget must stay under the metric budget or an honoured wait gets cancelled"
+        );
+    }
+
     #[test]
     fn the_default_cost_ceiling_is_cheap() {
         let args = Args::parse_from(["prober", "--at", "2026-01-01T00:00:00Z"]);

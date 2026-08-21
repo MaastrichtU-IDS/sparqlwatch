@@ -76,6 +76,8 @@ cargo run -- --at 2026-08-20T12:00:00Z --out run.nq
 | `--metrics` | `metrics.toml` | Metric definitions to apply |
 | `--out` | `run.nq` | Where to write the N-Quads |
 | `--max-cost` | `cheap` | Only run metrics with cost at or below this value (`cheap` or `expensive`) |
+| `--min-gap-ms` | `2000` | Minimum pause between two consecutive requests to one host |
+| `--retry-after-cap-s` | `20` | Longest `Retry-After` waited out before one retry of a throttled request |
 
 `--at` is required and is **not** read from the clock, deliberately. It names
 the run graph, it is published as the activity's `prov:generatedAtTime`, and a
@@ -84,6 +86,21 @@ lands in the same graph rather than inventing a second one. That also makes a
 run reproducible: same `--at`, same output identifiers. It is validated before
 any probing starts, because it is interpolated into IRIs and published as an
 `xsd:dateTime`.
+
+Every outbound request passes a per-host gate that gives two guarantees: never
+two requests in flight to one host, and at least `--min-gap-ms` between one
+request finishing and the next one to that host starting. The gate is taken once
+per probe, in the six public `Client` methods and nowhere else. A `429` or `503`
+carrying a `Retry-After` within `--retry-after-cap-s` is waited out and the
+request retried **once**; a longer delay, an HTTP-date value or junk is not
+waited out at all, and the throttle is reported as observed rather than turned
+into a guess.
+
+The cap's ceiling is arithmetic, not taste. The wait happens inside the held
+host guard, which sits inside the metric budget alongside the retried request,
+so `cap + request budget < metric budget` (20 + 30 = 50 < 60). A larger cap is
+a wait `tokio` would cancel, reporting `indeterminate` after burning the whole
+metric budget, so raising it means raising the metric budget too.
 
 Three nested budgets bound the work, per request (30s), per metric (60s), and per
 endpoint (600s), and every one of them cancels the future rather than

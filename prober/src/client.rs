@@ -1,9 +1,11 @@
 use crate::budget::Budget;
 use crate::media;
 use crate::observe::{BodyKind, Observation};
+use crate::politeness::{honour, parse_retry_after, Honour, Politeness, RetryAfter};
 use oxrdfio::{RdfFormat, RdfParser};
 use std::collections::HashSet;
-use std::time::Instant;
+use std::future::Future;
+use std::time::{Duration, Instant};
 
 /// Announced only by the two CORS probes, so the other probes cannot be
 /// perturbed by a server that filters on it.
@@ -79,16 +81,49 @@ fn truncate_body(s: String, max: usize) -> String {
     s
 }
 
+/// One request's outcome: the `Observation` a verdict is drawn from, plus the
+/// evidence this module itself needs and no verdict rule reads.
+///
+/// `Retry-After` stays out of `Observation` for the same reason `Location`
+/// does (see `preflight_once`): nothing in `resolve()` consults it, and
+/// `Observation` is the shape a verdict is computed from. It is the client's
+/// business alone whether we wait.
+struct Attempt<X> {
+    observation: Observation,
+    /// The raw `Retry-After` header value, unparsed. Read by `retry_delay`.
+    retry_after: Option<String>,
+    /// Whatever else this request kind carries out for its caller: the
+    /// response body for a query, the `Location` for one preflight hop, `()`
+    /// for a fetch or a resolved preflight chain.
+    extra: X,
+}
+
+impl<X> Attempt<X> {
+    /// A request that never produced a response. No status and no headers, so
+    /// there is nothing to honour and `retry_delay` will decline on the
+    /// missing status alone.
+    fn failed(error: String, elapsed_ms: u64, extra: X) -> Attempt<X> {
+        Attempt { observation: Observation::failed(error, elapsed_ms), retry_after: None, extra }
+    }
+}
+
 pub struct Client {
     http: reqwest::Client,
     /// Used by `preflight` and nothing else, because reqwest's redirect policy
     /// is per-Client and this probe is the one that must not follow one. See
     /// `preflight` for why.
     no_redirect: reqwest::Client,
+    /// The per-host gate every public probe below passes through, and the
+    /// `Retry-After` cap `retry_delay` reads. Stated by the caller rather than
+    /// defaulted: a `Client::new` that quietly meant "no politeness" would be
+    /// exactly the silent default this crate refuses for an unknown probe
+    /// kind, an unknown cost and a missing `var`. Tests pass
+    /// `Politeness::unlimited()`; a sweep passes what its flags say.
+    politeness: Politeness,
 }
 
 impl Client {
-    pub fn new(budget: Budget) -> anyhow::Result<Self> {
+    pub fn new(budget: Budget, politeness: Politeness) -> anyhow::Result<Self> {
         // HTTP_PROXY / HTTPS_PROXY are read automatically thanks to the
         // `system-proxy` feature. ids3 pods have no direct internet, so this
         // is load-bearing rather than a convenience.
@@ -113,7 +148,88 @@ impl Client {
                 " (+https://sparqlwatch.dev.k8s.semanticscience.org/about)"
             ))
             .build()?;
-        Ok(Self { http, no_redirect })
+        Ok(Self { http, no_redirect, politeness })
+    }
+
+    /// One header's value as a `String`, or `None` when it is absent or not
+    /// valid UTF-8. Shared so `Retry-After` is read the same way on every
+    /// request path.
+    fn header(headers: &reqwest::header::HeaderMap, name: &str) -> Option<String> {
+        headers.get(name).and_then(|v| v.to_str().ok()).map(str::to_string)
+    }
+
+    /// One attempt, plus at most ONE retry when the endpoint answered with a
+    /// throttle carrying a `Retry-After` we are willing to wait out.
+    ///
+    /// One retry and not a loop: a server that throttles the retry as well is
+    /// telling us to come back after this sweep, not to keep knocking. The
+    /// wait and the retry both happen inside the caller's held host guard, so
+    /// no other task can slip a request in on this host while we are waiting
+    /// out a delay this host asked for.
+    ///
+    /// The retried attempt is returned WHOLE, so the reported `elapsed_ms` is
+    /// the second request's own duration and excludes the wait. Our politeness
+    /// delay is not the endpoint's response time and must not be published as
+    /// one.
+    ///
+    /// **NEVER acquires the gate**, for the same reason `get_with_body` does
+    /// not: every caller already holds the guard.
+    async fn honouring_retry_after<X, F, Fut>(&self, url: &str, attempt: F) -> Attempt<X>
+    where
+        F: Fn() -> Fut,
+        Fut: Future<Output = Attempt<X>>,
+    {
+        let first = attempt().await;
+        let Some(delay) = self.retry_delay(url, &first) else {
+            return first;
+        };
+        tracing::info!(url, delay_ms = delay.as_millis() as u64,
+                       "endpoint asked us to come back; waiting it out and retrying once");
+        tokio::time::sleep(delay).await;
+        attempt().await
+    }
+
+    /// How long to wait before one retry, or `None` for "report what we saw".
+    ///
+    /// Nothing here invents a verdict. In every non-retry case the observation
+    /// is returned carrying the real status, and `resolve()` decides what a
+    /// throttle means for each probe kind.
+    ///
+    /// - `429` or `503` with a delta-seconds value within the cap: wait it out.
+    ///   Those two statuses are the ones that mean "not now, try later"; every
+    ///   other status is an answer about the request, not an instruction.
+    /// - Within the cap is decided by `politeness::honour`, so the cap lives in
+    ///   one place and is testable without a server.
+    /// - An HTTP-date value is recognised and still not honoured: this crate
+    ///   does not parse the date form, and guessing a delay from it, wrong in
+    ///   the short direction, is exactly the impoliteness this gate exists to
+    ///   prevent. Logged at `warn` with the value so we learn whether real
+    ///   endpoints use it.
+    /// - Junk, or no header at all: nothing to honour.
+    fn retry_delay<X>(&self, url: &str, attempt: &Attempt<X>) -> Option<Duration> {
+        if !matches!(attempt.observation.status, Some(429) | Some(503)) {
+            return None;
+        }
+        let value = attempt.retry_after.as_deref()?;
+        match parse_retry_after(value) {
+            RetryAfter::Seconds(d) => match honour(d, self.politeness.retry_after_cap()) {
+                Honour::Wait(d) => Some(d),
+                Honour::TooLong => {
+                    tracing::info!(url, requested_s = d.as_secs(),
+                                   cap_s = self.politeness.retry_after_cap().as_secs(),
+                                   "Retry-After beyond the cap; reporting the throttle instead of waiting");
+                    None
+                }
+            },
+            RetryAfter::HttpDate => {
+                tracing::warn!(url, value, "Retry-After in HTTP-date form; not parsed, not waited out");
+                None
+            }
+            RetryAfter::Unparseable => {
+                tracing::warn!(url, value, "Retry-After is unparseable; no delay invented");
+                None
+            }
+        }
     }
 
     /// `send_origin` is true only for the simple-GET CORS probe (the preflight
@@ -121,7 +237,16 @@ impl Client {
     /// every metric before, so every probe announced an `Origin`; a server that
     /// rejects unknown origins could then perturb the evidence for the metrics
     /// that are not about CORS at all.
-    async fn get_with_body(&self, url: &str, query: &str, send_origin: bool) -> (Observation, String) {
+    ///
+    /// **NEVER acquires the politeness gate**, and neither may anything else
+    /// this function is called from. `ask`, `cors`, `select_iris` and
+    /// `ask_literal` all funnel through here and every one of them already
+    /// holds this host's guard. The per-host lock is not reentrant, so an
+    /// acquire here would be a task waiting for a lock it holds itself:
+    /// a DEADLOCK, not a slow probe and not a failing assertion. The gate is
+    /// taken in the six public methods and nowhere else; a seventh public
+    /// method acquires, a helper below a public method does not.
+    async fn get_with_body(&self, url: &str, query: &str, send_origin: bool) -> Attempt<String> {
         let start = Instant::now();
         let mut req = self
             .http
@@ -136,10 +261,11 @@ impl Client {
 
         let resp = match resp {
             Ok(r) => r,
-            Err(e) => return (Observation::failed(e.to_string(), elapsed), String::new()),
+            Err(e) => return Attempt::failed(e.to_string(), elapsed, String::new()),
         };
         let status = resp.status().as_u16();
         let cors = resp.headers().contains_key("access-control-allow-origin");
+        let retry_after = Self::header(resp.headers(), "retry-after");
         let ctype = resp
             .headers()
             .get("content-type")
@@ -148,7 +274,7 @@ impl Client {
             .to_ascii_lowercase();
         let body = match resp.text().await {
             Ok(b) => b,
-            Err(e) => return (Observation::failed(e.to_string(), elapsed), String::new()),
+            Err(e) => return Attempt::failed(e.to_string(), elapsed, String::new()),
         };
 
         let looks_html = ctype.contains("text/html")
@@ -181,24 +307,37 @@ impl Client {
             elapsed_ms: elapsed,
             error: None,
         };
-        (observation, body)
+        Attempt { observation, retry_after, extra: body }
     }
 
     /// A queryless GET on the endpoint itself, asking for RDF rather than
     /// SPARQL results. This is how a SPARQL service description is obtained
     /// in the wild -- no `?query=` at all, because none is being asked.
     /// Does not send `Origin`: that header belongs to the CORS probe alone.
+    ///
+    /// One of the six public probes, so it takes the host guard exactly once
+    /// and holds it across the request and any honoured `Retry-After` wait.
     pub async fn fetch_rdf(&self, url: &str) -> Observation {
+        let _host = self.politeness.acquire(url).await;
+        self.honouring_retry_after(url, || self.fetch_rdf_once(url)).await.observation
+    }
+
+    /// One queryless RDF fetch. **NEVER acquires the gate**: `fetch_rdf` above
+    /// already holds this host's guard, and the per-host lock is not
+    /// reentrant, so acquiring here would deadlock on itself rather than fail
+    /// an assertion.
+    async fn fetch_rdf_once(&self, url: &str) -> Attempt<()> {
         let start = Instant::now();
         let resp = self.http.get(url).header("Accept", RDF_ACCEPT).send().await;
         let elapsed = start.elapsed().as_millis() as u64;
 
         let resp = match resp {
             Ok(r) => r,
-            Err(e) => return Observation::failed(e.to_string(), elapsed),
+            Err(e) => return Attempt::failed(e.to_string(), elapsed, ()),
         };
         let status = resp.status().as_u16();
         let cors = resp.headers().contains_key("access-control-allow-origin");
+        let retry_after = Self::header(resp.headers(), "retry-after");
         // Read before `resp.text()` consumes the response. After reqwest has
         // followed its redirects this is where we actually landed, which is
         // the URL a redirected description is most likely to name as its
@@ -212,7 +351,7 @@ impl Client {
             .to_string();
         let body = match resp.text().await {
             Ok(b) => b,
-            Err(e) => return Observation::failed(e.to_string(), elapsed),
+            Err(e) => return Attempt::failed(e.to_string(), elapsed, ()),
         };
         // Truncate BEFORE classifying, so classification and the declaration
         // parse downstream read the same bytes. Classifying the full body while
@@ -235,7 +374,7 @@ impl Client {
             BodyKind::Other
         };
 
-        Observation {
+        let observation = Observation {
             status: Some(status),
             cors,
             boolean: None,
@@ -249,7 +388,8 @@ impl Client {
             allow_headers: None,
             elapsed_ms: elapsed,
             error: None,
-        }
+        };
+        Attempt { observation, retry_after, extra: () }
     }
 
     /// The RDF format `ctype` announces, but only for a media type that
@@ -284,8 +424,11 @@ impl Client {
             .is_ok_and(|quads| !quads.is_empty())
     }
 
+    /// One of the six public probes, so it takes the host guard once, here,
+    /// and not in `get_with_body`.
     pub async fn ask(&self, url: &str, query: &str) -> Observation {
-        self.get_with_body(url, query, false).await.0
+        let _host = self.politeness.acquire(url).await;
+        self.honouring_retry_after(url, || self.get_with_body(url, query, false)).await.observation
     }
 
     /// The simple-GET CORS probe: a query request that announces an `Origin`,
@@ -296,7 +439,8 @@ impl Client {
     /// the browser's question. Both facts are published; neither subsumes the
     /// other, because an endpoint can genuinely have one and not the other.
     pub async fn cors(&self, url: &str, query: &str) -> Observation {
-        self.get_with_body(url, query, true).await.0
+        let _host = self.politeness.acquire(url).await;
+        self.honouring_retry_after(url, || self.get_with_body(url, query, true)).await.observation
     }
 
     /// The preflight a browser sends before a cross-origin SPARQL query: an
@@ -331,6 +475,23 @@ impl Client {
     /// grant. No body is read or classified: a preflight response has no
     /// meaningful body, and a `204` has none at all.
     pub async fn preflight(&self, url: &str) -> Observation {
+        let _host = self.politeness.acquire(url).await;
+        // One retry for the whole probe, not one per hop. A cap-sized wait on
+        // each of six hops would be six times the cap inside one metric
+        // budget, and the cap's arithmetic (see `DEFAULT_RETRY_AFTER_CAP`)
+        // assumes a single wait. A throttled chain is therefore re-walked from
+        // the start, which costs the hops again; chains in the wild are one hop
+        // long, and a uniform retry rule is worth more than saving a request
+        // in a case that combines a redirect with a throttle.
+        self.honouring_retry_after(url, || self.preflight_chain(url)).await.observation
+    }
+
+    /// The preflight redirect chain, resolved. **NEVER acquires the gate**:
+    /// `preflight` above already holds this host's guard, and neither this
+    /// function nor `preflight_once` below may take it again. The per-host
+    /// lock is not reentrant, so an acquire per hop would be a task waiting
+    /// for a lock it already holds: a DEADLOCK, which hangs rather than fails.
+    async fn preflight_chain(&self, url: &str) -> Attempt<()> {
         let start = Instant::now();
         let mut target = url.to_string();
         // Canonicalised, because every hop after the first is a parsed and
@@ -338,15 +499,16 @@ impl Client {
         let mut seen: HashSet<String> = HashSet::new();
         seen.insert(Self::canonical(&target));
 
-        let (mut o, mut location) = self.preflight_once(&target).await;
+        let mut a = self.preflight_once(&target).await;
+        let mut location = a.extra.take();
         let mut hops = 0usize;
-        while o.status.is_some_and(|s| (300..=399).contains(&s)) {
+        while a.observation.status.is_some_and(|s| (300..=399).contains(&s)) {
             if hops == MAX_PREFLIGHT_HOPS {
                 tracing::warn!(url, hops, "preflight redirect chain longer than the hop bound; not resolved");
                 break;
             }
             let Some(next) = location.as_deref().and_then(|l| Self::resolve_location(&target, l)) else {
-                tracing::warn!(url, status = ?o.status, "preflight redirect carried no usable Location; not resolved");
+                tracing::warn!(url, status = ?a.observation.status, "preflight redirect carried no usable Location; not resolved");
                 break;
             };
             if !seen.insert(next.clone()) {
@@ -356,19 +518,29 @@ impl Client {
             tracing::debug!(from = %target, to = %next, "re-issuing the preflight at a redirect target");
             target = next;
             hops += 1;
-            (o, location) = self.preflight_once(&target).await;
+            a = self.preflight_once(&target).await;
+            location = a.extra.take();
         }
         // The whole chain is what this measurement cost, not just its last
-        // hop: the row publishes one duration for one metric.
-        o.elapsed_ms = start.elapsed().as_millis() as u64;
-        o
+        // hop: the row publishes one duration for one metric. A `Retry-After`
+        // wait is NOT inside this window: `honouring_retry_after` re-walks the
+        // chain and returns the second walk whole, so our own politeness delay
+        // is never published as the endpoint's response time.
+        a.observation.elapsed_ms = start.elapsed().as_millis() as u64;
+        Attempt { observation: a.observation, retry_after: a.retry_after, extra: () }
     }
 
-    /// One `OPTIONS` preflight, no redirect resolution. Returns the
-    /// observation and the response's `Location` header, which is evidence the
-    /// chain resolution needs and no verdict rule reads, so it stays out of
+    /// One `OPTIONS` preflight, no redirect resolution. Carries out the
+    /// response's `Location` header as its `extra`, which is evidence the chain
+    /// resolution needs and no verdict rule reads, so it stays out of
     /// `Observation`.
-    async fn preflight_once(&self, url: &str) -> (Observation, Option<String>) {
+    ///
+    /// **NEVER acquires the politeness gate.** This runs once per redirect hop
+    /// inside a guard `preflight` already holds, and the per-host lock is not
+    /// reentrant: acquiring here would make the task wait for a lock it holds
+    /// itself, which is a DEADLOCK. It hangs; it does not fail an assertion.
+    /// The gate is taken in the six public methods and nowhere else.
+    async fn preflight_once(&self, url: &str) -> Attempt<Option<String>> {
         let start = Instant::now();
         let resp = self
             .no_redirect
@@ -382,12 +554,10 @@ impl Client {
 
         let resp = match resp {
             Ok(r) => r,
-            Err(e) => return (Observation::failed(e.to_string(), elapsed), None),
+            Err(e) => return Attempt::failed(e.to_string(), elapsed, None),
         };
         let headers = resp.headers();
-        let value = |name: &str| {
-            headers.get(name).and_then(|v| v.to_str().ok()).map(str::to_string)
-        };
+        let value = |name: &str| Self::header(headers, name);
 
         let observation = Observation {
             status: Some(resp.status().as_u16()),
@@ -404,8 +574,9 @@ impl Client {
             elapsed_ms: elapsed,
             error: None,
         };
+        let retry_after = value("retry-after");
         let location = value("location");
-        (observation, location)
+        Attempt { observation, retry_after, extra: location }
     }
 
     /// `location` resolved against `base`, absolute or relative, or `None` if
@@ -449,9 +620,11 @@ impl Client {
     /// Collect IRI values of one variable. Literal values are ignored, so a
     /// caller asking for classes cannot be fooled by literals.
     pub async fn select_iris(&self, url: &str, query: &str, var: &str) -> Observation {
-        let (mut o, body) = self.get_with_body(url, query, false).await;
+        let _host = self.politeness.acquire(url).await;
+        let a = self.honouring_retry_after(url, || self.get_with_body(url, query, false)).await;
+        let mut o = a.observation;
         if o.body_kind == BodyKind::SparqlJson {
-            o.bindings = Self::extract(&body, var, false);
+            o.bindings = Self::extract(&a.extra, var, false);
         }
         o
     }
@@ -467,9 +640,11 @@ impl Client {
     /// bindings are found under that name, so this reports `Some(false)`
     /// exactly as if the data were genuinely absent.
     pub async fn ask_literal(&self, url: &str, query: &str, var: &str) -> Observation {
-        let (mut o, body) = self.get_with_body(url, query, false).await;
+        let _host = self.politeness.acquire(url).await;
+        let a = self.honouring_retry_after(url, || self.get_with_body(url, query, false)).await;
+        let mut o = a.observation;
         if o.body_kind == BodyKind::SparqlJson {
-            let lits = Self::extract(&body, var, true);
+            let lits = Self::extract(&a.extra, var, true);
             o.boolean = Some(!lits.is_empty());
             o.bindings = lits;
         }

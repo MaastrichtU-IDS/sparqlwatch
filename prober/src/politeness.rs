@@ -132,6 +132,14 @@ pub fn honour(requested: Duration, cap: Duration) -> Honour {
 }
 
 
+/// The default minimum pause between consecutive requests to one host.
+///
+/// Two seconds is the number the design doc argues for and the one a sweep
+/// runs with unless `--min-gap-ms` says otherwise. It lives here beside the
+/// cap so the two halves of "how polite are we" cannot drift apart, and so a
+/// reader of this module sees both without going to `main.rs`.
+pub const DEFAULT_MIN_GAP: Duration = Duration::from_secs(2);
+
 /// The default cap on a `Retry-After` we are willing to wait out.
 ///
 /// Twenty seconds, not two minutes: the wait happens inside the 60s metric

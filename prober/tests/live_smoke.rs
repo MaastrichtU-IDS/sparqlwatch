@@ -1,5 +1,12 @@
-use sparqlwatch_prober::{budget::Budget, client::Client, metrics::load_metrics, run_sweep};
-use std::time::Instant;
+use sparqlwatch_prober::{budget::Budget, client::Client, metrics::load_metrics, politeness::Politeness, run_sweep};
+use std::time::{Duration, Instant};
+
+/// These two tests probe real third-party endpoints, so they get real
+/// politeness rather than `Politeness::unlimited()`: the gap is exactly what
+/// the rest of the suite is allowed to skip and a live run is not.
+fn polite() -> Politeness {
+    Politeness::new(Duration::from_secs(2))
+}
 
 /// Hits real third-party endpoints, so it is not part of the default run.
 /// Enable with: cargo test --test live_smoke -- --ignored
@@ -7,7 +14,7 @@ use std::time::Instant;
 #[ignore]
 async fn probes_three_real_endpoints() {
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
-    let client = Client::new(Budget::default()).unwrap();
+    let client = Client::new(Budget::default(), polite()).unwrap();
     let eps = vec![
         "https://data.kkg.kadaster.nl/query".to_string(),
         "https://ontop.certain.ai.ustp.at/sparql".to_string(),
@@ -42,7 +49,7 @@ async fn probes_three_real_endpoints() {
 #[ignore]
 async fn the_widened_content_queries_return_real_bindings() {
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
-    let client = Client::new(Budget::default()).unwrap();
+    let client = Client::new(Budget::default(), polite()).unwrap();
     let url = "https://data.kkg.kadaster.nl/query";
 
     let geo = defs.iter().find(|d| d.id == "geo-data").expect("geo-data must be shipped");
