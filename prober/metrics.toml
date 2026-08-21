@@ -50,6 +50,15 @@ declared_by = "http://www.opengis.net/def/function/geosparql/sfWithin"
 # we said it lacked. The UNION costs more on a large endpoint, which is what the
 # cost class in stage 1c-b is for.
 #
+# Measured on qlever.dev/api/osm-planet (planet-scale OSM) on 2026-08-21, cold:
+# the DEFAULT-GRAPH-ONLY `classes` query took 36.9s and a repeat exceeded 40s,
+# while the UNION exceeded 40s and then 60s. So on an endpoint this size neither
+# shape fits the 30s request budget and the metric reads `indeterminate`, which
+# is honest but uninformative. Note what that means: the cost is inherent to
+# `SELECT DISTINCT ?c WHERE { ?s a ?c }` needing a scan over every type, not to
+# the UNION, so a cost class alone will not make this measurable. Rethinking the
+# query shape for large endpoints belongs with the cost class in 1c-b.
+#
 # The graph variable is ?anyg, never the result variable. `GRAPH ?g { ?s
 # geo:asWKT ?g }` would join the graph name against the geometry literal, match
 # nothing, and publish a silent false `absent`.
