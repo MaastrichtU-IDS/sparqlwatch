@@ -47,11 +47,15 @@ compile**. The per-host lock, which is meant to be held across the request, is a
 ## Global Constraints
 
 - Rust 1.96, edition 2021, no nightly features. **No new dependencies.**
-  Note that this does not block you: `tokio::sync::Mutex` and
-  `tokio::task::JoinSet` already compile with the features `Cargo.toml` enables
-  today (`rt-multi-thread` brings `sync` and `rt` with it). I verified that by
-  building a throwaway module before writing this plan, so if you find yourself
-  reaching for a new dependency or a feature flag, re-read this line first.
+  **Add `sync` to tokio's feature list in `prober/Cargo.toml`.** Enabling a
+  feature on a dependency we already have is not a new dependency. This is
+  necessary even though `tokio::sync::Mutex` compiles in this crate today: it
+  compiles only because something in the dependency graph (reqwest or wiremock)
+  enables tokio's `sync` feature and cargo unifies features across the graph. I
+  verified that by building the same code in a scratch crate with our declared
+  features, where `tokio::sync` is private. Relying on a transitive feature means
+  a dependency bump can break our build for reasons nothing in our manifest
+  explains, so declare what we use.
 - `resolve()` stays a pure function. `src/emit.rs` is a pure function of its
   inputs with **no clock read** and no randomness. `--at` is never read from the
   clock.
@@ -140,6 +144,14 @@ fn the_host_key_is_the_server_not_the_url() {
     // default port away because it is answering a different question (is this
     // the same SERVICE), and say so in a comment.
     assert_ne!(host_key("http://example.org:7878/x"), host_key("http://example.org:7879/x"));
+
+    // But a DEFAULT port is the same server written two ways, and giving it two
+    // buckets would let two requests to one host run concurrently, which is the
+    // one thing this key exists to prevent.
+    assert_eq!(host_key("http://example.org:80/x"), host_key("http://example.org/x"));
+    assert_eq!(host_key("https://example.org:443/x"), host_key("https://example.org/x"));
+    // And the default depends on the scheme, so :443 on http is NOT default.
+    assert_ne!(host_key("http://example.org:443/x"), host_key("http://example.org/x"));
 }
 
 #[test]
@@ -332,10 +344,31 @@ first release. `acquire` clones the `Arc` out of the map, drops the map guard,
 awaits the per-host lock, then sleeps out any remainder of the gap while holding
 it. The guard stamps `Some(Instant::now())` on drop.
 
-Stamping on drop needs care: a `Drop` impl cannot await. Keep the per-host lock
-guard inside `HostGuard` and write the release time through it synchronously in
-`Drop`, which is possible because the value is a plain `Option<Instant>` behind a
-lock we already hold.
+Stamping on drop needs care, and the obvious shape does not compile. A `Drop`
+impl cannot await, so the guard must already be held; but a `HostGuard` that owns
+the `Arc` **and** borrows a `MutexGuard` from it is a self-reference, and fails
+with `E0515: cannot return value referencing local variable` plus `E0505`. I
+compiled both shapes to check.
+
+Use an owned guard instead:
+
+```rust
+pub struct HostGuard {
+    guard: tokio::sync::OwnedMutexGuard<Option<Instant>>,
+}
+
+impl Drop for HostGuard {
+    fn drop(&mut self) {
+        // Synchronous write through a guard we already hold, no await needed.
+        *self.guard = Some(Instant::now());
+    }
+}
+
+// acquired with `arc.lock_owned().await`, not `arc.lock().await`
+```
+
+That compiles, and `lock_owned` is why: it consumes the `Arc` and hands back a
+guard with no borrow to outlive.
 
 - [ ] **Step 4: Prove the tests are load-bearing**
 
@@ -364,8 +397,15 @@ git commit -m "feat(prober): a per-host gate that serialises and spaces requests
 - Test: `prober/tests/politeness.rs`
 
 **Interfaces:**
-- `Client::new(budget, politeness: Politeness)`. **There are 49 `Client::new`
-  call sites** across `src/` and `tests/`; count them yourself first, and expect
+- `pub struct Politeness` carries **both** settings: the minimum gap and the
+  `Retry-After` cap. An earlier draft of this plan put the cap in no type at all
+  while its tests called a `Client::new_with_politeness(budget, gap, cap)` that
+  contradicted the signature two paragraphs above it. One type, two constructors:
+  `Politeness::new(min_gap: Duration, retry_after_cap: Duration)` and
+  `Politeness::unlimited()` (zero gap, zero cap, for tests).
+- `Client::new(budget, politeness: Politeness)` is the **only** constructor. Do
+  not add a second one for tests: the tests pass `Politeness::new(...)` with the
+  timings they need. **There are 49 `Client::new` call sites** across `src/` and `tests/`; count them yourself first, and expect
   the suite to be red until the last one is updated.
 
   The parameter is explicit rather than defaulted, and that is a deliberate cost.
@@ -382,7 +422,22 @@ git commit -m "feat(prober): a per-host gate that serialises and spaces requests
   seconds per request across 49 call sites the suite would take many minutes and
   somebody would soon delete the politeness rather than the slowness.
 - Two flags: `--min-gap-ms` (default **2000**) and `--retry-after-cap-s`
-  (default **120**).
+  (default **20**).
+
+  **Why 20 and not 120.** The wait happens inside the held guard, which is inside
+  the metric budget (60s) and the request budget (30s). A 120-second cap is
+  fiction: `tokio::time::timeout` would cancel the future at 60 seconds, so any
+  honoured wait above roughly 30 seconds could never complete and would report
+  `indeterminate` after burning the whole metric budget. The cap has to leave room
+  for the retried request inside the metric budget:
+
+      cap + request budget < metric budget
+      20s + 30s = 50s < 60s
+
+  State that arithmetic in a comment where the default lives, so a future reader
+  raising the cap sees what else has to move. If you want a longer cap, the metric
+  budget has to grow with it, and that is a decision for a later slice, not a
+  side effect of this one.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -439,6 +494,15 @@ async fn a_retry_after_beyond_the_cap_is_not_waited_out() {
 }
 
 #[tokio::test]
+async fn a_503_with_retry_after_is_honoured_like_a_429() {
+    // The prose covers both statuses, so both need pinning: a 503 with
+    // Retry-After is a server telling us it is temporarily down, which is the
+    // same instruction a 429 gives for a different reason.
+    let o = client.ask(&url_that_503s_once_with("1"), "ASK{}").await;
+    assert_eq!(o.status, Some(200), "the retry happened after the 503 too");
+}
+
+#[tokio::test]
 async fn an_unparseable_retry_after_is_not_guessed_at() {
     // We do not know how long to wait, so we do not wait and do not retry. The
     // 429 stands and resolves to `indeterminate`, which is honest: the endpoint
@@ -476,17 +540,42 @@ On a `429` or `503` carrying `Retry-After`, inside the held guard:
   exists to prevent.
 - `Unparseable`, or no header: report as observed, no wait, no retry.
 
-In every non-retry case the observation carries the real status, so `resolve()`
-maps it to `indeterminate` by the existing rules. Nothing here invents a verdict.
+In every non-retry case the observation carries the real status and nothing here
+invents a verdict: the existing rules in `resolve()` decide what it means.
+
+Do **not** write, as an earlier draft of this plan did, that those rules map it to
+`indeterminate`. That is false for one arm and the exception is deliberate: the
+`Cors` positive case is not status-gated, because an
+`access-control-allow-origin` header proves CORS is configured whatever the status
+carrying it. So a throttled 429 that still carries the header resolves to a
+confirmation, correctly. Check the arm for each probe kind rather than assuming a
+uniform answer, and if you find an arm where a throttle produces something other
+than `indeterminate` or a header-justified confirmation, report it.
 
 - [ ] **Step 5: Prove the tests are load-bearing**
 
-Mutations, each verified applied: acquire inside `get_with_body` as well (the
-preflight test must fail, by deadlock caught as a timeout); remove the acquire
-from one public method, `fetch_rdf` say (the all-probes-gated test must fail);
-retry regardless of the cap (the beyond-cap test must fail); retry in a loop
-instead of once (report what breaks, and if nothing does, add a test that
-counts the requests the mock received). Restore, `touch`, re-run.
+Mutations, each verified applied. Note carefully which test each one affects,
+because an earlier draft of this plan got it wrong:
+
+- **Acquire inside `get_with_body` as well.** This does NOT affect the preflight
+  test: `preflight` goes through `preflight_once`, not `get_with_body`. It
+  affects `every_public_probe_goes_through_the_gate`, whose `ask`, `cors`,
+  `select_iris` and `ask_literal` calls would each try to acquire a lock they
+  already hold. **This deadlocks, so the test hangs rather than failing**, and
+  `cargo test` would sit there until you kill it. Wrap that test's body in
+  `tokio::time::timeout` so the deadlock surfaces as a clean failure with a
+  legible message. Do the same for the preflight test, which the plan already
+  specifies with a timeout for the same reason.
+- **Acquire inside `preflight_once` as well.** This is the mutation that hits the
+  preflight test, again as a hang caught by its timeout.
+- Remove the acquire from one public method, `fetch_rdf` say: the
+  all-probes-gated test must fail on elapsed time.
+- Retry regardless of the cap: the beyond-cap test must fail.
+- Retry in a loop instead of once: report what breaks, and if nothing does, add a
+  test that counts the requests the mock received. `wiremock`'s
+  `received_requests()` is how.
+
+Restore after each, `touch`, re-run.
 
 - [ ] **Step 6: Commit**
 
