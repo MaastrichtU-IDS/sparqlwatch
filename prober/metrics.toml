@@ -9,18 +9,23 @@ dimension = "availability"
 kind = "Liveness"
 query = "SELECT ?s WHERE { ?s ?p ?o } LIMIT 1"
 
-# What is measured is an `access-control-allow-origin` header on a SIMPLE GET.
-# That is weaker than the request a browser editor actually makes: a real
-# cross-origin query is preflighted, so an endpoint that sets ACAO on GET but
-# does not answer OPTIONS would pass this and still fail in the editor. The
-# real check is an OPTIONS preflight probe kind; deferred to a later stage.
-# Until then the label states only what was observed.
+# Two CORS facts, deliberately separate. `cors` is what a curl user sees: an
+# access-control-allow-origin header on a simple GET. `cors-preflight` is what a
+# browser sees, and it decides whether the embedded editor can talk to this
+# endpoint at all. An endpoint can genuinely have one and not the other, so
+# neither subsumes the other.
 [[metric]]
 id = "cors"
 label = "Sends access-control-allow-origin on a simple GET"
 dimension = "interoperability"
 kind = "Cors"
 query = "SELECT ?s WHERE { ?s ?p ?o } LIMIT 1"
+
+[[metric]]
+id = "cors-preflight"
+label = "Answers a CORS preflight for a cross-origin GET"
+dimension = "interoperability"
+kind = "CorsPreflight"
 
 [[metric]]
 id = "geo-functions"

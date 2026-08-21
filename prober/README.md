@@ -19,15 +19,23 @@ resolves to exactly one of six verdicts:
 | `absent` | Neither claimed nor observed |
 | `indeterminate` | We never got to find out |
 
-`absent` may only be claimed when the evidence actually establishes absence.
-For every probe except the description fetch, that means the endpoint itself
-answered, with a 2xx status, in a form we could read. The description fetch
-has one further exception: a `404` or `410` also counts as absence, because
-those two statuses speak to what is published at the URL itself, not to our
-request or the server's general health. A timeout, an unreachable host, a
-429, a gateway error, an HTML query console, an unparseable body (anything
-else we never got to interpret) is `indeterminate`. There is deliberately no
-composite score and no ranking, here or downstream.
+`absent` may only be claimed when the evidence actually establishes absence:
+the endpoint itself has to have answered the question we asked. For most
+probes that means it answered with a 2xx status, in a form we could read. Two
+probes have a further exception, in both cases because the status code *is* the
+answer to their question rather than a fact about our request:
+
+- the description fetch, where a `404` or `410` counts as absence, because
+  those two statuses speak to what is published at the URL itself;
+- the CORS preflight, where a `405`, a `501` or any `3xx` counts as absence,
+  because a browser's `fetch` requires the preflight to answer with an ok
+  status and not be redirected, so those statuses are the endpoint saying it
+  will not serve a cross-origin query.
+
+A timeout, an unreachable host, a 429, a gateway error, an HTML query console,
+an unparseable body (anything else we never got to interpret) is
+`indeterminate`. There is deliberately no composite score and no ranking, here
+or downstream.
 
 All judgement lives in one pure function, `resolve()` in `src/resolve.rs`. The
 HTTP client returns evidence and no opinion; the emitter is a pure function of
@@ -76,8 +84,8 @@ registry is seeded from a real-world dump known to contain junk, and one bad
 string must not discard a whole sweep's work.
 
 **`metrics.toml`** is the metric definitions, as *data*. Each names a probe
-kind from a closed set (`Liveness`, `Cors`, `AskFilter`, `AskData`,
-`SelectIris`, `FetchWellKnown`) plus its parameters, so adding a metric that
+kind from a closed set (`Liveness`, `Cors`, `CorsPreflight`, `AskFilter`,
+`AskData`, `SelectIris`, `FetchWellKnown`) plus its parameters, so adding a metric that
 fits an existing kind needs no Rust change. An unknown kind, or a
 bindings-reading kind with no `var`, is a loud load error rather than a silent
 default. The definitions are hashed into a `metricDefinitionRevision` recorded
@@ -104,12 +112,27 @@ default dataset or graphs, 3 carries VoID class or property partitions, 4
 declares an entailment regime, example resources, or extension functions. It is
 monotonic: a description that declares more never grades lower.
 
-The labels in that file state only what was actually measured. Two of them are
-narrower than they look: `geo-data` and `classes` query only the **default
-graph**, so an endpoint holding everything in named graphs answers empty; and
-`cors` observes an `access-control-allow-origin` header on a **simple GET**,
-which is weaker than the preflighted request a browser editor makes. Probing
-`GRAPH ?g` and an `OPTIONS` preflight are the real checks and are deferred.
+The labels in that file state only what was actually measured. `geo-data` and
+`classes` are narrower than they look: they query only the **default graph**,
+so an endpoint holding everything in named graphs answers empty. Probing
+`GRAPH ?g` as well and comparing is the real check and is deferred.
+
+The two CORS metrics are deliberately separate facts, and neither subsumes the
+other. `cors` observes an `access-control-allow-origin` header on a **simple
+GET**: what a `curl` user sees. `cors-preflight` sends the `OPTIONS` preflight a
+browser sends before a cross-origin query (`Origin`,
+`Access-Control-Request-Method: GET`, `Access-Control-Request-Headers:
+content-type`) and is what decides whether an embedded query editor can talk to
+the endpoint at all. An endpoint that sets the header on GET and refuses
+`OPTIONS` is common, and it reports `undeclared-but-verified` on the first and
+`absent` on the second, which is the honest pair of answers. The preflight
+probe does not follow redirects: a `303` would rewrite the `OPTIONS` into a
+`GET` and hand back exactly the simple-GET header we already have, publishing
+`verified` for that endpoint. `verified` on `cors-preflight` requires a 2xx
+whose `access-control-allow-origin` is `*` or our own origin
+(`https://sparqlwatch.dev.k8s.semanticscience.org`, the same host the
+`User-Agent` names) and whose `access-control-allow-methods`, if it sends one,
+lists GET. A header naming somebody else's origin is a grant to somebody else.
 
 ## Proxy environment
 

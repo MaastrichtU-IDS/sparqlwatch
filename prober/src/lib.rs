@@ -191,9 +191,12 @@ async fn probe_endpoint(
             match def.kind {
                 ProbeKind::AskData => client.ask_literal(ep, &q, var.as_deref().expect(VAR_REQUIRED)).await,
                 ProbeKind::SelectIris => client.select_iris(ep, &q, var.as_deref().expect(VAR_REQUIRED)).await,
-                // The only probe that announces an `Origin`, so the others
+                // The two probes that announce an `Origin`, so the others
                 // cannot be perturbed by a server that filters on it.
                 ProbeKind::Cors => client.cors(ep, &q).await,
+                // Takes no query: a preflight carries none, and this probe
+                // asks whether a browser would be allowed to send one at all.
+                ProbeKind::CorsPreflight => client.preflight(ep).await,
                 ProbeKind::Liveness => client.ask(ep, &q).await,
                 ProbeKind::AskFilter => client.ask(ep, &q).await,
                 ProbeKind::FetchWellKnown => unreachable!("FetchWellKnown is handled once per endpoint before the per-metric dispatch"),

@@ -5,7 +5,13 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProbeKind {
     Liveness,
+    /// An `access-control-allow-origin` header on a simple GET: what a `curl`
+    /// user sees.
     Cors,
+    /// An `OPTIONS` preflight for a cross-origin GET: what a browser sees.
+    /// Deliberately separate from `Cors`, because an endpoint can genuinely
+    /// have one and not the other and neither subsumes the other.
+    CorsPreflight,
     /// A data-free filter, testing whether a function is bound.
     AskFilter,
     /// An ASK over data, testing presence. Uses the literal guard.
@@ -29,6 +35,7 @@ impl ProbeKind {
         match self {
             ProbeKind::Liveness
             | ProbeKind::Cors
+            | ProbeKind::CorsPreflight
             | ProbeKind::AskFilter
             | ProbeKind::AskData
             | ProbeKind::SelectIris
@@ -160,6 +167,17 @@ query = "ASK { }"
         let ms = load_metrics(include_str!("../metrics.toml")).unwrap();
         assert!(ms.iter().any(|m| m.id == "geo-data"));
         assert!(ms.iter().find(|m| m.id == "service-description").unwrap().graded);
+        // The two CORS facts are both shipped, and they are different kinds.
+        // A `cors-preflight` metric accidentally defined as `kind = "Cors"`
+        // would publish the simple-GET header under the preflight's label,
+        // which is the exact mislabelling this metric exists to end.
+        assert_eq!(ms.iter().find(|m| m.id == "cors").unwrap().kind, ProbeKind::Cors);
+        let preflight = ms.iter().find(|m| m.id == "cors-preflight").expect("cors-preflight must be shipped");
+        assert_eq!(preflight.kind, ProbeKind::CorsPreflight);
+        // A preflight carries no query, and no declaration speaks for a CORS
+        // policy, so neither field may be set on it.
+        assert_eq!(preflight.query, None);
+        assert_eq!(preflight.declared_by, None);
     }
 
     #[test]
@@ -168,8 +186,9 @@ query = "ASK { }"
         // `probe_endpoint`, dispatched ahead of this generic per-metric path
         // rather than through it, but it is implemented now: no kind in the
         // closed set currently lacks one.
-        for k in [ProbeKind::Liveness, ProbeKind::Cors, ProbeKind::AskFilter,
-                  ProbeKind::AskData, ProbeKind::SelectIris, ProbeKind::FetchWellKnown] {
+        for k in [ProbeKind::Liveness, ProbeKind::Cors, ProbeKind::CorsPreflight,
+                  ProbeKind::AskFilter, ProbeKind::AskData, ProbeKind::SelectIris,
+                  ProbeKind::FetchWellKnown] {
             assert!(k.has_probe(), "{k:?} should have a probe");
         }
     }

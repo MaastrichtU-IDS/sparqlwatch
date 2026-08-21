@@ -32,6 +32,14 @@ async fn a_sweep_over_one_mock_endpoint_produces_nquads() {
             .insert_header("access-control-allow-origin", "*")
             .set_body_string(r#"{"head":{"vars":["s"]},"results":{"bindings":[{"s":{"type":"uri","value":"http://example.org/a"}}]},"boolean":true}"#))
         .mount(&server).await;
+    // The browser's question, answered with a grant. Separate from the GET
+    // mock above on purpose: the two CORS metrics are two different facts, and
+    // this endpoint has both.
+    Mock::given(method("OPTIONS")).and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(204)
+            .insert_header("access-control-allow-origin", "*")
+            .insert_header("access-control-allow-methods", "GET, POST, OPTIONS"))
+        .mount(&server).await;
 
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
     let client = Client::new(Budget::default()).unwrap();
@@ -50,6 +58,9 @@ async fn a_sweep_over_one_mock_endpoint_produces_nquads() {
         ("availability", Verdict::Verified),
         // The mock sets access-control-allow-origin.
         ("cors", Verdict::UndeclaredButVerified),
+        // And it answers the OPTIONS preflight with a wildcard grant that
+        // lists GET, so a browser would be allowed to query it too.
+        ("cors-preflight", Verdict::Verified),
         // boolean:true against expect = true.
         ("geo-functions", Verdict::UndeclaredButVerified),
         // The mock binds ?s, not ?g, so no WKT literal is present and the 200

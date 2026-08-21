@@ -3,9 +3,20 @@ use crate::observe::{BodyKind, Observation};
 use oxrdfio::{RdfFormat, RdfParser};
 use std::time::Instant;
 
-/// Announced only by the CORS probe, so the other probes cannot be perturbed
-/// by a server that filters on it.
-const ORIGIN: &str = "https://sparqlwatch.example";
+/// Announced only by the two CORS probes, so the other probes cannot be
+/// perturbed by a server that filters on it.
+///
+/// Public because `resolve` compares an endpoint's
+/// `access-control-allow-origin` against it: an exact echo of our origin is a
+/// grant to us, anything else is a grant to somebody else. Sharing the one
+/// constant is what stops the announced origin and the compared origin from
+/// drifting apart.
+///
+/// It has to be a domain that actually resolves. We announce it to every
+/// endpoint we probe, and an operator running an origin allowlist cannot
+/// allowlist a name that does not exist. Same defect as the placeholder
+/// `User-Agent` corrected in 8c22c1e, in the other header we send strangers.
+pub const ORIGIN: &str = "https://sparqlwatch.dev.k8s.semanticscience.org";
 
 /// The `Accept` header for a queryless RDF fetch (e.g. a service description).
 /// Distinct from the SPARQL-results `Accept` used by `get_with_body`: this
@@ -57,6 +68,10 @@ fn truncate_body(s: String, max: usize) -> String {
 
 pub struct Client {
     http: reqwest::Client,
+    /// Used by `preflight` and nothing else, because reqwest's redirect policy
+    /// is per-Client and this probe is the one that must not follow one. See
+    /// `preflight` for why.
+    no_redirect: reqwest::Client,
 }
 
 impl Client {
@@ -74,10 +89,22 @@ impl Client {
                 " (+https://sparqlwatch.dev.k8s.semanticscience.org/about)"
             ))
             .build()?;
-        Ok(Self { http })
+        // Same settings, minus redirect following. A separate Client rather
+        // than a per-request setting because reqwest's redirect policy is a
+        // Client-level property.
+        let no_redirect = reqwest::Client::builder()
+            .timeout(budget.request)
+            .redirect(reqwest::redirect::Policy::none())
+            .user_agent(concat!(
+                "sparqlwatch/", env!("CARGO_PKG_VERSION"),
+                " (+https://sparqlwatch.dev.k8s.semanticscience.org/about)"
+            ))
+            .build()?;
+        Ok(Self { http, no_redirect })
     }
 
-    /// `send_origin` is true only for the CORS probe. One request shape served
+    /// `send_origin` is true only for the simple-GET CORS probe (the preflight
+    /// does not go through this path). One request shape served
     /// every metric before, so every probe announced an `Origin`; a server that
     /// rejects unknown origins could then perturb the evidence for the metrics
     /// that are not about CORS at all.
@@ -134,6 +161,10 @@ impl Client {
             // alone, and nothing downstream scopes a query result by URL.
             final_url: None,
             content_type: if ctype.is_empty() { None } else { Some(ctype.clone()) },
+            // CORS preflight evidence belongs to `preflight` alone.
+            allow_origin: None,
+            allow_methods: None,
+            allow_headers: None,
             elapsed_ms: elapsed,
             error: None,
         };
@@ -200,6 +231,9 @@ impl Client {
             body: Some(body),
             final_url: Some(final_url),
             content_type: if ctype.is_empty() { None } else { Some(ctype.to_ascii_lowercase()) },
+            allow_origin: None,
+            allow_methods: None,
+            allow_headers: None,
             elapsed_ms: elapsed,
             error: None,
         }
@@ -234,13 +268,70 @@ impl Client {
         self.get_with_body(url, query, false).await.0
     }
 
-    /// The CORS probe: the one request that announces an `Origin`, because the
-    /// question it asks is what the endpoint does with one. Note what this
-    /// measures -- an `access-control-allow-origin` header on a simple GET --
-    /// which is weaker than the preflighted request a real browser editor
-    /// makes. An `OPTIONS` preflight probe is the real check and is deferred.
+    /// The simple-GET CORS probe: a query request that announces an `Origin`,
+    /// because the question it asks is what the endpoint does with one. Note
+    /// what this measures -- an `access-control-allow-origin` header on a
+    /// simple GET -- which is what a `curl` user sees and is weaker than the
+    /// preflighted request a real browser editor makes. `preflight` below is
+    /// the browser's question. Both facts are published; neither subsumes the
+    /// other, because an endpoint can genuinely have one and not the other.
     pub async fn cors(&self, url: &str, query: &str) -> Observation {
         self.get_with_body(url, query, true).await.0
+    }
+
+    /// The preflight a browser sends before a cross-origin SPARQL query: an
+    /// `OPTIONS` request carrying `Origin`, `Access-Control-Request-Method`
+    /// and `Access-Control-Request-Headers`. Without the request-method header
+    /// this is not a preflight at all and a correct server may ignore it,
+    /// which would make every verdict the resolver draws from it meaningless.
+    ///
+    /// Issued on `no_redirect`, so a redirect is observed rather than
+    /// followed. A `303` otherwise rewrites the `OPTIONS` into a `GET`, and an
+    /// endpoint that refuses `OPTIONS` but sets
+    /// `access-control-allow-origin` on a simple GET would then publish
+    /// `verified`: precisely the endpoint this metric exists to catch. A
+    /// browser fails a redirected preflight anyway, so the redirect itself is
+    /// the answer.
+    ///
+    /// Records the header VALUES, not just presence, because presence is not a
+    /// grant. No body is read or classified: a preflight response has no
+    /// meaningful body, and a `204` has none at all.
+    pub async fn preflight(&self, url: &str) -> Observation {
+        let start = Instant::now();
+        let resp = self
+            .no_redirect
+            .request(reqwest::Method::OPTIONS, url)
+            .header("Origin", ORIGIN)
+            .header("Access-Control-Request-Method", "GET")
+            .header("Access-Control-Request-Headers", "content-type")
+            .send()
+            .await;
+        let elapsed = start.elapsed().as_millis() as u64;
+
+        let resp = match resp {
+            Ok(r) => r,
+            Err(e) => return Observation::failed(e.to_string(), elapsed),
+        };
+        let headers = resp.headers();
+        let value = |name: &str| {
+            headers.get(name).and_then(|v| v.to_str().ok()).map(str::to_string)
+        };
+
+        Observation {
+            status: Some(resp.status().as_u16()),
+            cors: headers.contains_key("access-control-allow-origin"),
+            boolean: None,
+            bindings: Vec::new(),
+            body_kind: BodyKind::None,
+            body: None,
+            final_url: None,
+            content_type: None,
+            allow_origin: value("access-control-allow-origin"),
+            allow_methods: value("access-control-allow-methods"),
+            allow_headers: value("access-control-allow-headers"),
+            elapsed_ms: elapsed,
+            error: None,
+        }
     }
 
     /// Pull binding rows out of a SPARQL JSON body, keeping only the requested

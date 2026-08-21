@@ -1,4 +1,5 @@
 use crate::budget::Expired;
+use crate::client::ORIGIN;
 use crate::declare::Declarations;
 use crate::metrics::{MetricDef, ProbeKind};
 use crate::observe::{BodyKind, Observation};
@@ -41,16 +42,59 @@ fn answered_ok(o: &Observation) -> bool {
     matches!(o.status, Some(s) if (200..=299).contains(&s))
 }
 
+/// Whether `access-control-allow-methods` permits the GET we would send. An
+/// absent header is a grant: the header is optional and a preflight that
+/// answered without it refused nothing. An empty header is NOT a grant, because
+/// the server stated a list and GET is not in it.
+///
+/// Comparison is per comma-separated entry, never a substring search: a list of
+/// `POSTGET` (or, in the wild, a header value mangled by a proxy) contains the
+/// three letters of GET and permits nothing.
+fn allows_get(allow_methods: Option<&str>) -> bool {
+    let Some(list) = allow_methods else {
+        return true;
+    };
+    if list.trim() == "*" {
+        return true;
+    }
+    list.split(',').any(|m| m.trim().eq_ignore_ascii_case("GET"))
+}
+
+/// Whether `access-control-allow-origin` grants OUR origin. A wildcard grants
+/// everyone; an exact echo of our origin grants us. Anything else is a grant to
+/// somebody else, and reporting it as ours would publish `verified` for an
+/// endpoint that would refuse us in a browser.
+///
+/// `None` (no header at all) is not a grant, which is why the probe records the
+/// header's value and not merely `Observation.cors`.
+fn grants_our_origin(allow_origin: Option<&str>) -> bool {
+    let Some(value) = allow_origin else {
+        return false;
+    };
+    let value = value.trim();
+    value == "*" || value.eq_ignore_ascii_case(ORIGIN)
+}
+
 /// Turn observation plus declaration into a verdict. This is the only place
 /// judgement happens: no probing, no I/O, pure function.
 ///
-/// The rule applied uniformly below: **an absence claim requires
-/// `answered_ok`.** `Absent` (and `DeclaredButWrong`, which the spec ranks as
-/// worse still) may only be minted from a response the endpoint itself
-/// authored with a 2xx status. Anything else -- a throttle, a gateway error,
-/// an unparseable body, a response we never got -- is `Indeterminate`. There
-/// is exactly one deliberate exception: the `Cors` *positive* case, because an
-/// `access-control-allow-origin` header proves CORS at any status.
+/// The rule applied uniformly below: **an absence claim requires the endpoint
+/// to have answered the question we asked.** `Absent` (and
+/// `DeclaredButWrong`, which the spec ranks as worse still) may only be minted
+/// from a response the endpoint itself authored. For most probe kinds that
+/// means `answered_ok`: a 2xx, in a form we could read. Anything else -- a
+/// throttle, a gateway error, an unparseable body, a response we never got --
+/// is `Indeterminate`.
+///
+/// Two deliberate departures, both because the status IS the answer for the
+/// question being asked:
+///
+/// - the `Cors` *positive* case, because an `access-control-allow-origin`
+///   header proves CORS is configured at any status;
+/// - `CorsPreflight`, where a `405`, a `501` or a `3xx` is the endpoint
+///   telling us it will not serve a browser's preflight, so those statuses
+///   are an absence rather than an unknown. `resolve_fetch` has the third
+///   such case, a `404`/`410` on the description.
 pub fn resolve(def: &MetricDef, declared: Declared, obs: Result<&Observation, Expired>) -> Verdict {
     let o = match obs {
         Err(Expired) => return Verdict::Indeterminate,
@@ -119,6 +163,47 @@ pub fn resolve(def: &MetricDef, declared: Declared, obs: Result<&Observation, Ex
                 Verdict::Indeterminate
             }
         }
+        ProbeKind::CorsPreflight => {
+            // ORDER IS PART OF THE SPECIFICATION HERE, and the status gate
+            // comes FIRST. An earlier draft of these rules was a table, the
+            // natural implementation checked the headers before the status,
+            // and it returned `Verified` for a `405` carrying
+            // `access-control-allow-origin: *` -- a blanket header from a
+            // front-end filter over a handler that refuses OPTIONS, which is
+            // exactly the endpoint this metric exists to catch. Do not hoist
+            // the header check above this match.
+            //
+            // Rule 1 (expired budget, transport error) is handled by the
+            // guards at the top of this function.
+            match o.status {
+                // Fetch requires the preflight to answer with an ok status, so
+                // a 405/501 fails the preflight whatever headers ride along.
+                // This is the endpoint answering the question we asked, which
+                // is what licenses an absence claim.
+                Some(405) | Some(501) => Verdict::Absent,
+                // A browser fails a redirected preflight, so a 3xx is an
+                // answer too. `Client::preflight` also declines to follow it,
+                // so what we observe here is the redirect itself.
+                Some(s) if (300..=399).contains(&s) => Verdict::Absent,
+                // Any other non-2xx describes our request or the server's
+                // state, not its CORS policy.
+                Some(s) if !(200..=299).contains(&s) => Verdict::Indeterminate,
+                // 2xx: now, and only now, the headers decide.
+                Some(_) => {
+                    if grants_our_origin(o.allow_origin.as_deref()) && allows_get(o.allow_methods.as_deref()) {
+                        Verdict::Verified
+                    } else {
+                        // The endpoint answered the preflight and did not grant
+                        // us the request we would make.
+                        Verdict::Absent
+                    }
+                }
+                // No status and no error is not a state `Client::preflight` can
+                // produce, but a status is the evidence every rule above rests
+                // on, so its absence is an unknown rather than an absence.
+                None => Verdict::Indeterminate,
+            }
+        }
         ProbeKind::Liveness => {
             // A SPARQL JSON body is proof it speaks the protocol. A non-SPARQL
             // body only establishes absence when the endpoint answered
@@ -178,7 +263,9 @@ pub fn grade_from_declarations(defs: &Declarations) -> Level {
 /// no code here dereferences a well-known URL.
 ///
 /// `Absent` is minted only from a `404` or a `410`: those are the only status
-/// codes that speak to what is published at the URL -- nothing was ever
+/// codes that speak to what is published at the URL, and they are one of the
+/// three places in this module where a non-2xx status licenses an absence,
+/// alongside the `405`/`501`/`3xx` of a refused `CorsPreflight` -- nothing was ever
 /// there, or it was and has since been removed. Every other non-2xx status,
 /// `401`/`403` included, describes our request or the server's state, not
 /// the endpoint's published metadata, so it stays `Indeterminate`. This is
@@ -278,7 +365,7 @@ mod tests {
     }
 
     fn obs(boolean: Option<bool>) -> Observation {
-        Observation { status: Some(200), cors: true, boolean, bindings: vec![], body_kind: BodyKind::SparqlJson, body: None, final_url: None, content_type: None, elapsed_ms: 5, error: None }
+        Observation { status: Some(200), cors: true, boolean, bindings: vec![], body_kind: BodyKind::SparqlJson, body: None, final_url: None, content_type: None, allow_origin: None, allow_methods: None, allow_headers: None, elapsed_ms: 5, error: None }
     }
 
     #[test]
@@ -488,6 +575,82 @@ mod tests {
         o.status = Some(503);
         let v = resolve(&def(ProbeKind::Cors, None), Declared { claimed: false }, Ok(&o));
         assert_eq!(v, Verdict::Indeterminate);
+    }
+
+    #[test]
+    fn allows_get_reads_a_method_list_entry_by_entry() {
+        // An absent header is a grant: it is optional for a simple method, so a
+        // preflight that answered without it refused nothing.
+        assert!(allows_get(None), "an absent allow-methods header refuses nothing");
+        assert!(allows_get(Some("*")));
+        assert!(allows_get(Some("GET")));
+        assert!(allows_get(Some("get")), "method names compare case-insensitively");
+        assert!(allows_get(Some("GET, POST")));
+        assert!(!allows_get(Some("POST")));
+        // An empty header is NOT a grant: the server stated a list and GET is
+        // not in it.
+        assert!(!allows_get(Some("")), "an empty list grants nothing");
+        // The case a naive `contains` gets wrong.
+        assert!(!allows_get(Some("POSTGET")), "GET must be a list entry, not a substring");
+    }
+
+    #[test]
+    fn grants_our_origin_accepts_only_a_wildcard_or_us() {
+        assert!(!grants_our_origin(None), "no header is no grant");
+        assert!(grants_our_origin(Some("*")));
+        assert!(grants_our_origin(Some(ORIGIN)));
+        assert!(
+            grants_our_origin(Some(&ORIGIN.to_ascii_uppercase())),
+            "an origin is host-insensitive to case, so an uppercased echo is still us"
+        );
+        // A grant to somebody else. Publishing `verified` off this would be a
+        // confident wrong answer about an endpoint that would refuse us.
+        assert!(!grants_our_origin(Some("https://example.com")));
+        assert!(!grants_our_origin(Some("")));
+    }
+
+    /// The ordered status gate, at the unit level: the header check must not be
+    /// reachable for a 405, whatever the headers say.
+    #[test]
+    fn a_preflight_405_is_absent_even_with_a_wildcard_grant() {
+        let mut o = obs(None);
+        o.body_kind = BodyKind::None;
+        o.status = Some(405);
+        o.allow_origin = Some("*".into());
+        o.allow_methods = Some("GET, POST, OPTIONS".into());
+        let v = resolve(&def(ProbeKind::CorsPreflight, None), Declared { claimed: false }, Ok(&o));
+        assert_eq!(v, Verdict::Absent, "the status gate must be consulted before any header");
+    }
+
+    #[test]
+    fn a_preflight_3xx_is_absent_and_a_4xx_or_5xx_is_indeterminate() {
+        for status in [301, 302, 303, 307, 308] {
+            let mut o = obs(None);
+            o.body_kind = BodyKind::None;
+            o.status = Some(status);
+            o.allow_origin = Some("*".into());
+            let v = resolve(&def(ProbeKind::CorsPreflight, None), Declared { claimed: false }, Ok(&o));
+            assert_eq!(v, Verdict::Absent, "a browser fails a redirected preflight: {status}");
+        }
+        for status in [400, 401, 403, 404, 429, 500, 502, 503] {
+            let mut o = obs(None);
+            o.body_kind = BodyKind::None;
+            o.status = Some(status);
+            o.allow_origin = Some("*".into());
+            let v = resolve(&def(ProbeKind::CorsPreflight, None), Declared { claimed: false }, Ok(&o));
+            assert_eq!(v, Verdict::Indeterminate, "status {status} describes our request, not a CORS policy");
+        }
+    }
+
+    #[test]
+    fn an_expired_or_failed_preflight_is_indeterminate_never_absent() {
+        let d = def(ProbeKind::CorsPreflight, None);
+        assert_eq!(resolve(&d, Declared { claimed: false }, Err(Expired)), Verdict::Indeterminate);
+        let mut o = obs(None);
+        o.body_kind = BodyKind::None;
+        o.status = None;
+        o.error = Some("connection reset".into());
+        assert_eq!(resolve(&d, Declared { claimed: false }, Ok(&o)), Verdict::Indeterminate);
     }
 
     #[test]

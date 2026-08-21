@@ -47,6 +47,26 @@ pub struct Observation {
     /// declarations, indistinguishable from a genuinely empty description.
     #[serde(default)]
     pub content_type: Option<String>,
+    /// The `access-control-allow-origin` header's VALUE, on a preflight.
+    /// `cors` above records only presence, and presence is not a grant: a
+    /// value that is neither `*` nor our own origin grants somebody else, and
+    /// publishing that as ours would be a confident wrong answer. `None` for
+    /// every probe that is not a preflight, and when no such header was sent.
+    #[serde(default)]
+    pub allow_origin: Option<String>,
+    /// The `access-control-allow-methods` header's value, on a preflight.
+    /// `None` both when the header was absent (which permits a simple GET,
+    /// the header being optional) and for every non-preflight probe; the
+    /// resolver only consults it for the preflight kind, so the two cannot be
+    /// confused.
+    #[serde(default)]
+    pub allow_methods: Option<String>,
+    /// The `access-control-allow-headers` header's value, on a preflight.
+    /// Recorded as evidence rather than judged: the preflight asks about
+    /// `content-type`, and an operator debugging a refusal wants to see what
+    /// came back.
+    #[serde(default)]
+    pub allow_headers: Option<String>,
     pub elapsed_ms: u64,
     #[serde(default)]
     pub error: Option<String>,
@@ -63,6 +83,9 @@ impl Observation {
             body: None,
             final_url: None,
             content_type: None,
+            allow_origin: None,
+            allow_methods: None,
+            allow_headers: None,
             elapsed_ms,
             error: Some(error),
         }
