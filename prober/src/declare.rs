@@ -115,8 +115,14 @@ pub fn parse_declarations(body: &str, content_type: Option<&str>, endpoint: &str
 /// host) while the registry holds the one we asked for, and both name the
 /// same service.
 pub fn parse_declarations_for(body: &str, content_type: Option<&str>, endpoints: &[&str]) -> Declarations {
+    // `media::rdf_format_of`, not `RdfFormat::from_media_type` directly: the
+    // header routinely carries a `charset` parameter, and handing that to
+    // `from_media_type` returns `None`, silently reparsing an RDF/XML or
+    // JSON-LD description as Turtle and losing every declaration in it. That
+    // is exactly the drift that put the rule in one shared place, where
+    // `client.rs` reads it too.
     let format = content_type
-        .and_then(RdfFormat::from_media_type)
+        .and_then(crate::media::rdf_format_of)
         .unwrap_or(RdfFormat::Turtle);
 
     // Collected rather than streamed, because scoping cannot be decided

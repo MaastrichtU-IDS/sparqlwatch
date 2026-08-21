@@ -1,4 +1,5 @@
 use crate::budget::Budget;
+use crate::media;
 use crate::observe::{BodyKind, Observation};
 use oxrdfio::{RdfFormat, RdfParser};
 use std::collections::HashSet;
@@ -253,13 +254,20 @@ impl Client {
 
     /// The RDF format `ctype` announces, but only for a media type that
     /// identifies RDF specifically (see `RDF_MEDIA_TYPES`). Parameters such as
-    /// `; charset=utf-8` are stripped before the comparison.
+    /// `; charset=utf-8` are stripped by `media::essence`, which is shared
+    /// with `declare.rs` so the classification and the declaration parse can
+    /// never again disagree about what a body is.
+    ///
+    /// The allowlist stays here and is not pushed down into `media`: this
+    /// function's answer decides whether a body is CLASSIFIED as RDF, which is
+    /// an assertive claim, while `declare.rs` only needs a parser for a body it
+    /// is going to read either way.
     fn rdf_format_of(ctype: &str) -> Option<RdfFormat> {
-        let essence = ctype.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+        let essence = media::essence(ctype);
         if !RDF_MEDIA_TYPES.contains(&essence.as_str()) {
             return None;
         }
-        RdfFormat::from_media_type(&essence)
+        media::rdf_format_of(&essence)
     }
 
     /// Whether `body` parses under `fmt` AND yields at least one triple.

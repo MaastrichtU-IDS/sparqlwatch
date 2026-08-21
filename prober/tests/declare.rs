@@ -57,6 +57,75 @@ fn an_unknown_content_type_still_parses_if_the_payload_is_turtle() {
     assert!(d.declares(&format!("{SD}UnionDefaultGraph")), "should fall back to Turtle");
 }
 
+/// I2. `Content-Type: application/rdf+xml; charset=utf-8` is what a real
+/// server sends, and `RdfFormat::from_media_type` given that whole header
+/// answers `None`, so the body was reparsed as Turtle: zero triples, no
+/// declarations, and a run that published `verified` with `Level(0)` next to
+/// `declarationsRead = false` for a document it had just read. The parameter
+/// has to be stripped here exactly as `client.rs` strips it, which is why
+/// there is now one shared `media::rdf_format_of` and not two copies.
+///
+/// Asserts the declaration CONTENT, not a count: a Turtle fallback that
+/// happened to parse something would still not produce these IRIs.
+#[test]
+fn a_charset_parameter_does_not_send_a_non_turtle_body_to_the_turtle_parser() {
+    const RDFXML: &str = r#"<?xml version="1.0"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns:sd="http://www.w3.org/ns/sparql-service-description#">
+  <sd:Service rdf:about="http://example.org/sparql">
+    <sd:feature rdf:resource="http://www.w3.org/ns/sparql-service-description#UnionDefaultGraph"/>
+    <sd:extensionFunction rdf:resource="http://www.opengis.net/def/function/geosparql/sfWithin"/>
+  </sd:Service>
+</rdf:RDF>
+"#;
+    const JSONLD: &str = r#"{
+  "@id": "http://example.org/sparql",
+  "@type": "http://www.w3.org/ns/sparql-service-description#Service",
+  "http://www.w3.org/ns/sparql-service-description#feature": {
+    "@id": "http://www.w3.org/ns/sparql-service-description#UnionDefaultGraph"
+  },
+  "http://www.w3.org/ns/sparql-service-description#extensionFunction": {
+    "@id": "http://www.opengis.net/def/function/geosparql/sfWithin"
+  }
+}"#;
+    const SF_WITHIN: &str = "http://www.opengis.net/def/function/geosparql/sfWithin";
+    /// `oxrdfio` 0.2.5 tolerates a bare `charset=utf-8` on the full header, so
+    /// the brief's own examples pass either way and pin nothing. These are the
+    /// parameters it really refuses, and every one is a header a real server
+    /// sends: a legacy charset (the review's live reproduction), a
+    /// quoted-string parameter value (legal per RFC 9110), and a bare
+    /// parameter with no `=`. The body reaching us is a Rust `str` whatever
+    /// the charset said, so the parameter has no business selecting a parser.
+    const HEADERS: [(&str, &str); 7] = [
+        (RDFXML, "application/rdf+xml; charset=utf-8"),
+        (RDFXML, "application/rdf+xml; charset=iso-8859-1"),
+        (RDFXML, "application/rdf+xml; charset=\"utf-8\""),
+        (JSONLD, "application/ld+json; charset=utf-8"),
+        (JSONLD, "application/ld+json; charset=\"utf-8\""),
+        // The format the old fallback was accidentally right about.
+        (include_str!("fixtures/virtuoso-stub.ttl"), "text/turtle; charset=utf-8"),
+        (include_str!("fixtures/virtuoso-stub.ttl"), "text/turtle; utf-8"),
+    ];
+
+    for (body, ctype) in HEADERS {
+        let d = parse_declarations(body, Some(ctype), STUB_ENDPOINT);
+        assert!(d.triples > 0, "nothing parsed at all under {ctype}");
+        assert!(
+            d.declares(&format!("{SD}UnionDefaultGraph")),
+            "the declared feature was lost under {ctype}"
+        );
+    }
+
+    for (body, ctype) in HEADERS {
+        if body == include_str!("fixtures/virtuoso-stub.ttl") {
+            continue; // that fixture declares no extension function
+        }
+        let d = parse_declarations(body, Some(ctype), STUB_ENDPOINT);
+        assert!(d.extension_functions.contains(SF_WITHIN), "the declared function was lost under {ctype}");
+        assert!(d.doc_declares_extension_functions, "and the document-level flag with it, under {ctype}");
+    }
+}
+
 #[test]
 fn empty_declarations_declare_nothing() {
     let d = Declarations::empty();

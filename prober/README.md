@@ -105,7 +105,14 @@ an empty throttle body, a `{"error":"boom"}` page and a SPARQL-results document
 all parse cleanly, so a generic media type is not a positive identification of
 RDF and neither is a zero-triple parse. A genuine RDF/XML document served as bare
 `application/xml` therefore reports `indeterminate`, which is honest, rather than
-a confident verdict. A `404` or `410` response returns `Absent` with level 0. Any
+a confident verdict. The media type is read through one shared function
+(`src/media.rs`), which strips the header's parameters (`; charset=utf-8`)
+before matching, because that decision has to be identical here and in the
+declaration parser: when there were two copies they drifted, and an RDF/XML
+description served with a charset parameter classified as RDF, then got
+reparsed as Turtle, publishing `verified` with level 0 (which means "none
+served"), `declarationsRead false` for a document we had read, and losing every
+declaration in it. A `404` or `410` response returns `Absent` with level 0. Any
 other status is `Indeterminate`, recording that the request failed rather than
 that the description is absent.
 

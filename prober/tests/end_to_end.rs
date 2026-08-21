@@ -330,6 +330,106 @@ async fn a_description_served_as_rdf_xml_is_parsed_not_silently_dropped() {
     );
 }
 
+/// The same declaration as `STUB_TTL` and `STUB_RDFXML`, in JSON-LD, the third
+/// syntax `RDF_ACCEPT` asks for. Written with full IRIs and no `@context` so
+/// the test reads what the parser sees.
+const STUB_JSONLD: &str = r#"{
+  "@id": "http://example.org/sparql",
+  "@type": "http://www.w3.org/ns/sparql-service-description#Service",
+  "http://www.w3.org/ns/sparql-service-description#feature": {
+    "@id": "http://www.w3.org/ns/sparql-service-description#UnionDefaultGraph"
+  },
+  "http://www.w3.org/ns/sparql-service-description#extensionFunction": {
+    "@id": "http://www.opengis.net/def/function/geosparql/sfWithin"
+  }
+}"#;
+
+/// Sweep one endpoint whose queryless description fetch serves `body` under
+/// `content_type` and whose query probes all answer. Returns the
+/// `service-description` verdict and level, the `geo-functions` verdict, and
+/// the endpoint's `declarationsRead` fact: I2 corrupted all four at once.
+async fn sweep_description_served_as(
+    body: &str,
+    content_type: &str,
+) -> (Verdict, Option<Level>, Verdict, bool) {
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/sparql")).and(query_param_is_missing("query"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(body.as_bytes().to_vec(), content_type))
+        .mount(&server).await;
+    Mock::given(method("GET")).and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(WORKING_QUERY_RESPONSE))
+        .mount(&server).await;
+
+    let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
+    let client = Client::new(Budget::default()).unwrap();
+    let url = format!("{}/sparql", server.uri());
+    let (rows, read) = run_sweep(std::slice::from_ref(&url), &defs, &client, Budget::default()).await;
+    let row = |id: &str| rows.iter().find(|r| r.metric_id == id).unwrap();
+    assert_eq!(read.len(), 1);
+    let description = row("service-description");
+    (description.verdict, description.level, row("geo-functions").verdict, read[0].read)
+}
+
+/// I2. A `Content-Type` parameter is routine, and it used to split the
+/// client's classification from the declaration parse: the client stripped
+/// `; charset=utf-8` before choosing a format, `declare.rs` handed the full
+/// header to `RdfFormat::from_media_type`, got `None`, and reparsed the body
+/// as Turtle. For RDF/XML and JSON-LD that yields zero triples, so one
+/// response published three wrong facts at once: `service-description =
+/// verified` with `Level(0)`, which means "none served"; `declarationsRead =
+/// false` for a document we had just read; and `geo-functions =
+/// undeclared-but-verified`, the declaration itself lost.
+///
+/// `geo-functions` is the assertion that reads the declaration's CONTENT
+/// rather than the grade: it is `Verified` only if `geof:sfWithin` was
+/// actually parsed out of the body and matched against a working probe. A
+/// Turtle fallback that happens to survive cannot fake it.
+/// Every published fact this response should produce, asserted for each of the
+/// headers a server might serve it under. `geo` is the one that reads the
+/// declaration's CONTENT rather than a count or a grade: `Verified` requires
+/// `geof:sfWithin` to have been parsed out of this body AND matched against a
+/// working probe, so a fallback parser that happens to yield some triples
+/// cannot fake it.
+async fn assert_declarations_survive(body: &str, content_type: &str) {
+    let (verdict, level, geo, read) = sweep_description_served_as(body, content_type).await;
+    assert_eq!(verdict, Verdict::Verified, "under {content_type}");
+    assert_ne!(level, Some(Level(0)), "a description with real triples is not `none served`: {content_type}");
+    assert!(read, "we read this document, so the published fact has to say so: {content_type}");
+    assert_eq!(geo, Verdict::Verified, "the declared geof:sfWithin was lost under {content_type}");
+}
+
+#[tokio::test]
+async fn a_charset_parameter_does_not_lose_an_rdf_xml_descriptions_declarations() {
+    // `charset=utf-8` is the routine case and `oxrdfio` happens to tolerate it
+    // even on the raw header, so it pins nothing on its own. The other two are
+    // headers real servers send that it refuses: the review's live
+    // reproduction used a legacy charset, and a quoted parameter value is
+    // legal per RFC 9110.
+    for ctype in [
+        "application/rdf+xml; charset=utf-8",
+        "application/rdf+xml; charset=iso-8859-1",
+        "application/rdf+xml; charset=\"utf-8\"",
+    ] {
+        assert_declarations_survive(STUB_RDFXML, ctype).await;
+    }
+}
+
+#[tokio::test]
+async fn a_charset_parameter_does_not_lose_a_json_ld_descriptions_declarations() {
+    for ctype in ["application/ld+json; charset=utf-8", "application/ld+json; charset=\"utf-8\""] {
+        assert_declarations_survive(STUB_JSONLD, ctype).await;
+    }
+}
+
+/// The format the old fallback happened to be right about. It has to keep
+/// working, which is the only thing these cases can prove.
+#[tokio::test]
+async fn a_charset_parameter_does_not_lose_a_turtle_descriptions_declarations() {
+    for ctype in ["text/turtle; charset=utf-8", "text/turtle; utf-8"] {
+        assert_declarations_survive(STUB_TTL, ctype).await;
+    }
+}
+
 /// The third budget level. `Budget::with_endpoint_budget` existed but had no
 /// caller, so an endpoint could burn metric-budget × metrics, and unboundedly
 /// more as metrics are added. When it expires, the metrics not reached must
