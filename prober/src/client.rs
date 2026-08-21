@@ -66,9 +66,12 @@ impl Client {
         // is load-bearing rather than a convenience.
         let http = reqwest::Client::builder()
             .timeout(budget.request)
+            // Every request we make to a stranger's endpoint carries this, so
+            // the URL has to resolve to a page explaining who we are and how to
+            // ask us to stop. Stage 3 owes /about for exactly that reason.
             .user_agent(concat!(
                 "sparqlwatch/", env!("CARGO_PKG_VERSION"),
-                " (+https://sparqlwatch.example/about)"
+                " (+https://sparqlwatch.dev.k8s.semanticscience.org/about)"
             ))
             .build()?;
         Ok(Self { http })

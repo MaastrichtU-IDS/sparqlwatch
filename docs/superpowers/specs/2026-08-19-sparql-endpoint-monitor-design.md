@@ -517,7 +517,12 @@ observation in both directions, marking 10 responders FAIL and 54 non-responders
    cool URIs, GeoSPARQL function support, GeoSPARQL data presence. umakadata's
    `criteria/` is a usable reference for several detection routines, and
    `~/code/umaka-test` already has working probes for the geo ones.
-3. **Public domain name** and whether it sits under an institutional domain.
+3. ~~**Public domain name**~~ **Decided:** `https://sparqlwatch.dev.k8s.semanticscience.org`.
+   It sits under the institutional domain, and the `dev` label matches the
+   `sparqlwatch-dev` project-env in stage 4. Two consequences: the prober's
+   `User-Agent` points at `/about` on that host, so **stage 3 owes an `/about`
+   page** explaining who is probing and how to ask us to stop, and stage 4's
+   ingress host is fixed rather than open.
 
 ## Appendix A: why not umakadata
 
