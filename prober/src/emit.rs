@@ -281,12 +281,32 @@ pub fn emit_nquads(
             Term::NamedNode(nn(&format!("urn:sparqlwatch:metric:{}", fact.metric_id))?),
             graph.clone(),
         ));
+        quads.push(Quad::new(
+            subj.clone(),
+            nn("urn:sparqlwatch:notMeasuredReason")?,
+            Term::Literal(Literal::new_simple_literal(fact.reason.slug())),
+            graph.clone(),
+        ));
+        // The same link every measurement carries. Without it, a consumer
+        // holding this fact can reach the policy that produced it
+        // (`urn:sparqlwatch:maxCost`, which hangs off the activity) only by
+        // assuming the `run:{at}` / `activity:{at}` naming convention or by
+        // relying on being inside the right named graph. In a run where every
+        // metric was declined there is no measurement to borrow the activity
+        // from.
+        //
+        // Unlike the two DQV properties replaced above, this one's declared
+        // domain is safe to accept: PROV-O gives `prov:wasGeneratedBy` the
+        // domain `prov:Entity`, and this fact genuinely is a thing our run
+        // produced. The test is not "does the predicate have a domain" but
+        // "is the domain something we are", and here it is.
+        //
         // No `dqv:value` and no `sw:level`: nothing was measured, so there is
         // nothing to state. The reason is all the new information there is.
         quads.push(Quad::new(
             subj,
-            nn("urn:sparqlwatch:notMeasuredReason")?,
-            Term::Literal(Literal::new_simple_literal(fact.reason.slug())),
+            nn(&format!("{PROV}wasGeneratedBy"))?,
+            Term::NamedNode(activity.clone()),
             graph.clone(),
         ));
     }
@@ -649,7 +669,7 @@ mod tests {
 
     #[test]
     fn a_not_measured_fact_names_the_endpoint_and_the_metric_it_skipped() {
-        // The four quads the spec asks for, read back as quads rather than as
+        // The quads the spec asks for, read back as quads rather than as
         // text: a consumer asking "why is there no verdict for classes here"
         // must be able to join endpoint and metric.
         let nm = vec![NotMeasured {
@@ -692,6 +712,43 @@ mod tests {
             && q.object == Term::NamedNode(NamedNode::new("http://www.w3.org/ns/dcat#DataService").unwrap())));
         assert!(qs.iter().all(|q| q.graph_name
             == GraphName::NamedNode(NamedNode::new("urn:sparqlwatch:run:r1").unwrap())));
+    }
+
+    #[test]
+    fn a_not_measured_fact_is_linked_to_the_run_that_declined_it() {
+        // Every measurement carries `prov:wasGeneratedBy`; so must this, or a
+        // consumer holding the fact can reach the policy that explains it (the
+        // `urn:sparqlwatch:maxCost` on the activity) only by assuming the
+        // `activity:{at}` naming convention. The fixture has no measurements at
+        // all, which is the case that matters: in a run where every metric was
+        // declined there is no measurement to borrow the activity from.
+        let nm = vec![NotMeasured {
+            endpoint: "http://example.org/sparql".into(),
+            metric_id: "classes".into(),
+            reason: NotMeasuredReason::CostCeiling,
+        }];
+        let out = emit_nquads(&RunId("r1".into()), AT, REV, &[], &[], &nm, Cost::Expensive).unwrap();
+        let qs = quads_of(&out);
+        let subj = NamedOrBlankNode::NamedNode(
+            NamedNode::new("urn:sparqlwatch:not-measured:r1:0").unwrap(),
+        );
+        let activity = NamedNode::new("urn:sparqlwatch:activity:r1").unwrap();
+        assert_eq!(
+            qs.iter()
+                .filter(|q| q.subject == subj
+                    && q.predicate.as_str() == "http://www.w3.org/ns/prov#wasGeneratedBy")
+                .map(|q| &q.object)
+                .collect::<Vec<_>>(),
+            vec![&Term::NamedNode(activity.clone())],
+            "the fact must name the run activity that declined the metric"
+        );
+        // ...and following that link reaches the policy, which is the whole
+        // point of the link rather than of the naming convention.
+        assert!(
+            qs.iter().any(|q| q.subject == NamedOrBlankNode::NamedNode(activity.clone())
+                && q.predicate.as_str() == "urn:sparqlwatch:maxCost"),
+            "the activity the fact points at is the one carrying the ceiling"
+        );
     }
 
     #[test]

@@ -156,6 +156,10 @@ the run emits a resource of type `urn:sparqlwatch:NotMeasured`, with:
 - `urn:sparqlwatch:notMeasuredOn` pointing to the endpoint
 - `urn:sparqlwatch:notMeasuredMetric` pointing to the metric definition
 - `urn:sparqlwatch:notMeasuredReason` set to `"cost-ceiling"`
+- `prov:wasGeneratedBy` pointing to the run's activity, the same link every
+  measurement carries, so the fact reaches the `urn:sparqlwatch:maxCost` that
+  explains it without anyone having to assume the `activity:{at}` naming
+  convention
 - **no** `dqv:value`
 - **no** level
 
