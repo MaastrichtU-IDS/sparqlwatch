@@ -31,6 +31,12 @@ async fn probes_three_real_endpoints() {
 /// measured directly by hand: geo-data 0.26s, classes 15.6s, both with a
 /// non-empty result), and asserts each returns a non-empty binding set.
 ///
+/// What it does NOT establish: that the named-graph branch is reached.
+/// kadaster behaves as a union-default-graph store, so its default graph
+/// answers both branches on its own and this test would pass with the `GRAPH`
+/// branch deleted. Proving that half needs an endpoint whose data really sits
+/// in named graphs; see the named-graph entry in README's known limitations.
+///
 /// Enable with: cargo test --test live_smoke -- --ignored
 #[tokio::test]
 #[ignore]
