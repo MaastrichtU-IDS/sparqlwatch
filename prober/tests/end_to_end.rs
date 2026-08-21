@@ -36,7 +36,7 @@ async fn a_sweep_over_one_mock_endpoint_produces_nquads() {
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
     let client = Client::new(Budget::default()).unwrap();
     let url = format!("{}/sparql", server.uri());
-    let rows = run_sweep(std::slice::from_ref(&url), &defs, &client, Budget::default()).await;
+    let (rows, _declarations_read) = run_sweep(std::slice::from_ref(&url), &defs, &client, Budget::default()).await;
 
     assert_eq!(rows.len(), defs.len(), "one measurement per metric per endpoint");
 
@@ -66,7 +66,9 @@ async fn a_sweep_over_one_mock_endpoint_produces_nquads() {
     ]);
     assert_eq!(got, expected);
 
-    let nq = emit_nquads(&RunId("test".into()), "2026-08-20T08:00:00Z", "test-revision", &rows).unwrap();
+    let nq =
+        emit_nquads(&RunId("test".into()), "2026-08-20T08:00:00Z", "test-revision", &rows, &_declarations_read)
+            .unwrap();
     let quads: Vec<Quad> = RdfParser::from_format(RdfFormat::NQuads)
         .for_slice(nq.as_bytes())
         .map(|q| q.expect("the emitted sweep must parse as N-Quads"))
@@ -91,7 +93,7 @@ async fn a_sweep_over_one_mock_endpoint_produces_nquads() {
 async fn an_unreachable_endpoint_yields_indeterminate_not_a_panic() {
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
     let client = Client::new(Budget::default()).unwrap();
-    let rows = run_sweep(&["http://127.0.0.1:1/sparql".to_string()], &defs, &client, Budget::default()).await;
+    let (rows, _declarations_read) = run_sweep(&["http://127.0.0.1:1/sparql".to_string()], &defs, &client, Budget::default()).await;
     assert_eq!(rows.len(), defs.len());
     assert!(rows.iter().all(|r| r.verdict == Verdict::Indeterminate));
 }
@@ -123,7 +125,7 @@ async fn a_metric_binding_a_nonstandard_variable_is_extracted_via_its_declared_v
 
     let client = Client::new(Budget::default()).unwrap();
     let url = format!("{}/sparql", server.uri());
-    let rows = run_sweep(&[url], &[def], &client, Budget::default()).await;
+    let (rows, _declarations_read) = run_sweep(&[url], &[def], &client, Budget::default()).await;
 
     assert_eq!(rows.len(), 1);
     assert_eq!(
@@ -155,7 +157,7 @@ async fn the_sweep_fetches_the_description_once_per_endpoint() {
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
     let client = Client::new(Budget::default()).unwrap();
     let url = format!("{}/sparql", server.uri());
-    let rows = run_sweep(std::slice::from_ref(&url), &defs, &client, Budget::default()).await;
+    let (rows, _declarations_read) = run_sweep(std::slice::from_ref(&url), &defs, &client, Budget::default()).await;
 
     let queryless = server.received_requests().await.unwrap().iter()
         .filter(|r| r.method == Method::GET && r.url.query().is_none()).count();
@@ -182,7 +184,7 @@ async fn a_fetched_description_puts_a_level_on_its_row() {
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
     let client = Client::new(Budget::default()).unwrap();
     let url = format!("{}/sparql", server.uri());
-    let rows = run_sweep(std::slice::from_ref(&url), &defs, &client, Budget::default()).await;
+    let (rows, _declarations_read) = run_sweep(std::slice::from_ref(&url), &defs, &client, Budget::default()).await;
 
     let row = rows.iter().find(|r| r.metric_id == "service-description").unwrap();
     assert_eq!(row.verdict, Verdict::Verified);
@@ -218,7 +220,7 @@ async fn a_non_graded_fetch_metric_carries_no_level() {
 
     let client = Client::new(Budget::default()).unwrap();
     let url = format!("{}/sparql", server.uri());
-    let rows = run_sweep(std::slice::from_ref(&url), &[def], &client, Budget::default()).await;
+    let (rows, _declarations_read) = run_sweep(std::slice::from_ref(&url), &[def], &client, Budget::default()).await;
 
     let row = &rows[0];
     assert_eq!(row.verdict, Verdict::Verified, "the fetch itself still succeeds");
@@ -250,7 +252,7 @@ async fn a_declared_and_working_capability_resolves_to_verified_through_the_swee
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
     let client = Client::new(Budget::default()).unwrap();
     let url = format!("{}/sparql", server.uri());
-    let rows = run_sweep(std::slice::from_ref(&url), &defs, &client, Budget::default()).await;
+    let (rows, _declarations_read) = run_sweep(std::slice::from_ref(&url), &defs, &client, Budget::default()).await;
 
     let row = rows.iter().find(|r| r.metric_id == "geo-functions").unwrap();
     assert_eq!(
@@ -297,7 +299,7 @@ async fn a_description_served_as_rdf_xml_is_parsed_not_silently_dropped() {
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
     let client = Client::new(Budget::default()).unwrap();
     let url = format!("{}/sparql", server.uri());
-    let rows = run_sweep(std::slice::from_ref(&url), &defs, &client, Budget::default()).await;
+    let (rows, _declarations_read) = run_sweep(std::slice::from_ref(&url), &defs, &client, Budget::default()).await;
 
     let description = rows.iter().find(|r| r.metric_id == "service-description").unwrap();
     assert_eq!(description.verdict, Verdict::Verified, "the body did parse, as RDF/XML");
@@ -351,7 +353,7 @@ async fn an_endpoint_budget_expiry_still_yields_one_row_per_metric() {
     let client = Client::new(budget).unwrap();
     let url = format!("{}/sparql", server.uri());
     let started = std::time::Instant::now();
-    let rows = run_sweep(std::slice::from_ref(&url), &defs, &client, budget).await;
+    let (rows, _declarations_read) = run_sweep(std::slice::from_ref(&url), &defs, &client, budget).await;
     let took = started.elapsed();
 
     assert_eq!(rows.len(), defs.len(), "one row per (endpoint, metric) regardless of timing");
@@ -422,7 +424,7 @@ async fn each_endpoints_row_carries_the_level_computed_for_that_endpoint() {
 
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
     let client = Client::new(Budget::default()).unwrap();
-    let rows = run_sweep(&[bare_url.clone(), rich_url.clone()], &defs, &client, Budget::default()).await;
+    let (rows, _declarations_read) = run_sweep(&[bare_url.clone(), rich_url.clone()], &defs, &client, Budget::default()).await;
 
     let level_at = |url: &str| {
         let row = rows.iter()
@@ -476,7 +478,7 @@ async fn a_description_reached_through_a_redirect_is_still_scoped_to_us() {
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
     let client = Client::new(Budget::default()).unwrap();
     let url = format!("{}/a", server.uri());
-    let rows = run_sweep(std::slice::from_ref(&url), &defs, &client, Budget::default()).await;
+    let (rows, _declarations_read) = run_sweep(std::slice::from_ref(&url), &defs, &client, Budget::default()).await;
 
     let geo = rows.iter().find(|r| r.metric_id == "geo-functions").unwrap();
     assert_eq!(
@@ -516,7 +518,7 @@ async fn a_neighbouring_datasets_declaration_is_not_credited_to_this_endpoint() 
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
     let client = Client::new(Budget::default()).unwrap();
     let url = format!("{}/plain/sparql", server.uri());
-    let rows = run_sweep(std::slice::from_ref(&url), &defs, &client, Budget::default()).await;
+    let (rows, _declarations_read) = run_sweep(std::slice::from_ref(&url), &defs, &client, Budget::default()).await;
 
     let geo = rows.iter().find(|r| r.metric_id == "geo-functions").unwrap();
     assert_eq!(
@@ -534,4 +536,204 @@ async fn a_neighbouring_datasets_declaration_is_not_credited_to_this_endpoint() 
         "a real two-service description is not graded as if nothing were served, got {:?}",
         description_row.level
     );
+}
+
+// --- declarationsRead: the fact a consumer cannot infer from the verdicts
+// alone. See `resolve::Declared` and `emit::DeclarationsRead` for why. ---
+
+/// A working answer for every query probe: `boolean: true`, one bound `?s`.
+/// Good enough to exercise `AskFilter`/`AskData`/`Liveness` positively without
+/// caring which query text actually landed.
+const WORKING_QUERY_RESPONSE: &str =
+    r#"{"head":{"vars":["s"]},"results":{"bindings":[{"s":{"type":"uri","value":"http://example.org/a"}}]},"boolean":true}"#;
+
+/// Sweep one mock endpoint whose queryless description fetch serves `body`
+/// under `content_type`, and whose query probes all get a working answer.
+/// Returns the run's emitted N-Quads.
+async fn sweep_with_description(body: &str, content_type: &str) -> String {
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/sparql")).and(query_param_is_missing("query"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(body.as_bytes().to_vec(), content_type))
+        .mount(&server).await;
+    Mock::given(method("GET")).and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(WORKING_QUERY_RESPONSE))
+        .mount(&server).await;
+
+    let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
+    let client = Client::new(Budget::default()).unwrap();
+    let url = format!("{}/sparql", server.uri());
+    let (rows, declarations_read) = run_sweep(std::slice::from_ref(&url), &defs, &client, Budget::default()).await;
+    emit_nquads(&RunId("test".into()), "2026-08-20T08:00:00Z", "test-revision", &rows, &declarations_read).unwrap()
+}
+
+/// Sweep one mock endpoint where every request, queryless or not, gets
+/// `status` with an empty body. The description was never readable.
+async fn sweep_with_status(status: u16) -> String {
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(status))
+        .mount(&server).await;
+
+    let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
+    let client = Client::new(Budget::default()).unwrap();
+    let url = format!("{}/sparql", server.uri());
+    let (rows, declarations_read) = run_sweep(std::slice::from_ref(&url), &defs, &client, Budget::default()).await;
+    emit_nquads(&RunId("test".into()), "2026-08-20T08:00:00Z", "test-revision", &rows, &declarations_read).unwrap()
+}
+
+/// As `sweep_with_status`, except the query probes (everything but the
+/// queryless description fetch) get `WORKING_QUERY_RESPONSE`, so a
+/// declaration-backed metric's probe genuinely confirms the capability while
+/// its description stays unreadable.
+async fn sweep_with_status_and_working_queries(status: u16) -> String {
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/sparql")).and(query_param_is_missing("query"))
+        .respond_with(ResponseTemplate::new(status))
+        .mount(&server).await;
+    Mock::given(method("GET")).and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(WORKING_QUERY_RESPONSE))
+        .mount(&server).await;
+
+    let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
+    let client = Client::new(Budget::default()).unwrap();
+    let url = format!("{}/sparql", server.uri());
+    let (rows, declarations_read) = run_sweep(std::slice::from_ref(&url), &defs, &client, Budget::default()).await;
+    emit_nquads(&RunId("test".into()), "2026-08-20T08:00:00Z", "test-revision", &rows, &declarations_read).unwrap()
+}
+
+/// Two endpoints: one mock server answering every request, and one address
+/// nothing listens on. Same shape as
+/// `an_unreachable_endpoint_yields_indeterminate_not_a_panic` above.
+async fn sweep_two_endpoints_one_broken() -> String {
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(WORKING_QUERY_RESPONSE))
+        .mount(&server).await;
+
+    let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
+    let client = Client::new(Budget::default()).unwrap();
+    let good = format!("{}/sparql", server.uri());
+    let broken = "http://127.0.0.1:1/sparql".to_string();
+    let (rows, declarations_read) = run_sweep(&[good, broken], &defs, &client, Budget::default()).await;
+    emit_nquads(&RunId("test".into()), "2026-08-20T08:00:00Z", "test-revision", &rows, &declarations_read).unwrap()
+}
+
+fn quads_of(run: &str) -> Vec<Quad> {
+    RdfParser::from_format(RdfFormat::NQuads)
+        .for_slice(run.as_bytes())
+        .map(|q| q.expect("the run must parse as N-Quads"))
+        .collect()
+}
+
+/// The `declarationsRead` fact for the (assumed single) endpoint in `run`.
+/// `None` means no such quad was found at all, which is exactly the bug this
+/// task exists to prevent: `every_endpoint_gets_exactly_one_declarations_read_fact`
+/// checks the count directly for the multi-endpoint case.
+fn declarations_read(run: &str) -> Option<bool> {
+    quads_of(run)
+        .iter()
+        .find(|q| q.predicate.as_str() == "urn:sparqlwatch:declarationsRead")
+        .map(|q| match &q.object {
+            Term::Literal(l) => l.value() == "true",
+            other => panic!("declarationsRead must be a literal, got {other}"),
+        })
+}
+
+fn count_declarations_read_quads(run: &str) -> usize {
+    quads_of(run).iter().filter(|q| q.predicate.as_str() == "urn:sparqlwatch:declarationsRead").count()
+}
+
+/// The verdict published for `metric_id` in `run`. Reads the two rows a
+/// measurement is spread across (`dqv:isMeasurementOf`, `dqv:value`) rather
+/// than assuming a fixed quad order, since the emitted document's order is
+/// not part of the contract.
+fn verdict_of(run: &str, metric_id: &str) -> Verdict {
+    let quads = quads_of(run);
+    let metric_iri = format!("urn:sparqlwatch:metric:{metric_id}");
+    let subject = quads
+        .iter()
+        .find(|q| {
+            q.predicate.as_str() == "http://www.w3.org/ns/dqv#isMeasurementOf"
+                && matches!(&q.object, Term::NamedNode(n) if n.as_str() == metric_iri)
+        })
+        .map(|q| q.subject.clone())
+        .unwrap_or_else(|| panic!("no measurement of {metric_id} in this run"));
+    let slug = quads
+        .iter()
+        .find(|q| q.subject == subject && q.predicate.as_str() == "http://www.w3.org/ns/dqv#value")
+        .and_then(|q| match &q.object {
+            Term::Literal(l) => Some(l.value().to_string()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("measurement of {metric_id} has no dqv:value"));
+    Verdict::ALL
+        .into_iter()
+        .find(|v| v.slug() == slug)
+        .unwrap_or_else(|| panic!("{slug} is not a verdict slug"))
+}
+
+fn load_shipped_metrics() -> Vec<MetricDef> {
+    load_metrics(include_str!("../metrics.toml")).unwrap()
+}
+
+/// The fact a consumer cannot currently infer. A description that parses
+/// partially declares something AND fails to classify, so neither the
+/// service-description verdict nor the presence of a declaration tells you
+/// whether we read their declarations. Publish it directly.
+#[tokio::test]
+async fn a_partially_parsed_description_still_reports_its_declarations_as_read() {
+    // Declares sfWithin, then breaks. `declare.rs` keeps what parsed; the body
+    // does not classify as RDF, so service-description is indeterminate.
+    const BROKEN: &str = concat!(
+        "@prefix sd: <http://www.w3.org/ns/sparql-service-description#> .\n",
+        "@prefix geof: <http://www.opengis.net/def/function/geosparql/> .\n",
+        "<http://example.org/s> sd:extensionFunction geof:sfWithin .\n",
+        "<http://example.org/s> sd:endpoint <<<< not turtle at all\n",
+    );
+    let run = sweep_with_description(BROKEN, "text/turtle").await;
+    assert_eq!(
+        declarations_read(&run),
+        Some(true),
+        "we did read declarations out of this body, whatever the grade says"
+    );
+    assert_eq!(
+        verdict_of(&run, "service-description"),
+        Verdict::Indeterminate,
+        "the fixture must reproduce the mismatch or it proves nothing"
+    );
+}
+
+#[tokio::test]
+async fn an_unreadable_description_reports_declarations_as_not_read() {
+    let run = sweep_with_status(500).await;
+    assert_eq!(declarations_read(&run), Some(false));
+}
+
+#[tokio::test]
+async fn every_endpoint_gets_exactly_one_declarations_read_fact() {
+    // Including the ones whose fetch failed: a missing fact is indistinguishable
+    // from a false one to a consumer writing a SPARQL query.
+    let run = sweep_two_endpoints_one_broken().await;
+    assert_eq!(count_declarations_read_quads(&run), 2);
+}
+
+/// The one thing an unreadable description must never do is manufacture a
+/// declaration. Assert over the declaration-backed metrics specifically: for
+/// those, an unread description must land on `undeclared-but-verified` when the
+/// probe confirms the capability. Revision 1 asserted only that the verdict was
+/// not `declared-only` or `declared-but-wrong`, which a `verified` slips past.
+#[tokio::test]
+async fn an_unreadable_description_never_manufactures_a_declaration() {
+    let run = sweep_with_status_and_working_queries(500).await;
+    let defs = load_shipped_metrics();
+    let backed: Vec<&MetricDef> = defs.iter().filter(|d| d.declared_by.is_some()).collect();
+    assert!(!backed.is_empty(), "there must be a declaration-backed metric or this proves nothing");
+    for d in backed {
+        assert_eq!(
+            verdict_of(&run, &d.id),
+            Verdict::UndeclaredButVerified,
+            "metric {} claimed a declaration from a description we could not read",
+            d.id
+        );
+    }
 }

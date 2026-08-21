@@ -98,8 +98,8 @@ async fn main() -> anyhow::Result<()> {
     // A pure function of the definitions, so the published revision is
     // reproducible from the same metrics.toml.
     let revision = definitions_revision(&defs);
-    let rows = run_sweep(&eps.endpoint, &defs, &client, budget).await;
-    let nq = emit_nquads(&RunId(args.at.clone()), &args.at, &revision, &rows)?;
+    let (rows, declarations_read) = run_sweep(&eps.endpoint, &defs, &client, budget).await;
+    let nq = emit_nquads(&RunId(args.at.clone()), &args.at, &revision, &rows, &declarations_read)?;
     std::fs::write(&args.out, nq)?;
     tracing::info!(endpoints = eps.endpoint.len(), measurements = rows.len(),
                    revision = %revision, out = %args.out, "sweep complete");

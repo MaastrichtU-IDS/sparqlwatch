@@ -5,6 +5,18 @@ use crate::observe::{BodyKind, Observation};
 use crate::verdict::{Level, Verdict};
 
 /// What the endpoint says about itself, from its service description.
+///
+/// `claimed: false` covers two situations this type cannot tell apart on its
+/// own: the description genuinely declares nothing, or we never managed to
+/// read one at all (no fetch reached it, the fetch found an empty body, or
+/// the body failed to parse). The two are distinguished by the endpoint's
+/// `declarationsRead` fact, one boolean published per endpoint per run (see
+/// `emit::DeclarationsRead`), computed in `run_sweep` as
+/// `declarations.triples > 0`. A partially parsed description is the
+/// concrete case where the distinction matters: `declare.rs` keeps whatever
+/// declarations it read before a syntax error, so `claimed` can be `true`
+/// there while `service-description`'s own row grades `Indeterminate`
+/// because the body never classified as RDF.
 #[derive(Debug, Clone, Copy)]
 pub struct Declared {
     pub claimed: bool,

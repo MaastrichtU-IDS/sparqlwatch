@@ -13,7 +13,7 @@ resolves to exactly one of six verdicts:
 | Verdict | Meaning |
 | --- | --- |
 | `verified` | A probe confirms it works, and the endpoint declares it |
-| `undeclared-but-verified` | Works, but the endpoint advertises nothing |
+| `undeclared-but-verified` | Works; no declaration was seen (see the endpoint's `declarationsRead` fact for whether we could read its description) |
 | `declared-but-wrong` | Answered, and answered incorrectly |
 | `declared-only` | Claimed, not confirmable by probe |
 | `absent` | Neither claimed nor observed |
@@ -157,12 +157,6 @@ Two caveats on that correction, neither of which weakens it:
 ## Known limitations
 
 The following are deferred deliberately, not oversights:
-
-- A **failed** description fetch and a description that **genuinely declares
-  nothing** currently produce the same result, because the "declared" flag is a
-  simple boolean with no way to express "unknown". An endpoint whose description
-  times out is therefore credited as undeclared rather than unknown. This requires
-  a three-state value in the resolver, deferred to stage 1c.
 
 - The fetch is **unconditional**: an endpoint pays one queryless GET even if no
   configured metric actually needs the result, because the probe kind doesn't know

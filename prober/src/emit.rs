@@ -24,6 +24,19 @@ pub struct MeasurementRow {
     pub elapsed_ms: Option<u64>,
 }
 
+/// Whether one endpoint's description fetch produced a parseable graph of at
+/// least one triple, computed in `run_sweep` as `declarations.triples > 0`.
+/// Published once per endpoint per run, independent of what `resolve_fetch`
+/// graded the same fetch as: a description that declares something and then
+/// hits a syntax error mid-parse keeps `read: true` here while its
+/// `service-description` row is `Indeterminate`. This is deliberately not a
+/// `MeasurementRow`: it is a fact about the fetch, not a measurement against
+/// a metric definition.
+pub struct DeclarationsRead {
+    pub endpoint: String,
+    pub read: bool,
+}
+
 fn nn(s: &str) -> anyhow::Result<NamedNode> {
     Ok(NamedNode::new(s)?)
 }
@@ -42,6 +55,7 @@ pub fn emit_nquads(
     generated_at: &str,
     metric_revision: &str,
     rows: &[MeasurementRow],
+    declarations_read: &[DeclarationsRead],
 ) -> anyhow::Result<String> {
     let graph = GraphName::NamedNode(nn(&format!("urn:sparqlwatch:run:{}", run.0))?);
     let activity = nn(&format!("urn:sparqlwatch:activity:{}", run.0))?;
@@ -153,6 +167,39 @@ pub fn emit_nquads(
         }
     }
 
+    for fact in declarations_read {
+        // Same non-fatal handling as a measurement row above: one bad
+        // endpoint string must not cost every other endpoint its fact.
+        let endpoint = match NamedNode::new(&fact.endpoint) {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!(
+                    endpoint = %fact.endpoint,
+                    error = %e,
+                    "skipping declarationsRead fact: endpoint is not a valid IRI"
+                );
+                continue;
+            }
+        };
+        if typed_endpoints.insert(fact.endpoint.clone()) {
+            quads.push(Quad::new(
+                NamedOrBlankNode::NamedNode(endpoint.clone()),
+                rdf::TYPE.into_owned(),
+                Term::NamedNode(nn(&format!("{DCAT}DataService"))?),
+                graph.clone(),
+            ));
+        }
+        quads.push(Quad::new(
+            NamedOrBlankNode::NamedNode(endpoint),
+            nn("urn:sparqlwatch:declarationsRead")?,
+            Term::Literal(Literal::new_typed_literal(
+                if fact.read { "true" } else { "false" },
+                xsd::BOOLEAN,
+            )),
+            graph.clone(),
+        ));
+    }
+
     let mut out = Vec::new();
     let mut ser = RdfSerializer::from_format(RdfFormat::NQuads).for_writer(&mut out);
     for q in &quads {
@@ -200,7 +247,7 @@ mod tests {
     }
 
     fn emit(rows: &[MeasurementRow]) -> Vec<Quad> {
-        let out = emit_nquads(&RunId("r1".into()), "2026-08-20T08:00:00Z", REV, rows).unwrap();
+        let out = emit_nquads(&RunId("r1".into()), "2026-08-20T08:00:00Z", REV, rows, &[]).unwrap();
         quads_of(&out)
     }
 
@@ -210,7 +257,7 @@ mod tests {
 
     #[test]
     fn every_quad_lands_in_the_run_graph() {
-        let out = emit_nquads(&RunId("2026-08-20T08:00:00Z".into()), "2026-08-20T08:00:00Z", REV, &rows()).unwrap();
+        let out = emit_nquads(&RunId("2026-08-20T08:00:00Z".into()), "2026-08-20T08:00:00Z", REV, &rows(), &[]).unwrap();
         let expected = GraphName::NamedNode(
             NamedNode::new("urn:sparqlwatch:run:2026-08-20T08:00:00Z").unwrap(),
         );
@@ -306,7 +353,7 @@ mod tests {
                 elapsed_ms: Some(3),
             },
         );
-        let out = emit_nquads(&RunId("r1".into()), "2026-08-20T08:00:00Z", REV, &rs)
+        let out = emit_nquads(&RunId("r1".into()), "2026-08-20T08:00:00Z", REV, &rs, &[])
             .expect("one junk endpoint must not discard the sweep");
         assert!(!out.contains("not an iri at all"));
         let qs = quads_of(&out);
@@ -369,5 +416,44 @@ mod tests {
             objects(&qs, "urn:sparqlwatch:metricDefinitionRevision"),
             vec![&Term::Literal(Literal::new_simple_literal(REV))]
         );
+    }
+
+    #[test]
+    fn declarations_read_emits_a_boolean_quad_shaped_for_the_run() {
+        let facts = vec![DeclarationsRead { endpoint: "https://qlever.dev/api/osm-planet".into(), read: true }];
+        let out = emit_nquads(&RunId("r1".into()), "2026-08-20T08:00:00Z", REV, &[], &facts).unwrap();
+        let qs = quads_of(&out);
+        let q = qs
+            .iter()
+            .find(|q| q.predicate.as_str() == "urn:sparqlwatch:declarationsRead")
+            .expect("no declarationsRead quad emitted");
+        assert_eq!(
+            q.subject,
+            NamedOrBlankNode::NamedNode(NamedNode::new("https://qlever.dev/api/osm-planet").unwrap()),
+            "subject must be the endpoint IRI"
+        );
+        assert_eq!(
+            q.object,
+            Term::Literal(Literal::new_typed_literal("true", xsd::BOOLEAN)),
+            "object must be an xsd:boolean literal"
+        );
+        assert_eq!(
+            q.graph_name,
+            GraphName::NamedNode(NamedNode::new("urn:sparqlwatch:run:r1").unwrap()),
+            "the fact belongs to the run graph like everything else"
+        );
+    }
+
+    #[test]
+    fn every_endpoint_with_a_fact_gets_its_own_quad_whatever_the_boolean() {
+        let facts = vec![
+            DeclarationsRead { endpoint: "https://a.example/sparql".into(), read: true },
+            DeclarationsRead { endpoint: "https://b.example/sparql".into(), read: false },
+        ];
+        let out = emit_nquads(&RunId("r1".into()), "2026-08-20T08:00:00Z", REV, &[], &facts).unwrap();
+        let qs = quads_of(&out);
+        let read_quads: Vec<&Quad> =
+            qs.iter().filter(|q| q.predicate.as_str() == "urn:sparqlwatch:declarationsRead").collect();
+        assert_eq!(read_quads.len(), 2, "one quad per endpoint, whatever the boolean");
     }
 }

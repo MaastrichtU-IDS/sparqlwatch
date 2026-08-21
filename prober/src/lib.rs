@@ -10,7 +10,7 @@ pub mod resolve;
 use crate::budget::{Budget, Expired};
 use crate::client::Client;
 use crate::declare::{parse_declarations_for, Declarations};
-use crate::emit::MeasurementRow;
+use crate::emit::{DeclarationsRead, MeasurementRow};
 use crate::metrics::{MetricDef, ProbeKind};
 use crate::resolve::{resolve, resolve_fetch, Declared};
 use crate::verdict::Verdict;
@@ -30,17 +30,29 @@ use crate::verdict::Verdict;
 /// Every verdict here comes from `resolve()` or from a budget expiry, which is
 /// the one thing this layer knows and the resolver cannot: judgement about an
 /// *observation* never happens outside `resolve()`.
+///
+/// Alongside the rows, every endpoint gets exactly one `DeclarationsRead`
+/// fact: whether its queryless description fetch produced a parseable graph
+/// of at least one triple. `Declared::claimed` cannot answer this on its
+/// own -- `false` there means either "declares nothing" or "we could not
+/// read it", and the two are distinguished only by this fact. `read` starts
+/// `false` and is set inside `probe_endpoint` as soon as the fetch's
+/// `Declarations` are known, so an endpoint whose budget expires before that
+/// point (never fetched at all) still gets a fact, honestly `false`, rather
+/// than none.
 pub async fn run_sweep(
     endpoints: &[String],
     defs: &[MetricDef],
     client: &Client,
     budget: Budget,
-) -> Vec<MeasurementRow> {
+) -> (Vec<MeasurementRow>, Vec<DeclarationsRead>) {
     let mut rows = Vec::new();
+    let mut declarations_read = Vec::new();
     for ep in endpoints {
         let mut ep_rows: Vec<MeasurementRow> = Vec::new();
+        let mut read = false;
         let outcome = budget
-            .with_endpoint_budget(probe_endpoint(ep, defs, client, budget, &mut ep_rows))
+            .with_endpoint_budget(probe_endpoint(ep, defs, client, budget, &mut ep_rows, &mut read))
             .await;
         if outcome.is_err() {
             tracing::warn!(endpoint = %ep, reached = ep_rows.len(), of = defs.len(),
@@ -60,21 +72,31 @@ pub async fn run_sweep(
                 });
             }
         }
+        declarations_read.push(DeclarationsRead { endpoint: ep.clone(), read });
         rows.extend(ep_rows);
     }
-    rows
+    (rows, declarations_read)
 }
 
 const VAR_REQUIRED: &str = "a bindings-reading probe kind requires `var`; load_metrics enforces it";
 
 /// One endpoint's metrics, in definition order, appending as it goes so a
 /// caller that cancels this future can still see how far it got.
+///
+/// `declarations_read` is set the same way, as a side effect on a borrowed
+/// `bool`, for the same reason: `run_sweep` wraps this whole function in the
+/// endpoint budget, and a cancelled future returns nothing, so a fact that
+/// depended on this call's return value would simply be lost whenever the
+/// budget expired before the fetch finished. Starting `false` and setting it
+/// true only once a graph is actually in hand keeps the fact honest under
+/// cancellation too.
 async fn probe_endpoint(
     ep: &str,
     defs: &[MetricDef],
     client: &Client,
     budget: Budget,
     rows: &mut Vec<MeasurementRow>,
+    declarations_read: &mut bool,
 ) {
     // One queryless fetch per endpoint, not one per metric: six metrics must
     // not mean six identical GETs landing in an operator's log. Its outcome
@@ -108,6 +130,13 @@ async fn probe_endpoint(
         }
         Err(Expired) => Declarations::empty(),
     };
+    // The honest definition: we got a graph and read at least one triple out
+    // of it. This is about the parse, not the HTTP status or the fetch's own
+    // verdict: a 200 with an empty body reads `false` here, and a body that
+    // declares something and then hits a syntax error mid-parse (`declare.rs`
+    // keeps what parsed before the error) reads `true` even though
+    // `resolve_fetch` below grades that same fetch `Indeterminate`.
+    *declarations_read = declarations.triples > 0;
     let (fetch_verdict, fetch_level) = resolve_fetch(&declarations, fetch_outcome.as_ref().map_err(|e| *e));
     // Same principle as every other row: an expired or failed fetch measured
     // nothing, so it reports no elapsed time rather than a zero one.
