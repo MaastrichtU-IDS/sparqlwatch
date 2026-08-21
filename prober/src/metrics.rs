@@ -209,18 +209,40 @@ pub fn definitions_revision(defs: &[MetricDef]) -> String {
     for d in defs {
         // Order and field set are part of the revision: a reordered file is a
         // different definition list, and every field affects what is measured.
+        //
+        // Destructured rather than field-accessed on purpose. A struct pattern
+        // with no `..` fails to compile the moment `MetricDef` gains a field, so
+        // a new field cannot join the definitions without somebody deciding here
+        // whether it belongs in the revision. The alternative, ten field
+        // accesses, lets a new field be forgotten in silence, and the cost of
+        // forgetting is not a failing test: `metricDefinitionRevision` is a
+        // published literal in immutable per-run graphs, so two definition sets
+        // that measure different things would share one revision forever, with
+        // no way to reinterpret the history afterwards.
+        let MetricDef {
+            id,
+            label,
+            dimension,
+            kind,
+            query,
+            expect,
+            var,
+            declared_by,
+            graded,
+            cost,
+        } = d;
         canonical.push_str(&format!(
             "{}\x1f{}\x1f{}\x1f{:?}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{:?}\x1e",
-            d.id,
-            d.label,
-            d.dimension,
-            d.kind,
-            d.query.as_deref().unwrap_or(""),
-            d.expect.map(|b| b.to_string()).unwrap_or_default(),
-            d.var.as_deref().unwrap_or(""),
-            d.declared_by.as_deref().unwrap_or(""),
-            d.graded,
-            d.cost,
+            id,
+            label,
+            dimension,
+            kind,
+            query.as_deref().unwrap_or(""),
+            expect.map(|b| b.to_string()).unwrap_or_default(),
+            var.as_deref().unwrap_or(""),
+            declared_by.as_deref().unwrap_or(""),
+            graded,
+            cost,
         ));
     }
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
@@ -342,34 +364,125 @@ query = "SELECT ?thing WHERE {{ ?s ?p ?thing }} LIMIT 1"
 
     #[test]
     fn the_revision_is_a_pure_function_of_the_definitions() {
+        // The revision exists so a published measurement can be read against the
+        // definition that produced it, and it is a published literal inside
+        // immutable per-run graphs. A field that stops contributing therefore
+        // cannot be fixed later: two definition sets that measure different
+        // things would share one revision in history that is already out. So
+        // every field gets a guard, not just the three that happened to have one.
+        //
+        // Written as a loop over per-field variants, and the variants are built
+        // from a destructured base on purpose. A struct pattern with no `..`
+        // fails to compile when `MetricDef` gains a field, and every binding
+        // below is used exactly once to build a variant, so a field that is
+        // named but left uncovered is an unused-variable warning. CI runs
+        // `cargo clippy --all-targets -- -D warnings`, so that warning is an
+        // error there: the same completeness-by-construction chain
+        // `ProbeKind::ALL` uses, rather than a hand-maintained list of
+        // assertions that a new field can slip past.
+        let base = load_metrics(
+            "[[metric]]\nid=\"m\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"Liveness\"\nquery=\"ASK{}\"\n",
+        )
+        .unwrap();
+        let rev = definitions_revision(&base);
+        let d = base[0].clone();
+        let MetricDef {
+            id,
+            label,
+            dimension,
+            kind,
+            query,
+            expect,
+            var,
+            declared_by,
+            graded,
+            cost,
+        } = d.clone();
+
+        let variants: Vec<(&str, MetricDef)> = vec![
+            ("id", MetricDef { id: format!("{id}-renamed"), ..d.clone() }),
+            ("label", MetricDef { label: format!("{label} (reworded)"), ..d.clone() }),
+            ("dimension", MetricDef { dimension: format!("{dimension}-other"), ..d.clone() }),
+            // The field this branch just proved publishes a confident false
+            // `absent` when it drifts: `SelectIris` reads IRI bindings where
+            // `AskData` reads a boolean.
+            (
+                "kind",
+                MetricDef {
+                    kind: if kind == ProbeKind::Liveness { ProbeKind::Cors } else { ProbeKind::Liveness },
+                    ..d.clone()
+                },
+            ),
+            (
+                "query",
+                MetricDef {
+                    query: Some(format!("{} # edited", query.as_deref().unwrap_or(""))),
+                    ..d.clone()
+                },
+            ),
+            ("expect", MetricDef { expect: Some(!expect.unwrap_or(false)), ..d.clone() }),
+            // The other field whose drift publishes a false `absent`: a probe
+            // that reads the wrong variable's bindings finds nothing.
+            (
+                "var",
+                MetricDef {
+                    var: Some(var.as_deref().map(|v| format!("{v}2")).unwrap_or_else(|| "c".into())),
+                    ..d.clone()
+                },
+            ),
+            (
+                "declared_by",
+                MetricDef {
+                    declared_by: Some(
+                        declared_by.as_deref().unwrap_or("http://example.org/fn").to_string(),
+                    ),
+                    ..d.clone()
+                },
+            ),
+            ("graded", MetricDef { graded: !graded, ..d.clone() }),
+            (
+                "cost",
+                MetricDef {
+                    cost: match cost {
+                        Cost::Cheap => Cost::Expensive,
+                        Cost::Expensive => Cost::Cheap,
+                    },
+                    ..d.clone()
+                },
+            ),
+        ];
+
+        for (field, variant) in &variants {
+            assert_ne!(
+                rev,
+                definitions_revision(std::slice::from_ref(variant)),
+                "editing `{field}` changes what is measured or where, so it must be a new revision"
+            );
+        }
+        // Each variant differs from the base in exactly one field, so no two
+        // variants may share a revision either: that would mean two fields land
+        // in the same place in the canonical string.
+        let revisions: std::collections::BTreeSet<String> =
+            variants.iter().map(|(_, v)| definitions_revision(std::slice::from_ref(v))).collect();
+        assert_eq!(
+            revisions.len(),
+            variants.len(),
+            "two single-field edits collided, so some field is not in its own position"
+        );
+
+        // The rest of the contract, which is not per-field: same definitions in,
+        // same revision out (no clock, no counter, no build metadata), a
+        // reordered file is a different definition list, and the value names the
+        // algorithm so a future one can be told apart from this one.
         let a = load_metrics(SRC).unwrap();
         assert_eq!(definitions_revision(&a), definitions_revision(&a), "no clock, no randomness");
-        let b = load_metrics(&SRC.replace("ASK { }", "ASK { ?s ?p ?o }")).unwrap();
-        assert_ne!(definitions_revision(&a), definitions_revision(&b), "an edited query is a new revision");
-        let c = load_metrics(&SRC.replace(
-            "kind = \"AskFilter\"\nexpect = true",
-            "kind = \"AskFilter\"\nexpect = true\ndeclared_by = \"http://example.org/fn\"",
-        ))
-        .unwrap();
-        assert_ne!(
-            definitions_revision(&a),
-            definitions_revision(&c),
-            "an edited declared_by changes what the metric is read against, so it must be a new revision too"
-        );
         let reordered: Vec<MetricDef> = a.iter().rev().cloned().collect();
-        assert_ne!(definitions_revision(&a), definitions_revision(&reordered));
-        assert!(definitions_revision(&a).starts_with("fnv1a64:"));
-
-        let d = load_metrics(&SRC.replace(
-            "kind = \"AskFilter\"\nexpect = true",
-            "kind = \"AskFilter\"\nexpect = true\ncost = \"expensive\"",
-        ))
-        .unwrap();
         assert_ne!(
             definitions_revision(&a),
-            definitions_revision(&d),
-            "an edited cost changes which metrics a sweep runs, so it must be a new revision too"
+            definitions_revision(&reordered),
+            "a reordered file is a different definition list"
         );
+        assert!(definitions_revision(&a).starts_with("fnv1a64:"));
     }
 
     #[test]
