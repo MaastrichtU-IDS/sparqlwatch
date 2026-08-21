@@ -44,21 +44,24 @@ ASK { FILTER(geof:sfWithin("POINT(5 52)"^^geo:wktLiteral, "POLYGON((0 50,10 50,1
 # that the rare honest endpoint is credited, not because we expect it to fire often.
 declared_by = "http://www.opengis.net/def/function/geosparql/sfWithin"
 
-# The next two queries address only the DEFAULT GRAPH. On engines where the
-# default graph is not the union of the named graphs, an endpoint holding all
-# its data in named graphs answers empty, and reporting that as "holds no
-# geometry" or "no classes" would be a confident wrong answer about an endpoint
-# full of both. The real fix is to probe `GRAPH ?g { ... }` as well and compare;
-# deferred to a later stage. Until then the labels name the graph measured.
+# Both queries look in the default graph AND in named graphs. Default-graph-only
+# versions published `absent` for an endpoint holding everything in named
+# graphs, a confident wrong answer about an endpoint full of exactly the content
+# we said it lacked. The UNION costs more on a large endpoint, which is what the
+# cost class in stage 1c-b is for.
+#
+# The graph variable is ?anyg, never the result variable. `GRAPH ?g { ?s
+# geo:asWKT ?g }` would join the graph name against the geometry literal, match
+# nothing, and publish a silent false `absent`.
 [[metric]]
 id = "geo-data"
-label = "Holds WKT geometry in the default graph"
+label = "Holds WKT geometry"
 dimension = "content"
 kind = "AskData"
 var = "g"
 query = """
 PREFIX geo: <http://www.opengis.net/ont/geosparql#>
-SELECT ?g WHERE { ?s geo:asWKT ?g } LIMIT 1
+SELECT ?g WHERE { { ?s geo:asWKT ?g } UNION { GRAPH ?anyg { ?s geo:asWKT ?g } } } LIMIT 1
 """
 
 [[metric]]
@@ -70,8 +73,8 @@ graded = true
 
 [[metric]]
 id = "classes"
-label = "Distinct classes in the default graph"
+label = "Distinct classes"
 dimension = "content"
 kind = "SelectIris"
 var = "c"
-query = "SELECT DISTINCT ?c WHERE { ?s a ?c } LIMIT 200"
+query = "SELECT DISTINCT ?c WHERE { { ?s a ?c } UNION { GRAPH ?anyg { ?s a ?c } } } LIMIT 200"

@@ -750,3 +750,38 @@ async fn an_unreadable_description_never_manufactures_a_declaration() {
         );
     }
 }
+
+/// Pin both halves of the fix, reading the shipped definitions rather than a
+/// fixture so editing the file cannot silently narrow them again.
+#[test]
+fn the_content_metrics_reach_named_graphs_without_colliding_variables() {
+    let defs = load_shipped_metrics();
+    for id in ["geo-data", "classes"] {
+        let d = defs.iter().find(|d| d.id == id).expect("metric must exist");
+        let q = d.query.as_deref().unwrap_or("");
+        let var = d.var.as_deref().expect("both metrics read a bound variable");
+
+        assert!(q.contains("GRAPH ?"), "{id} must look in named graphs too");
+        assert!(q.to_uppercase().contains("UNION"), "{id} must still look in the default graph");
+
+        // Every GRAPH variable in the query must differ from the result
+        // variable. `GRAPH ?g { ?s geo:asWKT ?g }` parses, runs, and can never
+        // match: the graph name is joined against the geometry literal. The
+        // result is an empty binding set, which resolves to `absent`, which is
+        // the exact false negative this metric change exists to remove.
+        for (i, _) in q.match_indices("GRAPH ?") {
+            let rest = &q[i + "GRAPH ?".len()..];
+            let g: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+            assert!(!g.is_empty(), "{id} has a malformed GRAPH variable");
+            assert_ne!(
+                g, var,
+                "{id} binds ?{var} as its result AND as its graph name, so it can never match"
+            );
+        }
+
+        assert!(
+            !d.label.to_lowercase().contains("default graph"),
+            "{id}'s label still claims default-graph-only scope"
+        );
+    }
+}

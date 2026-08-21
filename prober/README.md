@@ -113,9 +113,12 @@ declares an entailment regime, example resources, or extension functions. It is
 monotonic: a description that declares more never grades lower.
 
 The labels in that file state only what was actually measured. `geo-data` and
-`classes` are narrower than they look: they query only the **default graph**,
-so an endpoint holding everything in named graphs answers empty. Probing
-`GRAPH ?g` as well and comparing is the real check and is deferred.
+`classes` query the default graph AND every named graph, via a `UNION` with a
+`GRAPH ?anyg { ... }` branch, so an endpoint holding everything in named
+graphs is not reported as holding nothing. The graph variable is never the
+metric's own result variable: `GRAPH ?g { ?s geo:asWKT ?g }` would join the
+graph name against the geometry literal, match nothing, and publish a silent
+false `absent`, which is exactly the failure this widening exists to remove.
 
 The two CORS metrics are deliberately separate facts, and neither subsumes the
 other. `cors` observes an `access-control-allow-origin` header on a **simple
@@ -184,14 +187,6 @@ The following are deferred deliberately, not oversights:
 - The fetch is **unconditional**: an endpoint pays one queryless GET even if no
   configured metric actually needs the result, because the probe kind doesn't know
   which metrics use it. This is a small cost traded for simpler logic.
-
-- Declarations are collected **graph-wide**, with no scoping to the service
-  actually being probed. A document describing two co-hosted services can
-  therefore credit endpoint A with endpoint B's `sd:extensionFunction`, turning
-  an `undeclared-but-verified` into a `verified` that endpoint never earned.
-  Fixing it needs graph traversal (match the service node by `sd:endpoint`, then
-  follow `sd:defaultDataset` for the VoID partitions), deferred to stage 1c and
-  **before any real registry sweep**.
 
 - A description larger than the 256 KiB body cap is never graded: it reports
   `indeterminate`, because we did not read it. Classification and the
