@@ -286,6 +286,27 @@ impl Drop for HostGuard {
     }
 }
 
+/// A compile-time assertion that `Politeness::acquire`'s future is `Send`.
+///
+/// This is what makes "the map lock is held across the await" a BUILD error
+/// rather than a stall no test would catch: a `std::sync::MutexGuard` is not
+/// `Send`, so a future holding one across an await point cannot satisfy this
+/// bound.
+///
+/// It lives in `src/` deliberately. Until a later stage spawns the sweep,
+/// nothing else in the crate requires this future to be `Send`, so the bound was
+/// supplied only by one integration test's `JoinSet::spawn`. A guarantee that
+/// disappears when somebody deletes a test is not a structural guarantee, which
+/// is the whole reason the map lock is a `std::sync::Mutex` in the first place.
+///
+/// Never called. Its only job is to exist and be type-checked.
+#[allow(dead_code)]
+fn _acquire_future_is_send() {
+    fn assert_send<T: Send>(_: T) {}
+    let politeness = Politeness::unlimited();
+    assert_send(politeness.acquire("http://example.org/sparql"));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
