@@ -375,3 +375,137 @@ fn the_document_wide_extension_function_flag_does_not_move_with_the_probed_endpo
     assert!(geo.declares(SFWITHIN));
     assert!(!plain.declares(SFWITHIN));
 }
+
+/// A `sd:Service` block that states no `sd:endpoint` is still a service the
+/// document describes. Counting only `sd:endpoint` subjects made it invisible,
+/// so this two-service document was read as one, took the single-service
+/// fallback, and credited the probed endpoint with BOTH functions.
+#[test]
+fn a_service_block_that_states_no_endpoint_still_counts_as_a_service() {
+    const DOC: &str = r#"
+@prefix sd: <http://www.w3.org/ns/sparql-service-description#> .
+@prefix geof: <http://www.opengis.net/def/function/geosparql/> .
+<http://example.org/a> a sd:Service ;
+    sd:endpoint <http://internal.lan/a> ;
+    sd:extensionFunction geof:sfWithin .
+<http://example.org/b> a sd:Service ;
+    sd:extensionFunction geof:sfContains .
+"#;
+    const SFCONTAINS: &str = "http://www.opengis.net/def/function/geosparql/sfContains";
+    let d = parse_declarations(DOC, Some("text/turtle"), "http://example.org/sparql");
+    assert!(!d.declares(SFWITHIN), "the stated endpoint does not match us, so its function is not ours");
+    assert!(
+        !d.declares(SFCONTAINS),
+        "and the endpoint-less service block is a second service, not a document to read whole"
+    );
+    // Still graded, and the control: probing the URL that DOES match reads that
+    // service and only that one.
+    assert!(d.triples > 0);
+    let a = parse_declarations(DOC, Some("text/turtle"), "http://internal.lan/a");
+    assert!(a.declares(SFWITHIN) && !a.declares(SFCONTAINS));
+}
+
+/// The one service block of a Virtuoso stub is a service by both halves of the
+/// rule (typed, and stating an endpoint), so widening the count must not turn
+/// the stubs into a multi-service document that declares nothing.
+#[test]
+fn widening_the_service_count_does_not_strip_the_single_service_stub() {
+    let d = parse_declarations(
+        include_str!("fixtures/virtuoso-stub.ttl"),
+        Some("text/turtle"),
+        "http://elsewhere.example/sparql",
+    );
+    assert!(
+        d.declares(&format!("{SD}UnionDefaultGraph")),
+        "one service, probed under another URL: the mismatch is theirs, so it is read whole"
+    );
+}
+
+/// The expansion must stop at a node that is itself another of the document's
+/// services. A linking predicate pointing at a neighbour's service node
+/// otherwise carries that neighbour's capability across the boundary.
+#[test]
+fn the_expansion_stops_at_another_described_service() {
+    const DOC: &str = r#"
+@prefix sd: <http://www.w3.org/ns/sparql-service-description#> .
+@prefix geof: <http://www.opengis.net/def/function/geosparql/> .
+<http://example.org/mine> a sd:Service ;
+    sd:endpoint <http://example.org/mine/sparql> ;
+    sd:graph <http://example.org/theirs> .
+<http://example.org/theirs> a sd:Service ;
+    sd:endpoint <http://example.org/theirs/sparql> ;
+    sd:extensionFunction geof:sfContains .
+"#;
+    const SFCONTAINS: &str = "http://www.opengis.net/def/function/geosparql/sfContains";
+    let mine = parse_declarations(DOC, Some("text/turtle"), "http://example.org/mine/sparql");
+    assert!(
+        !mine.declares(SFCONTAINS),
+        "a different service with a different endpoint keeps its own claim"
+    );
+    // The control: the claim is real, and belongs to the service that made it.
+    let theirs = parse_declarations(DOC, Some("text/turtle"), "http://example.org/theirs/sparql");
+    assert!(theirs.declares(SFCONTAINS));
+}
+
+/// The legitimate case the boundary must not break: two services pointing at
+/// the SAME dataset node genuinely share that dataset, so its declarations are
+/// both services'. A dataset is not a service, so it does not stop the walk.
+#[test]
+fn a_dataset_shared_by_two_services_is_read_by_both() {
+    const DOC: &str = r#"
+@prefix sd: <http://www.w3.org/ns/sparql-service-description#> .
+@prefix geof: <http://www.opengis.net/def/function/geosparql/> .
+<http://example.org/a> a sd:Service ;
+    sd:endpoint <http://example.org/a/sparql> ;
+    sd:defaultDataset <http://example.org/shared> .
+<http://example.org/b> a sd:Service ;
+    sd:endpoint <http://example.org/b/sparql> ;
+    sd:defaultDataset <http://example.org/shared> .
+<http://example.org/shared> sd:extensionFunction geof:sfWithin .
+"#;
+    for probed in ["http://example.org/a/sparql", "http://example.org/b/sparql"] {
+        assert!(
+            parse_declarations(DOC, Some("text/turtle"), probed).declares(SFWITHIN),
+            "{probed} points at the shared dataset, so the dataset's function is its own"
+        );
+    }
+}
+
+/// A hostile document can make a fixed-point expansion quadratic by writing its
+/// linking chain in reverse document order, so each rescan of every quad adds
+/// one subject. The old loop took 20.9 s in release and 171 s in debug on this
+/// body; the worklist walk takes 41 ms and 202 ms. This is synchronous work no
+/// `tokio::time::timeout` can drop, so the sweep cannot recover from it.
+///
+/// Asserted as "the parse returns and the capability at the far end of the
+/// chain is found", not as a wall-clock bound: a timing assertion would be
+/// flaky on a loaded CI box, while a quadratic expansion turns this test into a
+/// three-minute stall that is impossible to miss, and a truncated one loses
+/// `sfWithin` and fails outright.
+#[test]
+fn a_long_reversed_linking_chain_is_walked_once_not_rescanned_per_link() {
+    const LINKS: usize = 10_440;
+    let mut doc = String::from(
+        "@prefix sd: <http://www.w3.org/ns/sparql-service-description#> .\n\
+         @prefix geof: <http://www.opengis.net/def/function/geosparql/> .\n\
+         @prefix n: <http://example.org/n> .\n",
+    );
+    // The capability sits at the far end, and the chain is written from the far
+    // end back towards the service, whose own link comes last.
+    doc.push_str(&format!("n:{LINKS} sd:extensionFunction geof:sfWithin .\n"));
+    for i in (0..LINKS).rev() {
+        doc.push_str(&format!("n:{i} sd:graph n:{} .\n", i + 1));
+    }
+    doc.push_str(
+        "<http://example.org/svc> a sd:Service ;\n    sd:endpoint <http://example.org/sparql> ;\n    sd:graph n:0 .\n",
+    );
+    // A body a real server could send us: inside `MAX_BODY` (256 KiB), which is
+    // what makes the blow-up reachable rather than theoretical.
+    assert!(doc.len() < 256 * 1024, "the adversarial body must fit the fetch cap, got {}", doc.len());
+
+    let d = parse_declarations(&doc, Some("text/turtle"), "http://example.org/sparql");
+    assert!(
+        d.declares(SFWITHIN),
+        "the whole chain is one service's subtree, so the capability at its end is found"
+    );
+}

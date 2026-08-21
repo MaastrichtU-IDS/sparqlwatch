@@ -9,7 +9,7 @@
 
 use oxrdf::{NamedOrBlankNode, Quad, Term};
 use oxrdfio::{RdfFormat, RdfParser};
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
 const SD_FEATURE: &str = "http://www.w3.org/ns/sparql-service-description#feature";
 const SD_EXTENSION_FUNCTION: &str = "http://www.w3.org/ns/sparql-service-description#extensionFunction";
@@ -22,6 +22,8 @@ const VOID_CLASS_PARTITION: &str = "http://rdfs.org/ns/void#classPartition";
 const VOID_EXAMPLE_RESOURCE: &str = "http://rdfs.org/ns/void#exampleResource";
 const VOID_PROPERTY_PARTITION: &str = "http://rdfs.org/ns/void#propertyPartition";
 const SD_ENDPOINT: &str = "http://www.w3.org/ns/sparql-service-description#endpoint";
+const SD_SERVICE: &str = "http://www.w3.org/ns/sparql-service-description#Service";
+const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 
 /// Linking predicates: a service's subtree includes what it points at.
 /// `defaultGraph` and `namedGraph` are here because real descriptions hang
@@ -180,25 +182,45 @@ pub fn parse_declarations_for(body: &str, content_type: Option<&str>, endpoints:
 ///
 /// `None` means no scope at all: read the whole document. `Some(set)` means
 /// read only those subjects, and an empty set therefore yields no
-/// capabilities. The four cases:
+/// capabilities.
 ///
-/// - No `sd:endpoint` triple anywhere: **no scope**. Most real descriptions,
-///   including the 21 byte-identical Virtuoso stubs in the survey, state no
-///   endpoint; scoping those to nothing would turn every one of them into a
-///   false `undeclared`.
+/// A **service**, for both jobs a service set does here, is any subject the
+/// document presents as one: a subject typed `sd:Service`, or a subject
+/// carrying an `sd:endpoint`. One definition, stated once, because the two
+/// jobs must agree. Counting only `sd:endpoint` subjects made a service block
+/// that states no endpoint invisible, so a genuinely two-service document took
+/// the single-service fallback below, was read whole, and credited the probed
+/// endpoint with its neighbour's extension function.
+///
+/// The four cases:
+///
+/// - The document presents no service at all: **no scope**. Most real
+///   descriptions state no endpoint, and many state no type either; scoping
+///   those to nothing would turn every one of them into a false `undeclared`.
+///   (The 21 byte-identical Virtuoso stubs in the survey state both, and match,
+///   so they scope to their one service.)
 /// - Some `sd:endpoint` matches one of `endpoints` under `same_endpoint`:
 ///   **scope to those subjects**, expanded transitively through `LINKING`.
-/// - Endpoints are stated, none matches, and the document describes exactly
-///   one service: **no scope**. We fetched this document from the endpoint we
-///   are probing and it describes one service; the URL disagreement is theirs.
-/// - Endpoints are stated, none matches, and the document describes more than
-///   one: **empty scope**. Crediting one of several services at random is
-///   exactly the leak this function exists to close. The grade is unaffected,
-///   because the grade is not scoped.
+/// - Endpoints or service types are stated, none matches, and the document
+///   presents exactly one service: **no scope**. We fetched this document from
+///   the endpoint we are probing and it describes one service; the URL
+///   disagreement is theirs.
+/// - Endpoints or service types are stated, none matches, and the document
+///   presents more than one service: **empty scope**. Crediting one of several
+///   services at random is exactly the leak this function exists to close. The
+///   grade is unaffected, because the grade is not scoped.
 fn scope_of(quads: &[Quad], endpoints: &[&str]) -> Option<HashSet<NamedOrBlankNode>> {
     let mut services: HashSet<&NamedOrBlankNode> = HashSet::new();
     let mut matched: HashSet<NamedOrBlankNode> = HashSet::new();
     for quad in quads {
+        // A subject the document types as a service is a service whether or
+        // not it also states where to reach it.
+        if quad.predicate.as_str() == RDF_TYPE
+            && matches!(&quad.object, Term::NamedNode(o) if o.as_str() == SD_SERVICE)
+        {
+            services.insert(&quad.subject);
+            continue;
+        }
         if quad.predicate.as_str() != SD_ENDPOINT {
             continue;
         }
@@ -224,23 +246,53 @@ fn scope_of(quads: &[Quad], endpoints: &[&str]) -> Option<HashSet<NamedOrBlankNo
     // A service's subtree is whatever it points at through `LINKING`, and
     // whatever that points at in turn, which is what makes a VoID partition
     // hung off a default graph (or off a blank node under one) this service's
-    // own. Each round adds at least one subject or the loop stops, so the
-    // quad count bounds it and a cyclic document cannot spin.
-    for _ in 0..quads.len() {
-        let mut grew = false;
-        for quad in quads {
-            if !LINKING.contains(&quad.predicate.as_str()) || !matched.contains(&quad.subject) {
+    // own.
+    //
+    // Indexed once, subject to what it points at, then walked as a worklist
+    // from the matched services, so each subject is expanded at most once and
+    // the whole expansion is linear in the quad count. The fixed-point loop
+    // this replaces rescanned every quad every round, which a document turns
+    // quadratic by writing its linking chain in reverse document order: a
+    // 259,980-byte body (inside the 256 KiB cap in `client.rs`) with a
+    // 10,440-link reversed `sd:graph` chain took 20.9 s in release and 171 s in
+    // debug, against 27 ms for a flat body of the same size. That is
+    // synchronous CPU work at no await point, so no `tokio::time::timeout` in
+    // `budget.rs` can drop it and one hostile host would stall the whole
+    // sequential sweep, which is the umakadata failure this system exists to
+    // avoid. The `matched` set is also the visited set, so a cyclic document
+    // still terminates.
+    let mut links: HashMap<&NamedOrBlankNode, Vec<NamedOrBlankNode>> = HashMap::new();
+    for quad in quads {
+        if !LINKING.contains(&quad.predicate.as_str()) {
+            continue;
+        }
+        let linked = match &quad.object {
+            Term::NamedNode(n) => NamedOrBlankNode::NamedNode(n.clone()),
+            // The arm that makes `sd:defaultDataset [ sd:defaultGraph [ ... ] ]`
+            // and every other blank-node-hung subtree part of the service.
+            Term::BlankNode(b) => NamedOrBlankNode::BlankNode(b.clone()),
+            _ => continue,
+        };
+        links.entry(&quad.subject).or_default().push(linked);
+    }
+
+    let mut frontier: VecDeque<NamedOrBlankNode> = matched.iter().cloned().collect();
+    while let Some(subject) = frontier.pop_front() {
+        let Some(linked) = links.get(&subject) else {
+            continue;
+        };
+        for next in linked {
+            // The boundary. A node that is itself another of the document's
+            // services stays that service's, even though ours points at it:
+            // its declarations are its own claims, not ours. A node that is
+            // merely a dataset does not stop the walk, so two services
+            // pointing at the SAME dataset node genuinely share it.
+            if services.contains(&next) && !matched.contains(next) {
                 continue;
             }
-            let linked = match &quad.object {
-                Term::NamedNode(n) => NamedOrBlankNode::NamedNode(n.clone()),
-                Term::BlankNode(b) => NamedOrBlankNode::BlankNode(b.clone()),
-                _ => continue,
-            };
-            grew |= matched.insert(linked);
-        }
-        if !grew {
-            break;
+            if matched.insert(next.clone()) {
+                frontier.push_back(next.clone());
+            }
         }
     }
     Some(matched)
