@@ -269,7 +269,8 @@ fn a_grade_input_survives_an_empty_capability_scope() {
     sd:endpoint <http://internal.lan/one> ;
     sd:defaultDataset <http://example.org/ds> .
 <http://example.org/ds> sd:defaultGraph <http://example.org/g> .
-<http://example.org/g> void:propertyPartition [ void:property geof:sfWithin ] .
+<http://example.org/g> void:propertyPartition [ void:property geof:sfWithin ] ;
+    sd:extensionFunction geof:sfWithin .
 <http://example.org/other> a sd:Service ; sd:endpoint <http://internal.lan/two> .
 "#;
     // Probed as a URL that matches nothing in the document, deliberately: the
@@ -277,6 +278,11 @@ fn a_grade_input_survives_an_empty_capability_scope() {
     // scope. Asserting this from a NON-matching endpoint is what makes the test
     // say something; asserting it from the matching one held either way.
     let d = parse_declarations(DOC, Some("text/turtle"), "http://elsewhere.example/sparql");
+    // A real guard: the fixture now carries `sd:extensionFunction geof:sfWithin`,
+    // which an unscoped capability read WOULD pick up. So this failing means the
+    // scope is not empty, and the grade assertion below would prove nothing.
+    // (The earlier version asserted on a `void:property`, which `declares()`
+    // never looks at, so it held whatever the scope did.)
     assert!(
         !d.declares("http://www.opengis.net/def/function/geosparql/sfWithin"),
         "the fixture must produce an EMPTY capability scope or the grade assertion proves nothing"
