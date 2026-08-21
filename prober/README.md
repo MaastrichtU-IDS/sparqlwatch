@@ -27,10 +27,12 @@ answer to their question rather than a fact about our request:
 
 - the description fetch, where a `404` or `410` counts as absence, because
   those two statuses speak to what is published at the URL itself;
-- the CORS preflight, where a `405`, a `501` or any `3xx` counts as absence,
-  because a browser's `fetch` requires the preflight to answer with an ok
-  status and not be redirected, so those statuses are the endpoint saying it
-  will not serve a cross-origin query.
+- the CORS preflight, where a `405` or a `501` counts as absence, because a
+  browser's `fetch` requires the preflight to answer with an ok status, so
+  those statuses are the endpoint saying it will not serve a cross-origin
+  query. A redirect is not one of them: the probe resolves the chain and
+  judges the response at the end of it, and a chain it could not resolve is
+  `indeterminate`.
 
 A timeout, an unreachable host, a 429, a gateway error, an HTML query console,
 an unparseable body (anything else we never got to interpret) is
@@ -129,9 +131,16 @@ content-type`) and is what decides whether an embedded query editor can talk to
 the endpoint at all. An endpoint that sets the header on GET and refuses
 `OPTIONS` is common, and it reports `undeclared-but-verified` on the first and
 `absent` on the second, which is the honest pair of answers. The preflight
-probe does not follow redirects: a `303` would rewrite the `OPTIONS` into a
-`GET` and hand back exactly the simple-GET header we already have, publishing
-`verified` for that endpoint. `verified` on `cors-preflight` requires a 2xx
+probe never follows a redirect implicitly: a `303` would rewrite the `OPTIONS`
+into a `GET` and hand back exactly the simple-GET header we already have,
+publishing a grant for that endpoint. It resolves the chain deliberately
+instead, re-issuing the same `OPTIONS` at each `Location` for up to 5 hops, and
+draws the verdict from the response at the end. A chain with no usable
+`Location`, a cycle, or more hops than that is `indeterminate`: we never
+reached a preflight answer. Minting a redirect itself as `absent` published
+"does not answer a browser preflight" for services that answer one one hop
+away, contradicting the `cors` row in the same run, which had followed the very
+same redirect. `verified` on `cors-preflight` requires a 2xx
 whose `access-control-allow-origin` is `*` or our own origin
 (`https://sparqlwatch.dev.k8s.semanticscience.org`, the same host the
 `User-Agent` names) and whose `access-control-allow-methods`, if it sends one,

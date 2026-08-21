@@ -1,6 +1,7 @@
 use crate::budget::Budget;
 use crate::observe::{BodyKind, Observation};
 use oxrdfio::{RdfFormat, RdfParser};
+use std::collections::HashSet;
 use std::time::Instant;
 
 /// Announced only by the two CORS probes, so the other probes cannot be
@@ -41,6 +42,17 @@ const RDF_MEDIA_TYPES: [&str; 6] = [
     "application/trig",
     "application/n-quads",
 ];
+
+/// How many redirects a preflight chain resolves before we give up on it.
+///
+/// The preflight never follows a redirect implicitly (see `preflight`): each
+/// hop is a deliberate re-issue of the same `OPTIONS` at the `Location`
+/// target, so the method is never rewritten into a `GET`. The bound is what
+/// stops a redirect cycle from costing an unbounded number of requests
+/// against somebody else's server; a chain that needs more than this many
+/// hops is one we did not reach the end of, which is `indeterminate` rather
+/// than an answer.
+const MAX_PREFLIGHT_HOPS: usize = 5;
 
 /// Cap on the *retained* response body, applied after `resp.text().await` has
 /// already buffered the whole response. This bounds what we keep in
@@ -285,18 +297,70 @@ impl Client {
     /// this is not a preflight at all and a correct server may ignore it,
     /// which would make every verdict the resolver draws from it meaningless.
     ///
-    /// Issued on `no_redirect`, so a redirect is observed rather than
-    /// followed. A `303` otherwise rewrites the `OPTIONS` into a `GET`, and an
-    /// endpoint that refuses `OPTIONS` but sets
-    /// `access-control-allow-origin` on a simple GET would then publish
-    /// `verified`: precisely the endpoint this metric exists to catch. A
-    /// browser fails a redirected preflight anyway, so the redirect itself is
-    /// the answer.
+    /// Issued on `no_redirect`, so a redirect is never followed implicitly. A
+    /// `303` otherwise rewrites the `OPTIONS` into a `GET`, and an endpoint
+    /// that refuses `OPTIONS` but sets `access-control-allow-origin` on a
+    /// simple GET would then publish a grant: precisely the endpoint this
+    /// metric exists to catch.
+    ///
+    /// A 3xx is nevertheless not an answer about the endpoint. Every other
+    /// probe reaches the endpoint through its redirect (`self.http` follows up
+    /// to 10), so treating the redirect itself as the preflight's answer
+    /// published `absent` for a service that answers a preflight perfectly one
+    /// hop away, in the same run whose `cors` row followed that same hop. So
+    /// the chain is resolved DELIBERATELY here instead: read `Location`,
+    /// resolve it against the URL we asked, and re-issue the same `OPTIONS`
+    /// there, up to `MAX_PREFLIGHT_HOPS`. The method is never rewritten, and
+    /// the hops are ours to see and to log rather than reqwest's to take
+    /// invisibly.
+    ///
+    /// What comes back is the response at the end of the chain. A 3xx that
+    /// still stands at that point (no usable `Location`, a cycle, or more hops
+    /// than the bound) is returned as itself, and the resolver reads it as
+    /// `indeterminate`: we never reached a preflight answer.
     ///
     /// Records the header VALUES, not just presence, because presence is not a
     /// grant. No body is read or classified: a preflight response has no
     /// meaningful body, and a `204` has none at all.
     pub async fn preflight(&self, url: &str) -> Observation {
+        let start = Instant::now();
+        let mut target = url.to_string();
+        // Canonicalised, because every hop after the first is a parsed and
+        // rejoined URL, and a cycle check has to compare like with like.
+        let mut seen: HashSet<String> = HashSet::new();
+        seen.insert(Self::canonical(&target));
+
+        let (mut o, mut location) = self.preflight_once(&target).await;
+        let mut hops = 0usize;
+        while o.status.is_some_and(|s| (300..=399).contains(&s)) {
+            if hops == MAX_PREFLIGHT_HOPS {
+                tracing::warn!(url, hops, "preflight redirect chain longer than the hop bound; not resolved");
+                break;
+            }
+            let Some(next) = location.as_deref().and_then(|l| Self::resolve_location(&target, l)) else {
+                tracing::warn!(url, status = ?o.status, "preflight redirect carried no usable Location; not resolved");
+                break;
+            };
+            if !seen.insert(next.clone()) {
+                tracing::warn!(url, next = %next, "preflight redirect chain loops; not resolved");
+                break;
+            }
+            tracing::debug!(from = %target, to = %next, "re-issuing the preflight at a redirect target");
+            target = next;
+            hops += 1;
+            (o, location) = self.preflight_once(&target).await;
+        }
+        // The whole chain is what this measurement cost, not just its last
+        // hop: the row publishes one duration for one metric.
+        o.elapsed_ms = start.elapsed().as_millis() as u64;
+        o
+    }
+
+    /// One `OPTIONS` preflight, no redirect resolution. Returns the
+    /// observation and the response's `Location` header, which is evidence the
+    /// chain resolution needs and no verdict rule reads, so it stays out of
+    /// `Observation`.
+    async fn preflight_once(&self, url: &str) -> (Observation, Option<String>) {
         let start = Instant::now();
         let resp = self
             .no_redirect
@@ -310,14 +374,14 @@ impl Client {
 
         let resp = match resp {
             Ok(r) => r,
-            Err(e) => return Observation::failed(e.to_string(), elapsed),
+            Err(e) => return (Observation::failed(e.to_string(), elapsed), None),
         };
         let headers = resp.headers();
         let value = |name: &str| {
             headers.get(name).and_then(|v| v.to_str().ok()).map(str::to_string)
         };
 
-        Observation {
+        let observation = Observation {
             status: Some(resp.status().as_u16()),
             cors: headers.contains_key("access-control-allow-origin"),
             boolean: None,
@@ -331,7 +395,28 @@ impl Client {
             allow_headers: value("access-control-allow-headers"),
             elapsed_ms: elapsed,
             error: None,
+        };
+        let location = value("location");
+        (observation, location)
+    }
+
+    /// `location` resolved against `base`, absolute or relative, or `None` if
+    /// there is nothing usable to resolve: an empty header, or a value no URL
+    /// parser will take. `None` is what makes such a redirect
+    /// `indeterminate` rather than an answer.
+    fn resolve_location(base: &str, location: &str) -> Option<String> {
+        let location = location.trim();
+        if location.is_empty() {
+            return None;
         }
+        reqwest::Url::parse(base).ok()?.join(location).ok().map(|u| u.to_string())
+    }
+
+    /// `url` as its parser writes it back, so two spellings of one URL compare
+    /// equal in the cycle check. An unparseable string is returned unchanged:
+    /// the request will fail on it anyway, and the failure is the evidence.
+    fn canonical(url: &str) -> String {
+        reqwest::Url::parse(url).map(|u| u.to_string()).unwrap_or_else(|_| url.to_string())
     }
 
     /// Pull binding rows out of a SPARQL JSON body, keeping only the requested

@@ -146,23 +146,30 @@ async fn a_501_is_absent() {
     assert_eq!(v, Verdict::Absent);
 }
 
+/// C1. A 3xx used to be minted as `Absent`, so an `http://` registry URL whose
+/// service answers a preflight perfectly one hop away published "does not
+/// answer a browser preflight" -- in the same run whose `cors` row followed
+/// that same redirect and reported the capability present. The redirect is a
+/// chain to resolve, not an answer: read `Location`, re-issue the `OPTIONS`
+/// there, and resolve on what the end of the chain says.
 #[tokio::test]
-async fn a_redirected_preflight_is_absent_even_when_the_target_would_grant() {
-    // A browser fails a redirected preflight, so the verdict is `Absent`. And
-    // the client must not follow it: a 303 rewrites the OPTIONS into a GET, so
-    // an endpoint that refuses OPTIONS but sets ACAO on a simple GET would
-    // otherwise publish `Verified` -- precisely the endpoint this metric
-    // exists to catch.
+async fn a_303_to_a_granting_path_reaches_the_grant_instead_of_publishing_absent() {
     let server = MockServer::start().await;
     Mock::given(method("OPTIONS"))
         .and(path("/sparql"))
         .respond_with(ResponseTemplate::new(303).insert_header("location", "/granted"))
         .mount(&server)
         .await;
-    // Answers anything, any method, with a full grant.
-    Mock::given(path("/granted"))
+    // Answers a genuine preflight only. A `303` followed by reqwest would
+    // rewrite the OPTIONS into a GET, which finds no mock here, gets
+    // wiremock's 404 and resolves to `Indeterminate` -- so this mock is also
+    // what pins that the method is never rewritten.
+    Mock::given(method("OPTIONS"))
+        .and(path("/granted"))
+        .and(header_exists("origin"))
+        .and(header("access-control-request-method", "GET"))
         .respond_with(
-            ResponseTemplate::new(200)
+            ResponseTemplate::new(204)
                 .insert_header("access-control-allow-origin", "*")
                 .insert_header("access-control-allow-methods", "GET, POST, OPTIONS"),
         )
@@ -170,16 +177,136 @@ async fn a_redirected_preflight_is_absent_even_when_the_target_would_grant() {
         .await;
 
     let (v, o) = preflight_and_resolve(&format!("{}/sparql", server.uri())).await;
-    assert_eq!(v, Verdict::Absent);
-    assert_eq!(o.status, Some(303), "the redirect itself is the observation, not what it points at");
-    assert_eq!(o.allow_origin, None, "the grant at /granted must not have been read");
+    assert_eq!(v, Verdict::UndeclaredButVerified, "the preflight was answered at the end of the chain");
+    assert_eq!(o.status, Some(204), "the verdict is drawn from the final response, not the redirect");
+    assert_eq!(o.allow_origin.as_deref(), Some("*"));
+
+    let seen = server.received_requests().await.unwrap();
+    let hops: Vec<(String, String)> =
+        seen.iter().map(|r| (r.method.to_string(), r.url.path().to_string())).collect();
+    assert_eq!(
+        hops,
+        vec![
+            ("OPTIONS".to_string(), "/sparql".to_string()),
+            ("OPTIONS".to_string(), "/granted".to_string()),
+        ],
+        "the chain must be re-issued as OPTIONS, one deliberate hop at a time"
+    );
+}
+
+/// Ruling F survives the fix: we resolve the chain ourselves precisely so the
+/// method is never rewritten. An endpoint that redirects and then refuses
+/// `OPTIONS` while granting CORS on a simple GET is the endpoint this metric
+/// exists to catch, and it must still come out `absent`.
+#[tokio::test]
+async fn a_redirect_to_a_service_that_refuses_options_is_absent_not_a_grant() {
+    let server = MockServer::start().await;
+    Mock::given(method("OPTIONS"))
+        .and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(301).insert_header("location", "/real"))
+        .mount(&server)
+        .await;
+    Mock::given(method("OPTIONS"))
+        .and(path("/real"))
+        .respond_with(ResponseTemplate::new(405))
+        .mount(&server)
+        .await;
+    // The blanket header a front-end filter puts on a simple GET. Reachable
+    // only by rewriting the method, which is what must not happen.
+    Mock::given(method("GET"))
+        .and(path("/real"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("access-control-allow-origin", "*")
+                .insert_header("access-control-allow-methods", "GET"),
+        )
+        .mount(&server)
+        .await;
+
+    let (v, o) = preflight_and_resolve(&format!("{}/sparql", server.uri())).await;
+    assert_eq!(v, Verdict::Absent, "the service at the end of the chain refuses OPTIONS");
+    assert_eq!(o.status, Some(405));
+    assert_eq!(o.allow_origin, None, "the simple-GET grant must not have been read");
 
     let seen = server.received_requests().await.unwrap();
     assert!(
-        seen.iter().all(|r| r.url.path() != "/granted"),
-        "the preflight client followed the redirect: {:?}",
-        seen.iter().map(|r| r.url.path().to_string()).collect::<Vec<_>>()
+        seen.iter().all(|r| r.method == wiremock::http::Method::OPTIONS),
+        "the preflight was rewritten into another method: {:?}",
+        seen.iter().map(|r| r.method.to_string()).collect::<Vec<_>>()
     );
+}
+
+/// A 3xx we cannot resolve is not an absence. `absent` on this metric asserts
+/// the endpoint answered the preflight and refused us; here we never reached a
+/// preflight answer at all.
+#[tokio::test]
+async fn a_redirect_with_no_usable_location_is_indeterminate() {
+    for template in [
+        ResponseTemplate::new(302),                                  // no Location at all
+        ResponseTemplate::new(302).insert_header("location", "   "), // blank Location
+    ] {
+        let server = preflight_answering(template).await;
+        let (v, o) = preflight_and_resolve(&format!("{}/sparql", server.uri())).await;
+        assert_eq!(v, Verdict::Indeterminate, "an unresolvable redirect is not an answer");
+        assert_eq!(o.status, Some(302), "the unresolved redirect is what we observed");
+        assert_eq!(server.received_requests().await.unwrap().len(), 1, "there was nowhere to go");
+    }
+}
+
+#[tokio::test]
+async fn a_redirect_loop_is_indeterminate_and_stops() {
+    let server = MockServer::start().await;
+    Mock::given(method("OPTIONS"))
+        .and(path("/a"))
+        .respond_with(ResponseTemplate::new(307).insert_header("location", "/b"))
+        .mount(&server)
+        .await;
+    Mock::given(method("OPTIONS"))
+        .and(path("/b"))
+        .respond_with(ResponseTemplate::new(307).insert_header("location", "/a"))
+        .mount(&server)
+        .await;
+
+    let (v, o) = preflight_and_resolve(&format!("{}/a", server.uri())).await;
+    assert_eq!(v, Verdict::Indeterminate);
+    assert_eq!(o.status, Some(307));
+    // /a, then /b, then /a again is already seen and the chain stops. The
+    // point of the cycle check is that a stranger's server does not get an
+    // unbounded number of our requests.
+    assert_eq!(server.received_requests().await.unwrap().len(), 2, "the loop was not cut");
+}
+
+#[tokio::test]
+async fn a_chain_longer_than_the_hop_bound_is_indeterminate() {
+    let server = MockServer::start().await;
+    // Seven redirects and then a grant: more hops than the bound allows, so
+    // the grant must never be reached and the verdict must not be `absent`.
+    for i in 0..7 {
+        Mock::given(method("OPTIONS"))
+            .and(path(format!("/h{i}")))
+            .respond_with(ResponseTemplate::new(303).insert_header("location", format!("/h{}", i + 1)))
+            .mount(&server)
+            .await;
+    }
+    Mock::given(method("OPTIONS"))
+        .and(path("/h7"))
+        .respond_with(
+            ResponseTemplate::new(204)
+                .insert_header("access-control-allow-origin", "*")
+                .insert_header("access-control-allow-methods", "GET"),
+        )
+        .mount(&server)
+        .await;
+
+    let (v, o) = preflight_and_resolve(&format!("{}/h0", server.uri())).await;
+    assert_eq!(v, Verdict::Indeterminate, "we did not reach the end of the chain");
+    assert_eq!(o.status, Some(303));
+
+    let seen = server.received_requests().await.unwrap();
+    let paths: Vec<String> = seen.iter().map(|r| r.url.path().to_string()).collect();
+    // The first request plus five resolved hops. The bound is a bound on
+    // requests we send to somebody else's server, so it is asserted exactly.
+    assert_eq!(paths, vec!["/h0", "/h1", "/h2", "/h3", "/h4", "/h5"], "the hop bound was not honoured");
 }
 
 #[tokio::test]

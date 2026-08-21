@@ -91,10 +91,12 @@ fn grants_our_origin(allow_origin: Option<&str>) -> bool {
 ///
 /// - the `Cors` *positive* case, because an `access-control-allow-origin`
 ///   header proves CORS is configured at any status;
-/// - `CorsPreflight`, where a `405`, a `501` or a `3xx` is the endpoint
-///   telling us it will not serve a browser's preflight, so those statuses
-///   are an absence rather than an unknown. `resolve_fetch` has the third
-///   such case, a `404`/`410` on the description.
+/// - `CorsPreflight`, where a `405` or a `501` is the endpoint telling us it
+///   will not serve a browser's preflight, so those statuses are an absence
+///   rather than an unknown. A `3xx` is not: `Client::preflight` resolves the
+///   redirect chain and this verdict is drawn from its end, so a `3xx` here
+///   means we never reached an answer. `resolve_fetch` has the third such
+///   case, a `404`/`410` on the description.
 pub fn resolve(def: &MetricDef, declared: Declared, obs: Result<&Observation, Expired>) -> Verdict {
     let o = match obs {
         Err(Expired) => return Verdict::Indeterminate,
@@ -181,10 +183,23 @@ pub fn resolve(def: &MetricDef, declared: Declared, obs: Result<&Observation, Ex
                 // This is the endpoint answering the question we asked, which
                 // is what licenses an absence claim.
                 Some(405) | Some(501) => Verdict::Absent,
-                // A browser fails a redirected preflight, so a 3xx is an
-                // answer too. `Client::preflight` also declines to follow it,
-                // so what we observe here is the redirect itself.
-                Some(s) if (300..=399).contains(&s) => Verdict::Absent,
+                // A 3xx that survives as far as this rule is a chain
+                // `Client::preflight` could not resolve: no usable `Location`,
+                // a cycle, or more hops than its bound. A resolvable redirect
+                // never arrives here, because that client re-issues the
+                // `OPTIONS` at the target and this verdict is drawn from the
+                // response at the end of the chain.
+                //
+                // It was `Absent` once, on the reasoning that a browser fails
+                // a redirected preflight. True of the browser, but wrong about
+                // the endpoint: every other probe reaches the endpoint through
+                // its redirect, so one run published `cors =
+                // undeclared-but-verified` and `cors-preflight = absent` for
+                // one service, and the contradiction came from our redirect
+                // policy rather than from anything the endpoint did. An
+                // unresolvable chain means we never got a preflight answer,
+                // which is exactly what `Indeterminate` says.
+                Some(s) if (300..=399).contains(&s) => Verdict::Indeterminate,
                 // Any other non-2xx describes our request or the server's
                 // state, not its CORS policy.
                 Some(s) if !(200..=299).contains(&s) => Verdict::Indeterminate,
@@ -280,7 +295,7 @@ pub fn grade_from_declarations(defs: &Declarations) -> Level {
 /// `Absent` is minted only from a `404` or a `410`: those are the only status
 /// codes that speak to what is published at the URL, and they are one of the
 /// three places in this module where a non-2xx status licenses an absence,
-/// alongside the `405`/`501`/`3xx` of a refused `CorsPreflight` -- nothing was ever
+/// alongside the `405`/`501` of a refused `CorsPreflight` -- nothing was ever
 /// there, or it was and has since been removed. Every other non-2xx status,
 /// `401`/`403` included, describes our request or the server's state, not
 /// the endpoint's published metadata, so it stays `Indeterminate`. This is
@@ -637,15 +652,27 @@ mod tests {
         assert_eq!(v, Verdict::Absent, "the status gate must be consulted before any header");
     }
 
+    /// A 3xx reaching the resolver is a chain `Client::preflight` could not
+    /// resolve, and an unresolved chain is not an answer. It was `Absent`
+    /// until C1: every other probe measures the endpoint through its redirect,
+    /// so minting the redirect as an absence made one run publish `cors =
+    /// undeclared-but-verified` and `cors-preflight = absent` about one
+    /// service, from our own redirect policy rather than from the endpoint.
+    /// Note that a wildcard grant rides along on each of these and changes
+    /// nothing: the status gate still comes first.
     #[test]
-    fn a_preflight_3xx_is_absent_and_a_4xx_or_5xx_is_indeterminate() {
+    fn a_preflight_3xx_is_indeterminate_and_a_4xx_or_5xx_is_indeterminate() {
         for status in [301, 302, 303, 307, 308] {
             let mut o = obs(None);
             o.body_kind = BodyKind::None;
             o.status = Some(status);
             o.allow_origin = Some("*".into());
             let v = resolve(&def(ProbeKind::CorsPreflight, None), Declared { claimed: false }, Ok(&o));
-            assert_eq!(v, Verdict::Absent, "a browser fails a redirected preflight: {status}");
+            assert_eq!(
+                v,
+                Verdict::Indeterminate,
+                "an unresolved redirect chain never reached a preflight answer: {status}"
+            );
         }
         for status in [400, 401, 403, 404, 429, 500, 502, 503] {
             let mut o = obs(None);
