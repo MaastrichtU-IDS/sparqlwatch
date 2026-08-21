@@ -1,0 +1,18 @@
+@prefix sd: <http://www.w3.org/ns/sparql-service-description#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+
+<http://example.org/sparql>
+    rdf:type sd:Service ;
+    sd:endpoint <http://example.org/sparql> ;
+    sd:url <http://example.org/sparql> ;
+    sd:feature sd:UnionDefaultGraph ;
+    sd:feature sd:DereferencesURIs ;
+    sd:supportedLanguage sd:SPARQL10Query ;
+    sd:resultFormat <http://www.w3.org/ns/formats/SPARQL_Results_XML> ;
+    sd:resultFormat <http://www.w3.org/ns/formats/SPARQL_Results_JSON> ;
+    sd:resultFormat <http://www.w3.org/ns/formats/SPARQL_Results_CSV> ;
+    sd:resultFormat <http://www.w3.org/ns/formats/SPARQL_Results_TSV> ;
+    sd:resultFormat <http://www.w3.org/ns/formats/RDF_XML> ;
+    sd:resultFormat <http://www.w3.org/ns/formats/Turtle> ;
+    sd:resultFormat <http://www.w3.org/ns/formats/N-Triples> ;
+    sd:resultFormat <http://www.w3.org/ns/formats/JSON-LD> .

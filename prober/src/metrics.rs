@@ -16,20 +16,23 @@ pub enum ProbeKind {
 
 impl ProbeKind {
     /// Whether a probe is actually implemented for this kind. `FetchWellKnown`
-    /// is defined but not yet built (the fetch probe is a later stage), and a
-    /// kind with no probe must be skipped *without issuing a request*: the
-    /// generic query path would send `GET <endpoint>?query=`, a malformed
-    /// protocol request that learns nothing and looks like abuse to the
-    /// operator whose logs it lands in. The metric still gets a row, recorded
-    /// as `Indeterminate`, so the gap stays visible in the published output.
+    /// now has one too -- a single queryless fetch per endpoint, issued once
+    /// in `probe_endpoint` ahead of this per-metric dispatch rather than
+    /// through it -- so every current kind returns `true`. The mechanism
+    /// stays for a future kind that has no probe yet: it must be skipped
+    /// *without issuing a request*, since the generic query path would send
+    /// `GET <endpoint>?query=`, a malformed protocol request that learns
+    /// nothing and looks like abuse to the operator whose logs it lands in.
+    /// Such a metric still gets a row, recorded as `Indeterminate`, so the
+    /// gap stays visible in the published output.
     pub fn has_probe(&self) -> bool {
         match self {
             ProbeKind::Liveness
             | ProbeKind::Cors
             | ProbeKind::AskFilter
             | ProbeKind::AskData
-            | ProbeKind::SelectIris => true,
-            ProbeKind::FetchWellKnown => false,
+            | ProbeKind::SelectIris
+            | ProbeKind::FetchWellKnown => true,
         }
     }
 }
@@ -49,6 +52,11 @@ pub struct MetricDef {
     /// Absent for kinds that don't read bindings.
     #[serde(default)]
     pub var: Option<String>,
+    /// The IRI whose presence in the endpoint's own declarations means it
+    /// claims this capability. Absent for metrics no declaration can speak
+    /// for (liveness, response time, CORS headers).
+    #[serde(default)]
+    pub declared_by: Option<String>,
     #[serde(default)]
     pub graded: bool,
 }
@@ -95,7 +103,7 @@ pub fn definitions_revision(defs: &[MetricDef]) -> String {
         // Order and field set are part of the revision: a reordered file is a
         // different definition list, and every field affects what is measured.
         canonical.push_str(&format!(
-            "{}\x1f{}\x1f{}\x1f{:?}\x1f{}\x1f{}\x1f{}\x1f{}\x1e",
+            "{}\x1f{}\x1f{}\x1f{:?}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}\x1e",
             d.id,
             d.label,
             d.dimension,
@@ -103,6 +111,7 @@ pub fn definitions_revision(defs: &[MetricDef]) -> String {
             d.query.as_deref().unwrap_or(""),
             d.expect.map(|b| b.to_string()).unwrap_or_default(),
             d.var.as_deref().unwrap_or(""),
+            d.declared_by.as_deref().unwrap_or(""),
             d.graded,
         ));
     }
@@ -154,10 +163,13 @@ query = "ASK { }"
     }
 
     #[test]
-    fn fetch_well_known_has_no_probe_yet_and_every_other_kind_does() {
-        assert!(!ProbeKind::FetchWellKnown.has_probe());
+    fn every_probe_kind_has_a_probe() {
+        // FetchWellKnown's probe is the once-per-endpoint fetch in
+        // `probe_endpoint`, dispatched ahead of this generic per-metric path
+        // rather than through it, but it is implemented now: no kind in the
+        // closed set currently lacks one.
         for k in [ProbeKind::Liveness, ProbeKind::Cors, ProbeKind::AskFilter,
-                  ProbeKind::AskData, ProbeKind::SelectIris] {
+                  ProbeKind::AskData, ProbeKind::SelectIris, ProbeKind::FetchWellKnown] {
             assert!(k.has_probe(), "{k:?} should have a probe");
         }
     }
@@ -203,6 +215,16 @@ query = "SELECT ?thing WHERE {{ ?s ?p ?thing }} LIMIT 1"
         assert_eq!(definitions_revision(&a), definitions_revision(&a), "no clock, no randomness");
         let b = load_metrics(&SRC.replace("ASK { }", "ASK { ?s ?p ?o }")).unwrap();
         assert_ne!(definitions_revision(&a), definitions_revision(&b), "an edited query is a new revision");
+        let c = load_metrics(&SRC.replace(
+            "kind = \"AskFilter\"\nexpect = true",
+            "kind = \"AskFilter\"\nexpect = true\ndeclared_by = \"http://example.org/fn\"",
+        ))
+        .unwrap();
+        assert_ne!(
+            definitions_revision(&a),
+            definitions_revision(&c),
+            "an edited declared_by changes what the metric is read against, so it must be a new revision too"
+        );
         let reordered: Vec<MetricDef> = a.iter().rev().cloned().collect();
         assert_ne!(definitions_revision(&a), definitions_revision(&reordered));
         assert!(definitions_revision(&a).starts_with("fnv1a64:"));
@@ -228,5 +250,17 @@ query = "SELECT ?s WHERE { ?s ?p ?o } LIMIT 1"
         assert_eq!(geo_data.var, Some("g".to_string()));
         let cors = ms.iter().find(|m| m.id == "cors").unwrap();
         assert_eq!(cors.var, None);
+    }
+
+    #[test]
+    fn a_metric_can_name_the_declaration_that_would_satisfy_it() {
+        let ms = load_metrics(include_str!("../metrics.toml")).unwrap();
+        let geo = ms.iter().find(|m| m.id == "geo-functions").unwrap();
+        assert_eq!(
+            geo.declared_by.as_deref(),
+            Some("http://www.opengis.net/def/function/geosparql/sfWithin")
+        );
+        // Most metrics have no declaration that could speak for them.
+        assert!(ms.iter().find(|m| m.id == "availability").unwrap().declared_by.is_none());
     }
 }

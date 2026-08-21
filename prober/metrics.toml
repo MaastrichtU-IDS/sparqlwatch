@@ -33,6 +33,11 @@ PREFIX geo: <http://www.opengis.net/ont/geosparql#>
 PREFIX geof: <http://www.opengis.net/def/function/geosparql/>
 ASK { FILTER(geof:sfWithin("POINT(5 52)"^^geo:wktLiteral, "POLYGON((0 50,10 50,10 55,0 55,0 50))"^^geo:wktLiteral)) }
 """
+# In the survey behind this project, 0 of 28 endpoints publishing a service
+# description declared anything geospatial, while 18 demonstrably evaluated
+# geof:sfWithin. This field is expected to change almost nothing. It exists so
+# that the rare honest endpoint is credited, not because we expect it to fire often.
+declared_by = "http://www.opengis.net/def/function/geosparql/sfWithin"
 
 # The next two queries address only the DEFAULT GRAPH. On engines where the
 # default graph is not the union of the named graphs, an endpoint holding all

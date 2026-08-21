@@ -19,18 +19,28 @@ resolves to exactly one of six verdicts:
 | `absent` | Neither claimed nor observed |
 | `indeterminate` | We never got to find out |
 
-`absent` may only be claimed when the evidence actually establishes absence:
-the endpoint itself answered, with a 2xx status, in a form we could read. A
-timeout, an unreachable host, a 429, a gateway error, an HTML query console, an
-unparseable body — anything we never got to interpret — is `indeterminate`.
-There is deliberately no composite score and no ranking, here or downstream.
+`absent` may only be claimed when the evidence actually establishes absence.
+For every probe except the description fetch, that means the endpoint itself
+answered, with a 2xx status, in a form we could read. The description fetch
+has one further exception: a `404` or `410` also counts as absence, because
+those two statuses speak to what is published at the URL itself, not to our
+request or the server's general health. A timeout, an unreachable host, a
+429, a gateway error, an HTML query console, an unparseable body (anything
+else we never got to interpret) is `indeterminate`. There is deliberately no
+composite score and no ranking, here or downstream.
 
 All judgement lives in one pure function, `resolve()` in `src/resolve.rs`. The
 HTTP client returns evidence and no opinion; the emitter is a pure function of
 its inputs, with no clock read and no randomness.
 
-Declaration parsing is not built yet, so nothing is `declared` at this stage:
-every confirmed capability currently reports as `undeclared-but-verified`.
+A service description is fetched once per endpoint with a queryless GET request
+that asks for RDF (`text/turtle, application/rdf+xml;q=0.9, application/ld+json;q=0.8`),
+and its declarations are compared against what the probes observe. Most confirmed
+capabilities report as `undeclared-but-verified`, because almost no endpoint declares
+its capabilities. `Verified` is reachable but will stay rare by design: in the survey
+behind this project, 18 endpoints evaluate `geof:sfWithin` and not one declares it.
+The `service-description` metric now carries a graded level (0 to 4) rather than
+always being indeterminate, grading by informativeness rather than presence.
 
 ## Running it
 
@@ -53,8 +63,8 @@ run reproducible: same `--at`, same output identifiers. It is validated before
 any probing starts, because it is interpolated into IRIs and published as an
 `xsd:dateTime`.
 
-Three nested budgets bound the work — per request (30s), per metric (60s), per
-endpoint (600s) — and every one of them cancels the future rather than
+Three nested budgets bound the work, per request (30s), per metric (60s), and per
+endpoint (600s), and every one of them cancels the future rather than
 reporting afterwards that it took too long. A metric the budget never reached
 is `indeterminate` and carries no `elapsedMs`, because nothing was measured.
 
@@ -74,9 +84,25 @@ default. The definitions are hashed into a `metricDefinitionRevision` recorded
 on every run, a pure function of the definitions themselves, so a measurement
 can be read against the definition that produced it.
 
-`FetchWellKnown` has no probe implemented yet. Its metric stays in the file and
-still gets a row — `indeterminate` — so the gap is visible in the output, but
-no request is issued for it.
+`FetchWellKnown` probes by fetching the queryless GET described above. It returns
+`Verified`, plus a level reflecting the description's informativeness, only when
+a **2xx** response arrives under an RDF-specific media type (`text/turtle`,
+`application/rdf+xml`, `application/ld+json`, `application/n-triples`,
+`application/trig`, `application/n-quads`) and parses to **at least one triple**.
+All three conditions are load-bearing. `RdfFormat::from_media_type` also accepts
+the generic `text/plain`, `application/json` and `application/xml`, under which
+an empty throttle body, a `{"error":"boom"}` page and a SPARQL-results document
+all parse cleanly, so a generic media type is not a positive identification of
+RDF and neither is a zero-triple parse. A genuine RDF/XML document served as bare
+`application/xml` therefore reports `indeterminate`, which is honest, rather than
+a confident verdict. A `404` or `410` response returns `Absent` with level 0. Any
+other status is `Indeterminate`, recording that the request failed rather than
+that the description is absent.
+
+The level ladder follows the design doc: 0 none served, 1 a stub, 2 names a
+default dataset or graphs, 3 carries VoID class or property partitions, 4
+declares an entailment regime, example resources, or extension functions. It is
+monotonic: a description that declares more never grades lower.
 
 The labels in that file state only what was actually measured. Two of them are
 narrower than they look: `geo-data` and `classes` query only the **default
@@ -97,18 +123,79 @@ export https_proxy=$HTTP_PROXY
 export NO_PROXY=localhost,127.0.0.1,.svc,.cluster.local
 ```
 
-`reqwest`'s `system-proxy` feature is load-bearing rather than a convenience —
+`reqwest`'s `system-proxy` feature is load-bearing rather than a convenience:
 without a proxy every endpoint would fail identically, which looks exactly like
 a dead registry.
 
 **Correction to the spec's stage-0 findings.** The finding that "uppercase
 `HTTP_PROXY` is ignored for `http://` URLs" is **curl-specific**: curl ignores
 the uppercase form there because of a CGI variable collision. This client uses
-reqwest, whose documented proxy resolution reads `HTTP_PROXY` *or*
-`http_proxy` (and likewise for HTTPS and `ALL_PROXY`), so that constraint does
-not apply to this code. Setting both cases, as above, is harmless
+reqwest, and hyper-util resolves the proxy with
+`get_first_env(&["HTTP_PROXY", "http_proxy"])` (`matcher.rs:232`, hyper-util
+0.1.20), reading both cases with uppercase first, so that constraint does not
+apply to this code. Setting both cases, as above, is harmless
 belt-and-braces and worth keeping for any sidecar or shell tooling that does
-follow curl's rule — but the spec's note should not be read as binding here.
+follow curl's rule, but the spec's note should not be read as binding here.
+
+Two caveats on that correction, neither of which weakens it:
+
+- `get_first_env` decides presence with `std::env::var(name).is_ok()`, so a
+  correctly-set lowercase `http_proxy` is silently shadowed by an uppercase
+  `HTTP_PROXY` that is merely set to an empty string. That is exactly the
+  registry-wide silent-failure shape the spec's own stage-0 finding warns
+  about, and the four-line export block above is precisely what a templated
+  Helm values file could leave empty for one case while filling in the
+  other.
+- hyper-util disables environment-variable proxying entirely, uppercase and
+  lowercase both, when `REQUEST_METHOD` is set (`matcher.rs:230`, with the
+  early return at `matcher.rs:305`). The CGI collision curl guards against
+  therefore exists here too, in a stronger form: it drops the proxy outright
+  rather than merely picking the wrong case. "That constraint does not apply
+  to this code" above is true only for the uppercase-versus-lowercase
+  question, not for the CGI collision itself.
+
+## Known limitations
+
+The following are deferred deliberately, not oversights:
+
+- A **failed** description fetch and a description that **genuinely declares
+  nothing** currently produce the same result, because the "declared" flag is a
+  simple boolean with no way to express "unknown". An endpoint whose description
+  times out is therefore credited as undeclared rather than unknown. This requires
+  a three-state value in the resolver, deferred to stage 1c.
+
+- The fetch is **unconditional**: an endpoint pays one queryless GET even if no
+  configured metric actually needs the result, because the probe kind doesn't know
+  which metrics use it. This is a small cost traded for simpler logic.
+
+- Declarations are collected **graph-wide**, with no scoping to the service
+  actually being probed. A document describing two co-hosted services can
+  therefore credit endpoint A with endpoint B's `sd:extensionFunction`, turning
+  an `undeclared-but-verified` into a `verified` that endpoint never earned.
+  Fixing it needs graph traversal (match the service node by `sd:endpoint`, then
+  follow `sd:defaultDataset` for the VoID partitions), deferred to stage 1c and
+  **before any real registry sweep**.
+
+- A description larger than the 256 KiB body cap is never graded: it reports
+  `indeterminate`, because we did not read it. Classification and the
+  declaration join now read the same truncated bytes, which is what makes that
+  answer coherent. They used not to: classification read the whole body while
+  the join read the truncated one, so a description whose only triples sat past
+  the cut classified as `Rdf` (licensing `verified`) and then graded `Level(0)`,
+  which means "none served". That row asserted both that a description is
+  published and that it says nothing, and its level was indistinguishable from
+  an `absent` row's.
+
+- One cost of that cap remains, in the conservative direction. Declarations are
+  read from the same truncated body, so a declaration sitting past the cut is
+  lost, and a metric that should read `verified` reports
+  `undeclared-but-verified` instead. Measured with a 300 KiB Turtle description
+  whose `sd:extensionFunction geof:sfWithin` sits past 256 KiB, `geo-functions`
+  reported `undeclared-but-verified`. That understates a real endpoint rather
+  than asserting something false about it, which is the direction this project
+  errs in on purpose. Whether to raise the cap, stream the parse, or leave it is
+  stage 1c's call; real descriptions are typically hundreds of bytes, not
+  hundreds of kilobytes.
 
 ## Tests
 
