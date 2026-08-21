@@ -1,4 +1,5 @@
 use sparqlwatch_prober::declare::{parse_declarations, Declarations};
+use sparqlwatch_prober::resolve::grade_from_declarations;
 
 const SD: &str = "http://www.w3.org/ns/sparql-service-description#";
 
@@ -235,6 +236,15 @@ fn a_description_naming_no_endpoint_is_still_read_whole() {
 /// The grade describes the document as published, so it must NOT move when the
 /// probed endpoint changes. An earlier revision of this change scoped the grade
 /// inputs except `triples`, which published "stub" for a rich description.
+///
+/// EVERY grade input is compared here, not a subset. `has_example_resources`
+/// was the one left out, and moving it alone into the scoped pass used to leave
+/// the whole suite green while reintroducing exactly the level-collapse ff7c2c5
+/// fixed for extension functions: one published document grading `Level(1)`,
+/// "a stub", for one of its own services and `Level(4)` for the other, from the
+/// same bytes. Each input sits under the NON-probed service when this document
+/// is read as `bare`, so moving any one of them to the scoped pass changes that
+/// reading and fails here.
 #[test]
 fn the_grade_inputs_describe_the_whole_document_not_the_scoped_service() {
     const DOC: &str = r#"
@@ -243,8 +253,10 @@ fn the_grade_inputs_describe_the_whole_document_not_the_scoped_service() {
 <http://example.org/rich> a sd:Service ;
     sd:endpoint <http://example.org/rich/sparql> ;
     sd:defaultDataset <http://example.org/ds> ;
-    sd:defaultEntailmentRegime <http://www.w3.org/ns/entailment/RDFS> .
-<http://example.org/ds> void:classPartition [ void:class <http://example.org/C> ] .
+    sd:defaultEntailmentRegime <http://www.w3.org/ns/entailment/RDFS> ;
+    sd:extensionFunction <http://www.opengis.net/def/function/geosparql/sfWithin> .
+<http://example.org/ds> void:classPartition [ void:class <http://example.org/C> ] ;
+    void:exampleResource <http://example.org/thing> .
 <http://example.org/bare> a sd:Service ; sd:endpoint <http://example.org/bare/sparql> .
 "#;
     let rich = parse_declarations(DOC, Some("text/turtle"), "http://example.org/rich/sparql");
@@ -253,7 +265,28 @@ fn the_grade_inputs_describe_the_whole_document_not_the_scoped_service() {
     assert_eq!(rich.has_entailment, bare.has_entailment, "so does the entailment flag");
     assert_eq!(rich.has_void_partitions, bare.has_void_partitions);
     assert_eq!(rich.names_dataset, bare.names_dataset);
+    assert_eq!(rich.has_example_resources, bare.has_example_resources, "and the example-resource flag");
+    assert_eq!(
+        rich.doc_declares_extension_functions, bare.doc_declares_extension_functions,
+        "and the document-wide extension-function flag"
+    );
+
+    // The fixture has to actually populate every input, or the equalities above
+    // are satisfied by a document that declares nothing.
+    assert!(rich.triples > 0, "the fixture must parse or this proves nothing");
     assert!(rich.has_entailment, "the fixture must be rich or this proves nothing");
+    assert!(rich.has_void_partitions);
+    assert!(rich.names_dataset);
+    assert!(rich.has_example_resources);
+    assert!(rich.doc_declares_extension_functions);
+
+    // And the one published number those inputs exist to produce: one document,
+    // one grade, whichever of its services we probed.
+    assert_eq!(
+        grade_from_declarations(&rich),
+        grade_from_declarations(&bare),
+        "one published document must not grade differently for two of its own services"
+    );
 }
 
 /// A stated `sd:endpoint` that matches nothing must not silently strip the
