@@ -1,7 +1,7 @@
 use sparqlwatch_prober::budget::Budget;
 use sparqlwatch_prober::client::Client;
 use sparqlwatch_prober::emit::{emit_nquads, RunId};
-use sparqlwatch_prober::metrics::{load_metrics, MetricDef, ProbeKind};
+use sparqlwatch_prober::metrics::{load_metrics, Cost, MetricDef, ProbeKind};
 use sparqlwatch_prober::registry::load_endpoints;
 use sparqlwatch_prober::run_sweep;
 use sparqlwatch_prober::verdict::{Level, Verdict};
@@ -190,6 +190,7 @@ async fn a_metric_binding_a_nonstandard_variable_is_extracted_via_its_declared_v
         var: Some("thing".into()),
         declared_by: None,
         graded: false,
+        cost: Cost::Cheap,
     };
 
     let client = Client::new(Budget::default()).unwrap();
@@ -285,6 +286,7 @@ async fn a_non_graded_fetch_metric_carries_no_level() {
         var: None,
         declared_by: None,
         graded: false,
+        cost: Cost::Cheap,
     };
 
     let client = Client::new(Budget::default()).unwrap();
@@ -511,6 +513,7 @@ async fn an_endpoint_budget_expiry_still_yields_one_row_per_metric() {
             var: None,
             declared_by: None,
             graded: false,
+            cost: Cost::Cheap,
         })
         .collect();
 
@@ -575,6 +578,7 @@ async fn a_budget_expiry_after_the_fetch_still_publishes_declarations_read() {
             var: None,
             declared_by: None,
             graded: false,
+            cost: Cost::Cheap,
         })
         .collect();
 

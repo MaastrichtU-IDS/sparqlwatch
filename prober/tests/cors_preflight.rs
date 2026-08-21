@@ -11,7 +11,7 @@
 
 use sparqlwatch_prober::budget::Budget;
 use sparqlwatch_prober::client::{Client, ORIGIN};
-use sparqlwatch_prober::metrics::{MetricDef, ProbeKind};
+use sparqlwatch_prober::metrics::{Cost, MetricDef, ProbeKind};
 use sparqlwatch_prober::observe::{BodyKind, Observation};
 use sparqlwatch_prober::resolve::{resolve, Declared};
 use sparqlwatch_prober::verdict::Verdict;
@@ -32,6 +32,7 @@ fn preflight_def() -> MetricDef {
         var: None,
         declared_by: None,
         graded: false,
+        cost: Cost::Cheap,
     }
 }
 

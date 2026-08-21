@@ -80,6 +80,23 @@ impl ProbeKind {
     }
 }
 
+/// What a metric costs the endpoint we point it at. A closed set, like
+/// `ProbeKind`: an unknown value is a load error, because guessing silently
+/// changes what a sweep costs somebody else's server.
+///
+/// `Cheap` means the query can stop at its first match. `Expensive` means it
+/// forces a scan. The line is not a guess: measured on qlever.dev's
+/// planet-scale OSM endpoint, the same class query answers in 0.166s with
+/// `LIMIT 1` and no `DISTINCT`, and times out past 45s with
+/// `DISTINCT ... LIMIT 200`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Cost {
+    #[default]
+    Cheap,
+    Expensive,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetricDef {
     pub id: String,
@@ -102,6 +119,10 @@ pub struct MetricDef {
     pub declared_by: Option<String>,
     #[serde(default)]
     pub graded: bool,
+    /// What this metric costs the endpoint it points at. Silent about cost
+    /// means cheap, but an unrecognized value is a load error, not a guess.
+    #[serde(default)]
+    pub cost: Cost,
 }
 
 #[derive(Deserialize)]
@@ -131,6 +152,27 @@ pub fn load_metrics(toml_src: &str) -> anyhow::Result<Vec<MetricDef>> {
     Ok(f.metric)
 }
 
+/// Split `defs` into those to run against a sweep whose ceiling is
+/// `ceiling`, and those declined because their cost exceeds it. Both halves
+/// preserve the input order: a reordered result would make "declined"
+/// harder to line up against the file that declared it.
+pub fn within_cost(defs: &[MetricDef], ceiling: Cost) -> (Vec<MetricDef>, Vec<MetricDef>) {
+    let mut run = Vec::new();
+    let mut declined = Vec::new();
+    for d in defs {
+        let within = match ceiling {
+            Cost::Cheap => d.cost == Cost::Cheap,
+            Cost::Expensive => true,
+        };
+        if within {
+            run.push(d.clone());
+        } else {
+            declined.push(d.clone());
+        }
+    }
+    (run, declined)
+}
+
 /// A stable identifier for a set of metric definitions, so a run can record
 /// which revision produced its measurements. Deliberately a pure function of
 /// the definitions themselves -- no clock, no counter, no build metadata -- so
@@ -146,7 +188,7 @@ pub fn definitions_revision(defs: &[MetricDef]) -> String {
         // Order and field set are part of the revision: a reordered file is a
         // different definition list, and every field affects what is measured.
         canonical.push_str(&format!(
-            "{}\x1f{}\x1f{}\x1f{:?}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}\x1e",
+            "{}\x1f{}\x1f{}\x1f{:?}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{:?}\x1e",
             d.id,
             d.label,
             d.dimension,
@@ -156,6 +198,7 @@ pub fn definitions_revision(defs: &[MetricDef]) -> String {
             d.var.as_deref().unwrap_or(""),
             d.declared_by.as_deref().unwrap_or(""),
             d.graded,
+            d.cost,
         ));
     }
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
@@ -294,6 +337,17 @@ query = "SELECT ?thing WHERE {{ ?s ?p ?thing }} LIMIT 1"
         let reordered: Vec<MetricDef> = a.iter().rev().cloned().collect();
         assert_ne!(definitions_revision(&a), definitions_revision(&reordered));
         assert!(definitions_revision(&a).starts_with("fnv1a64:"));
+
+        let d = load_metrics(&SRC.replace(
+            "kind = \"AskFilter\"\nexpect = true",
+            "kind = \"AskFilter\"\nexpect = true\ncost = \"expensive\"",
+        ))
+        .unwrap();
+        assert_ne!(
+            definitions_revision(&a),
+            definitions_revision(&d),
+            "an edited cost changes which metrics a sweep runs, so it must be a new revision too"
+        );
     }
 
     #[test]
@@ -328,5 +382,52 @@ query = "SELECT ?s WHERE { ?s ?p ?o } LIMIT 1"
         );
         // Most metrics have no declaration that could speak for them.
         assert!(ms.iter().find(|m| m.id == "availability").unwrap().declared_by.is_none());
+    }
+
+    #[test]
+    fn a_metric_without_a_cost_is_cheap() {
+        let defs = load_metrics(
+            "[[metric]]\nid=\"m\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"Liveness\"\nquery=\"ASK{}\"\n"
+        ).unwrap();
+        assert_eq!(defs[0].cost, Cost::Cheap, "a definition silent about cost is cheap");
+    }
+
+    #[test]
+    fn an_unknown_cost_is_a_load_error_not_a_silent_default() {
+        // Same doctrine as an unknown `kind`: the set is closed, and guessing
+        // silently changes what a sweep costs somebody else's server.
+        assert!(load_metrics(
+            "[[metric]]\nid=\"m\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"Liveness\"\nquery=\"ASK{}\"\ncost=\"free\"\n"
+        ).is_err());
+    }
+
+    #[test]
+    fn within_cost_splits_and_keeps_order() {
+        let defs = load_metrics(concat!(
+            "[[metric]]\nid=\"a\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"Liveness\"\nquery=\"ASK{}\"\ncost=\"cheap\"\n",
+            "[[metric]]\nid=\"b\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"Liveness\"\nquery=\"ASK{}\"\ncost=\"expensive\"\n",
+            "[[metric]]\nid=\"c\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"Liveness\"\nquery=\"ASK{}\"\ncost=\"cheap\"\n",
+        )).unwrap();
+
+        let (run, declined) = within_cost(&defs, Cost::Cheap);
+        assert_eq!(run.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(), ["a", "c"]);
+        assert_eq!(declined.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(), ["b"]);
+
+        let (run, declined) = within_cost(&defs, Cost::Expensive);
+        assert_eq!(run.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(), ["a", "b", "c"],
+                   "the higher ceiling runs everything, still in file order");
+        assert!(declined.is_empty());
+    }
+
+    #[test]
+    fn cost_is_part_of_the_definitions_revision() {
+        // The revision exists so a measurement can be read against the definition
+        // that produced it, and cost changes which metrics run at all.
+        let one = "[[metric]]\nid=\"m\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"Liveness\"\nquery=\"ASK{}\"\ncost=\"cheap\"\n";
+        let two = "[[metric]]\nid=\"m\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"Liveness\"\nquery=\"ASK{}\"\ncost=\"expensive\"\n";
+        assert_ne!(
+            definitions_revision(&load_metrics(one).unwrap()),
+            definitions_revision(&load_metrics(two).unwrap())
+        );
     }
 }
