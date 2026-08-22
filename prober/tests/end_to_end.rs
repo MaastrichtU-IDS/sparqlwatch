@@ -1818,3 +1818,102 @@ async fn a_status_the_resolver_distrusts_publishes_no_sample_at_all() {
     }
 }
 
+#[tokio::test]
+async fn each_sample_names_its_own_endpoint_its_own_values_and_its_own_metric() {
+    // Two endpoints, returning DIFFERENT classes, in one sweep. A
+    // single-endpoint fixture cannot tell a correct implementation from one
+    // that hardcodes what it names, which is why two mutations survived the
+    // whole suite green before this test existed: hardcoding the sample's
+    // `metric_id`, and re-attributing every sample to `endpoints[0]`.
+    // `content_samples` is a shared accumulator threaded through
+    // `probe_endpoint` as a `&mut Vec`, so cross-endpoint leakage is exactly
+    // the shape a real bug in it would take.
+    let first = an_endpoint_binding_classes(&[ZEBRA, APPLE]).await;
+    let second = an_endpoint_binding_classes(&[MANGO]).await;
+    let a = format!("{}/sparql", first.uri());
+    let b = format!("{}/sparql", second.uri());
+    let def = enumerating_metric(3);
+    // Deliberately not the shipped id: a sample labelled "classes" whatever
+    // took it would pass a fixture built on the shipped metric.
+    assert_eq!(def.id, "classes-small", "the fixture's point is an id that is not `classes`");
+    let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
+    let Sweep { rows, declarations_read: read, not_measured, content_samples } =
+        without_deadlocking(run_sweep(
+            &[a.clone(), b.clone()],
+            std::slice::from_ref(&def),
+            &[],
+            &client,
+            Budget::default(),
+        ))
+        .await;
+
+    assert_eq!(content_samples.len(), 2, "two endpoints that both sampled are two samples");
+    let of = |ep: &str| {
+        content_samples
+            .iter()
+            .find(|s| s.endpoint == ep)
+            .unwrap_or_else(|| panic!("no sample attributed to {ep}: {content_samples:?}"))
+    };
+    // Looked up by endpoint, never by index: the values are what prove the
+    // attribution, so each endpoint must carry back exactly what it returned.
+    assert_eq!(of(&a).values, vec![ZEBRA.to_string(), APPLE.to_string()]);
+    assert_eq!(of(&b).values, vec![MANGO.to_string()]);
+    for s in &content_samples {
+        assert_eq!(s.metric_id, "classes-small", "the sample names the metric that took it");
+    }
+
+    // The same three facts, read back out of the graph, since that is what a
+    // consumer actually joins on.
+    let nq = emit_nquads(RunEmission {
+        run: &RunId("test".into()),
+        generated_at: "2026-08-22T08:00:00Z",
+        metric_revision: "test-revision",
+        rows: &rows,
+        declarations_read: &read,
+        not_measured: &not_measured,
+        max_cost: Cost::Expensive,
+        content_samples: &content_samples,
+    })
+    .unwrap();
+    let quads = quads_of(&nq);
+    let subject_for = |ep: &str| {
+        quads
+            .iter()
+            .find(|q| {
+                q.predicate.as_str() == "urn:sparqlwatch:sampledFrom"
+                    && matches!(&q.object, Term::NamedNode(n) if n.as_str() == ep)
+            })
+            .map(|q| q.subject.clone())
+            .unwrap_or_else(|| panic!("no sample subject sampledFrom {ep}"))
+    };
+    let published = |ep: &str| -> Vec<String> {
+        let subj = subject_for(ep);
+        quads
+            .iter()
+            .filter(|q| q.subject == subj && q.predicate.as_str() == "urn:sparqlwatch:sampledValue")
+            .map(|q| match &q.object {
+                Term::NamedNode(n) => n.as_str().to_string(),
+                other => panic!("a sampled value must be an IRI, got {other}"),
+            })
+            .collect()
+    };
+    assert_eq!(published(&a), vec![ZEBRA.to_string(), APPLE.to_string()]);
+    assert_eq!(published(&b), vec![MANGO.to_string()]);
+    assert_ne!(subject_for(&a), subject_for(&b), "two samples, two subjects");
+    for ep in [&a, &b] {
+        let subj = subject_for(ep);
+        assert!(
+            quads.iter().any(|q| q.subject == subj
+                && q.predicate.as_str() == "urn:sparqlwatch:sampledBy"
+                && q.object
+                    == Term::NamedNode(
+                        NamedNode::new("urn:sparqlwatch:metric:classes-small").unwrap()
+                    )),
+            "the sample from {ep} must name the metric that took it"
+        );
+    }
+
+    // No verdict moved: both endpoints answered, so both are verified, exactly
+    // as they were before samples existed.
+    assert_eq!(verdict_of(&nq, "classes-small"), Verdict::Verified);
+}
