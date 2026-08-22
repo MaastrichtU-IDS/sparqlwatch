@@ -150,12 +150,36 @@ pub struct MetricDef {
     pub sample_limit: Option<usize>,
 }
 
+/// Drop everything from a `#` to the end of its line. `metrics.toml` uses
+/// triple-quoted multi-line query blocks, so a SPARQL comment inside one is
+/// entirely plausible, and a comment mentioning a limit must not be read as
+/// one: `LIMIT 50` plus a trailing `# raise back to limit 200` would otherwise
+/// satisfy a declared `sample_limit = 200` while the query returned 50, and 50
+/// of a cap of 200 is published as COMPLETE. That is the precise failure the
+/// cross-check exists to block.
+///
+/// Crude in the same direction as `query_limit` itself: a `#` inside an IRI or
+/// a string literal truncates that line too, so such a query loses its `LIMIT`
+/// and fails to load. That is the acceptable failure. A matcher that fails
+/// loudly is fine; one that PASSES something it should reject is not.
+fn without_sparql_comments(query: &str) -> String {
+    query
+        .lines()
+        .map(|line| match line.find('#') {
+            Some(i) => &line[..i],
+            None => line,
+        })
+        .collect::<Vec<&str>>()
+        .join("\n")
+}
+
 /// Pull the integer following the last case-insensitive `LIMIT` in `query`,
 /// if any. Deliberately crude: this reads our own hand-written
 /// `metrics.toml`, not arbitrary SPARQL, and a wrong read here is a load
 /// error rather than a wrong measurement, so a full parser would be the
 /// wrong amount of machinery for the risk it removes.
 fn query_limit(query: &str) -> Option<u64> {
+    let query = without_sparql_comments(query);
     let lower = query.to_ascii_lowercase();
     let pos = lower.rfind("limit")?;
     let rest = query[pos + "limit".len()..].trim_start();
@@ -808,6 +832,55 @@ query = "SELECT ?s WHERE { ?s ?p ?o } LIMIT 1"
         let err = load_metrics(src).unwrap_err().to_string();
         assert!(err.contains("wkt-sample"), "the error must name the metric: {err}");
         assert!(err.contains("SelectIris"), "and say which kind may sample: {err}");
+    }
+
+    #[test]
+    fn a_comment_cannot_stand_in_for_the_querys_real_limit() {
+        // The reviewer's input, verbatim in shape: `metrics.toml` uses
+        // triple-quoted multi-line query blocks, so a SPARQL comment inside one is
+        // plausible, and `rfind("limit")` landed in the comment. The query is
+        // bounded at 50, truncation is then computed as `50 >= 200` = false, and a
+        // list truncated at 50 is published as COMPLETE: the single failure this
+        // cross-check exists to prevent.
+        let commented = "[[metric]]\nid=\"zebra-sample\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"SelectIris\"\nvar=\"c\"\n\
+             sample_limit=200\nquery=\"\"\"\nSELECT DISTINCT ?c WHERE { ?s a ?c } LIMIT 50\n\
+             # lowered from 200 after the qlever timeout; raise back to limit 200 when budgets allow\n\"\"\"\n";
+        let err = load_metrics(commented).unwrap_err().to_string();
+        assert!(err.contains("zebra-sample"), "the error must name the metric: {err}");
+        assert!(
+            err.contains("50"),
+            "and report the LIMIT the query really carries, not the one the comment mentions: {err}"
+        );
+
+        // A `#` in an IRI is not a comment, and stripping to end of line takes the
+        // rest of the line with it. This query has no real `LIMIT` at all, and used
+        // to load because `limit200` sat inside the IRI: an unbounded `SELECT
+        // DISTINCT ?c` sent to a stranger's server.
+        let in_an_iri = "[[metric]]\nid=\"zebra-sample\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"SelectIris\"\nvar=\"c\"\n\
+             sample_limit=200\nquery=\"SELECT DISTINCT ?c WHERE { ?s <http://example.org/vocab#limit200> ?c }\"\n";
+        assert!(
+            load_metrics(in_an_iri).is_err(),
+            "no LIMIT is no LIMIT, whatever an identifier happens to spell"
+        );
+
+        // The same crudeness in the other direction, asserted so it stays a known
+        // failure rather than a surprise: a `#` inside a string literal truncates
+        // its line too, so an otherwise honest query loses its `LIMIT` and refuses
+        // to load. A matcher that fails loudly is fine; one that passes something
+        // it should reject is not.
+        let hash_in_a_literal = "[[metric]]\nid=\"zebra-sample\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"SelectIris\"\nvar=\"c\"\n\
+             sample_limit=200\nquery=\"SELECT DISTINCT ?c WHERE { ?s a ?c FILTER(?c != \\\"#\\\") } LIMIT 200\"\n";
+        assert!(
+            load_metrics(hash_in_a_literal).is_err(),
+            "the crude matcher refuses rather than guessing, and a load error is the safe direction"
+        );
+
+        // And an ordinary comment that says nothing about a limit still loads, so
+        // the fix does not cost the file its comments.
+        let harmless = "[[metric]]\nid=\"zebra-sample\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"SelectIris\"\nvar=\"c\"\n\
+             sample_limit=200\nquery=\"\"\"\n# every class, bounded, in whichever graph the endpoint defaults to\n\
+             SELECT DISTINCT ?c WHERE { ?s a ?c } LIMIT 200\n\"\"\"\n";
+        assert!(load_metrics(harmless).is_ok(), "a comment is not a limit, and not a problem either");
     }
 
     #[test]
