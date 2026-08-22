@@ -98,6 +98,12 @@ pub struct ContentSample {
     /// would discard it for a tidiness nobody asked for. Not deduplicated
     /// either -- `SELECT DISTINCT` already did that, and doing it again here
     /// would hide an endpoint that ignores `DISTINCT`.
+    ///
+    /// A value that cannot be written as an IRI is dropped at emission and is
+    /// not counted by the published `sampleSize`, so the size a consumer reads
+    /// always matches the `sampledValue` quads beside it. The drop itself is
+    /// logged, because the graph has no way to say "there was one more and we
+    /// could not name it".
     pub values: Vec<String>,
     /// True when `values.len()` reached the metric's declared `sample_limit`,
     /// so a further value may exist and we did not see it. A list a reader
@@ -405,6 +411,53 @@ pub fn emit_nquads(input: RunEmission) -> anyhow::Result<String> {
                 continue;
             }
         };
+        // Serialized before the size is written, because the size counts what
+        // is published. A value that is not a well-formed IRI cannot be
+        // written, and a size counting it would disagree with the
+        // `sampledValue` quads beside it with nothing in the graph to explain
+        // the gap: a consumer asking "how many classes did we see" would get
+        // two published answers and no way to tell an unwritable value from an
+        // emitter that lost one. So the size is always verifiable from the
+        // graph itself, and a dropped value is reported to the log, which is
+        // the only place that can carry a fact about a value we could not
+        // name.
+        //
+        // In the endpoint's order, untouched: not sorted, not filtered beyond
+        // what serialization forces, not deduplicated. `SELECT DISTINCT`
+        // already deduplicated, and reordering would discard evidence about
+        // the endpoint for no gain.
+        let mut writable: Vec<NamedNode> = Vec::with_capacity(sample.values.len());
+        for value in &sample.values {
+            match NamedNode::new(value) {
+                Ok(n) => writable.push(n),
+                Err(e) => tracing::warn!(
+                    endpoint = %sample.endpoint,
+                    metric = %sample.metric_id,
+                    value = %value,
+                    error = %e,
+                    "skipping sampled value: not a valid IRI"
+                ),
+            }
+        }
+        if writable.len() < sample.values.len() {
+            tracing::warn!(
+                endpoint = %sample.endpoint,
+                metric = %sample.metric_id,
+                bound = sample.values.len(),
+                published = writable.len(),
+                "sampled values were dropped as unwritable; sampleSize counts what is published, \
+                 so the graph stays self-consistent and this log is where the loss is recorded"
+            );
+        }
+        // Nothing writable is nothing to publish, for the same reason a probe
+        // that bound nothing publishes no sample: a node saying `sampleSize 0`
+        // gives a consumer something to join that says nothing, and here it
+        // would falsely read as "this endpoint has no classes" when what
+        // happened is that we could not write down the ones it named. The log
+        // above is what records that.
+        if writable.is_empty() {
+            continue;
+        }
         let subj = NamedOrBlankNode::NamedNode(nn(&format!(
             "urn:sparqlwatch:content-sample:{}:{}",
             run.0, i
@@ -454,36 +507,16 @@ pub fn emit_nquads(input: RunEmission) -> anyhow::Result<String> {
             )),
             graph.clone(),
         ));
-        // How many the endpoint bound, which is what we saw. A value below
-        // that survives serialization only if it is a well-formed IRI, so the
-        // size and the number of `sampledValue` quads can differ; the size
-        // reports the observation, the quads report what could be written.
         quads.push(Quad::new(
             subj.clone(),
             nn("urn:sparqlwatch:sampleSize")?,
             Term::Literal(Literal::new_typed_literal(
-                sample.values.len().to_string(),
+                writable.len().to_string(),
                 xsd::INTEGER,
             )),
             graph.clone(),
         ));
-        // In the endpoint's order, untouched: not sorted, not filtered, not
-        // deduplicated. `SELECT DISTINCT` already deduplicated, and reordering
-        // would discard evidence about the endpoint for no gain.
-        for value in &sample.values {
-            let value = match NamedNode::new(value) {
-                Ok(n) => n,
-                Err(e) => {
-                    tracing::warn!(
-                        endpoint = %sample.endpoint,
-                        metric = %sample.metric_id,
-                        value = %value,
-                        error = %e,
-                        "skipping sampled value: not a valid IRI"
-                    );
-                    continue;
-                }
-            };
+        for value in writable {
             quads.push(Quad::new(
                 subj.clone(),
                 nn("urn:sparqlwatch:sampledValue")?,
@@ -1466,12 +1499,69 @@ mod tests {
             vec![&Term::NamedNode(NamedNode::new("http://example.org/A").unwrap())],
             "and its unwritable value is dropped rather than guessed at"
         );
-        // The size still reports what the endpoint bound, including the value
-        // we could not serialize: it is a count of the observation, not of the
-        // quads.
+        // The size counts what was published, not what was bound. A "2" here
+        // beside one `sampledValue` quad would be two published answers to
+        // "how many classes did we see", with nothing in the graph to explain
+        // the gap. The dropped value is recorded in the log instead.
         assert_eq!(
             objects(&qs, "urn:sparqlwatch:sampleSize"),
-            vec![&Term::Literal(Literal::new_typed_literal("2", xsd::INTEGER))]
+            vec![&Term::Literal(Literal::new_typed_literal("1", xsd::INTEGER))]
+        );
+    }
+
+    #[test]
+    fn a_sample_whose_values_are_all_unwritable_publishes_no_sample_node() {
+        // The degenerate case the rule above creates: counting only what is
+        // published means a sample of nothing but unwritable values would
+        // otherwise publish `sampleSize 0`, which reads as "this endpoint has
+        // no classes" when what happened is that we could not write down the
+        // ones it named. Same doctrine as a probe that bound nothing.
+        let out = emit_nquads(RunEmission {
+            run: &RunId("r1".into()),
+            generated_at: AT,
+            metric_revision: REV,
+            rows: &[],
+            declarations_read: &[],
+            not_measured: &[],
+            max_cost: Cost::Expensive,
+            content_samples: &[sample(&["not an iri", "nor this one"], false)],
+        })
+        .unwrap();
+        assert!(
+            !out.contains("urn:sparqlwatch:sample"),
+            "no sample node at all, so there is nothing to misread: {out}"
+        );
+    }
+
+    #[test]
+    fn sample_size_is_verifiable_against_the_values_beside_it() {
+        // The invariant, rather than one instance of it: whatever the emitter
+        // could not write, the published count and the published enumeration
+        // agree, so a consumer can check one against the other.
+        let out = emit_nquads(RunEmission {
+            run: &RunId("r1".into()),
+            generated_at: AT,
+            metric_revision: REV,
+            rows: &[],
+            declarations_read: &[],
+            not_measured: &[],
+            max_cost: Cost::Expensive,
+            content_samples: &[sample(
+                &["http://example.org/A", "not an iri", "http://example.org/B", "no space allowed"],
+                false,
+            )],
+        })
+        .unwrap();
+        let qs = quads_of(&out);
+        let values = objects(&qs, "urn:sparqlwatch:sampledValue").len();
+        assert_eq!(values, 2, "two of the four values could be written");
+        assert_eq!(
+            objects(&qs, "urn:sparqlwatch:sampleSize"),
+            vec![&Term::Literal(Literal::new_typed_literal(
+                values.to_string(),
+                xsd::INTEGER
+            ))],
+            "the size a consumer reads must be the number of values it can count"
         );
     }
 }
