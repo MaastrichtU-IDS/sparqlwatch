@@ -110,42 +110,65 @@ fn nn(s: &str) -> anyhow::Result<NamedNode> {
     Ok(NamedNode::new(s)?)
 }
 
+/// Everything `emit_nquads` needs to publish one run's graph, gathered into
+/// named fields rather than positional parameters.
+///
+/// The field list grew once already (see `Sweep`, one commit prior, for the
+/// same growth on `run_sweep`'s return type) and the spec already promises
+/// more side-facts to publish, so a struct is the right shape regardless of
+/// clippy's line: a ninth fact list only ever adds a field, never touches an
+/// existing call site.
+///
+/// The reason that matters here specifically: `generated_at` and
+/// `metric_revision` are adjacent and both plain `&str`. Under the old
+/// positional signature, swapping them was a silent, type-checking mistake
+/// that would publish the metric revision as `prov:generatedAtTime` and the
+/// timestamp as `metricDefinitionRevision`, inside a per-run graph this
+/// project treats as immutable once written. Named fields make that specific
+/// swap a compile error instead of a review miss.
+pub struct RunEmission<'a> {
+    pub run: &'a RunId,
+    /// The instant the run was started, published as `prov:generatedAtTime`.
+    /// Not a revision hash: see the struct's doc comment for the mistake this
+    /// field name exists to prevent.
+    pub generated_at: &'a str,
+    /// Identifies the metric definitions the run used. The spec requires a
+    /// run to record both it and the prober version, because a measurement is
+    /// only interpretable against the definition that produced it. Must be a
+    /// pure function of the definitions (see `metrics::definitions_revision`),
+    /// never a clock or a counter, so that re-running the same definitions
+    /// yields the same revision. Not a timestamp: see the struct's doc
+    /// comment for the mistake this field name exists to prevent.
+    pub metric_revision: &'a str,
+    pub rows: &'a [MeasurementRow],
+    pub declarations_read: &'a [DeclarationsRead],
+    pub not_measured: &'a [NotMeasured],
+    /// The ceiling the sweep was run with, recorded on the run's activity. A
+    /// parameter rather than something this function discovers:
+    /// `emit_nquads` reads no clock, no environment and no global, so the
+    /// same inputs always produce the same document.
+    pub max_cost: Cost,
+    /// What the enumerating probes saw, published verbatim and in the
+    /// endpoint's own order.
+    pub content_samples: &'a [ContentSample],
+}
+
 /// One named graph per run keeps history immutable and lets a bad run be
 /// dropped wholesale.
 ///
-/// `metric_revision` identifies the metric definitions the run used. The spec
-/// requires a run to record both it and the prober version, because a
-/// measurement is only interpretable against the definition that produced it.
-/// It must be a pure function of the definitions (see
-/// `metrics::definitions_revision`), never a clock or a counter, so that
-/// re-running the same definitions yields the same revision.
-///
-/// `max_cost` is the ceiling the sweep was run with, recorded on the run's
-/// activity. It is a parameter rather than something this function discovers:
-/// `emit_nquads` reads no clock, no environment and no global, so the same
-/// inputs always produce the same document.
-///
-/// `content_samples` are what the enumerating probes saw, published verbatim
-/// and in the endpoint's own order.
-///
-/// The eighth parameter puts this one over clippy's seven-argument line, and
-/// the suppression is deliberate rather than a shrug: each parameter is a
-/// distinct fact list this function must publish, none is optional, and
-/// bundling them into an "emission input" struct would only move the same
-/// eight names one layer out while making the positional call sites read as a
-/// literal that has to be built. When a ninth arrives, that struct is the
-/// right answer and this attribute is the signal to write it.
-#[allow(clippy::too_many_arguments)]
-pub fn emit_nquads(
-    run: &RunId,
-    generated_at: &str,
-    metric_revision: &str,
-    rows: &[MeasurementRow],
-    declarations_read: &[DeclarationsRead],
-    not_measured: &[NotMeasured],
-    max_cost: Cost,
-    content_samples: &[ContentSample],
-) -> anyhow::Result<String> {
+/// Takes a single `RunEmission` rather than its fields positionally; see that
+/// struct's doc comment for why.
+pub fn emit_nquads(input: RunEmission) -> anyhow::Result<String> {
+    let RunEmission {
+        run,
+        generated_at,
+        metric_revision,
+        rows,
+        declarations_read,
+        not_measured,
+        max_cost,
+        content_samples,
+    } = input;
     let graph = GraphName::NamedNode(nn(&format!("urn:sparqlwatch:run:{}", run.0))?);
     let activity = nn(&format!("urn:sparqlwatch:activity:{}", run.0))?;
     let mut quads: Vec<Quad> = Vec::new();
@@ -573,7 +596,16 @@ mod tests {
     }
 
     fn emit(rows: &[MeasurementRow]) -> Vec<Quad> {
-        let out = emit_nquads(&RunId("r1".into()), "2026-08-20T08:00:00Z", REV, rows, &[], &[], Cost::Cheap, &[]).unwrap();
+        let out = emit_nquads(RunEmission {
+            run: &RunId("r1".into()),
+            generated_at: "2026-08-20T08:00:00Z",
+            metric_revision: REV,
+            rows,
+            declarations_read: &[],
+            not_measured: &[],
+            max_cost: Cost::Cheap,
+            content_samples: &[],
+        }).unwrap();
         quads_of(&out)
     }
 
@@ -583,7 +615,16 @@ mod tests {
 
     #[test]
     fn every_quad_lands_in_the_run_graph() {
-        let out = emit_nquads(&RunId("2026-08-20T08:00:00Z".into()), "2026-08-20T08:00:00Z", REV, &rows(), &[], &[], Cost::Cheap, &[]).unwrap();
+        let out = emit_nquads(RunEmission {
+            run: &RunId("2026-08-20T08:00:00Z".into()),
+            generated_at: "2026-08-20T08:00:00Z",
+            metric_revision: REV,
+            rows: &rows(),
+            declarations_read: &[],
+            not_measured: &[],
+            max_cost: Cost::Cheap,
+            content_samples: &[],
+        }).unwrap();
         let expected = GraphName::NamedNode(
             NamedNode::new("urn:sparqlwatch:run:2026-08-20T08:00:00Z").unwrap(),
         );
@@ -679,7 +720,16 @@ mod tests {
                 elapsed_ms: Some(3),
             },
         );
-        let out = emit_nquads(&RunId("r1".into()), "2026-08-20T08:00:00Z", REV, &rs, &[], &[], Cost::Cheap, &[])
+        let out = emit_nquads(RunEmission {
+            run: &RunId("r1".into()),
+            generated_at: "2026-08-20T08:00:00Z",
+            metric_revision: REV,
+            rows: &rs,
+            declarations_read: &[],
+            not_measured: &[],
+            max_cost: Cost::Cheap,
+            content_samples: &[],
+        })
             .expect("one junk endpoint must not discard the sweep");
         assert!(!out.contains("not an iri at all"));
         let qs = quads_of(&out);
@@ -747,7 +797,16 @@ mod tests {
     #[test]
     fn declarations_read_emits_a_boolean_quad_shaped_for_the_run() {
         let facts = vec![DeclarationsRead { endpoint: "https://qlever.dev/api/osm-planet".into(), read: true }];
-        let out = emit_nquads(&RunId("r1".into()), "2026-08-20T08:00:00Z", REV, &[], &facts, &[], Cost::Cheap, &[]).unwrap();
+        let out = emit_nquads(RunEmission {
+            run: &RunId("r1".into()),
+            generated_at: "2026-08-20T08:00:00Z",
+            metric_revision: REV,
+            rows: &[],
+            declarations_read: &facts,
+            not_measured: &[],
+            max_cost: Cost::Cheap,
+            content_samples: &[],
+        }).unwrap();
         let qs = quads_of(&out);
         let q = qs
             .iter()
@@ -776,7 +835,16 @@ mod tests {
             DeclarationsRead { endpoint: "https://a.example/sparql".into(), read: true },
             DeclarationsRead { endpoint: "https://b.example/sparql".into(), read: false },
         ];
-        let out = emit_nquads(&RunId("r1".into()), "2026-08-20T08:00:00Z", REV, &[], &facts, &[], Cost::Cheap, &[]).unwrap();
+        let out = emit_nquads(RunEmission {
+            run: &RunId("r1".into()),
+            generated_at: "2026-08-20T08:00:00Z",
+            metric_revision: REV,
+            rows: &[],
+            declarations_read: &facts,
+            not_measured: &[],
+            max_cost: Cost::Cheap,
+            content_samples: &[],
+        }).unwrap();
         let qs = quads_of(&out);
         let read_quads: Vec<&Quad> =
             qs.iter().filter(|q| q.predicate.as_str() == "urn:sparqlwatch:declarationsRead").collect();
@@ -785,11 +853,21 @@ mod tests {
 
     #[test]
     fn a_not_measured_fact_carries_no_verdict_and_no_level() {
-        let nq = emit_nquads(&RunId(AT.into()), AT, REV, &[], &[], &[NotMeasured {
-            endpoint: "http://example.org/sparql".into(),
-            metric_id: "classes".into(),
-            reason: NotMeasuredReason::CostCeiling,
-        }], Cost::Cheap, &[]).unwrap();
+        let nq = emit_nquads(RunEmission {
+            run: &RunId(AT.into()),
+            generated_at: AT,
+            metric_revision: REV,
+            rows: &[],
+            declarations_read: &[],
+            not_measured: &[NotMeasured {
+                endpoint: "http://example.org/sparql".into(),
+                metric_id: "classes".into(),
+                reason: NotMeasuredReason::CostCeiling,
+            }],
+            max_cost: Cost::Cheap,
+            content_samples: &[],
+        })
+        .unwrap();
 
         assert!(nq.contains("urn:sparqlwatch:NotMeasured"));
         assert!(nq.contains("cost-ceiling"));
@@ -809,7 +887,16 @@ mod tests {
             metric_id: "classes".into(),
             reason: NotMeasuredReason::CostCeiling,
         }];
-        let nq = emit_nquads(&RunId(AT.into()), AT, REV, &rows, &[], &nm, Cost::Cheap, &[]).unwrap();
+        let nq = emit_nquads(RunEmission {
+            run: &RunId(AT.into()),
+            generated_at: AT,
+            metric_revision: REV,
+            rows: &rows,
+            declarations_read: &[],
+            not_measured: &nm,
+            max_cost: Cost::Cheap,
+            content_samples: &[],
+        }).unwrap();
 
         // Collect the two subject sets separately, each by the rdf:type that
         // marks what kind of fact it is. Do NOT filter on a substring of one
@@ -847,7 +934,16 @@ mod tests {
             metric_id: "classes".into(),
             reason: NotMeasuredReason::CostCeiling,
         }];
-        let out = emit_nquads(&RunId("r1".into()), AT, REV, &[], &[], &nm, Cost::Cheap, &[]).unwrap();
+        let out = emit_nquads(RunEmission {
+            run: &RunId("r1".into()),
+            generated_at: AT,
+            metric_revision: REV,
+            rows: &[],
+            declarations_read: &[],
+            not_measured: &nm,
+            max_cost: Cost::Cheap,
+            content_samples: &[],
+        }).unwrap();
         let qs = quads_of(&out);
         let subj = NamedOrBlankNode::NamedNode(
             NamedNode::new("urn:sparqlwatch:not-measured:r1:0").unwrap(),
@@ -897,7 +993,16 @@ mod tests {
             metric_id: "classes".into(),
             reason: NotMeasuredReason::CostCeiling,
         }];
-        let out = emit_nquads(&RunId("r1".into()), AT, REV, &[], &[], &nm, Cost::Expensive, &[]).unwrap();
+        let out = emit_nquads(RunEmission {
+            run: &RunId("r1".into()),
+            generated_at: AT,
+            metric_revision: REV,
+            rows: &[],
+            declarations_read: &[],
+            not_measured: &nm,
+            max_cost: Cost::Expensive,
+            content_samples: &[],
+        }).unwrap();
         let qs = quads_of(&out);
         let subj = NamedOrBlankNode::NamedNode(
             NamedNode::new("urn:sparqlwatch:not-measured:r1:0").unwrap(),
@@ -951,7 +1056,16 @@ mod tests {
                 reason: NotMeasuredReason::CostCeiling,
             },
         ];
-        let out = emit_nquads(&RunId("r1".into()), AT, REV, &rows(), &[], &nm, Cost::Cheap, &[]).unwrap();
+        let out = emit_nquads(RunEmission {
+            run: &RunId("r1".into()),
+            generated_at: AT,
+            metric_revision: REV,
+            rows: &rows(),
+            declarations_read: &[],
+            not_measured: &nm,
+            max_cost: Cost::Cheap,
+            content_samples: &[],
+        }).unwrap();
         let qs = quads_of(&out);
 
         let declined: BTreeSet<String> = qs
@@ -993,7 +1107,16 @@ mod tests {
             NotMeasured { endpoint: "http://a.example/sparql".into(), metric_id: "classes".into(), reason: NotMeasuredReason::CostCeiling },
             NotMeasured { endpoint: "http://b.example/sparql".into(), metric_id: "classes".into(), reason: NotMeasuredReason::CostCeiling },
         ];
-        let out = emit_nquads(&RunId("r1".into()), AT, REV, &[], &[], &nm, Cost::Cheap, &[]).unwrap();
+        let out = emit_nquads(RunEmission {
+            run: &RunId("r1".into()),
+            generated_at: AT,
+            metric_revision: REV,
+            rows: &[],
+            declarations_read: &[],
+            not_measured: &nm,
+            max_cost: Cost::Cheap,
+            content_samples: &[],
+        }).unwrap();
         let qs = quads_of(&out);
         let subjects: BTreeSet<String> = qs
             .iter()
@@ -1011,7 +1134,16 @@ mod tests {
             NotMeasured { endpoint: "not an iri at all".into(), metric_id: "classes".into(), reason: NotMeasuredReason::CostCeiling },
             NotMeasured { endpoint: "http://b.example/sparql".into(), metric_id: "classes".into(), reason: NotMeasuredReason::CostCeiling },
         ];
-        let out = emit_nquads(&RunId("r1".into()), AT, REV, &[], &[], &nm, Cost::Cheap, &[])
+        let out = emit_nquads(RunEmission {
+            run: &RunId("r1".into()),
+            generated_at: AT,
+            metric_revision: REV,
+            rows: &[],
+            declarations_read: &[],
+            not_measured: &nm,
+            max_cost: Cost::Cheap,
+            content_samples: &[],
+        })
             .expect("one junk endpoint must not discard the sweep");
         assert!(!out.contains("not an iri at all"));
         let qs = quads_of(&out);
@@ -1025,7 +1157,16 @@ mod tests {
         // from one that ran it: the not-measured facts say which metrics were
         // declined, and this says what policy declined them.
         for (ceiling, slug) in [(Cost::Cheap, "cheap"), (Cost::Expensive, "expensive")] {
-            let out = emit_nquads(&RunId("r1".into()), AT, REV, &rows(), &[], &[], ceiling, &[]).unwrap();
+            let out = emit_nquads(RunEmission {
+                run: &RunId("r1".into()),
+                generated_at: AT,
+                metric_revision: REV,
+                rows: &rows(),
+                declarations_read: &[],
+                not_measured: &[],
+                max_cost: ceiling,
+                content_samples: &[],
+            }).unwrap();
             let qs = quads_of(&out);
             assert_eq!(
                 objects(&qs, "urn:sparqlwatch:maxCost"),
@@ -1060,7 +1201,16 @@ mod tests {
             truncated: false,
         };
         let nq =
-            emit_nquads(&RunId(AT.into()), AT, REV, &[], &[], &[], Cost::Cheap, &[s]).unwrap();
+            emit_nquads(RunEmission {
+                run: &RunId(AT.into()),
+                generated_at: AT,
+                metric_revision: REV,
+                rows: &[],
+                declarations_read: &[],
+                not_measured: &[],
+                max_cost: Cost::Cheap,
+                content_samples: &[s],
+            }).unwrap();
         assert!(nq.contains("urn:sparqlwatch:ContentSample"));
         assert_eq!(nq.matches("urn:sparqlwatch:sampledValue").count(), 2);
         assert!(nq.contains(r#""2"^^<http://www.w3.org/2001/XMLSchema#integer>"#));
@@ -1075,8 +1225,16 @@ mod tests {
         // booleans must therefore be reachable, or an implementation that
         // hard-codes one is indistinguishable from a correct one.
         let out =
-            emit_nquads(&RunId("r1".into()), AT, REV, &[], &[], &[], Cost::Expensive,
-                        &[sample(&["http://example.org/A"], true)]).unwrap();
+            emit_nquads(RunEmission {
+                run: &RunId("r1".into()),
+                generated_at: AT,
+                metric_revision: REV,
+                rows: &[],
+                declarations_read: &[],
+                not_measured: &[],
+                max_cost: Cost::Expensive,
+                content_samples: &[sample(&["http://example.org/A"], true)],
+            }).unwrap();
         let qs = quads_of(&out);
         assert_eq!(
             objects(&qs, "urn:sparqlwatch:sampleTruncated"),
@@ -1099,20 +1257,20 @@ mod tests {
         // `void:classPartition` and `void:class` both carry `rdfs:domain
         // void:Dataset`, and either one here would entail that this sample is a
         // dataset.
-        let nq = emit_nquads(
-            &RunId(AT.into()),
-            AT,
-            REV,
-            &rows(),
-            &[],
-            &[NotMeasured {
+        let nq = emit_nquads(RunEmission {
+            run: &RunId(AT.into()),
+            generated_at: AT,
+            metric_revision: REV,
+            rows: &rows(),
+            declarations_read: &[],
+            not_measured: &[NotMeasured {
                 endpoint: "http://example.org/sparql".into(),
                 metric_id: "classes".into(),
                 reason: NotMeasuredReason::CostCeiling,
             }],
-            Cost::Cheap,
-            &[sample(&["http://example.org/A", "http://example.org/B"], false)],
-        )
+            max_cost: Cost::Cheap,
+            content_samples: &[sample(&["http://example.org/A", "http://example.org/B"], false)],
+        })
         .unwrap();
         let subjects: std::collections::HashSet<&str> = nq
             .lines()
@@ -1156,16 +1314,16 @@ mod tests {
             metric_id: "classes".into(),
             reason: NotMeasuredReason::CostCeiling,
         }];
-        let out = emit_nquads(
-            &RunId("r1".into()),
-            AT,
-            REV,
-            &[row("http://example.org/sparql", "availability", Verdict::Verified)],
-            &[],
-            &nm,
-            Cost::Cheap,
-            &[sample(&["http://example.org/A"], false)],
-        )
+        let out = emit_nquads(RunEmission {
+            run: &RunId("r1".into()),
+            generated_at: AT,
+            metric_revision: REV,
+            rows: &[row("http://example.org/sparql", "availability", Verdict::Verified)],
+            declarations_read: &[],
+            not_measured: &nm,
+            max_cost: Cost::Cheap,
+            content_samples: &[sample(&["http://example.org/A"], false)],
+        })
         .unwrap();
         let qs = quads_of(&out);
         let typed = |iri: &str| -> BTreeSet<String> {
@@ -1193,19 +1351,19 @@ mod tests {
         // Read back as quads, and in the endpoint's order: the order is
         // evidence about the endpoint, so the fixture is deliberately not
         // alphabetical and an implementation that sorts must fail here.
-        let out = emit_nquads(
-            &RunId("r1".into()),
-            AT,
-            REV,
-            &[],
-            &[],
-            &[],
-            Cost::Expensive,
-            &[sample(
+        let out = emit_nquads(RunEmission {
+            run: &RunId("r1".into()),
+            generated_at: AT,
+            metric_revision: REV,
+            rows: &[],
+            declarations_read: &[],
+            not_measured: &[],
+            max_cost: Cost::Expensive,
+            content_samples: &[sample(
                 &["http://example.org/Zebra", "http://example.org/Apple", "http://example.org/Mango"],
                 false,
             )],
-        )
+        })
         .unwrap();
         let qs = quads_of(&out);
         let subj = NamedOrBlankNode::NamedNode(
@@ -1248,15 +1406,15 @@ mod tests {
 
     #[test]
     fn several_samples_each_get_their_own_subject() {
-        let out = emit_nquads(
-            &RunId("r1".into()),
-            AT,
-            REV,
-            &[],
-            &[],
-            &[],
-            Cost::Expensive,
-            &[
+        let out = emit_nquads(RunEmission {
+            run: &RunId("r1".into()),
+            generated_at: AT,
+            metric_revision: REV,
+            rows: &[],
+            declarations_read: &[],
+            not_measured: &[],
+            max_cost: Cost::Expensive,
+            content_samples: &[
                 sample(&["http://example.org/A"], false),
                 ContentSample {
                     endpoint: "http://b.example/sparql".into(),
@@ -1265,7 +1423,7 @@ mod tests {
                     truncated: true,
                 },
             ],
-        )
+        })
         .unwrap();
         let qs = quads_of(&out);
         let subjects: BTreeSet<String> = qs
@@ -1281,15 +1439,15 @@ mod tests {
         // Same doctrine as a measurement row and a not-measured fact: this runs
         // after all the probing, so one junk string must not turn a whole sweep
         // into no output at all.
-        let out = emit_nquads(
-            &RunId("r1".into()),
-            AT,
-            REV,
-            &[],
-            &[],
-            &[],
-            Cost::Expensive,
-            &[
+        let out = emit_nquads(RunEmission {
+            run: &RunId("r1".into()),
+            generated_at: AT,
+            metric_revision: REV,
+            rows: &[],
+            declarations_read: &[],
+            not_measured: &[],
+            max_cost: Cost::Expensive,
+            content_samples: &[
                 ContentSample {
                     endpoint: "not an iri at all".into(),
                     metric_id: "classes".into(),
@@ -1298,7 +1456,7 @@ mod tests {
                 },
                 sample(&["http://example.org/A", "not an iri either"], false),
             ],
-        )
+        })
         .expect("one junk string must not discard the sweep");
         assert!(!out.contains("not an iri"));
         let qs = quads_of(&out);

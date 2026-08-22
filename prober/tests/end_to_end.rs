@@ -1,6 +1,6 @@
 use sparqlwatch_prober::budget::Budget;
 use sparqlwatch_prober::client::Client;
-use sparqlwatch_prober::emit::{emit_nquads, NotMeasured, NotMeasuredReason, RunId};
+use sparqlwatch_prober::emit::{emit_nquads, NotMeasured, NotMeasuredReason, RunEmission, RunId};
 use sparqlwatch_prober::metrics::{load_metrics, within_cost, Cost, MetricDef, ProbeKind};
 use sparqlwatch_prober::politeness::Politeness;
 use sparqlwatch_prober::registry::load_endpoints;
@@ -92,7 +92,16 @@ async fn a_sweep_over_one_mock_endpoint_produces_nquads() {
     assert_eq!(got, expected);
 
     let nq =
-        emit_nquads(&RunId("test".into()), "2026-08-20T08:00:00Z", "test-revision", &rows, &_declarations_read, &[], Cost::Cheap, &[])
+        emit_nquads(RunEmission {
+            run: &RunId("test".into()),
+            generated_at: "2026-08-20T08:00:00Z",
+            metric_revision: "test-revision",
+            rows: &rows,
+            declarations_read: &_declarations_read,
+            not_measured: &[],
+            max_cost: Cost::Cheap,
+            content_samples: &[],
+        })
             .unwrap();
     let quads: Vec<Quad> = RdfParser::from_format(RdfFormat::NQuads)
         .for_slice(nq.as_bytes())
@@ -807,7 +816,16 @@ async fn sweep_with_description(body: &str, content_type: &str) -> String {
     let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let url = format!("{}/sparql", server.uri());
     let Sweep { rows, declarations_read, not_measured: _not_measured, content_samples: _content_samples } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
-    emit_nquads(&RunId("test".into()), "2026-08-20T08:00:00Z", "test-revision", &rows, &declarations_read, &[], Cost::Cheap, &[]).unwrap()
+    emit_nquads(RunEmission {
+        run: &RunId("test".into()),
+        generated_at: "2026-08-20T08:00:00Z",
+        metric_revision: "test-revision",
+        rows: &rows,
+        declarations_read: &declarations_read,
+        not_measured: &[],
+        max_cost: Cost::Cheap,
+        content_samples: &[],
+    }).unwrap()
 }
 
 /// Sweep one mock endpoint where every request, queryless or not, gets
@@ -822,7 +840,16 @@ async fn sweep_with_status(status: u16) -> String {
     let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let url = format!("{}/sparql", server.uri());
     let Sweep { rows, declarations_read, not_measured: _not_measured, content_samples: _content_samples } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
-    emit_nquads(&RunId("test".into()), "2026-08-20T08:00:00Z", "test-revision", &rows, &declarations_read, &[], Cost::Cheap, &[]).unwrap()
+    emit_nquads(RunEmission {
+        run: &RunId("test".into()),
+        generated_at: "2026-08-20T08:00:00Z",
+        metric_revision: "test-revision",
+        rows: &rows,
+        declarations_read: &declarations_read,
+        not_measured: &[],
+        max_cost: Cost::Cheap,
+        content_samples: &[],
+    }).unwrap()
 }
 
 /// As `sweep_with_status`, except the query probes (everything but the
@@ -842,7 +869,16 @@ async fn sweep_with_status_and_working_queries(status: u16) -> String {
     let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let url = format!("{}/sparql", server.uri());
     let Sweep { rows, declarations_read, not_measured: _not_measured, content_samples: _content_samples } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
-    emit_nquads(&RunId("test".into()), "2026-08-20T08:00:00Z", "test-revision", &rows, &declarations_read, &[], Cost::Cheap, &[]).unwrap()
+    emit_nquads(RunEmission {
+        run: &RunId("test".into()),
+        generated_at: "2026-08-20T08:00:00Z",
+        metric_revision: "test-revision",
+        rows: &rows,
+        declarations_read: &declarations_read,
+        not_measured: &[],
+        max_cost: Cost::Cheap,
+        content_samples: &[],
+    }).unwrap()
 }
 
 /// Two endpoints: one mock server answering every request, and one address
@@ -859,7 +895,16 @@ async fn sweep_two_endpoints_one_broken() -> String {
     let good = format!("{}/sparql", server.uri());
     let broken = "http://127.0.0.1:1/sparql".to_string();
     let Sweep { rows, declarations_read, not_measured: _not_measured, content_samples: _content_samples } = without_deadlocking(run_sweep(&[good, broken], &defs, &[], &client, Budget::default())).await;
-    emit_nquads(&RunId("test".into()), "2026-08-20T08:00:00Z", "test-revision", &rows, &declarations_read, &[], Cost::Cheap, &[]).unwrap()
+    emit_nquads(RunEmission {
+        run: &RunId("test".into()),
+        generated_at: "2026-08-20T08:00:00Z",
+        metric_revision: "test-revision",
+        rows: &rows,
+        declarations_read: &declarations_read,
+        not_measured: &[],
+        max_cost: Cost::Cheap,
+        content_samples: &[],
+    }).unwrap()
 }
 
 fn quads_of(run: &str) -> Vec<Quad> {
@@ -976,7 +1021,16 @@ async fn a_registry_that_lists_one_url_twice_probes_it_once() {
     let defs = load_shipped_metrics();
     let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let Sweep { rows, declarations_read: read, not_measured: _not_measured, content_samples: _content_samples } = without_deadlocking(run_sweep(&endpoints, &defs, &[], &client, Budget::default())).await;
-    let run = emit_nquads(&RunId("test".into()), "2026-08-20T08:00:00Z", "test-revision", &rows, &read, &[], Cost::Cheap, &[]).unwrap();
+    let run = emit_nquads(RunEmission {
+        run: &RunId("test".into()),
+        generated_at: "2026-08-20T08:00:00Z",
+        metric_revision: "test-revision",
+        rows: &rows,
+        declarations_read: &read,
+        not_measured: &[],
+        max_cost: Cost::Cheap,
+        content_samples: &[],
+    }).unwrap();
 
     assert_eq!(count_declarations_read_quads(&run), 1, "one endpoint, one fact, whatever the registry said");
     assert_eq!(rows.len(), defs.len(), "one row per metric, not two");
@@ -1006,7 +1060,16 @@ async fn a_near_duplicate_differing_by_a_trailing_slash_stays_two_entries() {
     let defs = load_shipped_metrics();
     let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let Sweep { rows, declarations_read: read, not_measured: _not_measured, content_samples: _content_samples } = without_deadlocking(run_sweep(&endpoints, &defs, &[], &client, Budget::default())).await;
-    let run = emit_nquads(&RunId("test".into()), "2026-08-20T08:00:00Z", "test-revision", &rows, &read, &[], Cost::Cheap, &[]).unwrap();
+    let run = emit_nquads(RunEmission {
+        run: &RunId("test".into()),
+        generated_at: "2026-08-20T08:00:00Z",
+        metric_revision: "test-revision",
+        rows: &rows,
+        declarations_read: &read,
+        not_measured: &[],
+        max_cost: Cost::Cheap,
+        content_samples: &[],
+    }).unwrap();
 
     assert_eq!(count_declarations_read_quads(&run), 2, "two entries, two facts");
     assert_eq!(rows.len(), 2 * defs.len(), "one row per metric per entry");
@@ -1169,7 +1232,16 @@ async fn has_classes_reads_the_iri_c_binds_through_select_iris_not_ask_data() {
     let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let url = format!("{}/sparql", server.uri());
     let Sweep { rows, declarations_read: read, not_measured: _not_measured, content_samples: _content_samples } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
-    let run = emit_nquads(&RunId("test".into()), "2026-08-20T08:00:00Z", "test-revision", &rows, &read, &[], Cost::Cheap, &[]).unwrap();
+    let run = emit_nquads(RunEmission {
+        run: &RunId("test".into()),
+        generated_at: "2026-08-20T08:00:00Z",
+        metric_revision: "test-revision",
+        rows: &rows,
+        declarations_read: &read,
+        not_measured: &[],
+        max_cost: Cost::Cheap,
+        content_samples: &[],
+    }).unwrap();
 
     assert_eq!(
         verdict_of(&run, "has-classes"),
@@ -1263,8 +1335,16 @@ async fn a_declined_metric_reaches_the_published_graph_with_no_verdict() {
     let url = format!("{}/sparql", server.uri());
     let Sweep { rows, declarations_read: read, not_measured, content_samples: _content_samples } =
         without_deadlocking(run_sweep(std::slice::from_ref(&url), &run, &declined, &client, Budget::default())).await;
-    let nq = emit_nquads(&RunId("test".into()), "2026-08-20T08:00:00Z", "test-revision",
-                         &rows, &read, &not_measured, Cost::Cheap, &[]).unwrap();
+    let nq = emit_nquads(RunEmission {
+        run: &RunId("test".into()),
+        generated_at: "2026-08-20T08:00:00Z",
+        metric_revision: "test-revision",
+        rows: &rows,
+        declarations_read: &read,
+        not_measured: &not_measured,
+        max_cost: Cost::Cheap,
+        content_samples: &[],
+    }).unwrap();
     let quads = quads_of(&nq);
 
     let classes = NamedNode::new("urn:sparqlwatch:metric:classes").unwrap();
@@ -1520,8 +1600,16 @@ async fn the_classes_metric_publishes_the_iris_it_bound() {
 
     // And it survives emission: a requirement met in memory and lost on disk is
     // not met. Read back as quads, in order.
-    let nq = emit_nquads(&RunId("test".into()), "2026-08-20T08:00:00Z", "test-revision",
-                         &rows, &read, &not_measured, Cost::Expensive, &content_samples).unwrap();
+    let nq = emit_nquads(RunEmission {
+        run: &RunId("test".into()),
+        generated_at: "2026-08-20T08:00:00Z",
+        metric_revision: "test-revision",
+        rows: &rows,
+        declarations_read: &read,
+        not_measured: &not_measured,
+        max_cost: Cost::Expensive,
+        content_samples: &content_samples,
+    }).unwrap();
     let quads = quads_of(&nq);
     let published: Vec<String> = quads.iter()
         .filter(|q| q.predicate.as_str() == "urn:sparqlwatch:sampledValue")
@@ -1619,8 +1707,16 @@ async fn a_declined_metric_publishes_no_sample_and_still_says_why() {
 
     assert!(content_samples.is_empty(),
             "a metric that was never run cannot have sampled anything: {content_samples:?}");
-    let nq = emit_nquads(&RunId("test".into()), "2026-08-20T08:00:00Z", "test-revision",
-                         &rows, &read, &not_measured, Cost::Cheap, &content_samples).unwrap();
+    let nq = emit_nquads(RunEmission {
+        run: &RunId("test".into()),
+        generated_at: "2026-08-20T08:00:00Z",
+        metric_revision: "test-revision",
+        rows: &rows,
+        declarations_read: &read,
+        not_measured: &not_measured,
+        max_cost: Cost::Cheap,
+        content_samples: &content_samples,
+    }).unwrap();
     let quads = quads_of(&nq);
     assert!(!quads.iter().any(|q| q.predicate.as_str().starts_with("urn:sparqlwatch:sample")),
             "no sample quad of any kind reaches the graph");
