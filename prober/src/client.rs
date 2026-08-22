@@ -179,19 +179,18 @@ impl Client {
     /// One retry and not a loop: a server that throttles the retry as well is
     /// telling us to come back after this sweep, not to keep knocking.
     ///
-    /// The wait happens with NO host guard held, and that is a consequence of
-    /// gating every hop rather than every probe. `attempt` is a whole gated
-    /// chain walk: it takes the gate for each hop and releases it before
-    /// returning, so there is no guard here to wait inside. The retried walk
-    /// reacquires, which means the retried request is separately excluded and
-    /// separately spaced, exactly like a first one.
+    /// The wait itself is NOT taken here, and that is deliberate. `retry_delay`
+    /// records the delay on the host (`Politeness::stand_down`), and the
+    /// retried walk's first gated hop waits it out while holding that host, so
+    /// the pause binds every request to the server rather than only this one.
+    /// A sleep here as well would be a second mechanism enforcing the same
+    /// pause, and each would hide the other: with both in place, removing
+    /// either one left the whole suite green.
     ///
-    /// Waiting outside a guard would let another metric's probe walk into the
-    /// host we were just told to leave alone, so the throttle is recorded on
-    /// the host itself (`retry_delay` calls `Politeness::stand_down`) before
-    /// this sleep begins. The sleep here is therefore our own retry keeping
-    /// its own promise, and the gate keeps the same promise for every other
-    /// request to that host, including ones this task knows nothing about.
+    /// The consequence worth stating is that the retried walk reacquires the
+    /// gate hop by hop, so the retried request is separately excluded and
+    /// separately spaced, exactly like a first one, and the wait happens
+    /// inside the metric budget where `tokio` can cancel it.
     ///
     /// The retried attempt is returned WHOLE, so the reported `elapsed_ms` is
     /// the second walk's own request time and excludes the wait. Our politeness
@@ -210,8 +209,9 @@ impl Client {
             return first;
         };
         tracing::info!(url, delay_ms = delay.as_millis() as u64,
-                       "endpoint asked us to come back; waiting it out and retrying once");
-        tokio::time::sleep(delay).await;
+                       "endpoint asked us to come back; the host is held until then, and we retry once");
+        // No sleep here: the delay is already recorded against the host, and
+        // the acquire inside this walk's first hop is what waits it out.
         let retried = attempt().await;
         // One retry and not a loop, but the retried response can carry an
         // instruction of its own, and an instruction is about the host rather

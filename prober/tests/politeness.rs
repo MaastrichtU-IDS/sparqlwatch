@@ -501,6 +501,25 @@ async fn a_server_that_throttles_twice_is_not_asked_a_third_time() {
                "one attempt and exactly one retry");
 }
 
+/// Fix 2's missing test: a `Retry-After` we said we would honour has to cost us
+/// the wait. Every other retry test here asserts the retry HAPPENED, which a
+/// client that retried instantly would also satisfy, and instantly is precisely
+/// the impoliteness the whole slice exists to remove.
+///
+/// A floor, and the gap is zero, so the only thing that can reach it is the
+/// honoured delay itself.
+#[tokio::test]
+async fn an_honoured_retry_after_is_really_waited_out_before_the_retry() {
+    let server = an_endpoint_that_throttles(1, 429, "1").await;
+    let c = client(Duration::ZERO, CAP);
+    let t0 = Instant::now();
+    let o = without_deadlocking(c.ask(&format!("{}/sparql", server.uri()), "ASK{}")).await;
+    assert_eq!(o.status, Some(200), "the retry reached the answer");
+    assert!(t0.elapsed() >= Duration::from_millis(900),
+            "the second-long delay was waited out, not skipped, took {:?}", t0.elapsed());
+    assert_eq!(server.received_requests().await.unwrap().len(), 2, "one attempt, one retry");
+}
+
 /// The finding this fix closes: a throttle used to bind our own retry and
 /// nothing else, so the next metric's probe knocked on the same host after the
 /// ordinary gap. Both requests here are throttled, so the second stand-down
