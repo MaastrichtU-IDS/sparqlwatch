@@ -92,8 +92,12 @@ async fn the_gap_is_measured_from_release_not_from_acquisition() {
 #[tokio::test]
 async fn a_host_that_asked_us_to_come_back_later_is_left_alone_until_then() {
     let p = Politeness::new(Duration::ZERO);
-    p.stand_down("http://example.org/a", Duration::from_millis(300));
+    // The clock starts BEFORE the stand-down is recorded, because the instant
+    // it records is `now + 300ms` measured a hair later: timed from after the
+    // call, an acquire that waits exactly right can read a few hundred
+    // microseconds under the floor.
     let t0 = Instant::now();
+    p.stand_down("http://example.org/a", Duration::from_millis(300));
     drop(p.acquire("http://example.org/a").await);
     assert!(t0.elapsed() >= Duration::from_millis(300),
             "the host was deferred, not merely spaced, took {:?}", t0.elapsed());
@@ -105,8 +109,8 @@ async fn a_host_that_asked_us_to_come_back_later_is_left_alone_until_then() {
 #[tokio::test]
 async fn a_stand_down_defers_every_url_on_that_host() {
     let p = Politeness::new(Duration::ZERO);
-    p.stand_down("http://example.org/sparql?query=one", Duration::from_millis(300));
     let t0 = Instant::now();
+    p.stand_down("http://example.org/sparql?query=one", Duration::from_millis(300));
     drop(p.acquire("http://example.org/other").await);
     assert!(t0.elapsed() >= Duration::from_millis(300),
             "a second question to a deferred host waits too, took {:?}", t0.elapsed());
