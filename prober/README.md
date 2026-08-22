@@ -117,8 +117,11 @@ Seven metrics are `cheap` at the default cost ceiling: availability, cors,
 cors-preflight, geo-functions, geo-data, service-description, has-classes.
 
 Per endpoint, the prober makes 7 requests. Between consecutive requests to one
-host, there is a gap. The sweep is sequential (bounded concurrency per host is
-stage 1c-b3). So:
+host, there is a gap. The sweep is sequential: stage 1c-b3 adds bounded
+concurrency **across endpoints**, never within a host. Per-host concurrency stays
+at one request, which is the guarantee this stage exists to provide, so 1c-b3
+shortens a sweep by overlapping different hosts and changes nothing about how any
+single host is treated. So:
 
 - Per endpoint: 7 requests with some latency (call it L per request) plus 6 gaps.
 - Gap time per endpoint: 6 gaps × 2 seconds = 12 seconds.
