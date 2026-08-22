@@ -6,7 +6,7 @@ use sparqlwatch_prober::{
     metrics::{definitions_revision, load_metrics, within_cost, Cost},
     politeness::{Politeness, DEFAULT_MIN_GAP, DEFAULT_RETRY_AFTER_CAP},
     registry::load_endpoints,
-    run_sweep,
+    run_sweep, Sweep,
 };
 use std::time::Duration;
 
@@ -187,7 +187,7 @@ async fn main() -> anyhow::Result<()> {
     // The policy lives here, in one place. `run_sweep` receives both halves as
     // data and never learns what a ceiling is.
     let (run, declined) = within_cost(&defs, args.max_cost);
-    let (rows, declarations_read, not_measured) =
+    let Sweep { rows, declarations_read, not_measured } =
         run_sweep(&endpoints, &run, &declined, &client, budget).await;
     let nq = emit_nquads(
         &RunId(args.at.clone()),

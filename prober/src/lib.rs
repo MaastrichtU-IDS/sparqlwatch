@@ -52,13 +52,19 @@ use crate::verdict::Verdict;
 /// the policy in one place and the mechanism in another is deliberate: a
 /// second reason for declining a metric changes `main.rs` and the reason enum,
 /// not this loop.
+pub struct Sweep {
+    pub rows: Vec<MeasurementRow>,
+    pub declarations_read: Vec<DeclarationsRead>,
+    pub not_measured: Vec<NotMeasured>,
+}
+
 pub async fn run_sweep(
     endpoints: &[String],
     defs: &[MetricDef],
     declined: &[MetricDef],
     client: &Client,
     budget: Budget,
-) -> (Vec<MeasurementRow>, Vec<DeclarationsRead>, Vec<NotMeasured>) {
+) -> Sweep {
     let mut rows = Vec::new();
     let mut declarations_read = Vec::new();
     let mut not_measured = Vec::new();
@@ -100,7 +106,7 @@ pub async fn run_sweep(
             });
         }
     }
-    (rows, declarations_read, not_measured)
+    Sweep { rows, declarations_read, not_measured }
 }
 
 const VAR_REQUIRED: &str = "a bindings-reading probe kind requires `var`; load_metrics enforces it";
