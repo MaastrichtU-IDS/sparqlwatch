@@ -157,12 +157,25 @@ pub const DEFAULT_MIN_GAP: Duration = Duration::from_secs(2);
 
 /// The default cap on a `Retry-After` we are willing to wait out.
 ///
-/// Twenty seconds, not two minutes: the wait happens inside the 60s metric
-/// budget alongside a request that may itself take 30s, and `cap + request
-/// budget` has to stay under the metric budget or tokio cancels the honoured
-/// wait and reports `Indeterminate` after burning the whole budget for
-/// nothing. 20 + 30 = 50 < 60. Raising the cap means moving a budget, which
-/// is a deliberate decision rather than a side effect of one.
+/// Twenty seconds, not two minutes, and the ceiling is arithmetic rather than
+/// taste. Four things come out of one 60s metric budget, in this order: the gap
+/// before the first request, the first request, the wait the throttle asked
+/// for, and the retried request. The case a cap can protect is the ordinary
+/// one, where the throttle came back quickly, since refusing a request is cheap
+/// for a server that is refusing it:
+///
+///     gap (2) + wait (20) + retried request (30) = 52 < 60
+///
+/// So a larger cap eats that margin, and raising it makes a cancelled retry
+/// MORE likely rather than less.
+///
+/// No cap value makes the worst case fit. A first request that runs its whole
+/// 30s timeout before the throttle arrives costs 2 + 30 + 30 = 62 with a cap of
+/// ZERO, so a gap plus two full-timeout requests is already over budget on its
+/// own. When that happens `tokio` cancels somewhere inside the retry and the
+/// metric reports `indeterminate`, which is exactly true: we never got an
+/// answer. A retry guaranteed to fit would need a metric budget above 82
+/// seconds, which is a decision nobody has taken.
 pub const DEFAULT_RETRY_AFTER_CAP: Duration = Duration::from_secs(20);
 
 /// The gate every probe passes through, and the two settings that decide how
@@ -174,9 +187,11 @@ pub const DEFAULT_RETRY_AFTER_CAP: Duration = Duration::from_secs(20);
 /// could drift apart and a caller could set one without noticing the other
 /// existed.
 ///
-/// The gate itself gives two guarantees, and the second does not imply the
+/// The gate itself gives three guarantees, and the second does not imply the
 /// first: a gap alone would let two tasks both observe it elapsed and proceed
-/// together, so exclusion is a lock, not a calculation.
+/// together, so exclusion is a lock, not a calculation. The third is what makes
+/// the second one honest, since a pause we chose is no answer to a pause the
+/// server asked for.
 ///
 /// 1. Never two requests in flight to one host.
 /// 2. At least `min_gap` between one request's release and the next one's

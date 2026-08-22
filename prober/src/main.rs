@@ -44,15 +44,23 @@ struct Args {
     ///
     /// Twenty seconds, and the ceiling is arithmetic rather than taste. The
     /// wait happens inside the held per-host guard, which sits inside the
-    /// metric budget alongside the retried request:
+    /// metric budget along with the gap, the first request and the retried
+    /// request. The case the cap protects is the ordinary one, where the
+    /// throttle came back quickly:
     ///
-    ///     cap + request budget < metric budget
-    ///     20s + 30s = 50s < 60s
+    ///     gap + cap + request budget < metric budget
+    ///     2s  + 20s +      30s       = 52s < 60s
     ///
-    /// Above that, `tokio::time::timeout` cancels the honoured wait and the
-    /// metric reports `indeterminate` after burning its whole budget for
-    /// nothing. Raising this cap therefore means raising `Budget::metric`
-    /// too, which is a deliberate decision and not a side effect of this one.
+    /// Above that, `tokio::time::timeout` cancels the retry and the metric
+    /// reports `indeterminate` after burning its whole budget, so raising this
+    /// cap makes cancellation MORE likely, not less.
+    ///
+    /// No value here makes the worst case fit: a first request that runs its
+    /// full 30s before the throttle arrives costs 2 + 30 + 30 = 62s with a cap
+    /// of zero. That case is cancelled by design and reported as
+    /// `indeterminate`, which is what never getting an answer looks like. A
+    /// retry guaranteed to fit would need `Budget::metric` above 82s, which is
+    /// a decision nobody has taken.
     #[arg(long, default_value_t = DEFAULT_RETRY_AFTER_CAP.as_secs())]
     retry_after_cap_s: u64,
 }
@@ -248,19 +256,38 @@ mod tests {
     /// on `DEFAULT_RETRY_AFTER_CAP` would still pass if `default_value_t` were
     /// changed to name something else.
     ///
-    /// The cap in particular is arithmetic, not taste: the honoured wait sits
-    /// inside the held host guard, inside the metric budget, alongside the
-    /// retried request, so `cap + request budget < metric budget` (20 + 30 = 50
-    /// < 60). Anything larger is a wait tokio would cancel.
+    /// The cap in particular is arithmetic, not taste, and the arithmetic is
+    /// about the ordinary throttle rather than the worst case. Four things come
+    /// out of one metric budget, in order: the gap, the first request, the
+    /// honoured wait, and the retried request. A throttle usually comes back
+    /// quickly, since refusing a request is cheap, so what has to fit is
+    ///
+    ///     gap + cap + request budget < metric budget    (2 + 20 + 30 = 52 < 60)
+    ///
+    /// and a larger cap eats that margin: raising it makes a cancelled retry
+    /// more likely, not less.
+    ///
+    /// The worst case fits under NO cap, which is why there is no assertion
+    /// about it here. A first request that runs its full 30s before the
+    /// throttle arrives costs 2 + 30 + 30 = 62 > 60 with a cap of zero, so a
+    /// gap plus two full-timeout requests is already over budget on its own.
+    /// The budget cancels that retry and the metric reports `indeterminate`,
+    /// which is correct: we never got an answer. A retry guaranteed to fit
+    /// would need a metric budget above 82s, which is a decision nobody has
+    /// taken.
     #[test]
     fn the_default_politeness_is_a_two_second_gap_and_a_twenty_second_cap() {
         let args = Args::parse_from(["prober", "--at", "2026-01-01T00:00:00Z"]);
         assert_eq!(args.min_gap_ms, 2000, "a plain run must pause between requests to one host");
-        assert_eq!(args.retry_after_cap_s, 20, "a longer cap than this cannot complete inside the metric budget");
+        assert_eq!(args.retry_after_cap_s, 20, "a longer cap than this leaves no room to retry at all");
         let budget = Budget::default();
         assert!(
-            Duration::from_secs(args.retry_after_cap_s) + budget.request < budget.metric,
-            "cap + request budget must stay under the metric budget or an honoured wait gets cancelled"
+            Duration::from_millis(args.min_gap_ms)
+                + Duration::from_secs(args.retry_after_cap_s)
+                + budget.request
+                < budget.metric,
+            "gap + cap + request budget must stay under the metric budget, or even a throttle \
+             that came back at once cannot be retried inside it"
         );
     }
 

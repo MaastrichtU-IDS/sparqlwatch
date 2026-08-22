@@ -87,9 +87,10 @@ run reproducible: same `--at`, same output identifiers. It is validated before
 any probing starts, because it is interpolated into IRIs and published as an
 `xsd:dateTime`.
 
-Every outbound request passes a per-host gate that gives two guarantees: never
-two requests in flight to one host, and at least `--min-gap-ms` between one
-request finishing and the next one to that host starting. The gate is taken
+Every outbound request passes a per-host gate that gives three guarantees: never
+two requests in flight to one host, at least `--min-gap-ms` between one request
+finishing and the next one to that host starting, and nothing at all to a host
+before the instant that host asked us to come back at. The gate is taken
 once per outbound **request**, not once per probe, and in one place only. No
 probe follows a redirect implicitly: a chain is walked a hop at a time, and each
 hop takes the gate for the host that hop actually touches, which is not
@@ -103,17 +104,40 @@ chain longer than five hops, a cycle, or a `Location` we cannot resolve is
 consumes the budget the measurement needs and every metric reports
 `indeterminate` against an endpoint that answered perfectly.
 
-A `429` or `503` carrying a `Retry-After` within `--retry-after-cap-s` is waited
-out and the request retried **once**; a longer delay, an HTTP-date value or junk
-is not waited out at all, and the throttle is reported as observed rather than
-turned into a guess. The retried walk takes the gate again, hop by hop, like a
-first one.
+A `429` or `503` carrying a `Retry-After` in delta-seconds defers the **host**
+until that instant, whether or not the delay is one we are willing to wait out:
+a server that tells us to come back later is not sent a different question in
+the meantime. Every later request to that host, from any metric, waits at the
+gate until the instant passes. Within `--retry-after-cap-s` the request is also
+retried **once** after the wait; a longer delay, an HTTP-date value or junk is
+not retried at all, and the throttle is reported as observed rather than turned
+into a guess. The retried walk takes the gate again, hop by hop, like a first
+one, and it is that acquisition which waits the delay out, so there is exactly
+one place in the crate that decides how long we wait.
 
-The cap's ceiling is arithmetic, not taste. The wait sits inside the metric
-budget alongside the retried request, so `cap + request budget < metric budget`
-(20 + 30 = 50 < 60). A larger cap is a wait `tokio` would cancel, reporting
-`indeterminate` after burning the whole metric budget, so raising it means
-raising the metric budget too.
+The deferral is deliberately not bounded. A host that asks for an hour gets an
+hour, the metric and endpoint budgets cancel the requests that queue behind it,
+and those metrics report `indeterminate`, which is exactly what happened: we
+never got to ask. A second bound here would be a second place deciding how long
+we wait.
+
+The cap's ceiling is arithmetic, not taste, and the arithmetic is about the
+ordinary throttle rather than the worst case. Four things come out of one 60s
+metric budget, in this order: the gap, the first request, the honoured wait, and
+the retried request. A throttle usually comes back quickly, since refusing a
+request is cheap for the server refusing it, so what has to fit is
+`gap + cap + request budget < metric budget` (2 + 20 + 30 = 52 < 60). A larger
+cap eats that margin, so raising it makes a cancelled retry **more** likely, not
+less.
+
+No cap value makes the worst case fit. A first request that runs its full 30s
+timeout before the throttle arrives costs 2 + 30 + 30 = 62 > 60 even with a cap
+of zero: a gap plus two full-timeout requests is already over the metric budget
+on its own. A retry is therefore best-effort inside that budget. When it does
+not fit, `tokio` cancels it and the metric reports `indeterminate`, which is
+correct, because we never got an answer. A retry guaranteed to fit in every case
+would need a metric budget above 82 seconds, and nobody has taken that
+decision.
 
 Three nested budgets bound the work, per request (30s), per metric (60s), and per
 endpoint (600s), and every one of them cancels the future rather than
