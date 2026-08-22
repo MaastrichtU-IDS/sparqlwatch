@@ -338,14 +338,26 @@ typed resources. `SelectIris` has no such guard and returns `verified` when any 
 `classes` already ran `SELECT DISTINCT ?c ... LIMIT 200` to answer "does this
 endpoint publish a bounded list of types"; it now publishes the bindings it
 reads instead of discarding them once the verdict is drawn. A metric that
-reads bindings may declare `sample_limit` in `metrics.toml`, checked at load
-against the `LIMIT` its own query actually carries, so the two numbers cannot
-drift apart. `classes` is the only metric that declares one, at 200, matching
-its query's `LIMIT 200`. `has-classes` runs `SELECT ?c WHERE { ?s a ?c }
-LIMIT 1` and deliberately declares none: its single binding is whichever type
-the endpoint happened to return first, and publishing that as a "sample" would
-suggest it says something about the endpoint's vocabulary, when it says only
-that at least one typed resource exists.
+uses probe kind `SelectIris` may declare `sample_limit` in `metrics.toml`,
+checked at load against the `LIMIT` its own query actually carries (SPARQL
+comments stripped first, so a comment mentioning a different number cannot
+stand in for the real one), so the two numbers cannot drift apart. `classes` is
+the only metric that declares one, at 200, matching its query's `LIMIT 200`.
+`has-classes` runs `SELECT ?c WHERE { ?s a ?c } LIMIT 1` and deliberately
+declares none: its single binding is whichever type the endpoint happened to
+return first, and publishing that as a "sample" would suggest it says something
+about the endpoint's vocabulary, when it says only that at least one typed
+resource exists.
+
+`AskData` may not declare a `sample_limit` either, even though it does read
+bindings: it reads the lexical forms of literals, and every sampled value is
+published as an IRI, so an `AskData` sample would drop most values and
+republish any whose lexical form happens to parse as an IRI as a resource the
+endpoint never mentioned, losing the datatype either way. Lifting that
+restriction needs a sample that carries, per value, whether it is an IRI or a
+literal with its datatype, and an emitter that emits accordingly. Until both
+exist the path stays closed, because a half-supported path publishes a wrong
+fact about somebody's data.
 
 Per sample, the run graph carries only sparqlwatch's own predicates plus
 `rdf:type` and `prov:wasGeneratedBy`:
@@ -353,15 +365,33 @@ Per sample, the run graph carries only sparqlwatch's own predicates plus
 - `rdf:type urn:sparqlwatch:ContentSample`
 - `urn:sparqlwatch:sampledFrom` the endpoint
 - `urn:sparqlwatch:sampledBy` the metric definition
-- `urn:sparqlwatch:sampleSize` the count of values bound, an `xsd:integer`
+- `urn:sparqlwatch:sampleSize` the count of values published, an `xsd:integer`
 - `urn:sparqlwatch:sampleTruncated` an `xsd:boolean`
-- `urn:sparqlwatch:sampledValue`, one per IRI the endpoint returned, repeated
+- `urn:sparqlwatch:sampledValue`, one per IRI published, repeated
 - `prov:wasGeneratedBy` the run's activity, the same link every other fact in
   this graph carries
 
 Values are published in the order the endpoint returned them: not sorted, not
 deduplicated beyond what `SELECT DISTINCT` already did, because reordering
 would discard evidence about the endpoint for a tidiness nobody asked for.
+
+`sampleSize` counts the values actually published, so it is always verifiable
+against the `sampledValue` quads beside it. A value that cannot be written as
+an IRI is dropped and not counted, and the drop is logged with the bound and
+published counts, because the graph has no way to say "there was one more and
+we could not name it". A sample whose values are all unwritable publishes no
+node at all, since `sampleSize 0` would read as "this endpoint has no classes".
+Against the three endpoints in this project's own registry, nothing was dropped
+(kadaster 59 of 59, ontop 50 of 50, qlever no sample).
+
+A sample is published only where the measurement for that same metric came out
+positive, `verified` or `undeclared-but-verified`. This is gated on the verdict
+rather than on the response status deliberately: `resolve()` already encodes
+every status rule this project has, so the sample and the measurement cannot
+disagree, and a change to those rules carries the sample with it. Without that
+gate, a `429` or a `503` carrying a parseable SPARQL-results body published the
+endpoint's full class list, marked complete, in the same graph whose
+measurement for that metric read `indeterminate`.
 
 `sampleTruncated` is `true` when the number of values reached the metric's
 declared `sample_limit`, using `>=` rather than `==`: an endpoint that ignores
