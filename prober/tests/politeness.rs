@@ -160,12 +160,18 @@ fn client(gap: Duration, cap: Duration) -> Client {
     Client::new(Budget::default(), Politeness::with_retry_after_cap(gap, cap)).unwrap()
 }
 
-/// The reentrancy hazard, as a test rather than a hope. A preflight that
-/// resolves a redirect chain acquires ONCE. If the gate were acquired per hop
-/// this deadlocks and the test times out rather than failing cleanly, so it
-/// runs under an explicit timeout to make the failure legible.
+/// A preflight that resolves a redirect chain gates EVERY hop: two requests,
+/// two acquisitions, one gap between them. It used to acquire once for the
+/// whole chain, which made the README's unconditional promise false for every
+/// hop after the first.
+///
+/// A floor on the elapsed time is what pins it, and the floor can only be
+/// reached if the second hop waited: the mocks are local, so both requests
+/// together cost milliseconds. Under an implementation that acquires the gate
+/// per hop while already holding it, this deadlocks instead of failing, so it
+/// runs under an explicit timeout to keep the failure legible.
 #[tokio::test]
-async fn a_preflight_resolving_a_redirect_chain_acquires_once() {
+async fn a_preflight_resolving_a_redirect_chain_gates_every_hop() {
     let server = MockServer::start().await;
     Mock::given(method("OPTIONS")).and(path("/a"))
         .respond_with(ResponseTemplate::new(303).insert_header("location", "/b"))
@@ -175,12 +181,98 @@ async fn a_preflight_resolving_a_redirect_chain_acquires_once() {
             .insert_header("access-control-allow-origin", "*"))
         .mount(&server).await;
 
-    // A gap large enough that a second acquisition would be visible in the
-    // elapsed time even if it somehow did not deadlock.
-    let c = client(Duration::from_millis(50), CAP);
+    let gap = Duration::from_millis(400);
+    let c = client(gap, CAP);
     let url = format!("{}/a", server.uri());
+    let t0 = Instant::now();
     let o = without_deadlocking(c.preflight(&url)).await;
     assert_eq!(o.status, Some(204), "the chain resolved to the granting hop");
+    assert_eq!(server.received_requests().await.unwrap().len(), 2,
+               "one OPTIONS per hop, and both of them ours to gate");
+    assert!(t0.elapsed() >= gap,
+            "the second hop waited its own gap, took {:?}", t0.elapsed());
+}
+
+/// The failure the reviewer measured, as a test. A probe whose first response
+/// is a `301` to the same host makes TWO requests to that host, and the second
+/// one is gated and spaced like any other. `reqwest` used to follow that
+/// redirect inside one `send()`, so the host saw two requests and the gate saw
+/// one.
+///
+/// A floor, never an upper bound: the two mock responses are local and cost
+/// milliseconds, so only a real gap can reach it.
+#[tokio::test]
+async fn a_probe_redirected_to_the_same_host_gates_both_requests() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/a"))
+        .respond_with(ResponseTemplate::new(301).insert_header("location", "/b"))
+        .mount(&server).await;
+    Mock::given(method("GET")).and(path("/b"))
+        .respond_with(ResponseTemplate::new(200)
+            .insert_header("content-type", "application/sparql-results+json")
+            .set_body_string(SPARQL_JSON))
+        .mount(&server).await;
+
+    let gap = Duration::from_millis(400);
+    let c = client(gap, CAP);
+    let t0 = Instant::now();
+    let o = without_deadlocking(c.ask(&format!("{}/a", server.uri()), "ASK{}")).await;
+    assert_eq!(o.status, Some(200), "the redirect was followed to its answer");
+    assert_eq!(o.boolean, Some(true), "and the answer at the end of it is what we report");
+    assert_eq!(server.received_requests().await.unwrap().len(), 2,
+               "the host saw two requests, which is what the gate must also see");
+    assert!(t0.elapsed() >= gap,
+            "the redirected hop waited a gap of its own, took {:?}", t0.elapsed());
+}
+
+/// A `301` to a DIFFERENT host gates on the host we are about to touch, not on
+/// the one that sent us there. Two assertions, because they fail under
+/// different mistakes:
+///
+/// 1. The walk into B waits out B's own gap, which is due because we probed B
+///    a moment ago. An implementation that follows the hop ungated (reqwest's,
+///    or one acquisition for the whole chain) returns in microseconds: that is
+///    exactly the 508µs the reviewer measured against a 3s gap.
+/// 2. A later probe of B waits, which can only happen if the hop stamped B's
+///    release. An implementation that reacquired the ORIGINAL host per hop
+///    would pass the first assertion and fail this one.
+#[tokio::test]
+async fn a_probe_redirected_to_another_host_gates_the_new_host() {
+    let a = MockServer::start().await;
+    let b = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/b"))
+        .respond_with(ResponseTemplate::new(200)
+            .insert_header("content-type", "application/sparql-results+json")
+            .set_body_string(SPARQL_JSON))
+        .mount(&b).await;
+    Mock::given(method("GET")).and(path("/a"))
+        .respond_with(ResponseTemplate::new(301).insert_header("location", format!("{}/b", b.uri())))
+        .mount(&a).await;
+
+    let gap = Duration::from_millis(400);
+    let c = client(gap, CAP);
+    let a_url = format!("{}/a", a.uri());
+    let b_url = format!("{}/b", b.uri());
+
+    // Touch B first, so B's gate is the one that owes a pause.
+    without_deadlocking(c.ask(&b_url, "ASK{}")).await;
+
+    // The floor is a little under the gap on purpose: the gap is measured from
+    // B's release, which happened a hair before this clock started.
+    let floor = gap * 3 / 4;
+    let t0 = Instant::now();
+    let o = without_deadlocking(c.ask(&a_url, "ASK{}")).await;
+    assert_eq!(o.status, Some(200), "the cross-host redirect was followed to its answer");
+    assert!(t0.elapsed() >= floor,
+            "the hop into B waited for B's gap, took {:?}", t0.elapsed());
+
+    let t1 = Instant::now();
+    without_deadlocking(c.ask(&b_url, "ASK{}")).await;
+    assert!(t1.elapsed() >= floor,
+            "the hop into B stamped B's release, so this waited too, took {:?}", t1.elapsed());
+    assert_eq!(a.received_requests().await.unwrap().len(), 1, "one request to the front-end");
+    assert_eq!(b.received_requests().await.unwrap().len(), 3,
+               "and three to the host it redirects to, every one of them gated");
 }
 
 #[tokio::test]

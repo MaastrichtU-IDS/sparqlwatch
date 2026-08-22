@@ -89,18 +89,31 @@ any probing starts, because it is interpolated into IRIs and published as an
 
 Every outbound request passes a per-host gate that gives two guarantees: never
 two requests in flight to one host, and at least `--min-gap-ms` between one
-request finishing and the next one to that host starting. The gate is taken once
-per probe, in the six public `Client` methods and nowhere else. A `429` or `503`
-carrying a `Retry-After` within `--retry-after-cap-s` is waited out and the
-request retried **once**; a longer delay, an HTTP-date value or junk is not
-waited out at all, and the throttle is reported as observed rather than turned
-into a guess.
+request finishing and the next one to that host starting. The gate is taken
+once per outbound **request**, not once per probe, and in one place only. No
+probe follows a redirect implicitly: a chain is walked a hop at a time, and each
+hop takes the gate for the host that hop actually touches, which is not
+necessarily the host the probe was pointed at. A three-hop chain therefore costs
+two gaps, and that is the honest price of a promise with no exceptions in it. A
+chain longer than five hops, a cycle, or a `Location` we cannot resolve is
+`indeterminate`: we never reached an answer.
 
-The cap's ceiling is arithmetic, not taste. The wait happens inside the held
-host guard, which sits inside the metric budget alongside the retried request,
-so `cap + request budget < metric budget` (20 + 30 = 50 < 60). A larger cap is
-a wait `tokio` would cancel, reporting `indeterminate` after burning the whole
-metric budget, so raising it means raising the metric budget too.
+`--min-gap-ms` is validated at startup, before any probing: the gap plus the
+30s request budget has to stay under the 60s metric budget, or the pause alone
+consumes the budget the measurement needs and every metric reports
+`indeterminate` against an endpoint that answered perfectly.
+
+A `429` or `503` carrying a `Retry-After` within `--retry-after-cap-s` is waited
+out and the request retried **once**; a longer delay, an HTTP-date value or junk
+is not waited out at all, and the throttle is reported as observed rather than
+turned into a guess. The retried walk takes the gate again, hop by hop, like a
+first one.
+
+The cap's ceiling is arithmetic, not taste. The wait sits inside the metric
+budget alongside the retried request, so `cap + request budget < metric budget`
+(20 + 30 = 50 < 60). A larger cap is a wait `tokio` would cancel, reporting
+`indeterminate` after burning the whole metric budget, so raising it means
+raising the metric budget too.
 
 Three nested budgets bound the work, per request (30s), per metric (60s), and per
 endpoint (600s), and every one of them cancels the future rather than
@@ -124,6 +137,8 @@ shortens a sweep by overlapping different hosts and changes nothing about how an
 single host is treated. So:
 
 - Per endpoint: 7 requests with some latency (call it L per request) plus 6 gaps.
+  An endpoint that redirects costs one more gated request and one more gap per
+  hop, since every hop is a request in its own right.
 - Gap time per endpoint: 6 gaps × 2 seconds = 12 seconds.
 - Request time per endpoint: 7 requests × L.
 - With an average request latency of 300 ms (a rough middle ground for
