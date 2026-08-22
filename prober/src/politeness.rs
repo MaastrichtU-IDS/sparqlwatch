@@ -162,12 +162,9 @@ pub const DEFAULT_MIN_GAP: Duration = Duration::from_secs(2);
 /// before the first request, the first request, the wait the throttle asked
 /// for, and the retried request. The case a cap can protect is the ordinary
 /// one, where the throttle came back quickly, since refusing a request is cheap
-/// for a server that is refusing it:
-///
-///     gap (2) + wait (20) + retried request (30) = 52 < 60
-///
-/// So a larger cap eats that margin, and raising it makes a cancelled retry
-/// MORE likely rather than less.
+/// for a server that is refusing it: `gap (2) + wait (20) + retried request
+/// (30) = 52 < 60`. So a larger cap eats that margin, and raising it makes a
+/// cancelled retry MORE likely rather than less.
 ///
 /// No cap value makes the worst case fit. A first request that runs its whole
 /// 30s timeout before the throttle arrives costs 2 + 30 + 30 = 62 with a cap of
