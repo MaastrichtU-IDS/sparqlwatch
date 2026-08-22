@@ -36,15 +36,22 @@ three reasons, in increasing order of weight:
 2. This project's architecture is to store observations and derive views as
    queries, which is stage 2's whole thesis. A VoID projection is better as a
    later query over honest raw facts than as a lossy choice made at write time.
-3. **I could not verify VoID's `rdfs:domain` declarations from three sources**
-   while writing this plan, and on this project an unverified domain is a reason
-   to wait rather than guess: reusing `dqv:computedOn` and `dqv:isMeasurementOf`
-   for the not-measured fact entailed, under RDFS, that 548 declined pairs were
-   quality measurements that never happened. Nothing was wrong until a consumer
-   ran inference.
+3. **The domains confirm it.** I could not retrieve the VoID vocabulary from four
+   sources while writing this plan. The pre-execution review of this plan did,
+   and reports that **`void:classPartition` and `void:class` both carry
+   `rdfs:domain void:Dataset`**. That is attributed rather than independently
+   verified by me, so treat it as strong evidence rather than settled fact and
+   re-check if you rely on it for anything beyond this decision.
 
-   If a later slice wants VoID interop, **verify the domains first** and record
-   what you found.
+   Taken at face value it means reusing either term would entail, under RDFS,
+   that a `ContentSample` **is** a `void:Dataset`, which it is not. That is
+   exactly the defect this project already shipped once: the not-measured fact
+   reused `dqv:computedOn` and `dqv:isMeasurementOf`, whose domains entailed 548
+   declined pairs were quality measurements that never happened, and nothing was
+   wrong until a consumer ran inference.
+
+   So D1 is not caution in the absence of evidence. The evidence points the same
+   way.
 
 **D2. Truncation is a published fact, not an implementation detail.** A query with
 `LIMIT 200` that returns exactly 200 rows tells us nothing about whether a 201st
@@ -102,8 +109,14 @@ Counts you will need, which I verified rather than estimated:
 - **20 `MetricDef` struct literals** (12 in `src/metrics.rs`, 2 `src/resolve.rs`,
   2 `tests/cors_preflight.rs`, 4 `tests/end_to_end.rs`). `MetricDef` derives no
   `Default` and must not gain one, so a new field has to be added at each.
-- **26 `emit_nquads` call sites** (14 in `src/emit.rs`, 2 `src/main.rs`, 10
-  `tests/end_to_end.rs`).
+- **23 `emit_nquads` call sites.** An earlier draft of this plan said 26, from a
+  grep that counted lines rather than calls. Count them yourself.
+- **29 `run_sweep` call sites** (1 `src/main.rs`, 27 `tests/end_to_end.rs`, 1
+  `tests/live_smoke.rs`). The earlier draft did not mention these at all, which
+  was the review's Critical finding: it specified that `emit_nquads` gains a
+  parameter without ever saying how a `ContentSample` reaches it, and `run_sweep`
+  currently returns a three-element tuple that every one of those 29 sites
+  destructures.
 - `definitions_revision` destructures `MetricDef` with **no `..`**, so adding a
   field fails to compile until somebody decides whether it belongs in the
   published revision. It does: it changes what we publish. Put it in, and let the
@@ -223,7 +236,75 @@ git commit -m "feat(prober): a metric declares how many it will sample, checked 
 
 ---
 
-## Task 2: Carry the sample out, and publish it truthfully
+## Task 2: Return a `Sweep`, so the next side-fact costs one file
+
+This task changes **no behaviour**. It exists because the review found that the
+earlier draft never said how a `ContentSample` gets out of the sweep, and because
+the answer should not be a fourth tuple element.
+
+`run_sweep` returns `(Vec<MeasurementRow>, Vec<DeclarationsRead>, Vec<NotMeasured>)`.
+That tuple has already grown from one element to two to three, and **each growth
+edited all 29 call sites**. A content sample is the fourth side-fact, and the spec
+names more coming: properties per class, counts, published examples. Growing the
+tuple again buys nothing and pays the same 29-site cost every time.
+
+**Files:**
+- Modify: `prober/src/lib.rs`
+- Modify: `prober/src/main.rs`, `prober/tests/end_to_end.rs`, `prober/tests/live_smoke.rs`
+- Test: no new tests. The suite passing unchanged **is** the test, because a pure
+  refactor that changes a verdict is a failed refactor.
+
+**Interfaces:**
+```rust
+pub struct Sweep {
+    pub rows: Vec<MeasurementRow>,
+    pub declarations_read: Vec<DeclarationsRead>,
+    pub not_measured: Vec<NotMeasured>,
+}
+```
+`run_sweep(...) -> Sweep`. Task 3 adds `content_samples` as a field, touching no
+caller.
+
+- [ ] **Step 1: Count the call sites yourself**
+
+Run `grep -rn "run_sweep(" prober/src prober/tests | grep -v "pub async fn"`.
+Expect 29. Expect the suite to be red until the last one is converted; that is
+normal for this task and not a signal to change approach.
+
+- [ ] **Step 2: Convert**
+
+Most call sites destructure and ignore two of the three, in the shape
+`let (rows, _read, _nm) = run_sweep(...)`. Those become `let sweep = run_sweep(...)`
+plus `sweep.rows`, or a destructuring `let Sweep { rows, .. } = ...` where that
+reads better. Prefer whichever leaves the test's intent clearest, and do not
+mechanically rewrite an assertion while you are in there.
+
+- [ ] **Step 3: Prove nothing moved**
+
+The suite must pass with **exactly** the counts it started at: 247 passed, 0
+failed, 2 ignored. Not "green", the same numbers. If a count changes you have
+added or lost a test, which this task must not do.
+
+Then run a real sweep from `prober/` and diff its output against a run from
+before the refactor, ignoring `elapsedMs` (wall-clock, so it differs by design):
+
+```
+cargo run -q -- --at 2026-08-22T11:00:00Z --out <scratchpad>/after.nq
+```
+
+Report whether the quad sets are identical apart from timings. A pure refactor
+that changes the published graph is not a pure refactor.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add prober/src prober/tests
+git commit -m "refactor(prober): run_sweep returns a Sweep, not a growing tuple"
+```
+
+---
+
+## Task 3: Carry the sample out, and publish it truthfully
 
 **Files:**
 - Modify: `prober/src/lib.rs` (retain the bindings, build the samples)
@@ -247,7 +328,9 @@ git commit -m "feat(prober): a metric declares how many it will sample, checked 
       pub truncated: bool,
   }
   ```
-- `emit_nquads` gains `content_samples: &[ContentSample]`. **26 call sites**, and
+- `Sweep` gains `pub content_samples: Vec<ContentSample>`, which is why Task 2
+  came first: adding a field touches **no** `run_sweep` caller.
+- `emit_nquads` gains `content_samples: &[ContentSample]`. **23 call sites**, and
   `main.rs` is among them: update every one in this task, so the bin target never
   sits non-compiling.
 - Emitted per sample, in the run graph, using **sparqlwatch-owned predicates
@@ -320,9 +403,20 @@ fn a_sample_never_shares_a_subject_with_a_measurement_or_a_not_measured_fact() {
 // end_to_end.rs
 #[tokio::test]
 async fn the_classes_metric_publishes_the_iris_it_bound() {
-    // A mock returning three class IRIs must publish three sampled values, and
-    // the verdict must be unchanged: this slice adds a fact, it does not move a
-    // verdict.
+    // Assert the VALUES and their ORDER, not the count. A test that checks only
+    // "three sampled values" is passed by an implementation that publishes three
+    // placeholders, and this project has shipped exactly that kind of test
+    // before.
+    const A: &str = "http://example.org/Zebra";
+    const B: &str = "http://example.org/Apple";
+    const C: &str = "http://example.org/Mango";
+    // Deliberately not alphabetical: the endpoint's order is evidence, and an
+    // implementation that sorts must fail this.
+    let sample = /* sweep a mock returning A, B, C in that order */;
+    assert_eq!(sample.values, vec![A.to_string(), B.to_string(), C.to_string()],
+               "the IRIs the endpoint returned, in its order, not ours");
+    // And the verdict has not moved: this slice adds a fact.
+    assert_eq!(verdict_of("classes"), Verdict::Verified);
 }
 
 #[tokio::test]
@@ -355,9 +449,15 @@ async fn a_declined_metric_publishes_no_sample_and_still_says_why() {
 In `lib.rs`, where the observation is resolved, keep `o.bindings` when the
 metric declares a `sample_limit`, and build one `ContentSample` per (endpoint,
 metric that declared one and produced bindings). Truncated is
-`values.len() >= limit`, and use `>=` rather than `==` deliberately: a probe that
-somehow returned more than the cap is still a sample we cannot call complete, and
-`==` would silently call it complete.
+`values.len() >= limit`, and `>=` rather than `==` is deliberate: an endpoint that
+ignores `LIMIT` and returns more than the cap has still given us a sample we
+cannot call complete, and `==` would call it complete.
+
+**Pin that choice, because the earlier draft argued it in prose and tested it
+nowhere.** A test where the probe returns MORE values than the declared limit must
+report `truncated: true`; changing `>=` to `==` must fail it. Endpoints ignoring
+`LIMIT` is not hypothetical, and the failure mode is the one this slice exists to
+prevent: a list a reader believes is complete.
 
 Emit in `emit.rs`, purely from the inputs. Do not sort, filter or deduplicate the
 values: `SELECT DISTINCT` already deduplicated, and reordering discards evidence
@@ -365,11 +465,19 @@ about the endpoint.
 
 - [ ] **Step 4: Prove the tests are load-bearing**
 
-Mutations, each verified applied: always set `truncated: false`; always set it
-true; publish the values sorted (the order test must fail, and if there is no
-order test, that is a gap to report); build the sample IRI from the measurement
-counter (the disjointness test must fail); emit `void:classPartition` instead of
-`sampledValue` (the foreign-vocabulary test must fail). Restore, `touch`, re-run.
+Mutations, each verified applied:
+
+- always set `truncated: false`, and always set it `true`
+- **change `>=` to `==`** in the truncation test (the over-limit test must fail)
+- publish the values sorted (the order assertion must fail)
+- publish placeholder IRIs instead of the bound ones (the value assertion must
+  fail; if it does not, the test is checking counts and needs tightening)
+- build the sample IRI from the measurement counter (the disjointness test must
+  fail)
+- emit `void:classPartition` instead of `sampledValue` (the foreign-vocabulary
+  test must fail)
+
+Restore after each, `touch`, re-run.
 
 - [ ] **Step 5: Commit**
 
@@ -380,7 +488,7 @@ git commit -m "feat(prober): publish the classes we sampled, and whether we saw 
 
 ---
 
-## Task 3: Documentation, and a real sample
+## Task 4: Documentation, and a real sample
 
 **Files:**
 - Modify: `prober/README.md`
