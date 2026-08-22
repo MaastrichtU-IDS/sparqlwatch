@@ -298,6 +298,39 @@ async fn every_public_probe_goes_through_the_gate() {
             "six gated probes to one host wait five gaps, took {:?}", t0.elapsed());
 }
 
+/// The validation exists in `main.rs` and is unit-tested there, but a unit
+/// test cannot see whether `main` actually calls it: deleting the call would
+/// leave every one of those tests green. So this runs the real binary, which is
+/// the only thing that can tell.
+///
+/// It also pins the ORDER. The refusal has to come before any probing, and in
+/// fact before the endpoint and metric files are even read: an operator who
+/// mistyped a gap should be told so immediately, not after a sweep of
+/// strangers' servers has published a run full of `indeterminate`.
+#[test]
+fn the_binary_refuses_a_gap_that_cannot_fit_before_it_probes_anything() {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_sparqlwatch-prober"))
+        .args([
+            "--at", "2026-01-01T00:00:00Z",
+            "--min-gap-ms", "70000",
+            // Files that do not exist, so a run that got as far as reading them
+            // would fail for the wrong reason and this test would notice.
+            "--endpoints", "no-such-endpoints.toml",
+            "--metrics", "no-such-metrics.toml",
+            "--out", "/dev/null",
+        ])
+        .output()
+        .expect("the prober binary should be runnable");
+    assert!(!out.status.success(), "a gap that cannot fit is a configuration error");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("--min-gap-ms"),
+            "the operator is told which flag is wrong, got: {stderr}");
+    assert!(stderr.contains("metric budget"),
+            "and which relationship it breaks, got: {stderr}");
+    assert!(!stderr.contains("no-such-endpoints.toml"),
+            "the gap is refused before the endpoint list is even read, got: {stderr}");
+}
+
 #[tokio::test]
 async fn a_retry_after_within_the_cap_is_waited_out_and_the_request_retried() {
     let server = an_endpoint_that_throttles(1, 429, "1").await;
