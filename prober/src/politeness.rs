@@ -30,17 +30,32 @@ use std::time::{Duration, Instant};
 /// not thrown away before that decision is made, even though it plays no
 /// part in the final key.
 ///
-/// No URL crate is a dependency, so this is hand-rolled: strip a scheme if
-/// present, take everything up to the first `/` as the authority, drop
-/// anything up to and including the last `@` (userinfo), lowercase, and
+/// No URL crate is a dependency, so this is hand-rolled: lowercase, strip a
+/// scheme if present, take everything up to the first `/`, `?` or `#` as the
+/// authority, drop anything up to and including the last `@` (userinfo), and
 /// strip a port that is the default for whichever scheme was seen. A string
-/// with no recognisable scheme, slash or `@` falls straight through this
+/// with no recognisable scheme, delimiter or `@` falls straight through this
 /// same pipeline and comes out as its own trimmed, lowercased self: the
 /// registry is seeded from a real-world dump that certainly contains junk,
 /// and collapsing every unparseable string into one constant bucket would
 /// serialise unrelated hosts behind each other.
+///
+/// The lowercasing happens BEFORE the scheme is matched, not after, because
+/// schemes are case-insensitive (RFC 3986 section 3.1) and a real-world dump
+/// of 548 URLs is exactly where `HTTP://` turns up. Matching case-sensitively
+/// stripped nothing from such a URL, and the first `/` of its `//` then made
+/// the authority `"http:"`: one shared bucket for every mixed-case URL in the
+/// registry, serialising unrelated hosts behind each other, and a second
+/// bucket for a host that already had one, which is the direction that lets
+/// two requests to one host overlap.
+///
+/// The authority ends at the first `/`, `?` or `#`, whichever comes first, and
+/// not at the `/` alone: `http://example.org?query=x` has no path at all, so
+/// cutting on `/` only carried the query into the key and gave one host as
+/// many buckets as it had query strings.
 pub fn host_key(url: &str) -> String {
-    let s = url.trim();
+    let s = url.trim().to_ascii_lowercase();
+    let s = s.as_str();
     let (scheme, rest) = if let Some(r) = s.strip_prefix("https://") {
         (Some("https"), r)
     } else if let Some(r) = s.strip_prefix("http://") {
@@ -48,7 +63,7 @@ pub fn host_key(url: &str) -> String {
     } else {
         (None, s)
     };
-    let authority = match rest.find('/') {
+    let authority = match rest.find(['/', '?', '#']) {
         Some(i) => &rest[..i],
         None => rest,
     };
@@ -59,16 +74,15 @@ pub fn host_key(url: &str) -> String {
         Some(i) => &authority[i + 1..],
         None => authority,
     };
-    let host = authority.to_ascii_lowercase();
     let host = match scheme {
-        Some("https") => host.strip_suffix(":443").unwrap_or(&host).to_string(),
-        Some("http") => host.strip_suffix(":80").unwrap_or(&host).to_string(),
-        _ => host,
+        Some("https") => authority.strip_suffix(":443").unwrap_or(authority),
+        Some("http") => authority.strip_suffix(":80").unwrap_or(authority),
+        _ => authority,
     };
     if host.is_empty() {
-        return s.to_ascii_lowercase();
+        return s.to_string();
     }
-    host
+    host.to_string()
 }
 
 /// The three shapes a `Retry-After` header value can take. Not an `Option`,
@@ -326,10 +340,38 @@ mod tests {
             ("http://Example.ORG/a", "http://example.org/b"),
             ("http://user:pw@example.org/a", "http://example.org/b"),
             ("http://example.org/a?query=x", "http://example.org/b"),
+            // A scheme is case-insensitive (RFC 3986 section 3.1), and a
+            // real-world dump contains oddly-cased URLs. Case-sensitive
+            // matching left this URL unstripped and keyed it as "http:".
+            ("HTTP://Example.ORG/a", "http://example.org/a"),
+            ("HTTPS://Example.ORG/a", "https://example.org/a"),
+            ("HtTp://example.org/a", "http://example.org/a"),
+            // No path at all, so the authority ends at the `?` or the `#`.
+            // Cutting on `/` alone gave one host three buckets, and three
+            // buckets means three requests to it can overlap.
+            ("http://example.org?query=x", "http://example.org/a"),
+            ("http://example.org#frag", "http://example.org/a"),
+            ("http://example.org?query=x", "http://example.org#frag"),
+            // The two defects together, which is the shape a registry dump
+            // actually contains.
+            ("HTTP://Example.ORG?query=x", "http://example.org/a"),
+            ("HTTP://Example.ORG:80?query=x", "http://example.org/a"),
         ] {
             assert_eq!(host_key(a), host_key(b), "{a} and {b} are one server");
         }
+        assert_eq!(host_key("HTTP://Example.ORG/a"), "example.org");
+        assert_eq!(host_key("HTTPS://other.example/b"), "other.example");
+        assert_eq!(host_key("http://example.org?query=x"), "example.org");
+        assert_eq!(host_key("http://example.org#frag"), "example.org");
+        assert_eq!(host_key("http://example.org/a"), "example.org");
         assert_ne!(host_key("http://a.example.org/x"), host_key("http://b.example.org/x"));
+        // Unrelated hosts must not share a bucket just because their scheme is
+        // shouted. Every uppercase-scheme URL used to key as "http:", which
+        // serialised the whole registry behind whichever of them came first.
+        assert_ne!(host_key("HTTP://a.example.org/x"), host_key("HTTP://b.example.org/x"),
+                   "an uppercase scheme must not collapse two hosts into one bucket");
+        assert_ne!(host_key("HTTP://Example.ORG/a"), host_key("HTTPS://other.example/b"));
+        assert_ne!(host_key("HTTP://a.example.org?query=x"), host_key("HTTP://b.example.org?query=x"));
         // A port is part of the server: two engines commonly share a host, and
         // serialising them together would halve our throughput for no politeness
         // gain. Note this differs from `declare::same_endpoint`, which normalises a
