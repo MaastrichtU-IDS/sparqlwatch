@@ -57,10 +57,12 @@ pub struct Sweep {
     pub declarations_read: Vec<DeclarationsRead>,
     pub not_measured: Vec<NotMeasured>,
     /// What the enumerating metrics saw, one entry per (endpoint, metric that
-    /// declared a `sample_limit` and bound at least one value). A metric that
-    /// declared none contributes nothing here, and neither does one whose
-    /// probe bound nothing: an empty list is not a sample, and the
-    /// measurement row already says `absent`.
+    /// declared a `sample_limit`, reached a positive verdict, and bound at
+    /// least one value). A metric that declared no `sample_limit` contributes
+    /// nothing here; neither does one whose probe bound nothing, because an
+    /// empty list is not a sample and the measurement row already says
+    /// `absent`; and neither does one the resolver would not confirm, because
+    /// a sample is an assertion and an unconfirmed observation supports none.
     pub content_samples: Vec<ContentSample>,
 }
 
@@ -258,8 +260,29 @@ async fn probe_endpoint(
         // which, for a task whose whole purpose is knowing what is in an
         // endpoint before writing a query.
         if let Some(limit) = def.sample_limit {
+            // Gated on the VERDICT, not on the response status. A sample is an
+            // assertion about the endpoint's data, so it may only be published
+            // where the resolver confirmed the capability: `Verified` or
+            // `UndeclaredButVerified`. Everything else, `Indeterminate` above
+            // all, means we do not know what this endpoint holds, and a graph
+            // that says "we could not determine whether this endpoint has
+            // classes" must not also say "here are its 59 classes, complete".
+            //
+            // The rejected alternative was to re-check the status here, the way
+            // `resolve`'s `SelectIris` arm checks `answered_ok`. That would be
+            // the third copy of the same rule (`resolve_fetch` and the
+            // `Liveness` positive case were both fixed by adding one), so the
+            // rules could drift apart in silence and a future change to them
+            // would have to find every copy. Riding on the verdict means the
+            // sample and the measurement cannot disagree by construction, and a
+            // change to the status rules carries the sample with it.
+            let confirmed = matches!(verdict, Verdict::Verified | Verdict::UndeclaredButVerified);
             if let Ok(o) = &observed {
-                if !o.bindings.is_empty() {
+                // The empty check stays alongside the verdict gate rather than
+                // relying on it: no current kind reaches a positive verdict
+                // with nothing bound, and if one ever does, a sample of size
+                // zero is still not a sample.
+                if confirmed && !o.bindings.is_empty() {
                     content_samples.push(ContentSample {
                         endpoint: ep.to_string(),
                         metric_id: def.id.clone(),

@@ -1729,3 +1729,92 @@ async fn a_declined_metric_publishes_no_sample_and_still_says_why() {
     // The cheap counterpart still measured, and its verdict has not moved.
     assert_eq!(verdict_of(&nq, "has-classes"), Verdict::Verified);
 }
+
+/// An endpoint that answers every query with `status` and a SPARQL-results
+/// body carrying real bindings. Not hypothetical: a service under load, or an
+/// intermediary in front of one, answers `429`/`503` with whatever body it has,
+/// and `select_iris` parses bindings out of any status.
+async fn an_endpoint_answering(status: u16, values: &[&str]) -> MockServer {
+    let bindings: Vec<String> = values
+        .iter()
+        .map(|v| format!(r#"{{"c":{{"type":"uri","value":"{v}"}}}}"#))
+        .collect();
+    let body = format!(
+        r#"{{"head":{{"vars":["c"]}},"results":{{"bindings":[{}]}}}}"#,
+        bindings.join(",")
+    );
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/sparql"))
+        .respond_with(
+            ResponseTemplate::new(status)
+                .insert_header("content-type", "application/sparql-results+json")
+                .set_body_string(body),
+        )
+        .mount(&server)
+        .await;
+    server
+}
+
+#[tokio::test]
+async fn a_status_the_resolver_distrusts_publishes_no_sample_at_all() {
+    // The verdict and the sample are asserted together in one test, because
+    // agreement between them is the whole point: a graph saying both "we could
+    // not determine whether this endpoint has classes" and "here are its
+    // classes, complete" is worse than either half alone, since a consumer
+    // joining on `sampledFrom` never sees the measurement that contradicts it.
+    for status in [429u16, 500, 502, 503] {
+        let server = an_endpoint_answering(status, &[ZEBRA, APPLE]).await;
+        let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
+        let url = format!("{}/sparql", server.uri());
+        let def = enumerating_metric(3);
+        let Sweep { rows, declarations_read: read, not_measured, content_samples } =
+            without_deadlocking(run_sweep(
+                std::slice::from_ref(&url),
+                std::slice::from_ref(&def),
+                &[],
+                &client,
+                Budget::default(),
+            ))
+            .await;
+
+        assert_eq!(
+            rows.iter().map(|r| r.verdict).collect::<Vec<_>>(),
+            vec![Verdict::Indeterminate],
+            "status {status} carrying bindings is not the engine confirming anything"
+        );
+        assert!(
+            content_samples.is_empty(),
+            "status {status}: the resolver refused to trust this response, so there is \
+             nothing to publish a sample from: {content_samples:?}"
+        );
+
+        // And nothing reaches the graph either: a requirement met in memory and
+        // lost on disk is not met.
+        let nq = emit_nquads(RunEmission {
+            run: &RunId("test".into()),
+            generated_at: "2026-08-22T08:00:00Z",
+            metric_revision: "test-revision",
+            rows: &rows,
+            declarations_read: &read,
+            not_measured: &not_measured,
+            max_cost: Cost::Expensive,
+            content_samples: &content_samples,
+        })
+        .unwrap();
+        assert_eq!(
+            verdict_of(&nq, "classes-small"),
+            Verdict::Indeterminate,
+            "status {status}: the measurement is unchanged by this gate"
+        );
+        assert!(
+            !nq.contains("urn:sparqlwatch:sample"),
+            "status {status}: no sample quad of any kind, so the graph cannot contradict itself"
+        );
+        assert!(
+            !nq.contains(ZEBRA),
+            "status {status}: and no value from the distrusted body leaks in by another route"
+        );
+    }
+}
+
