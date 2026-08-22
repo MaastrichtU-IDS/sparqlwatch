@@ -4,9 +4,10 @@
 //!
 //! The pure functions come first and are tested on their own, so the identity
 //! and header decisions can be read without any locking in the way. The gate
-//! below is the only stateful thing here, and the two guarantees it gives
-//! (never two requests in flight to one host, and a minimum pause between
-//! consecutive requests to one host) are what stand between this crate and an
+//! below is the only stateful thing here, and the guarantees it gives (never
+//! two requests in flight to one host, a minimum pause between consecutive
+//! requests to one host, and nothing at all to a host before the instant it
+//! asked us to come back at) are what stand between this crate and an
 //! operator who blocks us.
 
 use std::collections::HashMap;
@@ -180,19 +181,22 @@ pub const DEFAULT_RETRY_AFTER_CAP: Duration = Duration::from_secs(20);
 /// 1. Never two requests in flight to one host.
 /// 2. At least `min_gap` between one request's release and the next one's
 ///    start on that host.
+/// 3. Nothing at all to a host before the instant it asked us to come back at,
+///    once `stand_down` has recorded one.
 pub struct Politeness {
     /// Host key to per-host state. A `std::sync::Mutex` on purpose: its guard
     /// is not `Send`, so holding it across an `await` fails to compile in a
     /// future that must be `Send`. That makes "the map lock is held while
     /// waiting for a host", which would silently serialise the whole sweep
     /// behind one slow server, a build error rather than a stall no test would
-    /// catch. Hold it only long enough to clone the `Arc` out.
+    /// catch. Hold it only long enough to clone the `Arc` out or read the
+    /// stand-down instant beside it.
     ///
     /// The map only grows, one entry per distinct host key. With a registry of
     /// a few hundred endpoints that is a few hundred small entries for the
     /// life of a sweep, so there is nothing to evict and no eviction to get
     /// wrong.
-    hosts: std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<Option<Instant>>>>>,
+    hosts: std::sync::Mutex<HashMap<String, Host>>,
     /// The pause between consecutive requests to one host, measured from
     /// release.
     min_gap: Duration,
@@ -200,6 +204,27 @@ pub struct Politeness {
     /// is what actually honours a header (see `honour` above); the gate itself
     /// never consumes it.
     retry_after_cap: Duration,
+}
+
+/// Everything the gate remembers about one host.
+///
+/// Both fields are read and written only under the map lock, which is held for
+/// a lookup and never across an await. The lock inside `serialiser` is the one
+/// that is held across an await, and it is reached through an `Arc` cloned out
+/// of here precisely so the map lock does not have to be.
+struct Host {
+    /// Serialises requests to this host, and carries the instant the last
+    /// request to it was released, which is what the gap is measured from.
+    serialiser: Arc<tokio::sync::Mutex<Option<Instant>>>,
+    /// The earliest instant we may send this host anything at all. `None`
+    /// until the host tells us to come back later; see `stand_down`.
+    not_before: Option<Instant>,
+}
+
+impl Host {
+    fn new() -> Host {
+        Host { serialiser: Arc::new(tokio::sync::Mutex::new(None)), not_before: None }
+    }
 }
 
 impl Politeness {
@@ -241,47 +266,117 @@ impl Politeness {
         self.retry_after_cap
     }
 
-    /// Wait until this URL's host is free **and** the minimum gap since that
-    /// host's last release has elapsed, then take it. The returned guard holds
-    /// the host until it is dropped, and dropping it stamps the release time.
+    /// Wait until this URL's host is free, the minimum gap since that host's
+    /// last release has elapsed **and** any instant the host asked us to come
+    /// back at has passed, then take it. The returned guard holds the host
+    /// until it is dropped, and dropping it stamps the release time.
     ///
     /// The gap is measured from **release**, not from acquisition, so a slow
     /// request does not eat the pause that follows it: a 30-second query
     /// followed immediately by another request is exactly the case the pause
     /// exists for, and measuring from the start would let it through.
     ///
+    /// A host that has been told to stand down waits for that instant too, and
+    /// the wait is the LONGER of the two, not the sum: both are "not before
+    /// this moment" conditions on the same clock.
+    ///
     /// The sleep happens while holding the per-host lock, which is what makes
-    /// the two guarantees one thing: a waiter cannot slip in during another
-    /// waiter's pause.
+    /// the guarantees one thing rather than three: a waiter cannot slip in
+    /// during another waiter's pause, and a host that asked us to come back in
+    /// five minutes is not asked something else in the meantime.
     pub async fn acquire(&self, url: &str) -> HostGuard {
         let key = host_key(url);
         // Cloning the `Arc` out is the entire critical section for the map
         // lock. Everything that waits happens after the guard is dropped.
-        let host = {
+        let serialiser = {
             // A poisoned map lock means a panic happened elsewhere while
             // holding it. The guarded work is a `HashMap` lookup with no user
             // code in it, so there is nothing here for a panic to have left
             // inconsistent, and refusing every later acquire would turn one
             // panic into a sweep that probes nothing.
             let mut hosts = self.hosts.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            Arc::clone(
-                hosts
-                    .entry(key)
-                    .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(None))),
-            )
+            Arc::clone(&hosts.entry(key.clone()).or_insert_with(Host::new).serialiser)
         };
-        let guard = host.lock_owned().await;
+        let guard = serialiser.lock_owned().await;
+        // Read the stand-down AFTER taking the host, not before: a throttle
+        // recorded while we were queueing for this host is exactly the one we
+        // must not walk into. Nothing can record one while we hold the host,
+        // since recording one means having had a response from it, which means
+        // having held it.
+        //
+        // A second, separate critical section rather than one that spans the
+        // await, because the map lock's guard is not `Send` and holding it
+        // across the await would not compile. That is the guard rail working,
+        // not an obstacle: see the field's comment.
+        let not_before = {
+            let hosts = self.hosts.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            hosts.get(&key).and_then(|h| h.not_before)
+        };
+        let mut wait = Duration::ZERO;
         if let Some(released) = *guard {
             // `checked_sub` rather than a subtraction: `Duration` subtraction
             // panics on underflow, and a release older than the gap is the
             // common case, not an error.
             if let Some(remaining) = self.min_gap.checked_sub(released.elapsed()) {
-                if !remaining.is_zero() {
-                    tokio::time::sleep(remaining).await;
-                }
+                wait = remaining;
             }
         }
+        if let Some(until) = not_before {
+            // `saturating_duration_since` rather than a subtraction: an
+            // instant already past is the common case once a sweep has moved
+            // on, not an error.
+            wait = wait.max(until.saturating_duration_since(Instant::now()));
+        }
+        if !wait.is_zero() {
+            tokio::time::sleep(wait).await;
+        }
         HostGuard { guard }
+    }
+
+    /// Record that this URL's host asked us to come back in `delay`, so that
+    /// EVERY later request to it waits, not just the retry of the request that
+    /// was told.
+    ///
+    /// This is what makes honouring a `Retry-After` honest. A delay honoured
+    /// only by the request that received it means we wait twenty seconds
+    /// before repeating that one question and knock again with the next
+    /// metric's question after the ordinary gap: we said we would come back
+    /// later and then came back immediately with something else. A throttle is
+    /// about the server, so it is remembered on the server.
+    ///
+    /// Deliberately synchronous, and deliberately not bounded here:
+    ///
+    /// - Synchronous because it takes the map lock and nothing else. It is
+    ///   called from the retry path, which runs between chain walks with no
+    ///   host guard held, and it must stay callable from there without a
+    ///   second await that could queue behind a host it is about to defer.
+    /// - Unbounded because the caller already decides what IT is willing to
+    ///   wait out (`honour` and the cap), and this is a different question: how
+    ///   long the host asked to be left alone. An hour recorded here defers the
+    ///   host for an hour, the metric and endpoint budgets cancel the acquires
+    ///   that wait on it, and those metrics report `indeterminate`, which is
+    ///   exactly true: the server told us to go away and we never got to ask.
+    ///   A second bound here would be a second place deciding how long we wait.
+    ///
+    /// Only ever extends: a shorter delay arriving after a longer one does not
+    /// bring the host back early, since the longer instruction has not expired
+    /// just because a later request was answered.
+    pub fn stand_down(&self, url: &str, delay: Duration) {
+        // `checked_add`, because `Instant + Duration` panics on overflow and
+        // `Retry-After` is a header a stranger controls: the delta-seconds
+        // form parses as an `i64`, so `Retry-After: 9223372036854775807` is a
+        // well-formed value no clock can represent. An instant we cannot
+        // represent is not an instruction we can keep, and the request that
+        // saw it is reported as the throttle it was.
+        let Some(until) = Instant::now().checked_add(delay) else {
+            tracing::warn!(url, delay_s = delay.as_secs(),
+                           "Retry-After is too far in the future to represent; host not deferred");
+            return;
+        };
+        let key = host_key(url);
+        let mut hosts = self.hosts.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let host = hosts.entry(key).or_insert_with(Host::new);
+        host.not_before = host.not_before.max(Some(until));
     }
 }
 

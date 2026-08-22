@@ -86,6 +86,98 @@ async fn the_gap_is_measured_from_release_not_from_acquisition() {
             "a slow request must not consume the pause that follows it");
 }
 
+/// A host that told us to come back later is left alone by EVERY request, not
+/// just by the retry of the one it answered. The gap is zero here, so the only
+/// thing that can produce a delay is the stand-down.
+#[tokio::test]
+async fn a_host_that_asked_us_to_come_back_later_is_left_alone_until_then() {
+    let p = Politeness::new(Duration::ZERO);
+    p.stand_down("http://example.org/a", Duration::from_millis(300));
+    let t0 = Instant::now();
+    drop(p.acquire("http://example.org/a").await);
+    assert!(t0.elapsed() >= Duration::from_millis(300),
+            "the host was deferred, not merely spaced, took {:?}", t0.elapsed());
+}
+
+/// The stand-down is a property of the HOST, so it defers a different question
+/// to the same server. This is the whole point: it is the next metric's probe,
+/// not our own retry, that used to ignore the instruction.
+#[tokio::test]
+async fn a_stand_down_defers_every_url_on_that_host() {
+    let p = Politeness::new(Duration::ZERO);
+    p.stand_down("http://example.org/sparql?query=one", Duration::from_millis(300));
+    let t0 = Instant::now();
+    drop(p.acquire("http://example.org/other").await);
+    assert!(t0.elapsed() >= Duration::from_millis(300),
+            "a second question to a deferred host waits too, took {:?}", t0.elapsed());
+}
+
+#[tokio::test]
+async fn a_stand_down_on_one_host_does_not_defer_another() {
+    let p = Politeness::new(Duration::ZERO);
+    p.stand_down("http://a.example.org/x", Duration::from_secs(30));
+    let t0 = Instant::now();
+    drop(p.acquire("http://b.example.org/x").await);
+    assert!(t0.elapsed() < Duration::from_secs(1),
+            "one server asking to be left alone says nothing about another");
+}
+
+/// The gate does not second-guess how long the server asked for. An hour is an
+/// hour: the metric and endpoint budgets are what cancel the resulting waits,
+/// and the metrics then read `indeterminate`, which is exactly true because we
+/// never got to ask. A cap here would be a second place deciding how long we
+/// wait.
+///
+/// The assertion is that the acquire is still waiting after a moment, which is
+/// one-sided in the same sense as every floor above: 200ms is nowhere near the
+/// hour under test, so only a gate that bounded the wait itself can reach it.
+#[tokio::test]
+async fn an_hour_long_stand_down_is_not_shortened_by_the_gate() {
+    let p = Politeness::new(Duration::ZERO);
+    p.stand_down("http://example.org/a", Duration::from_secs(3600));
+    let waited = tokio::time::timeout(Duration::from_millis(200), p.acquire("http://example.org/a")).await;
+    assert!(waited.is_err(),
+            "a host that asked for an hour must still be waiting; the budgets cancel this, not the gate");
+}
+
+/// A later, shorter instruction does not bring a host back early. A server that
+/// said "five minutes" has not withdrawn that by answering something else, and
+/// taking the shorter of the two would let one stale response undo a
+/// stand-down.
+#[tokio::test]
+async fn a_shorter_stand_down_does_not_undo_a_longer_one() {
+    let p = Politeness::new(Duration::ZERO);
+    p.stand_down("http://example.org/a", Duration::from_secs(3600));
+    p.stand_down("http://example.org/a", Duration::from_millis(1));
+    let waited = tokio::time::timeout(Duration::from_millis(200), p.acquire("http://example.org/a")).await;
+    assert!(waited.is_err(), "the longer instruction stands");
+}
+
+/// A stand-down recorded while we were already queued for the host binds us
+/// too. It has to be read after the host is taken, not before: the request we
+/// most need to hold back is the one that was waiting its turn when the server
+/// said to go away, and it read the state before that was true.
+#[tokio::test]
+async fn a_stand_down_recorded_while_we_queued_is_still_honoured() {
+    let p = std::sync::Arc::new(Politeness::new(Duration::ZERO));
+    let held = p.acquire("http://example.org/a").await;
+    let waiter = tokio::spawn({
+        let p = p.clone();
+        async move {
+            let t0 = Instant::now();
+            let _g = p.acquire("http://example.org/a").await;
+            t0.elapsed()
+        }
+    });
+    // Long enough for the spawned task to be queued on the host we hold.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    p.stand_down("http://example.org/a", Duration::from_millis(400));
+    drop(held);
+    let elapsed = waiter.await.expect("the queued acquire should finish");
+    assert!(elapsed >= Duration::from_millis(400),
+            "a stand-down recorded while we queued still binds us, took {elapsed:?}");
+}
+
 // ---------------------------------------------------------------------------
 // The gate wired into `Client`: every outbound request passes through it,
 // redirect hops included, and a `Retry-After` we can afford is waited out.
@@ -407,4 +499,48 @@ async fn a_server_that_throttles_twice_is_not_asked_a_third_time() {
     assert_eq!(o.status, Some(429), "the second throttle is what we report");
     assert_eq!(server.received_requests().await.unwrap().len(), 2,
                "one attempt and exactly one retry");
+}
+
+/// The finding this fix closes: a throttle used to bind our own retry and
+/// nothing else, so the next metric's probe knocked on the same host after the
+/// ordinary gap. Both requests here are throttled, so the second stand-down
+/// outlives the first probe, and the gap is zero, so nothing but the
+/// stand-down can delay the probe that follows.
+#[tokio::test]
+async fn a_throttled_host_defers_the_next_probe_and_not_just_our_retry() {
+    let server = an_endpoint_that_throttles(2, 429, "1").await;
+    let c = client(Duration::ZERO, CAP);
+    let url = format!("{}/sparql", server.uri());
+    let first = without_deadlocking(c.ask(&url, "ASK{}")).await;
+    assert_eq!(first.status, Some(429), "both attempts were throttled");
+
+    let t0 = Instant::now();
+    let second = without_deadlocking(c.cors(&url, "ASK{}")).await;
+    assert_eq!(second.status, Some(200), "and the next metric eventually got its answer");
+    assert!(t0.elapsed() >= Duration::from_millis(750),
+            "the next metric waited out the throttle instead of knocking after the gap, took {:?}",
+            t0.elapsed());
+}
+
+/// A delay beyond the cap still defers the host. We decline to wait for our own
+/// retry, because that wait would burn the metric budget for one question, but
+/// declining to wait is not permission to ask something else: the server told
+/// us to go away either way.
+#[tokio::test]
+async fn a_beyond_cap_retry_after_still_defers_the_host() {
+    let server = an_endpoint_that_throttles(1, 429, "1").await;
+    // A zero cap refuses to wait out any delay at all, which is what makes the
+    // one second here beyond the cap without costing the suite a real wait.
+    let c = client(Duration::ZERO, Duration::ZERO);
+    let url = format!("{}/sparql", server.uri());
+    let t0 = Instant::now();
+    let first = without_deadlocking(c.ask(&url, "ASK{}")).await;
+    assert_eq!(first.status, Some(429), "the throttle is reported as observed");
+    assert!(t0.elapsed() < Duration::from_secs(5), "and no wait was taken for our own retry");
+    assert_eq!(server.received_requests().await.unwrap().len(), 1, "beyond the cap means no retry");
+
+    let t1 = Instant::now();
+    without_deadlocking(c.cors(&url, "ASK{}")).await;
+    assert!(t1.elapsed() >= Duration::from_millis(750),
+            "the host was still deferred for the next probe, took {:?}", t1.elapsed());
 }

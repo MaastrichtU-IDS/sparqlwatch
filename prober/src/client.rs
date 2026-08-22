@@ -184,11 +184,14 @@ impl Client {
     /// chain walk: it takes the gate for each hop and releases it before
     /// returning, so there is no guard here to wait inside. The retried walk
     /// reacquires, which means the retried request is separately excluded and
-    /// separately spaced, exactly like a first one. What is given up is that
-    /// another task could take this host during our wait; the two guarantees
-    /// the gate exists for still hold for that task's request, and a host that
-    /// throttles is hit by the sweep's other metrics anyway, since no throttle
-    /// is remembered per host.
+    /// separately spaced, exactly like a first one.
+    ///
+    /// Waiting outside a guard would let another metric's probe walk into the
+    /// host we were just told to leave alone, so the throttle is recorded on
+    /// the host itself (`retry_delay` calls `Politeness::stand_down`) before
+    /// this sleep begins. The sleep here is therefore our own retry keeping
+    /// its own promise, and the gate keeps the same promise for every other
+    /// request to that host, including ones this task knows nothing about.
     ///
     /// The retried attempt is returned WHOLE, so the reported `elapsed_ms` is
     /// the second walk's own request time and excludes the wait. Our politeness
@@ -209,7 +212,53 @@ impl Client {
         tracing::info!(url, delay_ms = delay.as_millis() as u64,
                        "endpoint asked us to come back; waiting it out and retrying once");
         tokio::time::sleep(delay).await;
-        attempt().await
+        let retried = attempt().await;
+        // One retry and not a loop, but the retried response can carry an
+        // instruction of its own, and an instruction is about the host rather
+        // than about this request: a server that throttles the retry as well is
+        // telling the whole sweep to go away, not just this metric. There is no
+        // second retry to decide, so only the recording is wanted here.
+        self.note_throttle(url, &retried);
+        retried
+    }
+
+    /// Note what a throttle asked for: record the host-level stand-down and
+    /// return the delta-seconds it named, or `None` when there was nothing
+    /// readable to note.
+    ///
+    /// Called for EVERY response that could carry an instruction, the retried
+    /// one included, and deliberately separate from the cap decision below. The
+    /// cap is about how long WE are willing to wait before re-asking; this is
+    /// the server asking to be left alone, which binds us whatever we decide
+    /// about our own retry.
+    ///
+    /// - `429` or `503` are the two statuses that mean "not now, try later";
+    ///   every other status is an answer about the request, not an instruction.
+    /// - An HTTP-date value is recognised and still not acted on: this crate
+    ///   does not parse the date form, and guessing a delay from it, wrong in
+    ///   the short direction, is exactly the impoliteness the gate exists to
+    ///   prevent. Logged at `warn` with the value so we learn whether real
+    ///   endpoints use it.
+    /// - Junk, or no header at all: nothing to note, and no delay invented.
+    fn note_throttle<X>(&self, url: &str, attempt: &Attempt<X>) -> Option<Duration> {
+        if !matches!(attempt.observation.status, Some(429) | Some(503)) {
+            return None;
+        }
+        let value = attempt.retry_after.as_deref()?;
+        match parse_retry_after(value) {
+            RetryAfter::Seconds(d) => {
+                self.politeness.stand_down(url, d);
+                Some(d)
+            }
+            RetryAfter::HttpDate => {
+                tracing::warn!(url, value, "Retry-After in HTTP-date form; not parsed, not waited out");
+                None
+            }
+            RetryAfter::Unparseable => {
+                tracing::warn!(url, value, "Retry-After is unparseable; no delay invented");
+                None
+            }
+        }
     }
 
     /// How long to wait before one retry, or `None` for "report what we saw".
@@ -218,38 +267,25 @@ impl Client {
     /// is returned carrying the real status, and `resolve()` decides what a
     /// throttle means for each probe kind.
     ///
-    /// - `429` or `503` with a delta-seconds value within the cap: wait it out.
-    ///   Those two statuses are the ones that mean "not now, try later"; every
-    ///   other status is an answer about the request, not an instruction.
-    /// - Within the cap is decided by `politeness::honour`, so the cap lives in
-    ///   one place and is testable without a server.
-    /// - An HTTP-date value is recognised and still not honoured: this crate
-    ///   does not parse the date form, and guessing a delay from it, wrong in
-    ///   the short direction, is exactly the impoliteness this gate exists to
-    ///   prevent. Logged at `warn` with the value so we learn whether real
-    ///   endpoints use it.
-    /// - Junk, or no header at all: nothing to honour.
+    /// The stand-down is recorded by `note_throttle` before this decides
+    /// anything, so a delay too long for us to wait out still defers the host:
+    /// declining to wait for our own retry is not permission to ask the same
+    /// server something else. Within the cap is decided by `politeness::honour`,
+    /// so the cap lives in one place and is testable without a server.
+    ///
+    /// A beyond-cap delay therefore means "report the throttle and stop
+    /// asking", never "ignore the instruction". The later requests that then
+    /// wait on the stand-down are cancelled by the metric and endpoint budgets
+    /// and reported as `indeterminate`, which is what never getting to ask
+    /// actually looks like.
     fn retry_delay<X>(&self, url: &str, attempt: &Attempt<X>) -> Option<Duration> {
-        if !matches!(attempt.observation.status, Some(429) | Some(503)) {
-            return None;
-        }
-        let value = attempt.retry_after.as_deref()?;
-        match parse_retry_after(value) {
-            RetryAfter::Seconds(d) => match honour(d, self.politeness.retry_after_cap()) {
-                Honour::Wait(d) => Some(d),
-                Honour::TooLong => {
-                    tracing::info!(url, requested_s = d.as_secs(),
-                                   cap_s = self.politeness.retry_after_cap().as_secs(),
-                                   "Retry-After beyond the cap; reporting the throttle instead of waiting");
-                    None
-                }
-            },
-            RetryAfter::HttpDate => {
-                tracing::warn!(url, value, "Retry-After in HTTP-date form; not parsed, not waited out");
-                None
-            }
-            RetryAfter::Unparseable => {
-                tracing::warn!(url, value, "Retry-After is unparseable; no delay invented");
+        let requested = self.note_throttle(url, attempt)?;
+        match honour(requested, self.politeness.retry_after_cap()) {
+            Honour::Wait(d) => Some(d),
+            Honour::TooLong => {
+                tracing::info!(url, requested_s = requested.as_secs(),
+                               cap_s = self.politeness.retry_after_cap().as_secs(),
+                               "Retry-After beyond the cap; reporting the throttle instead of waiting");
                 None
             }
         }
