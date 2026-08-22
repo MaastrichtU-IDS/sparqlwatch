@@ -1355,3 +1355,67 @@ async fn a_throttled_endpoint_is_not_reported_available_even_with_a_parseable_bo
         );
     }
 }
+
+/// Why a recorded `Retry-After` needs no bound of its own, as a test rather
+/// than as prose. A host that asks for an hour gets an hour: the metrics that
+/// follow wait at the gate, their metric budgets cancel them, and they report
+/// `indeterminate`, which is exactly what never getting to ask looks like. A
+/// bound inside the gate would be a second place deciding how long we wait,
+/// and the budgets already decide it.
+///
+/// The budgets are scaled so the hour is cancelled in milliseconds rather than
+/// in an hour. The ratios are what the sweep depends on, not the numbers.
+#[tokio::test]
+async fn a_host_that_asked_for_an_hour_indeterminates_the_rest_of_its_sweep() {
+    let server = MockServer::start().await;
+    // Throttled once with an hour, and healthy from then on. Answering
+    // normally afterwards is what makes the assertions below about the gate
+    // rather than about the server: every row is `indeterminate` because we
+    // never asked again, not because we were refused again.
+    Mock::given(method("GET")).and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(429).insert_header("retry-after", "3600"))
+        .up_to_n_times(1)
+        .with_priority(1)
+        .mount(&server).await;
+    Mock::given(method("GET")).and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(200)
+            .insert_header("access-control-allow-origin", "*")
+            .set_body_string(r#"{"head":{"vars":["s"]},"results":{"bindings":[{"s":{"type":"uri","value":"http://example.org/a"}}]},"boolean":true}"#))
+        .with_priority(2)
+        .mount(&server).await;
+    Mock::given(method("OPTIONS")).and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(204)
+            .insert_header("access-control-allow-origin", "*")
+            .insert_header("access-control-allow-methods", "GET, POST, OPTIONS"))
+        .mount(&server).await;
+
+    let budget = Budget {
+        request: std::time::Duration::from_millis(200),
+        metric: std::time::Duration::from_millis(400),
+        endpoint: std::time::Duration::from_secs(10),
+    };
+    let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
+    // The real default cap, so the hour is beyond it: we do not wait for our
+    // own retry, and the host is deferred all the same.
+    let client = Client::new(budget, Politeness::new(std::time::Duration::ZERO)).unwrap();
+    let url = format!("{}/sparql", server.uri());
+    let (rows, _declarations_read, _not_measured) =
+        without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, budget)).await;
+
+    assert_eq!(server.received_requests().await.unwrap().len(), 1,
+               "one request, and the hour it asked for held every later probe back");
+    let not_indeterminate: Vec<&str> = rows.iter()
+        .filter(|r| r.verdict != Verdict::Indeterminate)
+        .map(|r| r.metric_id.as_str())
+        .collect();
+    assert!(not_indeterminate.is_empty(),
+            "a metric we never got to ask about must read indeterminate, got {not_indeterminate:?}");
+    // Exactly one row measured anything: the queryless description fetch, which
+    // is the request that was throttled. Every other metric was cancelled while
+    // waiting at the gate, so it carries no `elapsedMs`, because nothing was
+    // measured.
+    let measured: Vec<&str> = rows.iter().filter(|r| r.elapsed_ms.is_some())
+        .map(|r| r.metric_id.as_str()).collect();
+    assert_eq!(measured, ["service-description"],
+               "only the throttled request measured a time; the cancelled metrics measured nothing");
+}
