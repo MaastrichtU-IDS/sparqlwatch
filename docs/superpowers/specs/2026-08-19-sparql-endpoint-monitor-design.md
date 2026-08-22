@@ -304,7 +304,7 @@ metric-definition revision, which is versioned data loaded into a named graph.
 |---|---|---|
 | ~~Squid egress blocks arbitrary-host `CONNECT`~~ | **RESOLVED 2026-08-20** | Spike passed. See [Stage 0 result](#stage-0-egress-spike-result). |
 | Scope creep: monitoring dashboards are deceptively large | High | First release is the leaderboard, endpoint pages, metric pages and submissions. Threads can follow. |
-| Probing looks like abuse to endpoint operators | Medium | Per-host concurrency of 1, delays, honest User-Agent with a contact URL, honour `Retry-After`, published probe schedule |
+| Probing looks like abuse to endpoint operators | Medium | **PARTLY DELIVERED 2026-08-21** (Stage 1c-b2): per-host concurrency of 1, configurable delays between requests (`--min-gap-ms`), honest User-Agent with a contact URL, and `Retry-After` handling (up to `--retry-after-cap-s`, delta-seconds form only) are done. Published probe schedule is **not built**. |
 | Very large datasets make some metrics intractable, as osm-planet did | Medium | **DELIVERED 2026-08-21** (Stage 1c-b1): metrics declare a cost class (`cheap` or `expensive`) and a declined metric records "not measured" rather than a misleading zero. The ceiling is **per run**, set by `--max-cost`, not per endpoint: an expensive metric is opt-in for the whole sweep. Per-endpoint opt-in is a reasonable later refinement and is **not built**, which matters because the measured case (`classes` costs 15.7s on kadaster and exceeds the 30s budget on qlever) is exactly the case a per-endpoint ceiling would serve. |
 | Duplicating a live service (SPARQLES or a successor) | Medium | Survey prior art before building. Not yet done. |
 | Endpoints without CORS cannot run queries in the embedded editor | Low | Autocomplete is served from our origin so it still works; the gap is reported as an actionable finding. Measured 4 of 4 evaluated endpoints already send CORS. |
@@ -374,7 +374,7 @@ that each end in something demonstrable, and each gets its own plan.
 | **1. Data model + prober core** | Metric definitions for an initial set, probe kinds, N-Quads output, tests against a mock endpoint. Runs locally, writes to a local Oxigraph. | stage 0 passes, or the prober is relocated outside the cluster |
 | **1b. Declarations and fetch** | Service description fetch with a queryless GET, declaration parsing, verdict resolution against declarations. A service-description metric with graded levels 0-4. | stage 1 |
 | **1c-b1** | **DELIVERED 2026-08-21**: Cost class on metrics, split the class metric, and the `not measured` record for declined metrics. See the plan file `docs/superpowers/plans/2026-08-21-safe-at-scale.md` for the superseded original plan and why it was split. | stage 1b |
-| **1c-b2** | Per-host politeness and `Retry-After` handling | stage 1c-b1 |
+| **1c-b2** | **DELIVERED 2026-08-21**: Per-host politeness (concurrency cap of 1, configurable `--min-gap-ms` between requests), `Retry-After` handling (delta-seconds within `--retry-after-cap-s`), and honest User-Agent. | stage 1c-b1 |
 | **1c-b3** | Stable measurement identifiers and bounded concurrency with deterministic output | stage 1c-b2 |
 | **1c-b4** | Crash-safe incremental writing | stage 1c-b3 |
 | **1d. Registry seeding** | Ingest LOD Cloud + YummyData candidates, resolve front-ends to real endpoints, probe with politeness, admit responders | stage 1c-b4 |

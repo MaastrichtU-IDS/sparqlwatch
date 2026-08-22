@@ -107,6 +107,36 @@ endpoint (600s), and every one of them cancels the future rather than
 reporting afterwards that it took too long. A metric the budget never reached
 is `indeterminate` and carries no `elapsedMs`, because nothing was measured.
 
+## Sweep cost
+
+At the default `--min-gap-ms` of 2000 and `--max-cost cheap`, a sweep's
+wall-clock time is arithmetic. This is a rough estimate, not a measurement,
+because no full registry sweep has been run yet.
+
+Seven metrics are `cheap` at the default cost ceiling: availability, cors,
+cors-preflight, geo-functions, geo-data, service-description, has-classes.
+
+Per endpoint, the prober makes 7 requests. Between consecutive requests to one
+host, there is a gap. The sweep is sequential (bounded concurrency per host is
+stage 1c-b3). So:
+
+- Per endpoint: 7 requests with some latency (call it L per request) plus 6 gaps.
+- Gap time per endpoint: 6 gaps × 2 seconds = 12 seconds.
+- Request time per endpoint: 7 requests × L.
+- With an average request latency of 300 ms (a rough middle ground for
+  network round-trip), the per-endpoint floor is roughly (7 × 0.3) + 12 = 14.1
+  seconds.
+- For 548 endpoints at 14.1 seconds each: 548 × 14.1 = 7,726.8 seconds, or about
+  2 hours 9 minutes.
+
+This assumes all endpoints are distinct hosts. Since some registry URLs share a
+host, requests to those shared hosts are serialised further by the per-host gate,
+adding time on top of this floor. Request latencies also vary widely; the above
+assumes 300 ms average, which is a middle estimate.
+
+The figure is why stage 1c-b3 (bounded concurrency per host) exists. A sequential
+sweep at this scale would time out on a scheduled job.
+
 ## Configuration files
 
 **`endpoints.toml`** is the list to sweep, one array of URLs. A URL that is not
