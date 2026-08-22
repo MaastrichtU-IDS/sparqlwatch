@@ -582,22 +582,22 @@ impl Client {
     /// this is not a preflight at all and a correct server may ignore it,
     /// which would make every verdict the resolver draws from it meaningless.
     ///
-    /// Issued on `no_redirect`, so a redirect is never followed implicitly. A
-    /// `303` otherwise rewrites the `OPTIONS` into a `GET`, and an endpoint
-    /// that refuses `OPTIONS` but sets `access-control-allow-origin` on a
-    /// simple GET would then publish a grant: precisely the endpoint this
-    /// metric exists to catch.
+    /// No redirect is ever followed implicitly, and for this probe that was
+    /// the original reason the policy exists: a `303` rewrites the `OPTIONS`
+    /// into a `GET`, and an endpoint that refuses `OPTIONS` but sets
+    /// `access-control-allow-origin` on a simple GET would then publish a
+    /// grant, which is precisely the endpoint this metric exists to catch.
     ///
     /// A 3xx is nevertheless not an answer about the endpoint. Every other
-    /// probe reaches the endpoint through its redirect (`self.http` follows up
-    /// to 10), so treating the redirect itself as the preflight's answer
-    /// published `absent` for a service that answers a preflight perfectly one
-    /// hop away, in the same run whose `cors` row followed that same hop. So
-    /// the chain is resolved DELIBERATELY here instead: read `Location`,
-    /// resolve it against the URL we asked, and re-issue the same `OPTIONS`
-    /// there, up to `MAX_PREFLIGHT_HOPS`. The method is never rewritten, and
-    /// the hops are ours to see and to log rather than reqwest's to take
-    /// invisibly.
+    /// probe reaches the endpoint through its redirect, so treating the
+    /// redirect itself as the preflight's answer published `absent` for a
+    /// service that answers a preflight perfectly one hop away, in the same run
+    /// whose `cors` row followed that same hop. So the chain is resolved
+    /// DELIBERATELY, by `gated_chain`: read `Location`, resolve it against the
+    /// URL we asked, and re-issue the same `OPTIONS` there, up to
+    /// `MAX_REDIRECT_HOPS`, taking the per-host gate for each hop. The method
+    /// is never rewritten, and the hops are ours to see, to space and to log
+    /// rather than reqwest's to take invisibly.
     ///
     /// What comes back is the response at the end of the chain. A 3xx that
     /// still stands at that point (no usable `Location`, a cycle, or more hops

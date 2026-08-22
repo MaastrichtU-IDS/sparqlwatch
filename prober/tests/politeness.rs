@@ -12,6 +12,12 @@ use std::time::{Duration, Instant};
 
 use sparqlwatch_prober::politeness::Politeness;
 
+// The timeout every probe below runs under is shared with the other test files
+// that drive a `Client`, because a reentrancy mistake hangs whichever of them
+// runs first and `client` sorts before `politeness`. See `tests/common`.
+mod common;
+use common::without_deadlocking;
+
 #[tokio::test]
 async fn two_requests_to_one_host_are_spaced_by_the_minimum_gap() {
     let p = Politeness::new(Duration::from_millis(300));
@@ -81,34 +87,25 @@ async fn the_gap_is_measured_from_release_not_from_acquisition() {
 }
 
 // ---------------------------------------------------------------------------
-// The gate wired into `Client`: every public probe passes through it exactly
-// once, and a `Retry-After` we can afford is waited out.
+// The gate wired into `Client`: every outbound request passes through it,
+// redirect hops included, and a `Retry-After` we can afford is waited out.
 //
 // EVERY test below runs its probes under `without_deadlocking`, and that is
 // not belt and braces. The per-host lock is not reentrant, so a gate acquired
-// in an inner helper (`get_with_body`, `preflight_once`, `preflight_chain`,
-// `fetch_rdf_once`) is taken by a task that already holds it: the task waits
-// for itself and the test HANGS rather than failing. Without a timeout
-// `cargo test` sits there until somebody kills it, which is the least legible
-// failure a suite can produce, and it is the failure the one mistake this
-// slice most invites actually produces.
+// in a helper that runs inside a hop's guard (`get_with_body`,
+// `preflight_once`, `fetch_rdf_once`) is taken by a task that already holds
+// it: the task waits for itself and the test HANGS rather than failing.
+// Without a timeout `cargo test` sits there until somebody kills it, which is
+// the least legible failure a suite can produce, and it is the failure the one
+// mistake this slice most invites actually produces. The helper is shared with
+// every other test file that drives a `Client`, for the reason recorded in
+// `tests/common`.
 // ---------------------------------------------------------------------------
-
-use std::future::Future;
 
 use sparqlwatch_prober::budget::Budget;
 use sparqlwatch_prober::client::Client;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
-
-/// Run a probe under a bound many times larger than anything real, so a
-/// deadlock surfaces as a named failure instead of a hung suite. One-sided,
-/// like every other timing assertion in this file, so it cannot flap.
-async fn without_deadlocking<T>(f: impl Future<Output = T>) -> T {
-    tokio::time::timeout(Duration::from_secs(20), f).await.expect(
-        "timed out: a probe that acquires the per-host gate it already holds deadlocks here",
-    )
-}
 
 /// A cap large enough that no test below is testing the cap by accident. The
 /// two tests that ARE about the cap state their own.
