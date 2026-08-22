@@ -333,6 +333,79 @@ while `classes` (expensive, "here are up to 200 distinct resource types") is opt
 the guard would find no literal and the metric would publish `absent` for an endpoint full of
 typed resources. `SelectIris` has no such guard and returns `verified` when any type is found.
 
+## Content samples
+
+`classes` already ran `SELECT DISTINCT ?c ... LIMIT 200` to answer "does this
+endpoint publish a bounded list of types"; it now publishes the bindings it
+reads instead of discarding them once the verdict is drawn. A metric that
+reads bindings may declare `sample_limit` in `metrics.toml`, checked at load
+against the `LIMIT` its own query actually carries, so the two numbers cannot
+drift apart. `classes` is the only metric that declares one, at 200, matching
+its query's `LIMIT 200`. `has-classes` runs `SELECT ?c WHERE { ?s a ?c }
+LIMIT 1` and deliberately declares none: its single binding is whichever type
+the endpoint happened to return first, and publishing that as a "sample" would
+suggest it says something about the endpoint's vocabulary, when it says only
+that at least one typed resource exists.
+
+Per sample, the run graph carries only sparqlwatch's own predicates plus
+`rdf:type` and `prov:wasGeneratedBy`:
+
+- `rdf:type urn:sparqlwatch:ContentSample`
+- `urn:sparqlwatch:sampledFrom` the endpoint
+- `urn:sparqlwatch:sampledBy` the metric definition
+- `urn:sparqlwatch:sampleSize` the count of values bound, an `xsd:integer`
+- `urn:sparqlwatch:sampleTruncated` an `xsd:boolean`
+- `urn:sparqlwatch:sampledValue`, one per IRI the endpoint returned, repeated
+- `prov:wasGeneratedBy` the run's activity, the same link every other fact in
+  this graph carries
+
+Values are published in the order the endpoint returned them: not sorted, not
+deduplicated beyond what `SELECT DISTINCT` already did, because reordering
+would discard evidence about the endpoint for a tidiness nobody asked for.
+
+`sampleTruncated` is `true` when the number of values reached the metric's
+declared `sample_limit`, using `>=` rather than `==`: an endpoint that ignores
+its own `LIMIT` and returns more than asked is still not called complete,
+because the query still bounded what we could see, not because the count came
+out exactly right. A list a reader believes is complete when it is not is the
+content equivalent of a confident wrong answer, so this is published rather
+than left for a consumer to infer from the count alone.
+
+Measured with `--max-cost expensive` against this project's own registry:
+`data.kkg.kadaster.nl` returned 59 distinct classes, not truncated, mostly the
+schema vocabulary its data is built from (`owl:Class`, `owl:Restriction`,
+`rdfs:Class`, `rdf:Property`). `ontop.certain.ai.ustp.at` returned 50, not
+truncated, real domain vocabulary from its own namespace
+(`https://w3id.org/aidoc-ap#AISystemCapability`,
+`https://w3id.org/aidoc-ap#ComputationalResource`, and others). `qlever.dev/api/osm-planet`
+produced no sample at all: its class enumeration exceeds the 30s request
+budget, so `classes` there is `indeterminate`, there are no bindings to
+publish, and correctly nothing is published as an empty sample either. The
+expensive sweep of these three endpoints took 1m18s, against roughly 41s at
+the default cost ceiling.
+
+A content sample is deliberately **not** a dataset description, and this
+project deliberately does **not** publish VoID from it. What a sample holds is
+an observation from one bounded query, not a description of a dataset: the
+thing behind a SPARQL endpoint may be several datasets, or a virtual graph over
+a relational store rather than a dataset at all (`ontop`, in this project's own
+registry, is exactly that). `void:classPartition` and `void:class` both carry
+`rdfs:domain void:Dataset`, so reusing either predicate here would entail,
+under plain RDFS, that a content sample IS a dataset, which is not something
+this project can honestly assert about an arbitrary endpoint. This project has
+already shipped that class of defect once: the `NotMeasured` fact originally
+reused `dqv:computedOn`, entailing that 548 deliberately declined pairs were
+quality measurements that never happened, and nothing was visibly wrong with
+it until a consumer ran inference. `ContentSample` uses sparqlwatch's own
+predicates for exactly that reason.
+
+Samples appear only under `--max-cost expensive`, because `classes` is the
+only metric that produces one and it is `expensive`. A default sweep therefore
+publishes no samples at all. That absence is not silence: the `NotMeasured`
+fact already published for `classes` under the default ceiling (see [Cost
+ceilings and not measured](#cost-ceilings-and-not-measured) above) is what
+tells a reader "we did not look" rather than "there is nothing there".
+
 ## Proxy environment
 
 The deployment target has no direct egress, so a proxy is mandatory there:
@@ -446,3 +519,11 @@ It is a read-only viewer over the emitted N-Quads, using the same verdict encodi
 as the design: dashed borders mark "works but not declared" and "indeterminate",
 and `absent` has no border at all, because it is the only verdict that claims a
 negative. The real web tier will query Oxigraph rather than parse a file.
+
+A run containing content samples (that is, one from an `--max-cost expensive`
+sweep) also gets a "Content samples" panel, one detail block per (endpoint,
+metric) sample: the endpoint, the metric, the value count, and whether the
+list is truncated, with the truncation state carried by its own badge rather
+than left to be inferred from the count. The value list itself sits behind a
+disclosure toggle rather than always on screen, since 59 or more IRIs is too
+much to put in a table row.

@@ -123,13 +123,34 @@ function collect(quads) {
     else if (q.p === `${SW}notMeasuredOn`) row(q.s).nmEndpoint = iri(q.o);
     else if (q.p === `${SW}notMeasuredMetric`) row(q.s).nmMetric = iri(q.o).replace(`${SW}metric:`, '');
     else if (q.p === `${SW}notMeasuredReason`) row(q.s).nmReason = lit(q.o);
+    // A content sample, same reasoning as the not-measured fact above: its own
+    // predicates only, so it needs its own arms rather than folding into the
+    // dqv:* branches. `sampledValue` is repeated per subject, so it accumulates
+    // into an array instead of overwriting a single field.
+    else if (q.p === `${SW}sampledFrom`) row(q.s).sampleEndpoint = iri(q.o);
+    else if (q.p === `${SW}sampledBy`) row(q.s).sampleMetric = iri(q.o).replace(`${SW}metric:`, '');
+    else if (q.p === `${SW}sampleSize`) row(q.s).sampleSize = Number(lit(q.o));
+    else if (q.p === `${SW}sampleTruncated`) row(q.s).sampleTruncated = lit(q.o) === 'true';
+    else if (q.p === `${SW}sampledValue`) (row(q.s).sampleValues ??= []).push(iri(q.o));
   }
   const all = [...m.values()];
   const rows = all.filter((r) => r.endpoint && r.metric && r.verdict);
   const declined = all
     .filter((r) => r.nmEndpoint && r.nmMetric)
     .map((r) => ({ endpoint: r.nmEndpoint, metric: r.nmMetric, reason: r.nmReason }));
-  return { run, rows, declined };
+  // Order preserved from the N-Quads themselves (insertion order of the Map),
+  // which is the emitter's own per-endpoint enumeration order, not re-sorted
+  // here on top of it.
+  const samples = all
+    .filter((r) => r.sampleEndpoint && r.sampleMetric)
+    .map((r) => ({
+      endpoint: r.sampleEndpoint,
+      metric: r.sampleMetric,
+      size: r.sampleSize ?? 0,
+      truncated: !!r.sampleTruncated,
+      values: r.sampleValues ?? [],
+    }));
+  return { run, rows, declined, samples };
 }
 
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -140,7 +161,7 @@ function chip(metric, verdict) {
     style="${chipStyle(v)} color: var(--${v.token})">${esc(ABBR[metric] ?? metric[0].toUpperCase())}</span>`;
 }
 
-function render({ run, rows, declined = [] }) {
+function render({ run, rows, declined = [], samples = [] }) {
   const endpoints = [...new Set([...rows.map((r) => r.endpoint), ...declined.map((d) => d.endpoint)])].sort();
   const metrics = metricsIn(rows, declined);
   const wasDeclined = (ep, m) => declined.some((d) => d.endpoint === ep && d.metric === m);
@@ -166,6 +187,32 @@ function render({ run, rows, declined = [] }) {
       <td class="num dim">${untimed ? untimed + ' untimed' : ''}</td>
     </tr>`;
   }).join('\n');
+
+  // A content sample is not a dataset description (see docs/design and the
+  // prober README): it is a bounded, ordered list of values one metric's
+  // query actually bound. The one thing this block must not do is let a
+  // truncated list read as a complete one, so the truncation state sits next
+  // to the count, in the same visual weight, rather than being something a
+  // reader has to open the list to discover.
+  const samplesSection = samples.length ? `
+  <div class="panel">
+    <h2>Content samples</h2>
+    <div class="note" style="margin-top:0">A sample is an observation from one bounded query, not a description of a
+    dataset: the thing behind an endpoint may be several datasets or, as with <code>ontop</code> here, a virtual graph
+    over a relational store. Values are listed in the order the endpoint returned them.</div>
+    ${samples.map((s) => `
+    <details class="sample">
+      <summary>
+        <span class="name">${esc(s.endpoint.replace(/^https?:\/\//, ''))}</span>
+        <span class="dim">${esc(s.metric)}</span>
+        <span class="count">${s.size} value${s.size === 1 ? '' : 's'}</span>
+        <span class="trunc ${s.truncated ? 'trunc-yes' : 'trunc-no'}">${s.truncated
+          ? 'truncated: more may exist beyond the limit'
+          : 'complete: not truncated'}</span>
+      </summary>
+      <ul class="sample-values">${s.values.map((v) => `<li>${esc(v)}</li>`).join('')}</ul>
+    </details>`).join('')}
+  </div>` : '';
 
   // Built through the same `chipStyle` the chips use, so a swatch always looks
   // like the thing it explains. It did not before: the legend gave `absent` a
@@ -216,6 +263,21 @@ function render({ run, rows, declined = [] }) {
   .leg i { width:20px; height:15px; border-radius:3px; display:inline-block; }
   .leg b { color:var(--bright); font-variant-numeric:tabular-nums; }
   .note { margin-top:11px; font-size:12px; color:var(--muted); max-width:780px; }
+  .sample { margin-top:10px; border:1px solid var(--border); border-radius:5px; padding:9px 12px; }
+  .sample + .sample { margin-top:8px; }
+  .sample summary { cursor:pointer; display:flex; align-items:center; gap:12px; flex-wrap:wrap; list-style:none; }
+  .sample summary::-webkit-details-marker { display:none; }
+  .sample summary::before { content:'\\25b8'; color:var(--dim); margin-right:-4px; }
+  .sample[open] summary::before { content:'\\25be'; }
+  .sample .name { font-family:var(--mono); font-size:12.5px; color:var(--bright); }
+  .sample .count { font-variant-numeric:tabular-nums; color:var(--muted); font-size:12px; }
+  .sample .trunc { font-size:11px; padding:2px 7px; border-radius:3px; margin-left:auto; }
+  .sample .trunc-no { color:var(--good); border:1px solid var(--good); }
+  .sample .trunc-yes { color:var(--warn); border:1px dashed var(--warn); }
+  .sample-values { margin:10px 0 0; padding:8px 10px; max-height:220px; overflow-y:auto;
+    background:var(--bg); border:1px solid var(--border); border-radius:4px;
+    font-family:var(--mono); font-size:11.5px; color:var(--muted); list-style:none; }
+  .sample-values li { padding:1px 0; word-break:break-all; }
 </style></head><body>
 <header>
   <div class="logo">
@@ -242,6 +304,7 @@ function render({ run, rows, declined = [] }) {
     and no border at all means nothing was there. Absent is the only verdict that claims a negative, and it is claimed only where a parsed answer
     established one.</div>
   </div>
+  ${samplesSection}
 </main></body></html>`;
 }
 

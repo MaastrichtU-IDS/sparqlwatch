@@ -175,6 +175,31 @@ reporting `not measured` is the truth and is more useful to a reader.
 Derived VoID is published per endpoint in its own named graph, clearly attributed to us
 rather than to the provider, and offered back to the provider as the remediation.
 
+**Tier 2 status, updated 2026-08-22 (stage 2b-1): partly delivered.** The
+`classes` metric samples distinct classes and publishes them as a
+`ContentSample` fact, bounded by a declared `sample_limit` (200, matching the
+metric's own `LIMIT`) and explicitly marked `sampleTruncated` when that limit
+was reached. See `prober/README.md`'s "Content samples" section for the exact
+predicates. **Not built**: properties per class, and counts. The tier is
+partly delivered, not delivered.
+
+That fact is deliberately **not** VoID, which supersedes the paragraph above
+for what tier 2 actually emits today. A content sample is an observation from
+one bounded query, not a description of a dataset: the thing behind a SPARQL
+endpoint may be several datasets, or a virtual graph over a relational store
+rather than a dataset at all (`ontop`, in this project's own registry, is
+exactly that). `void:classPartition` and `void:class` both carry
+`rdfs:domain void:Dataset`, so reusing either predicate here would entail,
+under plain RDFS, that a content sample IS a dataset, which this project
+cannot honestly assert about an arbitrary endpoint. This project has already
+shipped that class of defect once, when the `NotMeasured` fact reused
+`dqv:computedOn` and thereby entailed that 548 deliberately declined pairs
+were quality measurements that never happened, with nothing visibly wrong
+until a consumer ran inference. Whether derived VoID is still worth building
+alongside the sample, rather than instead of it, is an open question for
+whichever stage revisits tier 1's "derive and serve VoID" idea from the
+Purpose section above.
+
 ### 1c. Query editor and autocomplete
 
 Embed `@sib-swiss/sparql-editor`, a YASGUI-based web component that takes one script
@@ -379,7 +404,7 @@ that each end in something demonstrable, and each gets its own plan.
 | **1c-b4** | Crash-safe incremental writing | stage 1c-b3 |
 | **1d. Registry seeding** | Ingest LOD Cloud + YummyData candidates, resolve front-ends to real endpoints, probe with politeness, admit responders | stage 1c-b4 |
 | **2. Scoring as queries** | Score computation as pure SPARQL/functions over stored measurements, with recomputation over history proven | stage 1b |
-| **2b. Content metadata + examples** | Tiered VoID extraction, SIB example ingestion, `/.well-known/sparql-examples` discovery | stage 1d |
+| **2b. Content metadata + examples** | Tiered VoID extraction, SIB example ingestion, `/.well-known/sparql-examples` discovery. **PARTLY DELIVERED 2026-08-22** (stage 2b-1): distinct classes are sampled and published as a `ContentSample` fact, deliberately not as VoID; see the tier-2 status note under [1b](#1b-content-metadata-extraction-tiered). Properties per class, counts, SIB ingestion, and example discovery are not built. | stage 1d |
 | **3. Web read tier** | Faceted search, browse, endpoint pages, metric pages, charts, content negotiation, read-only public SPARQL endpoint | stage 2, 2b |
 | **3b. Embedded editor** | `@sib-swiss/sparql-editor` per endpoint, fed autocomplete metadata from our origin | stage 2b, 3 |
 | **4. ids3 deployment** | `sparqlwatch-dev` project-env: prober CronJob, web, Oxigraph, ingress, egress policy | stage 3 |
