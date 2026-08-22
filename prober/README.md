@@ -137,7 +137,7 @@ host, requests to those shared hosts are serialised further by the per-host gate
 adding time on top of this floor. Request latencies also vary widely; the above
 assumes 300 ms average, which is a middle estimate.
 
-The figure is why stage 1c-b3 (bounded concurrency per host) exists. A sequential
+The figure is why stage 1c-b3 (bounded concurrency across endpoints) exists. A sequential
 sweep at this scale would time out on a scheduled job.
 
 ## Configuration files
