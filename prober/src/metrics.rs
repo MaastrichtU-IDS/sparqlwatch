@@ -754,16 +754,34 @@ query = "SELECT ?s WHERE { ?s ?p ?o } LIMIT 1"
 
     #[test]
     fn a_sample_limit_must_match_the_querys_limit() {
+        // The id is deliberately distinctive. An earlier version used id = "m"
+        // and asserted err.contains("m"), which is satisfied by any message
+        // containing the letter m, the word "metric" included: it could not
+        // fail, while its failure message claimed to check that the error names
+        // the metric.
         // Two places that must agree will drift. The loader is where that is caught,
         // and a mismatch is a broken definition file, not something to guess about.
         let src = |lim: &str, q_lim: &str| format!(
-            "[[metric]]\nid=\"m\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"SelectIris\"\nvar=\"c\"\n\
+            "[[metric]]\nid=\"zebra-sample\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"SelectIris\"\nvar=\"c\"\n\
              sample_limit={lim}\nquery=\"SELECT DISTINCT ?c WHERE {{ ?s a ?c }} LIMIT {q_lim}\"\n"
         );
         assert!(load_metrics(&src("200", "200")).is_ok());
         let err = load_metrics(&src("200", "50")).unwrap_err().to_string();
-        assert!(err.contains("m"), "the error must name the metric: {err}");
+        assert!(err.contains("zebra-sample"), "the error must name the metric: {err}");
         assert!(err.contains("200") && err.contains("50"), "and both numbers: {err}");
+    }
+
+    #[test]
+    fn ask_data_may_declare_a_sample_limit_too() {
+        // The kind check permits SelectIris AND AskData, and nothing exercised the
+        // AskData half: narrowing the check to SelectIris only left all 252 tests
+        // green. AskData reads bindings through `ask_literal`, so a sample limit on
+        // one is a promise the probe can keep, and silently rejecting it would
+        // block the obvious next sample (geometry literals) for no reason.
+        let src = "[[metric]]\nid=\"wkt-sample\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"AskData\"\nvar=\"g\"\n\
+                   sample_limit=25\nquery=\"SELECT ?g WHERE { ?s ?p ?g } LIMIT 25\"\n";
+        let defs = load_metrics(src).expect("AskData reads bindings, so it may sample");
+        assert_eq!(defs[0].sample_limit, Some(25));
     }
 
     #[test]
