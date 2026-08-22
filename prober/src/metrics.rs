@@ -219,9 +219,26 @@ pub fn load_metrics(toml_src: &str) -> anyhow::Result<Vec<MetricDef>> {
             );
         }
         if let Some(limit) = m.sample_limit {
-            if !matches!(m.kind, ProbeKind::SelectIris | ProbeKind::AskData) {
+            // `SelectIris` alone, deliberately narrower than "reads bindings".
+            // `AskData` reads bindings too, but through `ask_literal`, which
+            // collects the LEXICAL FORMS OF LITERALS, and `emit.rs` publishes
+            // every sampled value through `NamedNode::new`. So an `AskData`
+            // sample would drop most literals and republish any whose lexical
+            // form happens to parse as an IRI as a resource the endpoint never
+            // mentioned, losing the datatype either way. That is a wrong fact
+            // about somebody's data, and a half-supported path is worse than a
+            // closed one, so the path is closed here rather than at emission:
+            // this is where a definition is judged, and nothing ships an
+            // `AskData` sample today.
+            //
+            // To lift this, the sample must carry per value whether it is an
+            // IRI or a literal (with its datatype), and the emitter must emit
+            // accordingly. Until both exist, widening this check publishes
+            // wrong term types.
+            if m.kind != ProbeKind::SelectIris {
                 anyhow::bail!(
-                    "metric '{}' of kind {:?} declares a `sample_limit` but never reads bindings",
+                    "metric '{}' of kind {:?} declares a `sample_limit`, but only `SelectIris` may sample: \
+                     every sampled value is published as an IRI, so any other kind would publish the wrong term type",
                     m.id,
                     m.kind
                 );
@@ -772,16 +789,25 @@ query = "SELECT ?s WHERE { ?s ?p ?o } LIMIT 1"
     }
 
     #[test]
-    fn ask_data_may_declare_a_sample_limit_too() {
-        // The kind check permits SelectIris AND AskData, and nothing exercised the
-        // AskData half: narrowing the check to SelectIris only left all 252 tests
-        // green. AskData reads bindings through `ask_literal`, so a sample limit on
-        // one is a promise the probe can keep, and silently rejecting it would
-        // block the obvious next sample (geometry literals) for no reason.
+    fn ask_data_may_not_declare_a_sample_limit_yet() {
+        // AskData does read bindings, but `ask_literal` reads the lexical forms of
+        // LITERALS, and `emit.rs` publishes every sampled value as an IRI. So an
+        // AskData sample would drop most literals and republish any whose lexical
+        // form parses as an IRI as a resource the endpoint never mentioned:
+        // "http://example.org/NotActuallyAnIri" as a plain string comes back out of
+        // the graph as `<http://example.org/NotActuallyAnIri>`, and the datatype is
+        // lost either way. That is a wrong fact about somebody's data, so the path
+        // is closed rather than half-supported. Nothing ships an AskData sample
+        // today, so nothing is lost by closing it.
+        //
+        // To lift this, `ContentSample` must carry per value whether it is an IRI
+        // or a literal (with its datatype) and the emitter must emit accordingly.
+        // Then this test inverts back, and a geometry sample becomes possible.
         let src = "[[metric]]\nid=\"wkt-sample\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"AskData\"\nvar=\"g\"\n\
                    sample_limit=25\nquery=\"SELECT ?g WHERE { ?s ?p ?g } LIMIT 25\"\n";
-        let defs = load_metrics(src).expect("AskData reads bindings, so it may sample");
-        assert_eq!(defs[0].sample_limit, Some(25));
+        let err = load_metrics(src).unwrap_err().to_string();
+        assert!(err.contains("wkt-sample"), "the error must name the metric: {err}");
+        assert!(err.contains("SelectIris"), "and say which kind may sample: {err}");
     }
 
     #[test]
@@ -796,7 +822,11 @@ query = "SELECT ?s WHERE { ?s ?p ?o } LIMIT 1"
     #[test]
     fn a_sample_limit_on_a_kind_that_reads_no_bindings_is_a_load_error() {
         // Liveness and Cors never populate `bindings`, so a sample limit on one is a
-        // promise the probe cannot keep. Same doctrine as the `var` check.
+        // promise the probe cannot keep. Same doctrine as the `var` check. The check
+        // is now narrower than this test needs (only `SelectIris` may sample, see
+        // the AskData test above), and this case stays because a kind that reads no
+        // bindings at all is a different mistake from one that reads the wrong term
+        // type.
         assert!(load_metrics(
             "[[metric]]\nid=\"m\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"Liveness\"\n\
              sample_limit=200\nquery=\"ASK{} LIMIT 200\"\n"
