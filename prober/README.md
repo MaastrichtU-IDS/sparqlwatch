@@ -76,6 +76,8 @@ cargo run -- --at 2026-08-20T12:00:00Z --out run.nq
 | `--metrics` | `metrics.toml` | Metric definitions to apply |
 | `--out` | `run.nq` | Where to write the N-Quads |
 | `--max-cost` | `cheap` | Only run metrics with cost at or below this value (`cheap` or `expensive`) |
+| `--min-gap-ms` | `2000` | Minimum pause between two consecutive requests to one host |
+| `--retry-after-cap-s` | `20` | Longest `Retry-After` waited out before one retry of a throttled request |
 
 `--at` is required and is **not** read from the clock, deliberately. It names
 the run graph, it is published as the activity's `prov:generatedAtTime`, and a
@@ -85,10 +87,97 @@ run reproducible: same `--at`, same output identifiers. It is validated before
 any probing starts, because it is interpolated into IRIs and published as an
 `xsd:dateTime`.
 
+Every outbound request passes a per-host gate that gives three guarantees: never
+two requests in flight to one host, at least `--min-gap-ms` between one request
+finishing and the next one to that host starting, and nothing at all to a host
+before the instant that host asked us to come back at. The gate is taken
+once per outbound **request**, not once per probe, and in one place only. No
+probe follows a redirect implicitly: a chain is walked a hop at a time, and each
+hop takes the gate for the host that hop actually touches, which is not
+necessarily the host the probe was pointed at. A three-hop chain therefore costs
+two gaps, and that is the honest price of a promise with no exceptions in it. A
+chain longer than five hops, a cycle, or a `Location` we cannot resolve is
+`indeterminate`: we never reached an answer.
+
+`--min-gap-ms` is validated at startup, before any probing: the gap plus the
+30s request budget has to stay under the 60s metric budget, or the pause alone
+consumes the budget the measurement needs and every metric reports
+`indeterminate` against an endpoint that answered perfectly.
+
+A `429` or `503` carrying a `Retry-After` in delta-seconds defers the **host**
+until that instant, whether or not the delay is one we are willing to wait out:
+a server that tells us to come back later is not sent a different question in
+the meantime. Every later request to that host, from any metric, waits at the
+gate until the instant passes. Within `--retry-after-cap-s` the request is also
+retried **once** after the wait; a longer delay, an HTTP-date value or junk is
+not retried at all, and the throttle is reported as observed rather than turned
+into a guess. The retried walk takes the gate again, hop by hop, like a first
+one, and it is that acquisition which waits the delay out, so there is exactly
+one place in the crate that decides how long we wait.
+
+The deferral is deliberately not bounded. A host that asks for an hour gets an
+hour, the metric and endpoint budgets cancel the requests that queue behind it,
+and those metrics report `indeterminate`, which is exactly what happened: we
+never got to ask. A second bound here would be a second place deciding how long
+we wait.
+
+The cap's ceiling is arithmetic, not taste, and the arithmetic is about the
+ordinary throttle rather than the worst case. Four things come out of one 60s
+metric budget, in this order: the gap, the first request, the honoured wait, and
+the retried request. A throttle usually comes back quickly, since refusing a
+request is cheap for the server refusing it, so what has to fit is
+`gap + cap + request budget < metric budget` (2 + 20 + 30 = 52 < 60). A larger
+cap eats that margin, so raising it makes a cancelled retry **more** likely, not
+less.
+
+No cap value makes the worst case fit. A first request that runs its full 30s
+timeout before the throttle arrives costs 2 + 30 + 30 = 62 > 60 even with a cap
+of zero: a gap plus two full-timeout requests is already over the metric budget
+on its own. A retry is therefore best-effort inside that budget. When it does
+not fit, `tokio` cancels it and the metric reports `indeterminate`, which is
+correct, because we never got an answer. A retry guaranteed to fit in every case
+would need a metric budget above 82 seconds, and nobody has taken that
+decision.
+
 Three nested budgets bound the work, per request (30s), per metric (60s), and per
 endpoint (600s), and every one of them cancels the future rather than
 reporting afterwards that it took too long. A metric the budget never reached
 is `indeterminate` and carries no `elapsedMs`, because nothing was measured.
+
+## Sweep cost
+
+At the default `--min-gap-ms` of 2000 and `--max-cost cheap`, a sweep's
+wall-clock time is arithmetic. This is a rough estimate, not a measurement,
+because no full registry sweep has been run yet.
+
+Seven metrics are `cheap` at the default cost ceiling: availability, cors,
+cors-preflight, geo-functions, geo-data, service-description, has-classes.
+
+Per endpoint, the prober makes 7 requests. Between consecutive requests to one
+host, there is a gap. The sweep is sequential: stage 1c-b3 adds bounded
+concurrency **across endpoints**, never within a host. Per-host concurrency stays
+at one request, which is the guarantee this stage exists to provide, so 1c-b3
+shortens a sweep by overlapping different hosts and changes nothing about how any
+single host is treated. So:
+
+- Per endpoint: 7 requests with some latency (call it L per request) plus 6 gaps.
+  An endpoint that redirects costs one more gated request and one more gap per
+  hop, since every hop is a request in its own right.
+- Gap time per endpoint: 6 gaps × 2 seconds = 12 seconds.
+- Request time per endpoint: 7 requests × L.
+- With an average request latency of 300 ms (a rough middle ground for
+  network round-trip), the per-endpoint floor is roughly (7 × 0.3) + 12 = 14.1
+  seconds.
+- For 548 endpoints at 14.1 seconds each: 548 × 14.1 = 7,726.8 seconds, or about
+  2 hours 9 minutes.
+
+This assumes all endpoints are distinct hosts. Since some registry URLs share a
+host, requests to those shared hosts are serialised further by the per-host gate,
+adding time on top of this floor. Request latencies also vary widely; the above
+assumes 300 ms average, which is a middle estimate.
+
+The figure is why stage 1c-b3 (bounded concurrency across endpoints) exists. A sequential
+sweep at this scale would time out on a scheduled job.
 
 ## Configuration files
 

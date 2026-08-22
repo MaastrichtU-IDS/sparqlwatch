@@ -2,6 +2,7 @@ use sparqlwatch_prober::budget::Budget;
 use sparqlwatch_prober::client::Client;
 use sparqlwatch_prober::emit::{emit_nquads, NotMeasured, NotMeasuredReason, RunId};
 use sparqlwatch_prober::metrics::{load_metrics, within_cost, Cost, MetricDef, ProbeKind};
+use sparqlwatch_prober::politeness::Politeness;
 use sparqlwatch_prober::registry::load_endpoints;
 use sparqlwatch_prober::run_sweep;
 use sparqlwatch_prober::verdict::{Level, Verdict};
@@ -11,6 +12,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use wiremock::http::Method;
 use wiremock::matchers::{method, path, query_param_is_missing};
 use wiremock::{Mock, MockServer, ResponseTemplate};
+mod common;
+use common::without_deadlocking;
 
 /// A minimal, valid service description. Turtle, matching what a queryless
 /// fetch actually receives from a real endpoint (see `tests/fetch.rs`). Also
@@ -43,9 +46,9 @@ async fn a_sweep_over_one_mock_endpoint_produces_nquads() {
         .mount(&server).await;
 
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
-    let client = Client::new(Budget::default()).unwrap();
+    let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let url = format!("{}/sparql", server.uri());
-    let (rows, _declarations_read, _not_measured) = run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default()).await;
+    let (rows, _declarations_read, _not_measured) = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
 
     assert_eq!(rows.len(), defs.len(), "one measurement per metric per endpoint");
 
@@ -137,9 +140,9 @@ async fn the_two_cors_metrics_are_not_the_same_probe() {
         .mount(&server).await;
 
     let defs = load_shipped_metrics();
-    let client = Client::new(Budget::default()).unwrap();
+    let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let url = format!("{}/sparql", server.uri());
-    let (rows, _read, _not_measured) = run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default()).await;
+    let (rows, _read, _not_measured) = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
     let verdict = |id: &str| rows.iter().find(|r| r.metric_id == id).unwrap().verdict;
 
     assert_eq!(
@@ -163,8 +166,8 @@ async fn the_two_cors_metrics_are_not_the_same_probe() {
 #[tokio::test]
 async fn an_unreachable_endpoint_yields_indeterminate_not_a_panic() {
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
-    let client = Client::new(Budget::default()).unwrap();
-    let (rows, _declarations_read, _not_measured) = run_sweep(&["http://127.0.0.1:1/sparql".to_string()], &defs, &[], &client, Budget::default()).await;
+    let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
+    let (rows, _declarations_read, _not_measured) = without_deadlocking(run_sweep(&["http://127.0.0.1:1/sparql".to_string()], &defs, &[], &client, Budget::default())).await;
     assert_eq!(rows.len(), defs.len());
     assert!(rows.iter().all(|r| r.verdict == Verdict::Indeterminate));
 }
@@ -195,9 +198,9 @@ async fn a_metric_binding_a_nonstandard_variable_is_extracted_via_its_declared_v
         cost: Cost::Cheap,
     };
 
-    let client = Client::new(Budget::default()).unwrap();
+    let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let url = format!("{}/sparql", server.uri());
-    let (rows, _declarations_read, _not_measured) = run_sweep(&[url], &[def], &[], &client, Budget::default()).await;
+    let (rows, _declarations_read, _not_measured) = without_deadlocking(run_sweep(&[url], &[def], &[], &client, Budget::default())).await;
 
     assert_eq!(rows.len(), 1);
     assert_eq!(
@@ -227,9 +230,9 @@ async fn the_sweep_fetches_the_description_once_per_endpoint() {
         .mount(&server).await;
 
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
-    let client = Client::new(Budget::default()).unwrap();
+    let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let url = format!("{}/sparql", server.uri());
-    let (rows, _declarations_read, _not_measured) = run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default()).await;
+    let (rows, _declarations_read, _not_measured) = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
 
     let queryless = server.received_requests().await.unwrap().iter()
         .filter(|r| r.method == Method::GET && r.url.query().is_none()).count();
@@ -254,9 +257,9 @@ async fn a_fetched_description_puts_a_level_on_its_row() {
         .mount(&server).await;
 
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
-    let client = Client::new(Budget::default()).unwrap();
+    let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let url = format!("{}/sparql", server.uri());
-    let (rows, _declarations_read, _not_measured) = run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default()).await;
+    let (rows, _declarations_read, _not_measured) = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
 
     let row = rows.iter().find(|r| r.metric_id == "service-description").unwrap();
     assert_eq!(row.verdict, Verdict::Verified);
@@ -291,9 +294,9 @@ async fn a_non_graded_fetch_metric_carries_no_level() {
         cost: Cost::Cheap,
     };
 
-    let client = Client::new(Budget::default()).unwrap();
+    let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let url = format!("{}/sparql", server.uri());
-    let (rows, _declarations_read, _not_measured) = run_sweep(std::slice::from_ref(&url), &[def], &[], &client, Budget::default()).await;
+    let (rows, _declarations_read, _not_measured) = without_deadlocking(run_sweep(std::slice::from_ref(&url), &[def], &[], &client, Budget::default())).await;
 
     let row = &rows[0];
     assert_eq!(row.verdict, Verdict::Verified, "the fetch itself still succeeds");
@@ -323,9 +326,9 @@ async fn a_declared_and_working_capability_resolves_to_verified_through_the_swee
         .mount(&server).await;
 
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
-    let client = Client::new(Budget::default()).unwrap();
+    let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let url = format!("{}/sparql", server.uri());
-    let (rows, _declarations_read, _not_measured) = run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default()).await;
+    let (rows, _declarations_read, _not_measured) = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
 
     let row = rows.iter().find(|r| r.metric_id == "geo-functions").unwrap();
     assert_eq!(
@@ -370,9 +373,9 @@ async fn a_description_served_as_rdf_xml_is_parsed_not_silently_dropped() {
         .mount(&server).await;
 
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
-    let client = Client::new(Budget::default()).unwrap();
+    let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let url = format!("{}/sparql", server.uri());
-    let (rows, _declarations_read, _not_measured) = run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default()).await;
+    let (rows, _declarations_read, _not_measured) = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
 
     let description = rows.iter().find(|r| r.metric_id == "service-description").unwrap();
     assert_eq!(description.verdict, Verdict::Verified, "the body did parse, as RDF/XML");
@@ -421,9 +424,9 @@ async fn sweep_description_served_as(
         .mount(&server).await;
 
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
-    let client = Client::new(Budget::default()).unwrap();
+    let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let url = format!("{}/sparql", server.uri());
-    let (rows, read, _not_measured) = run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default()).await;
+    let (rows, read, _not_measured) = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
     let row = |id: &str| rows.iter().find(|r| r.metric_id == id).unwrap();
     assert_eq!(read.len(), 1);
     let description = row("service-description");
@@ -524,10 +527,10 @@ async fn an_endpoint_budget_expiry_still_yields_one_row_per_metric() {
         metric: std::time::Duration::from_secs(5),
         endpoint: std::time::Duration::from_millis(60),
     };
-    let client = Client::new(budget).unwrap();
+    let client = Client::new(budget, Politeness::unlimited()).unwrap();
     let url = format!("{}/sparql", server.uri());
     let started = std::time::Instant::now();
-    let (rows, _declarations_read, _not_measured) = run_sweep(std::slice::from_ref(&url), &defs, &[], &client, budget).await;
+    let (rows, _declarations_read, _not_measured) = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, budget)).await;
     let took = started.elapsed();
 
     assert_eq!(rows.len(), defs.len(), "one row per (endpoint, metric) regardless of timing");
@@ -589,9 +592,9 @@ async fn a_budget_expiry_after_the_fetch_still_publishes_declarations_read() {
         metric: std::time::Duration::from_secs(5),
         endpoint: std::time::Duration::from_millis(100),
     };
-    let client = Client::new(budget).unwrap();
+    let client = Client::new(budget, Politeness::unlimited()).unwrap();
     let url = format!("{}/sparql", server.uri());
-    let (rows, read, _not_measured) = run_sweep(std::slice::from_ref(&url), &defs, &[], &client, budget).await;
+    let (rows, read, _not_measured) = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, budget)).await;
 
     // The budget really did cut the loop short, or this proves nothing about
     // the write position.
@@ -659,8 +662,8 @@ async fn each_endpoints_row_carries_the_level_computed_for_that_endpoint() {
     let rich_url = format!("{}/sparql", rich.uri());
 
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
-    let client = Client::new(Budget::default()).unwrap();
-    let (rows, _declarations_read, _not_measured) = run_sweep(&[bare_url.clone(), rich_url.clone()], &defs, &[], &client, Budget::default()).await;
+    let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
+    let (rows, _declarations_read, _not_measured) = without_deadlocking(run_sweep(&[bare_url.clone(), rich_url.clone()], &defs, &[], &client, Budget::default())).await;
 
     let level_at = |url: &str| {
         let row = rows.iter()
@@ -712,9 +715,9 @@ async fn a_description_reached_through_a_redirect_is_still_scoped_to_us() {
         .mount(&server).await;
 
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
-    let client = Client::new(Budget::default()).unwrap();
+    let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let url = format!("{}/a", server.uri());
-    let (rows, _declarations_read, _not_measured) = run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default()).await;
+    let (rows, _declarations_read, _not_measured) = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
 
     let geo = rows.iter().find(|r| r.metric_id == "geo-functions").unwrap();
     assert_eq!(
@@ -752,9 +755,9 @@ async fn a_neighbouring_datasets_declaration_is_not_credited_to_this_endpoint() 
         .mount(&server).await;
 
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
-    let client = Client::new(Budget::default()).unwrap();
+    let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let url = format!("{}/plain/sparql", server.uri());
-    let (rows, _declarations_read, _not_measured) = run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default()).await;
+    let (rows, _declarations_read, _not_measured) = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
 
     let geo = rows.iter().find(|r| r.metric_id == "geo-functions").unwrap();
     assert_eq!(
@@ -796,9 +799,9 @@ async fn sweep_with_description(body: &str, content_type: &str) -> String {
         .mount(&server).await;
 
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
-    let client = Client::new(Budget::default()).unwrap();
+    let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let url = format!("{}/sparql", server.uri());
-    let (rows, declarations_read, _not_measured) = run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default()).await;
+    let (rows, declarations_read, _not_measured) = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
     emit_nquads(&RunId("test".into()), "2026-08-20T08:00:00Z", "test-revision", &rows, &declarations_read, &[], Cost::Cheap).unwrap()
 }
 
@@ -811,9 +814,9 @@ async fn sweep_with_status(status: u16) -> String {
         .mount(&server).await;
 
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
-    let client = Client::new(Budget::default()).unwrap();
+    let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let url = format!("{}/sparql", server.uri());
-    let (rows, declarations_read, _not_measured) = run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default()).await;
+    let (rows, declarations_read, _not_measured) = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
     emit_nquads(&RunId("test".into()), "2026-08-20T08:00:00Z", "test-revision", &rows, &declarations_read, &[], Cost::Cheap).unwrap()
 }
 
@@ -831,9 +834,9 @@ async fn sweep_with_status_and_working_queries(status: u16) -> String {
         .mount(&server).await;
 
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
-    let client = Client::new(Budget::default()).unwrap();
+    let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let url = format!("{}/sparql", server.uri());
-    let (rows, declarations_read, _not_measured) = run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default()).await;
+    let (rows, declarations_read, _not_measured) = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
     emit_nquads(&RunId("test".into()), "2026-08-20T08:00:00Z", "test-revision", &rows, &declarations_read, &[], Cost::Cheap).unwrap()
 }
 
@@ -847,10 +850,10 @@ async fn sweep_two_endpoints_one_broken() -> String {
         .mount(&server).await;
 
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
-    let client = Client::new(Budget::default()).unwrap();
+    let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let good = format!("{}/sparql", server.uri());
     let broken = "http://127.0.0.1:1/sparql".to_string();
-    let (rows, declarations_read, _not_measured) = run_sweep(&[good, broken], &defs, &[], &client, Budget::default()).await;
+    let (rows, declarations_read, _not_measured) = without_deadlocking(run_sweep(&[good, broken], &defs, &[], &client, Budget::default())).await;
     emit_nquads(&RunId("test".into()), "2026-08-20T08:00:00Z", "test-revision", &rows, &declarations_read, &[], Cost::Cheap).unwrap()
 }
 
@@ -966,8 +969,8 @@ async fn a_registry_that_lists_one_url_twice_probes_it_once() {
     assert_eq!(endpoints.len(), 1, "the loader is what drops the duplicate");
 
     let defs = load_shipped_metrics();
-    let client = Client::new(Budget::default()).unwrap();
-    let (rows, read, _not_measured) = run_sweep(&endpoints, &defs, &[], &client, Budget::default()).await;
+    let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
+    let (rows, read, _not_measured) = without_deadlocking(run_sweep(&endpoints, &defs, &[], &client, Budget::default())).await;
     let run = emit_nquads(&RunId("test".into()), "2026-08-20T08:00:00Z", "test-revision", &rows, &read, &[], Cost::Cheap).unwrap();
 
     assert_eq!(count_declarations_read_quads(&run), 1, "one endpoint, one fact, whatever the registry said");
@@ -996,8 +999,8 @@ async fn a_near_duplicate_differing_by_a_trailing_slash_stays_two_entries() {
     assert_eq!(endpoints, vec![url.clone(), slashed.clone()], "these are two entries");
 
     let defs = load_shipped_metrics();
-    let client = Client::new(Budget::default()).unwrap();
-    let (rows, read, _not_measured) = run_sweep(&endpoints, &defs, &[], &client, Budget::default()).await;
+    let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
+    let (rows, read, _not_measured) = without_deadlocking(run_sweep(&endpoints, &defs, &[], &client, Budget::default())).await;
     let run = emit_nquads(&RunId("test".into()), "2026-08-20T08:00:00Z", "test-revision", &rows, &read, &[], Cost::Cheap).unwrap();
 
     assert_eq!(count_declarations_read_quads(&run), 2, "two entries, two facts");
@@ -1158,9 +1161,9 @@ async fn has_classes_reads_the_iri_c_binds_through_select_iris_not_ask_data() {
         .mount(&server).await;
 
     let defs = load_shipped_metrics();
-    let client = Client::new(Budget::default()).unwrap();
+    let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let url = format!("{}/sparql", server.uri());
-    let (rows, read, _not_measured) = run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default()).await;
+    let (rows, read, _not_measured) = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
     let run = emit_nquads(&RunId("test".into()), "2026-08-20T08:00:00Z", "test-revision", &rows, &read, &[], Cost::Cheap).unwrap();
 
     assert_eq!(
@@ -1182,10 +1185,10 @@ struct Swept {
 /// Drive the real sweep against a mock, with the definition list already split
 /// by the shipped `within_cost`.
 async fn sweep_against(server: &MockServer, run: &[MetricDef], declined: &[MetricDef]) -> Swept {
-    let client = Client::new(Budget::default()).unwrap();
+    let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let url = format!("{}/sparql", server.uri());
     let (rows, _read, not_measured) =
-        run_sweep(std::slice::from_ref(&url), run, declined, &client, Budget::default()).await;
+        without_deadlocking(run_sweep(std::slice::from_ref(&url), run, declined, &client, Budget::default())).await;
     Swept { rows, not_measured }
 }
 
@@ -1251,10 +1254,10 @@ async fn a_declined_metric_reaches_the_published_graph_with_no_verdict() {
     // ("record not measured") is met in memory and lost on disk.
     let server = an_endpoint_that_answers_everything().await;
     let (run, declined) = within_cost(&load_shipped_metrics(), Cost::Cheap);
-    let client = Client::new(Budget::default()).unwrap();
+    let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let url = format!("{}/sparql", server.uri());
     let (rows, read, not_measured) =
-        run_sweep(std::slice::from_ref(&url), &run, &declined, &client, Budget::default()).await;
+        without_deadlocking(run_sweep(std::slice::from_ref(&url), &run, &declined, &client, Budget::default())).await;
     let nq = emit_nquads(&RunId("test".into()), "2026-08-20T08:00:00Z", "test-revision",
                          &rows, &read, &not_measured, Cost::Cheap).unwrap();
     let quads = quads_of(&nq);
@@ -1303,10 +1306,10 @@ async fn a_declined_metric_is_recorded_once_per_endpoint() {
     let (run, declined) = within_cost(&load_shipped_metrics(), Cost::Cheap);
     assert_eq!(declined.len(), 1, "the fixture assumes exactly one expensive metric");
 
-    let client = Client::new(Budget::default()).unwrap();
+    let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let urls = vec![format!("{}/sparql", a.uri()), format!("{}/sparql", b.uri())];
     let (_rows, _read, not_measured) =
-        run_sweep(&urls, &run, &declined, &client, Budget::default()).await;
+        without_deadlocking(run_sweep(&urls, &run, &declined, &client, Budget::default())).await;
 
     assert_eq!(
         not_measured.len(),
@@ -1317,4 +1320,102 @@ async fn a_declined_metric_is_recorded_once_per_endpoint() {
         not_measured.iter().map(|n| n.endpoint.as_str()).collect();
     let expected: std::collections::BTreeSet<&str> = urls.iter().map(|u| u.as_str()).collect();
     assert_eq!(named, expected, "each endpoint is named by exactly one fact");
+}
+
+/// `availability` must not report `verified` for an endpoint that refused to
+/// serve us. A throttle carrying a SPARQL-results body was resolving to a
+/// confirmation, because the Liveness positive case was the only one in
+/// `resolve()` reading a parsed body without checking the status alongside it.
+/// `Cors` is the one deliberate exception, and it is header-justified.
+#[tokio::test]
+async fn a_throttled_endpoint_is_not_reported_available_even_with_a_parseable_body() {
+    for status in [429u16, 503] {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(status)
+                    .insert_header("content-type", "application/sparql-results+json")
+                    .set_body_raw(r#"{"head":{"vars":["s"]},"results":{"bindings":[]}}"#,
+                                  "application/sparql-results+json"),
+            )
+            .mount(&server)
+            .await;
+
+        let defs = load_shipped_metrics();
+        let def = defs.iter().find(|d| d.id == "availability").unwrap().clone();
+        let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
+        let url = format!("{}/sparql", server.uri());
+        let (rows, _read, _nm) =
+            without_deadlocking(run_sweep(std::slice::from_ref(&url), &[def], &[], &client, Budget::default())).await;
+
+        assert_eq!(
+            rows[0].verdict,
+            Verdict::Indeterminate,
+            "status {status} means it refused to answer, so availability is unknown, not confirmed"
+        );
+    }
+}
+
+/// Why a recorded `Retry-After` needs no bound of its own, as a test rather
+/// than as prose. A host that asks for an hour gets an hour: the metrics that
+/// follow wait at the gate, their metric budgets cancel them, and they report
+/// `indeterminate`, which is exactly what never getting to ask looks like. A
+/// bound inside the gate would be a second place deciding how long we wait,
+/// and the budgets already decide it.
+///
+/// The budgets are scaled so the hour is cancelled in milliseconds rather than
+/// in an hour. The ratios are what the sweep depends on, not the numbers.
+#[tokio::test]
+async fn a_host_that_asked_for_an_hour_indeterminates_the_rest_of_its_sweep() {
+    let server = MockServer::start().await;
+    // Throttled once with an hour, and healthy from then on. Answering
+    // normally afterwards is what makes the assertions below about the gate
+    // rather than about the server: every row is `indeterminate` because we
+    // never asked again, not because we were refused again.
+    Mock::given(method("GET")).and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(429).insert_header("retry-after", "3600"))
+        .up_to_n_times(1)
+        .with_priority(1)
+        .mount(&server).await;
+    Mock::given(method("GET")).and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(200)
+            .insert_header("access-control-allow-origin", "*")
+            .set_body_string(r#"{"head":{"vars":["s"]},"results":{"bindings":[{"s":{"type":"uri","value":"http://example.org/a"}}]},"boolean":true}"#))
+        .with_priority(2)
+        .mount(&server).await;
+    Mock::given(method("OPTIONS")).and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(204)
+            .insert_header("access-control-allow-origin", "*")
+            .insert_header("access-control-allow-methods", "GET, POST, OPTIONS"))
+        .mount(&server).await;
+
+    let budget = Budget {
+        request: std::time::Duration::from_millis(200),
+        metric: std::time::Duration::from_millis(400),
+        endpoint: std::time::Duration::from_secs(10),
+    };
+    let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
+    // The real default cap, so the hour is beyond it: we do not wait for our
+    // own retry, and the host is deferred all the same.
+    let client = Client::new(budget, Politeness::new(std::time::Duration::ZERO)).unwrap();
+    let url = format!("{}/sparql", server.uri());
+    let (rows, _declarations_read, _not_measured) =
+        without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, budget)).await;
+
+    assert_eq!(server.received_requests().await.unwrap().len(), 1,
+               "one request, and the hour it asked for held every later probe back");
+    let not_indeterminate: Vec<&str> = rows.iter()
+        .filter(|r| r.verdict != Verdict::Indeterminate)
+        .map(|r| r.metric_id.as_str())
+        .collect();
+    assert!(not_indeterminate.is_empty(),
+            "a metric we never got to ask about must read indeterminate, got {not_indeterminate:?}");
+    // Exactly one row measured anything: the queryless description fetch, which
+    // is the request that was throttled. Every other metric was cancelled while
+    // waiting at the gate, so it carries no `elapsedMs`, because nothing was
+    // measured.
+    let measured: Vec<&str> = rows.iter().filter(|r| r.elapsed_ms.is_some())
+        .map(|r| r.metric_id.as_str()).collect();
+    assert_eq!(measured, ["service-description"],
+               "only the throttled request measured a time; the cancelled metrics measured nothing");
 }

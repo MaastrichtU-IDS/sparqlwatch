@@ -1,8 +1,11 @@
 use sparqlwatch_prober::budget::Budget;
 use sparqlwatch_prober::client::Client;
+use sparqlwatch_prober::politeness::Politeness;
 use sparqlwatch_prober::observe::BodyKind;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
+mod common;
+use common::without_deadlocking;
 
 #[tokio::test]
 async fn ask_reads_boolean_and_cors() {
@@ -13,8 +16,8 @@ async fn ask_reads_boolean_and_cors() {
             .set_body_string(r#"{"head":{},"boolean":true}"#))
         .mount(&server).await;
 
-    let c = Client::new(Budget::default()).unwrap();
-    let o = c.ask(&format!("{}/sparql", server.uri()), "ASK{}").await;
+    let c = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
+    let o = without_deadlocking(c.ask(&format!("{}/sparql", server.uri()), "ASK{}")).await;
     assert_eq!(o.status, Some(200));
     assert_eq!(o.boolean, Some(true));
     assert!(o.cors);
@@ -34,8 +37,8 @@ async fn an_html_body_is_recognised_as_a_front_end() {
             .set_body_string("<!doctype html><html><body>YASGUI</body></html>"))
         .mount(&server).await;
 
-    let c = Client::new(Budget::default()).unwrap();
-    let o = c.ask(&format!("{}/sparql", server.uri()), "ASK{}").await;
+    let c = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
+    let o = without_deadlocking(c.ask(&format!("{}/sparql", server.uri()), "ASK{}")).await;
     assert_eq!(o.body_kind, BodyKind::Html);
     assert_eq!(o.boolean, None);
 }
@@ -47,17 +50,17 @@ async fn missing_cors_header_is_recorded() {
         .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"boolean":false}"#))
         .mount(&server).await;
 
-    let c = Client::new(Budget::default()).unwrap();
-    let o = c.ask(&format!("{}/sparql", server.uri()), "ASK{}").await;
+    let c = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
+    let o = without_deadlocking(c.ask(&format!("{}/sparql", server.uri()), "ASK{}")).await;
     assert!(!o.cors);
     assert_eq!(o.boolean, Some(false));
 }
 
 #[tokio::test]
 async fn a_connection_failure_becomes_an_error_not_a_panic() {
-    let c = Client::new(Budget::default()).unwrap();
+    let c = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     // Port 1 is reserved and nothing listens there.
-    let o = c.ask("http://127.0.0.1:1/sparql", "ASK{}").await;
+    let o = without_deadlocking(c.ask("http://127.0.0.1:1/sparql", "ASK{}")).await;
     assert!(o.error.is_some());
     assert_eq!(o.status, None);
 }
@@ -72,8 +75,8 @@ async fn an_html_body_without_a_content_type_is_still_detected() {
             .set_body_string("<!doctype html><html><body>YASGUI</body></html>"))
         .mount(&server).await;
 
-    let c = Client::new(Budget::default()).unwrap();
-    let o = c.ask(&format!("{}/sparql", server.uri()), "ASK{}").await;
+    let c = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
+    let o = without_deadlocking(c.ask(&format!("{}/sparql", server.uri()), "ASK{}")).await;
     assert_eq!(o.body_kind, BodyKind::Html);
 }
 
@@ -91,8 +94,8 @@ async fn select_returns_only_iri_bindings() {
         }"#))
         .mount(&server).await;
 
-    let c = Client::new(Budget::default()).unwrap();
-    let o = c.select_iris(&format!("{}/sparql", server.uri()), "SELECT ?c WHERE{}", "c").await;
+    let c = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
+    let o = without_deadlocking(c.select_iris(&format!("{}/sparql", server.uri()), "SELECT ?c WHERE{}", "c")).await;
     assert_eq!(o.bindings, vec![
         "http://example.org/Feature".to_string(),
         "http://example.org/Geometry".to_string(),
@@ -114,8 +117,8 @@ async fn aswkt_probe_rejects_non_literal_objects() {
         }"#))
         .mount(&server).await;
 
-    let c = Client::new(Budget::default()).unwrap();
-    let o = c.ask_literal(&format!("{}/sparql", server.uri()), "SELECT ?g WHERE{}", "g").await;
+    let c = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
+    let o = without_deadlocking(c.ask_literal(&format!("{}/sparql", server.uri()), "SELECT ?g WHERE{}", "g")).await;
     assert_eq!(o.boolean, Some(false), "an IRI object must not count as geometry");
 }
 
@@ -132,8 +135,8 @@ async fn aswkt_probe_accepts_a_literal_object() {
         }"#))
         .mount(&server).await;
 
-    let c = Client::new(Budget::default()).unwrap();
-    let o = c.ask_literal(&format!("{}/sparql", server.uri()), "SELECT ?g WHERE{}", "g").await;
+    let c = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
+    let o = without_deadlocking(c.ask_literal(&format!("{}/sparql", server.uri()), "SELECT ?g WHERE{}", "g")).await;
     assert_eq!(o.boolean, Some(true));
 }
 
@@ -159,15 +162,15 @@ async fn only_the_two_cors_probes_announce_an_origin() {
             .insert_header("access-control-allow-origin", "*"))
         .mount(&server).await;
 
-    let c = Client::new(Budget::default()).unwrap();
+    let c = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let url = format!("{}/sparql", server.uri());
-    c.ask(&url, "ASK{}").await;
-    c.select_iris(&url, "SELECT ?c WHERE{}", "c").await;
-    c.ask_literal(&url, "SELECT ?g WHERE{}", "g").await;
-    c.fetch_rdf(&url).await;
-    let cors = c.cors(&url, "ASK{}").await;
+    without_deadlocking(c.ask(&url, "ASK{}")).await;
+    without_deadlocking(c.select_iris(&url, "SELECT ?c WHERE{}", "c")).await;
+    without_deadlocking(c.ask_literal(&url, "SELECT ?g WHERE{}", "g")).await;
+    without_deadlocking(c.fetch_rdf(&url)).await;
+    let cors = without_deadlocking(c.cors(&url, "ASK{}")).await;
     assert!(cors.cors, "the cors probe still reads the header back");
-    let preflight = c.preflight(&url).await;
+    let preflight = without_deadlocking(c.preflight(&url)).await;
     assert_eq!(preflight.allow_origin.as_deref(), Some("*"), "the preflight still reads its headers back");
 
     let seen = server.received_requests().await.unwrap();

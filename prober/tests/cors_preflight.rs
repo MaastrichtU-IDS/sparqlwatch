@@ -11,12 +11,15 @@
 
 use sparqlwatch_prober::budget::Budget;
 use sparqlwatch_prober::client::{Client, ORIGIN};
+use sparqlwatch_prober::politeness::Politeness;
 use sparqlwatch_prober::metrics::{Cost, MetricDef, ProbeKind};
 use sparqlwatch_prober::observe::{BodyKind, Observation};
 use sparqlwatch_prober::resolve::{resolve, Declared};
 use sparqlwatch_prober::verdict::Verdict;
 use wiremock::matchers::{header, header_exists, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
+mod common;
+use common::without_deadlocking;
 
 /// The shipped `cors-preflight` metric's shape. No `declared_by`: no
 /// declaration in any service-description vocabulary speaks for a CORS
@@ -39,8 +42,8 @@ fn preflight_def() -> MetricDef {
 /// Probe `url` with the preflight and resolve the result, returning both so a
 /// test can assert the verdict and the evidence it came from.
 async fn preflight_and_resolve(url: &str) -> (Verdict, Observation) {
-    let c = Client::new(Budget::default()).unwrap();
-    let o = c.preflight(url).await;
+    let c = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
+    let o = without_deadlocking(c.preflight(url)).await;
     let v = resolve(&preflight_def(), Declared { claimed: false }, Ok(&o));
     (v, o)
 }

@@ -1,11 +1,14 @@
 use sparqlwatch_prober::budget::Budget;
 use sparqlwatch_prober::client::Client;
+use sparqlwatch_prober::politeness::Politeness;
 use sparqlwatch_prober::declare::parse_declarations;
 use sparqlwatch_prober::observe::BodyKind;
 use sparqlwatch_prober::resolve::resolve_fetch;
 use sparqlwatch_prober::verdict::{Level, Verdict};
 use wiremock::matchers::{headers, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
+mod common;
+use common::without_deadlocking;
 
 const STUB: &str = r#"
 @prefix sd: <http://www.w3.org/ns/sparql-service-description#> .
@@ -26,8 +29,8 @@ async fn a_turtle_body_is_classified_as_rdf_and_retained() {
             .set_body_raw(STUB.as_bytes().to_vec(), "text/turtle"))
         .mount(&server).await;
 
-    let c = Client::new(Budget::default()).unwrap();
-    let o = c.fetch_rdf(&format!("{}/sparql", server.uri())).await;
+    let c = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
+    let o = without_deadlocking(c.fetch_rdf(&format!("{}/sparql", server.uri()))).await;
     assert_eq!(o.status, Some(200));
     assert_eq!(o.body_kind, BodyKind::Rdf);
     assert!(o.body.as_deref().unwrap().contains("sd:Service"));
@@ -45,8 +48,8 @@ async fn the_fetch_sends_no_query_parameter() {
             .insert_header("content-type", "text/turtle").set_body_string(STUB))
         .mount(&server).await;
 
-    let c = Client::new(Budget::default()).unwrap();
-    let _ = c.fetch_rdf(&format!("{}/sparql", server.uri())).await;
+    let c = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
+    let _ = without_deadlocking(c.fetch_rdf(&format!("{}/sparql", server.uri()))).await;
     let reqs = server.received_requests().await.unwrap();
     assert_eq!(reqs.len(), 1);
     assert!(reqs[0].url.query().is_none(), "fetch must not send a query string, got {:?}", reqs[0].url.query());
@@ -64,8 +67,8 @@ async fn the_fetch_sends_no_origin() {
             .insert_header("content-type", "text/turtle").set_body_string(STUB))
         .mount(&server).await;
 
-    let c = Client::new(Budget::default()).unwrap();
-    let _ = c.fetch_rdf(&format!("{}/sparql", server.uri())).await;
+    let c = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
+    let _ = without_deadlocking(c.fetch_rdf(&format!("{}/sparql", server.uri()))).await;
     let reqs = server.received_requests().await.unwrap();
     assert_eq!(reqs.len(), 1);
     assert!(
@@ -93,8 +96,8 @@ async fn the_fetch_asks_for_rdf_not_sparql_results() {
             .set_body_raw(STUB.as_bytes().to_vec(), "text/turtle"))
         .mount(&server).await;
 
-    let c = Client::new(Budget::default()).unwrap();
-    let o = c.fetch_rdf(&format!("{}/sparql", server.uri())).await;
+    let c = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
+    let o = without_deadlocking(c.fetch_rdf(&format!("{}/sparql", server.uri()))).await;
     assert_eq!(o.status, Some(200), "the Accept matcher did not match");
 }
 
@@ -107,8 +110,8 @@ async fn an_html_console_is_not_rdf() {
             .set_body_string("<!doctype html><html><body>YASGUI</body></html>"))
         .mount(&server).await;
 
-    let c = Client::new(Budget::default()).unwrap();
-    let o = c.fetch_rdf(&format!("{}/sparql", server.uri())).await;
+    let c = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
+    let o = without_deadlocking(c.fetch_rdf(&format!("{}/sparql", server.uri()))).await;
     assert_eq!(o.body_kind, BodyKind::Html);
 }
 
@@ -119,8 +122,8 @@ async fn a_404_is_recorded_with_its_status_not_as_a_transport_error() {
         .respond_with(ResponseTemplate::new(404).set_body_string("nope"))
         .mount(&server).await;
 
-    let c = Client::new(Budget::default()).unwrap();
-    let o = c.fetch_rdf(&format!("{}/sparql", server.uri())).await;
+    let c = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
+    let o = without_deadlocking(c.fetch_rdf(&format!("{}/sparql", server.uri()))).await;
     assert_eq!(o.status, Some(404));
     assert!(o.error.is_none(), "a 404 is an answer, not a transport failure");
     assert_ne!(o.body_kind, BodyKind::Rdf);
@@ -153,9 +156,9 @@ async fn fetch_and_resolve(status: u16, ctype: Option<&str>, body: &str) -> (Ver
     }
     Mock::given(method("GET")).and(path("/sparql")).respond_with(template).mount(&server).await;
 
-    let c = Client::new(Budget::default()).unwrap();
+    let c = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let url = format!("{}/sparql", server.uri());
-    let o = c.fetch_rdf(&url).await;
+    let o = without_deadlocking(c.fetch_rdf(&url)).await;
     let declarations = parse_declarations(o.body.as_deref().unwrap_or(""), o.content_type.as_deref(), &url);
     let (verdict, level) = resolve_fetch(&declarations, Ok(&o));
     (verdict, level, o.body_kind)
@@ -324,8 +327,8 @@ async fn a_redirected_fetch_records_the_url_it_landed_on() {
             .set_body_raw(STUB.as_bytes().to_vec(), "text/turtle"))
         .mount(&server).await;
 
-    let c = Client::new(Budget::default()).unwrap();
-    let o = c.fetch_rdf(&format!("{}/a", server.uri())).await;
+    let c = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
+    let o = without_deadlocking(c.fetch_rdf(&format!("{}/a", server.uri()))).await;
     assert_eq!(o.status, Some(200), "the redirect was followed");
     assert_eq!(o.final_url.as_deref(), Some(format!("{}/b", server.uri()).as_str()),
                "the observation must carry the URL the fetch ended on, not the one it started at");
@@ -339,9 +342,9 @@ async fn a_fetch_that_was_not_redirected_records_the_url_it_asked_for() {
             .set_body_raw(STUB.as_bytes().to_vec(), "text/turtle"))
         .mount(&server).await;
 
-    let c = Client::new(Budget::default()).unwrap();
+    let c = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let url = format!("{}/sparql", server.uri());
-    let o = c.fetch_rdf(&url).await;
+    let o = without_deadlocking(c.fetch_rdf(&url)).await;
     assert_eq!(o.final_url.as_deref(), Some(url.as_str()));
 }
 
@@ -355,19 +358,19 @@ async fn a_probe_that_is_not_a_fetch_records_no_final_url() {
         .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"head":{},"boolean":true}"#))
         .mount(&server).await;
 
-    let c = Client::new(Budget::default()).unwrap();
+    let c = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let url = format!("{}/sparql", server.uri());
-    assert!(c.ask(&url, "ASK {}").await.final_url.is_none());
-    assert!(c.cors(&url, "ASK {}").await.final_url.is_none());
+    assert!(without_deadlocking(c.ask(&url, "ASK {}")).await.final_url.is_none());
+    assert!(without_deadlocking(c.cors(&url, "ASK {}")).await.final_url.is_none());
 }
 
 #[tokio::test]
 async fn a_failed_fetch_records_no_final_url() {
     // Nothing was reached, so there is no URL we landed on. `None` here and a
     // `Some` on every answered fetch is what lets a reader tell the two apart.
-    let c = Client::new(Budget::default()).unwrap();
+    let c = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     // Port 0 is unconnectable, so this fails in transport without a server.
-    let o = c.fetch_rdf("http://127.0.0.1:0/sparql").await;
+    let o = without_deadlocking(c.fetch_rdf("http://127.0.0.1:0/sparql")).await;
     assert!(o.error.is_some(), "the fetch must have failed for this test to mean anything");
     assert!(o.final_url.is_none());
 }
