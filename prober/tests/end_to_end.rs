@@ -196,6 +196,7 @@ async fn a_metric_binding_a_nonstandard_variable_is_extracted_via_its_declared_v
         declared_by: None,
         graded: false,
         cost: Cost::Cheap,
+        sample_limit: None,
     };
 
     let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
@@ -292,6 +293,7 @@ async fn a_non_graded_fetch_metric_carries_no_level() {
         declared_by: None,
         graded: false,
         cost: Cost::Cheap,
+        sample_limit: None,
     };
 
     let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
@@ -519,6 +521,7 @@ async fn an_endpoint_budget_expiry_still_yields_one_row_per_metric() {
             declared_by: None,
             graded: false,
             cost: Cost::Cheap,
+            sample_limit: None,
         })
         .collect();
 
@@ -584,6 +587,7 @@ async fn a_budget_expiry_after_the_fetch_still_publishes_declarations_read() {
             declared_by: None,
             graded: false,
             cost: Cost::Cheap,
+            sample_limit: None,
         })
         .collect();
 

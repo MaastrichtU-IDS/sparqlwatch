@@ -114,6 +114,7 @@ dimension = "content"
 kind = "SelectIris"
 var = "c"
 cost = "expensive"
+sample_limit = 200
 query = """
 SELECT DISTINCT ?c WHERE { { ?s a ?c } UNION { GRAPH ?anyg { ?s a ?c } } } LIMIT 200
 """
