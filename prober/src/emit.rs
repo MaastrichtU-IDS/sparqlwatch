@@ -71,6 +71,41 @@ pub struct NotMeasured {
     pub reason: NotMeasuredReason,
 }
 
+/// What one enumerating probe actually saw. Published so a reader can ask
+/// "which classes does this endpoint hold" instead of only "does it hold any",
+/// which is the question the whole project exists to answer before somebody
+/// writes a query.
+///
+/// Deliberately NOT a `void:classPartition` / `void:class` structure, and not
+/// any other borrowed vocabulary. Both of those carry `rdfs:domain
+/// void:Dataset`, so either one here would entail under plain RDFS that this
+/// sample IS a dataset description. It is not: it is an observation from a
+/// bounded query against a service, and the thing behind that service may be
+/// several datasets or a virtual graph over a relational store (`ontop`, in
+/// our own `endpoints.toml`). The same mistake was already shipped once on
+/// this project, when the `NotMeasured` fact reused `dqv:computedOn` and
+/// `dqv:isMeasurementOf` and thereby entailed that 548 deliberately declined
+/// pairs were measurements. Nothing broke until a consumer ran inference, and
+/// no test could have caught it, so the rule is now the type's own
+/// documentation: a sample carries our own predicates, `rdf:type`, and
+/// `prov:wasGeneratedBy`, and nothing else.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContentSample {
+    pub endpoint: String,
+    pub metric_id: String,
+    /// The IRIs the probe actually bound, in the order the endpoint returned
+    /// them. Not sorted: the order is evidence about the endpoint, and sorting
+    /// would discard it for a tidiness nobody asked for. Not deduplicated
+    /// either -- `SELECT DISTINCT` already did that, and doing it again here
+    /// would hide an endpoint that ignores `DISTINCT`.
+    pub values: Vec<String>,
+    /// True when `values.len()` reached the metric's declared `sample_limit`,
+    /// so a further value may exist and we did not see it. A list a reader
+    /// believes is complete when it is not is the content equivalent of a
+    /// confident wrong answer, so this is published rather than inferred.
+    pub truncated: bool,
+}
+
 fn nn(s: &str) -> anyhow::Result<NamedNode> {
     Ok(NamedNode::new(s)?)
 }
@@ -89,6 +124,18 @@ fn nn(s: &str) -> anyhow::Result<NamedNode> {
 /// activity. It is a parameter rather than something this function discovers:
 /// `emit_nquads` reads no clock, no environment and no global, so the same
 /// inputs always produce the same document.
+///
+/// `content_samples` are what the enumerating probes saw, published verbatim
+/// and in the endpoint's own order.
+///
+/// The eighth parameter puts this one over clippy's seven-argument line, and
+/// the suppression is deliberate rather than a shrug: each parameter is a
+/// distinct fact list this function must publish, none is optional, and
+/// bundling them into an "emission input" struct would only move the same
+/// eight names one layer out while making the positional call sites read as a
+/// literal that has to be built. When a ninth arrives, that struct is the
+/// right answer and this attribute is the signal to write it.
+#[allow(clippy::too_many_arguments)]
 pub fn emit_nquads(
     run: &RunId,
     generated_at: &str,
@@ -97,6 +144,7 @@ pub fn emit_nquads(
     declarations_read: &[DeclarationsRead],
     not_measured: &[NotMeasured],
     max_cost: Cost,
+    content_samples: &[ContentSample],
 ) -> anyhow::Result<String> {
     let graph = GraphName::NamedNode(nn(&format!("urn:sparqlwatch:run:{}", run.0))?);
     let activity = nn(&format!("urn:sparqlwatch:activity:{}", run.0))?;
@@ -312,6 +360,127 @@ pub fn emit_nquads(
         ));
     }
 
+    // A third IRI space, sharing neither the measurement counter nor the
+    // not-measured one, for the same reason those two are separate: three fact
+    // types live in one graph, and a consumer joining on any of their subjects
+    // must never land on a node that is several things at once. Distinct
+    // counters also mean the shapes cannot collide by arithmetic accident when
+    // one of the lists is empty.
+    for (i, sample) in content_samples.iter().enumerate() {
+        // Same non-fatal handling as every other fact: one junk endpoint out of
+        // 548 must not cost the sweep its whole output after the probing is
+        // already paid for.
+        let endpoint = match NamedNode::new(&sample.endpoint) {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!(
+                    endpoint = %sample.endpoint,
+                    metric = %sample.metric_id,
+                    error = %e,
+                    "skipping content sample: endpoint is not a valid IRI"
+                );
+                continue;
+            }
+        };
+        let subj = NamedOrBlankNode::NamedNode(nn(&format!(
+            "urn:sparqlwatch:content-sample:{}:{}",
+            run.0, i
+        ))?);
+        if typed_endpoints.insert(sample.endpoint.clone()) {
+            quads.push(Quad::new(
+                NamedOrBlankNode::NamedNode(endpoint.clone()),
+                rdf::TYPE.into_owned(),
+                Term::NamedNode(nn(&format!("{DCAT}DataService"))?),
+                graph.clone(),
+            ));
+        }
+        quads.push(Quad::new(
+            subj.clone(),
+            rdf::TYPE.into_owned(),
+            Term::NamedNode(nn("urn:sparqlwatch:ContentSample")?),
+            graph.clone(),
+        ));
+        // Sparqlwatch-owned predicates throughout, for the reason spelled out
+        // on `ContentSample` itself: `void:classPartition` and `void:class`
+        // both declare `rdfs:domain void:Dataset`, so borrowing either would
+        // entail that this observation is a dataset description. An
+        // undeclared predicate entails nothing, which is exactly what we want
+        // to say.
+        quads.push(Quad::new(
+            subj.clone(),
+            nn("urn:sparqlwatch:sampledFrom")?,
+            Term::NamedNode(endpoint),
+            graph.clone(),
+        ));
+        quads.push(Quad::new(
+            subj.clone(),
+            nn("urn:sparqlwatch:sampledBy")?,
+            Term::NamedNode(nn(&format!("urn:sparqlwatch:metric:{}", sample.metric_id))?),
+            graph.clone(),
+        ));
+        // Published, never left to be inferred from the count: a consumer
+        // cannot recompute this without knowing the metric's `sample_limit`,
+        // and a list silently believed complete is the failure this fact
+        // exists to prevent.
+        quads.push(Quad::new(
+            subj.clone(),
+            nn("urn:sparqlwatch:sampleTruncated")?,
+            Term::Literal(Literal::new_typed_literal(
+                if sample.truncated { "true" } else { "false" },
+                xsd::BOOLEAN,
+            )),
+            graph.clone(),
+        ));
+        // How many the endpoint bound, which is what we saw. A value below
+        // that survives serialization only if it is a well-formed IRI, so the
+        // size and the number of `sampledValue` quads can differ; the size
+        // reports the observation, the quads report what could be written.
+        quads.push(Quad::new(
+            subj.clone(),
+            nn("urn:sparqlwatch:sampleSize")?,
+            Term::Literal(Literal::new_typed_literal(
+                sample.values.len().to_string(),
+                xsd::INTEGER,
+            )),
+            graph.clone(),
+        ));
+        // In the endpoint's order, untouched: not sorted, not filtered, not
+        // deduplicated. `SELECT DISTINCT` already deduplicated, and reordering
+        // would discard evidence about the endpoint for no gain.
+        for value in &sample.values {
+            let value = match NamedNode::new(value) {
+                Ok(n) => n,
+                Err(e) => {
+                    tracing::warn!(
+                        endpoint = %sample.endpoint,
+                        metric = %sample.metric_id,
+                        value = %value,
+                        error = %e,
+                        "skipping sampled value: not a valid IRI"
+                    );
+                    continue;
+                }
+            };
+            quads.push(Quad::new(
+                subj.clone(),
+                nn("urn:sparqlwatch:sampledValue")?,
+                Term::NamedNode(value),
+                graph.clone(),
+            ));
+        }
+        // The same link every other fact carries, and safe for the same
+        // reason: PROV-O gives `prov:wasGeneratedBy` the domain `prov:Entity`,
+        // and a sample genuinely is a thing this run produced. Without it, a
+        // consumer holding a sample cannot reach the run that took it except
+        // by assuming the naming convention.
+        quads.push(Quad::new(
+            subj,
+            nn(&format!("{PROV}wasGeneratedBy"))?,
+            Term::NamedNode(activity.clone()),
+            graph.clone(),
+        ));
+    }
+
     for fact in declarations_read {
         // Same non-fatal handling as a measurement row above: one bad
         // endpoint string must not cost every other endpoint its fact.
@@ -404,7 +573,7 @@ mod tests {
     }
 
     fn emit(rows: &[MeasurementRow]) -> Vec<Quad> {
-        let out = emit_nquads(&RunId("r1".into()), "2026-08-20T08:00:00Z", REV, rows, &[], &[], Cost::Cheap).unwrap();
+        let out = emit_nquads(&RunId("r1".into()), "2026-08-20T08:00:00Z", REV, rows, &[], &[], Cost::Cheap, &[]).unwrap();
         quads_of(&out)
     }
 
@@ -414,7 +583,7 @@ mod tests {
 
     #[test]
     fn every_quad_lands_in_the_run_graph() {
-        let out = emit_nquads(&RunId("2026-08-20T08:00:00Z".into()), "2026-08-20T08:00:00Z", REV, &rows(), &[], &[], Cost::Cheap).unwrap();
+        let out = emit_nquads(&RunId("2026-08-20T08:00:00Z".into()), "2026-08-20T08:00:00Z", REV, &rows(), &[], &[], Cost::Cheap, &[]).unwrap();
         let expected = GraphName::NamedNode(
             NamedNode::new("urn:sparqlwatch:run:2026-08-20T08:00:00Z").unwrap(),
         );
@@ -510,7 +679,7 @@ mod tests {
                 elapsed_ms: Some(3),
             },
         );
-        let out = emit_nquads(&RunId("r1".into()), "2026-08-20T08:00:00Z", REV, &rs, &[], &[], Cost::Cheap)
+        let out = emit_nquads(&RunId("r1".into()), "2026-08-20T08:00:00Z", REV, &rs, &[], &[], Cost::Cheap, &[])
             .expect("one junk endpoint must not discard the sweep");
         assert!(!out.contains("not an iri at all"));
         let qs = quads_of(&out);
@@ -578,7 +747,7 @@ mod tests {
     #[test]
     fn declarations_read_emits_a_boolean_quad_shaped_for_the_run() {
         let facts = vec![DeclarationsRead { endpoint: "https://qlever.dev/api/osm-planet".into(), read: true }];
-        let out = emit_nquads(&RunId("r1".into()), "2026-08-20T08:00:00Z", REV, &[], &facts, &[], Cost::Cheap).unwrap();
+        let out = emit_nquads(&RunId("r1".into()), "2026-08-20T08:00:00Z", REV, &[], &facts, &[], Cost::Cheap, &[]).unwrap();
         let qs = quads_of(&out);
         let q = qs
             .iter()
@@ -607,7 +776,7 @@ mod tests {
             DeclarationsRead { endpoint: "https://a.example/sparql".into(), read: true },
             DeclarationsRead { endpoint: "https://b.example/sparql".into(), read: false },
         ];
-        let out = emit_nquads(&RunId("r1".into()), "2026-08-20T08:00:00Z", REV, &[], &facts, &[], Cost::Cheap).unwrap();
+        let out = emit_nquads(&RunId("r1".into()), "2026-08-20T08:00:00Z", REV, &[], &facts, &[], Cost::Cheap, &[]).unwrap();
         let qs = quads_of(&out);
         let read_quads: Vec<&Quad> =
             qs.iter().filter(|q| q.predicate.as_str() == "urn:sparqlwatch:declarationsRead").collect();
@@ -620,7 +789,7 @@ mod tests {
             endpoint: "http://example.org/sparql".into(),
             metric_id: "classes".into(),
             reason: NotMeasuredReason::CostCeiling,
-        }], Cost::Cheap).unwrap();
+        }], Cost::Cheap, &[]).unwrap();
 
         assert!(nq.contains("urn:sparqlwatch:NotMeasured"));
         assert!(nq.contains("cost-ceiling"));
@@ -640,7 +809,7 @@ mod tests {
             metric_id: "classes".into(),
             reason: NotMeasuredReason::CostCeiling,
         }];
-        let nq = emit_nquads(&RunId(AT.into()), AT, REV, &rows, &[], &nm, Cost::Cheap).unwrap();
+        let nq = emit_nquads(&RunId(AT.into()), AT, REV, &rows, &[], &nm, Cost::Cheap, &[]).unwrap();
 
         // Collect the two subject sets separately, each by the rdf:type that
         // marks what kind of fact it is. Do NOT filter on a substring of one
@@ -678,7 +847,7 @@ mod tests {
             metric_id: "classes".into(),
             reason: NotMeasuredReason::CostCeiling,
         }];
-        let out = emit_nquads(&RunId("r1".into()), AT, REV, &[], &[], &nm, Cost::Cheap).unwrap();
+        let out = emit_nquads(&RunId("r1".into()), AT, REV, &[], &[], &nm, Cost::Cheap, &[]).unwrap();
         let qs = quads_of(&out);
         let subj = NamedOrBlankNode::NamedNode(
             NamedNode::new("urn:sparqlwatch:not-measured:r1:0").unwrap(),
@@ -728,7 +897,7 @@ mod tests {
             metric_id: "classes".into(),
             reason: NotMeasuredReason::CostCeiling,
         }];
-        let out = emit_nquads(&RunId("r1".into()), AT, REV, &[], &[], &nm, Cost::Expensive).unwrap();
+        let out = emit_nquads(&RunId("r1".into()), AT, REV, &[], &[], &nm, Cost::Expensive, &[]).unwrap();
         let qs = quads_of(&out);
         let subj = NamedOrBlankNode::NamedNode(
             NamedNode::new("urn:sparqlwatch:not-measured:r1:0").unwrap(),
@@ -782,7 +951,7 @@ mod tests {
                 reason: NotMeasuredReason::CostCeiling,
             },
         ];
-        let out = emit_nquads(&RunId("r1".into()), AT, REV, &rows(), &[], &nm, Cost::Cheap).unwrap();
+        let out = emit_nquads(&RunId("r1".into()), AT, REV, &rows(), &[], &nm, Cost::Cheap, &[]).unwrap();
         let qs = quads_of(&out);
 
         let declined: BTreeSet<String> = qs
@@ -824,7 +993,7 @@ mod tests {
             NotMeasured { endpoint: "http://a.example/sparql".into(), metric_id: "classes".into(), reason: NotMeasuredReason::CostCeiling },
             NotMeasured { endpoint: "http://b.example/sparql".into(), metric_id: "classes".into(), reason: NotMeasuredReason::CostCeiling },
         ];
-        let out = emit_nquads(&RunId("r1".into()), AT, REV, &[], &[], &nm, Cost::Cheap).unwrap();
+        let out = emit_nquads(&RunId("r1".into()), AT, REV, &[], &[], &nm, Cost::Cheap, &[]).unwrap();
         let qs = quads_of(&out);
         let subjects: BTreeSet<String> = qs
             .iter()
@@ -842,7 +1011,7 @@ mod tests {
             NotMeasured { endpoint: "not an iri at all".into(), metric_id: "classes".into(), reason: NotMeasuredReason::CostCeiling },
             NotMeasured { endpoint: "http://b.example/sparql".into(), metric_id: "classes".into(), reason: NotMeasuredReason::CostCeiling },
         ];
-        let out = emit_nquads(&RunId("r1".into()), AT, REV, &[], &[], &nm, Cost::Cheap)
+        let out = emit_nquads(&RunId("r1".into()), AT, REV, &[], &[], &nm, Cost::Cheap, &[])
             .expect("one junk endpoint must not discard the sweep");
         assert!(!out.contains("not an iri at all"));
         let qs = quads_of(&out);
@@ -856,7 +1025,7 @@ mod tests {
         // from one that ran it: the not-measured facts say which metrics were
         // declined, and this says what policy declined them.
         for (ceiling, slug) in [(Cost::Cheap, "cheap"), (Cost::Expensive, "expensive")] {
-            let out = emit_nquads(&RunId("r1".into()), AT, REV, &rows(), &[], &[], ceiling).unwrap();
+            let out = emit_nquads(&RunId("r1".into()), AT, REV, &rows(), &[], &[], ceiling, &[]).unwrap();
             let qs = quads_of(&out);
             assert_eq!(
                 objects(&qs, "urn:sparqlwatch:maxCost"),
@@ -871,5 +1040,280 @@ mod tests {
             assert_eq!(activity, "<urn:sparqlwatch:activity:r1>",
                        "the ceiling is a property of the run's activity, not of a measurement");
         }
+    }
+
+    fn sample(values: &[&str], truncated: bool) -> ContentSample {
+        ContentSample {
+            endpoint: "http://example.org/sparql".into(),
+            metric_id: "classes".into(),
+            values: values.iter().map(|v| v.to_string()).collect(),
+            truncated,
+        }
+    }
+
+    #[test]
+    fn a_content_sample_says_how_many_and_whether_it_hit_the_cap() {
+        let s = ContentSample {
+            endpoint: "http://example.org/sparql".into(),
+            metric_id: "classes".into(),
+            values: vec!["http://example.org/A".into(), "http://example.org/B".into()],
+            truncated: false,
+        };
+        let nq =
+            emit_nquads(&RunId(AT.into()), AT, REV, &[], &[], &[], Cost::Cheap, &[s]).unwrap();
+        assert!(nq.contains("urn:sparqlwatch:ContentSample"));
+        assert_eq!(nq.matches("urn:sparqlwatch:sampledValue").count(), 2);
+        assert!(nq.contains(r#""2"^^<http://www.w3.org/2001/XMLSchema#integer>"#));
+        assert!(nq.contains(r#""false"^^<http://www.w3.org/2001/XMLSchema#boolean>"#));
+    }
+
+    #[test]
+    fn a_truncated_sample_publishes_that_fact_rather_than_leaving_it_inferred() {
+        // The counterpart of the test above, and not redundant with it: a
+        // consumer cannot recompute truncation from the size without knowing
+        // the metric's `sample_limit`, which is not in this graph. Both
+        // booleans must therefore be reachable, or an implementation that
+        // hard-codes one is indistinguishable from a correct one.
+        let out =
+            emit_nquads(&RunId("r1".into()), AT, REV, &[], &[], &[], Cost::Expensive,
+                        &[sample(&["http://example.org/A"], true)]).unwrap();
+        let qs = quads_of(&out);
+        assert_eq!(
+            objects(&qs, "urn:sparqlwatch:sampleTruncated"),
+            vec![&Term::Literal(Literal::new_typed_literal("true", xsd::BOOLEAN))],
+            "a sample that hit its cap must say so: a list a reader believes complete is worse than no list"
+        );
+        assert_eq!(
+            objects(&qs, "urn:sparqlwatch:sampleSize"),
+            vec![&Term::Literal(Literal::new_typed_literal("1", xsd::INTEGER))]
+        );
+    }
+
+    #[test]
+    fn a_content_sample_uses_no_foreign_vocabulary() {
+        // The not-measured fact reused dqv predicates whose domains entailed it
+        // was a quality measurement, which was the one defect on this project
+        // that no test could catch because nothing breaks until a consumer runs
+        // inference. A sample is an observation from a bounded query, not a
+        // dataset description, so it borrows nothing it has not earned:
+        // `void:classPartition` and `void:class` both carry `rdfs:domain
+        // void:Dataset`, and either one here would entail that this sample is a
+        // dataset.
+        let nq = emit_nquads(
+            &RunId(AT.into()),
+            AT,
+            REV,
+            &rows(),
+            &[],
+            &[NotMeasured {
+                endpoint: "http://example.org/sparql".into(),
+                metric_id: "classes".into(),
+                reason: NotMeasuredReason::CostCeiling,
+            }],
+            Cost::Cheap,
+            &[sample(&["http://example.org/A", "http://example.org/B"], false)],
+        )
+        .unwrap();
+        let subjects: std::collections::HashSet<&str> = nq
+            .lines()
+            .filter(|l| l.contains("urn:sparqlwatch:ContentSample"))
+            .filter_map(|l| l.split_whitespace().next())
+            .collect();
+        assert_eq!(subjects.len(), 1, "the fixture must contain a sample, or this scan proves nothing");
+        let mut seen = 0usize;
+        for line in nq.lines() {
+            let Some(s) = line.split_whitespace().next() else { continue };
+            if !subjects.contains(s) {
+                continue;
+            }
+            seen += 1;
+            let p = line.split_whitespace().nth(1).unwrap_or("");
+            assert!(
+                p.starts_with("<urn:sparqlwatch:")
+                    || p.contains("22-rdf-syntax-ns#type")
+                    || p.contains("ns/prov#wasGeneratedBy"),
+                "a sample carries only our own predicates, rdf:type and prov: {p}"
+            );
+        }
+        assert_eq!(seen, 8, "type, sampledFrom, sampledBy, truncated, size, two values, wasGeneratedBy");
+        // The control: the same document really does contain foreign
+        // vocabulary, on the measurements, so the loop above is not passing
+        // because nothing in the graph uses any.
+        assert!(nq.lines().any(|l| l.contains("http://www.w3.org/ns/dqv#computedOn")));
+    }
+
+    #[test]
+    fn a_sample_never_shares_a_subject_with_a_measurement_or_a_not_measured_fact() {
+        // Three fact types in one graph. If any two share an IRI, a consumer
+        // joining on it gets a node that is several things at once: a
+        // measurement that both has and has not a verdict, or a sample that is
+        // also a declined pair. Each set is collected by its own rdf:type
+        // rather than by a substring of one IRI shape, because
+        // `"measurement"` is not a substring of `not-measured:` and a
+        // substring filter would silently see half the graph.
+        let nm = vec![NotMeasured {
+            endpoint: "http://example.org/sparql".into(),
+            metric_id: "classes".into(),
+            reason: NotMeasuredReason::CostCeiling,
+        }];
+        let out = emit_nquads(
+            &RunId("r1".into()),
+            AT,
+            REV,
+            &[row("http://example.org/sparql", "availability", Verdict::Verified)],
+            &[],
+            &nm,
+            Cost::Cheap,
+            &[sample(&["http://example.org/A"], false)],
+        )
+        .unwrap();
+        let qs = quads_of(&out);
+        let typed = |iri: &str| -> BTreeSet<String> {
+            qs.iter()
+                .filter(|q| {
+                    q.predicate.as_ref() == rdf::TYPE
+                        && q.object == Term::NamedNode(NamedNode::new(iri).unwrap())
+                })
+                .map(|q| q.subject.to_string())
+                .collect()
+        };
+        let measurements = typed("http://www.w3.org/ns/dqv#QualityMeasurement");
+        let declined = typed("urn:sparqlwatch:NotMeasured");
+        let samples = typed("urn:sparqlwatch:ContentSample");
+        assert_eq!(measurements.len(), 1, "the fixture has one measurement");
+        assert_eq!(declined.len(), 1, "and one not-measured fact");
+        assert_eq!(samples.len(), 1, "and one content sample");
+        assert!(measurements.is_disjoint(&declined), "{measurements:?} vs {declined:?}");
+        assert!(measurements.is_disjoint(&samples), "{measurements:?} vs {samples:?}");
+        assert!(declined.is_disjoint(&samples), "{declined:?} vs {samples:?}");
+    }
+
+    #[test]
+    fn a_sample_names_its_endpoint_its_metric_and_the_run_that_took_it() {
+        // Read back as quads, and in the endpoint's order: the order is
+        // evidence about the endpoint, so the fixture is deliberately not
+        // alphabetical and an implementation that sorts must fail here.
+        let out = emit_nquads(
+            &RunId("r1".into()),
+            AT,
+            REV,
+            &[],
+            &[],
+            &[],
+            Cost::Expensive,
+            &[sample(
+                &["http://example.org/Zebra", "http://example.org/Apple", "http://example.org/Mango"],
+                false,
+            )],
+        )
+        .unwrap();
+        let qs = quads_of(&out);
+        let subj = NamedOrBlankNode::NamedNode(
+            NamedNode::new("urn:sparqlwatch:content-sample:r1:0").unwrap(),
+        );
+        let of = |p: &str| -> Vec<&Term> {
+            qs.iter()
+                .filter(|q| q.subject == subj && q.predicate.as_str() == p)
+                .map(|q| &q.object)
+                .collect()
+        };
+        assert_eq!(
+            of("urn:sparqlwatch:sampledFrom"),
+            vec![&Term::NamedNode(NamedNode::new("http://example.org/sparql").unwrap())]
+        );
+        assert_eq!(
+            of("urn:sparqlwatch:sampledBy"),
+            vec![&Term::NamedNode(NamedNode::new("urn:sparqlwatch:metric:classes").unwrap())]
+        );
+        assert_eq!(
+            of("urn:sparqlwatch:sampledValue"),
+            vec![
+                &Term::NamedNode(NamedNode::new("http://example.org/Zebra").unwrap()),
+                &Term::NamedNode(NamedNode::new("http://example.org/Apple").unwrap()),
+                &Term::NamedNode(NamedNode::new("http://example.org/Mango").unwrap()),
+            ],
+            "the IRIs the endpoint returned, in its order, not ours"
+        );
+        assert_eq!(
+            of("http://www.w3.org/ns/prov#wasGeneratedBy"),
+            vec![&Term::NamedNode(NamedNode::new("urn:sparqlwatch:activity:r1").unwrap())]
+        );
+        // Its endpoint is still a service: a consumer joining dcat:DataService
+        // must not lose an endpoint that has a sample and nothing else.
+        assert!(qs.iter().any(|q| q.predicate.as_ref() == rdf::TYPE
+            && q.object == Term::NamedNode(NamedNode::new("http://www.w3.org/ns/dcat#DataService").unwrap())));
+        assert!(qs.iter().all(|q| q.graph_name
+            == GraphName::NamedNode(NamedNode::new("urn:sparqlwatch:run:r1").unwrap())));
+    }
+
+    #[test]
+    fn several_samples_each_get_their_own_subject() {
+        let out = emit_nquads(
+            &RunId("r1".into()),
+            AT,
+            REV,
+            &[],
+            &[],
+            &[],
+            Cost::Expensive,
+            &[
+                sample(&["http://example.org/A"], false),
+                ContentSample {
+                    endpoint: "http://b.example/sparql".into(),
+                    metric_id: "classes".into(),
+                    values: vec!["http://example.org/B".into()],
+                    truncated: true,
+                },
+            ],
+        )
+        .unwrap();
+        let qs = quads_of(&out);
+        let subjects: BTreeSet<String> = qs
+            .iter()
+            .filter(|q| q.predicate.as_str() == "urn:sparqlwatch:sampleSize")
+            .map(|q| q.subject.to_string())
+            .collect();
+        assert_eq!(subjects.len(), 2, "two sampled (endpoint, metric) pairs are two samples");
+    }
+
+    #[test]
+    fn a_sample_with_an_invalid_endpoint_or_value_iri_is_skipped_not_fatal() {
+        // Same doctrine as a measurement row and a not-measured fact: this runs
+        // after all the probing, so one junk string must not turn a whole sweep
+        // into no output at all.
+        let out = emit_nquads(
+            &RunId("r1".into()),
+            AT,
+            REV,
+            &[],
+            &[],
+            &[],
+            Cost::Expensive,
+            &[
+                ContentSample {
+                    endpoint: "not an iri at all".into(),
+                    metric_id: "classes".into(),
+                    values: vec!["http://example.org/A".into()],
+                    truncated: false,
+                },
+                sample(&["http://example.org/A", "not an iri either"], false),
+            ],
+        )
+        .expect("one junk string must not discard the sweep");
+        assert!(!out.contains("not an iri"));
+        let qs = quads_of(&out);
+        assert_eq!(objects(&qs, "urn:sparqlwatch:sampleSize").len(), 1, "the well-formed sample survives");
+        assert_eq!(
+            objects(&qs, "urn:sparqlwatch:sampledValue"),
+            vec![&Term::NamedNode(NamedNode::new("http://example.org/A").unwrap())],
+            "and its unwritable value is dropped rather than guessed at"
+        );
+        // The size still reports what the endpoint bound, including the value
+        // we could not serialize: it is a count of the observation, not of the
+        // quads.
+        assert_eq!(
+            objects(&qs, "urn:sparqlwatch:sampleSize"),
+            vec![&Term::Literal(Literal::new_typed_literal("2", xsd::INTEGER))]
+        );
     }
 }

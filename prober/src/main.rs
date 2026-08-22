@@ -187,7 +187,7 @@ async fn main() -> anyhow::Result<()> {
     // The policy lives here, in one place. `run_sweep` receives both halves as
     // data and never learns what a ceiling is.
     let (run, declined) = within_cost(&defs, args.max_cost);
-    let Sweep { rows, declarations_read, not_measured } =
+    let Sweep { rows, declarations_read, not_measured, content_samples } =
         run_sweep(&endpoints, &run, &declined, &client, budget).await;
     let nq = emit_nquads(
         &RunId(args.at.clone()),
@@ -197,10 +197,12 @@ async fn main() -> anyhow::Result<()> {
         &declarations_read,
         &not_measured,
         args.max_cost,
+        &content_samples,
     )?;
     std::fs::write(&args.out, nq)?;
     tracing::info!(endpoints = endpoints.len(), measurements = rows.len(),
-                   not_measured = not_measured.len(), max_cost = args.max_cost.slug(),
+                   not_measured = not_measured.len(), content_samples = content_samples.len(),
+                   max_cost = args.max_cost.slug(),
                    revision = %revision, out = %args.out, "sweep complete");
     Ok(())
 }

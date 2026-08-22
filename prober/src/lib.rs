@@ -13,7 +13,7 @@ pub mod resolve;
 use crate::budget::{Budget, Expired};
 use crate::client::Client;
 use crate::declare::{parse_declarations_for, Declarations};
-use crate::emit::{DeclarationsRead, MeasurementRow, NotMeasured, NotMeasuredReason};
+use crate::emit::{ContentSample, DeclarationsRead, MeasurementRow, NotMeasured, NotMeasuredReason};
 use crate::metrics::{MetricDef, ProbeKind};
 use crate::resolve::{resolve, resolve_fetch, Declared};
 use crate::verdict::Verdict;
@@ -56,6 +56,12 @@ pub struct Sweep {
     pub rows: Vec<MeasurementRow>,
     pub declarations_read: Vec<DeclarationsRead>,
     pub not_measured: Vec<NotMeasured>,
+    /// What the enumerating metrics saw, one entry per (endpoint, metric that
+    /// declared a `sample_limit` and bound at least one value). A metric that
+    /// declared none contributes nothing here, and neither does one whose
+    /// probe bound nothing: an empty list is not a sample, and the
+    /// measurement row already says `absent`.
+    pub content_samples: Vec<ContentSample>,
 }
 
 pub async fn run_sweep(
@@ -68,11 +74,20 @@ pub async fn run_sweep(
     let mut rows = Vec::new();
     let mut declarations_read = Vec::new();
     let mut not_measured = Vec::new();
+    let mut content_samples = Vec::new();
     for ep in endpoints {
         let mut ep_rows: Vec<MeasurementRow> = Vec::new();
         let mut read = false;
         let outcome = budget
-            .with_endpoint_budget(probe_endpoint(ep, defs, client, budget, &mut ep_rows, &mut read))
+            .with_endpoint_budget(probe_endpoint(
+                ep,
+                defs,
+                client,
+                budget,
+                &mut ep_rows,
+                &mut read,
+                &mut content_samples,
+            ))
             .await;
         if outcome.is_err() {
             tracing::warn!(endpoint = %ep, reached = ep_rows.len(), of = defs.len(),
@@ -106,7 +121,7 @@ pub async fn run_sweep(
             });
         }
     }
-    Sweep { rows, declarations_read, not_measured }
+    Sweep { rows, declarations_read, not_measured, content_samples }
 }
 
 const VAR_REQUIRED: &str = "a bindings-reading probe kind requires `var`; load_metrics enforces it";
@@ -128,6 +143,7 @@ async fn probe_endpoint(
     budget: Budget,
     rows: &mut Vec<MeasurementRow>,
     declarations_read: &mut bool,
+    content_samples: &mut Vec<ContentSample>,
 ) {
     // One queryless fetch per endpoint, not one per metric: six metrics must
     // not mean six identical GETs landing in an operator's log. Its outcome
@@ -236,6 +252,28 @@ async fn probe_endpoint(
         let observed = budget.with_metric_budget(fut).await;
         let declared = Declared::from(&declarations, def);
         let verdict = resolve(def, declared, observed.as_ref().map_err(|e| *e));
+        // The bindings are kept only for a metric that asked to enumerate. Up
+        // to here they were used to reach a verdict and then dropped, so an
+        // endpoint could be reported as having classes without ever saying
+        // which, for a task whose whole purpose is knowing what is in an
+        // endpoint before writing a query.
+        if let Some(limit) = def.sample_limit {
+            if let Ok(o) = &observed {
+                if !o.bindings.is_empty() {
+                    content_samples.push(ContentSample {
+                        endpoint: ep.to_string(),
+                        metric_id: def.id.clone(),
+                        values: o.bindings.clone(),
+                        // `>=`, not `==`, deliberately. An endpoint that
+                        // ignores `LIMIT` and returns more than the cap has
+                        // still handed us a sample we cannot call complete;
+                        // `==` would call exactly that case complete, which is
+                        // the one failure this fact exists to prevent.
+                        truncated: o.bindings.len() >= limit,
+                    });
+                }
+            }
+        }
         // An expired metric budget measured nothing, so it reports no elapsed
         // time rather than a zero one.
         let elapsed = observed.as_ref().ok().map(|o| o.elapsed_ms);
