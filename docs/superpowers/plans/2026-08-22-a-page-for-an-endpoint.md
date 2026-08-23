@@ -26,6 +26,37 @@ render one page of static facts would be scaffolding standing in for progress.
 
 So: HTML now, React when a screen needs it, and no apology for either.
 
+## Two fixtures this plan needs and the repository does not have
+
+A review of the first revision found two of its tests unsatisfiable against the
+committed fixtures, and I verified both. Task 1 creates these before anything
+depends on them.
+
+**A default-ceiling run, for the not-measured cases.** **No committed fixture
+contains a single `sw:NotMeasured` resource.** I checked all five. That is not an
+oversight in the fixtures, it is a consequence of how they were captured: all of
+them come from `--max-cost expensive` sweeps, where nothing is declined. Worse, I
+had already recorded that fact two slices ago and then wrote two tests requiring
+such a fact anyway.
+
+A real one is cheap, because a default sweep produces them naturally. I captured
+it: `/private/tmp/claude-501/-Users-micheldumontier-code/e23f497b-40e0-4087-bab0-a34dc8cdfcf7/scratchpad/cheap-run.nq`,
+154 quads, 21 measurements, **3 `NotMeasured` facts** (one per endpoint, all
+`classes`, all reason `cost-ceiling`), and no content samples. Copy it in as
+`run-declined.nq`. It is a **real** sweep, not synthetic, so say so.
+
+**A two-run fixture whose verdicts actually differ.** `run-two-sweeps.nq` cannot
+support a most-recent-run test for measurements. I verified it: 24 (endpoint,
+metric) pairs appear in both of its runs and **zero of them differ in verdict**.
+Its only difference is a swapped `sampledValue`, which is content rather than a
+measurement, because it was built for the content query and I reused it without
+checking it carried the variation a measurements test needs.
+
+So either extend it with a verdict that differs between the runs, or add a
+sibling. Whichever you choose, its provenance comment must say which values differ
+and which run is current, the way the existing ones do, and a test must assert on
+a **differing value** rather than on a count.
+
 ## What already exists, verified
 
 - `web/load_run.py` loads a run into an on-disk store, replacing the run's graph.
@@ -160,8 +191,16 @@ measurements; drop the level. Each must fail its own test.
 - One route for an endpoint resource. Choose a URL shape and say why in a comment;
   an endpoint is identified by a URL, so it has to be encoded into the path or
   carried as a query parameter, and both have consequences worth one sentence.
-- `Accept: text/html` serves HTML. An RDF type serves RDF. No `Accept` at all
-  serves HTML, because a bare `curl` is a person more often than a machine.
+- `Accept: text/html` serves HTML. An RDF type serves RDF.
+- **`*/*` and a missing `Accept` both serve HTML.** An earlier revision justified
+  this by saying a bare `curl` sends no `Accept` header, which is simply false:
+  curl 8.7.1 sends `Accept: */*`. The rule survives the correction but the reason
+  changes. `*/*` means "anything", so serving the human-readable representation is
+  a choice rather than a deduction, and it is the right one because a person
+  exploring with `curl` is better served by something legible than by Turtle.
+- Handle a quality-value list (`text/html;q=0.9, text/turtle`) by preferring the
+  higher q, and test it. A negotiator that ignores q values while claiming to
+  negotiate is a confident wrong answer about what the client asked for.
 - An unknown endpoint is a 404, not an empty page.
 - The store arrives by dependency injection (D4).
 
@@ -185,9 +224,20 @@ measurements; drop the level. Each must fail its own test.
 
 - [ ] **Step 3: Implement**
 
-For the RDF representation, serialise the quads the two queries returned rather
-than re-deriving facts in Python. The store already holds RDF; turning it into
-objects and back into RDF is where the two representations would drift apart.
+For the RDF representation, **use a `CONSTRUCT` query**, not the two `SELECT`
+queries. An earlier revision of this plan said to "serialise the quads the two
+queries returned", which contradicts itself: a `SELECT` returns row bindings, not
+quads, so obeying it literally would require rebuilding triples in Python, which
+is precisely the re-derivation the same sentence forbade.
+
+A third query file, `CONSTRUCT`-shaped, returns the endpoint's facts as RDF
+straight from the store. That keeps the principle the botched sentence was reaching
+for: the store already holds RDF, and turning it into objects and back is where the
+two representations would drift apart.
+
+It also means the agreement test in this task is comparing two genuinely different
+derivations, an HTML page built from `SELECT` bindings against RDF built by
+`CONSTRUCT`, which is what makes that test worth having.
 
 - [ ] **Step 4: Prove the tests are load-bearing**
 
