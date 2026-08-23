@@ -92,23 +92,17 @@ def _incomplete_load(stored: int, expected: int, graph_names: set[NamedNode]) ->
     )
 
 
-def load_run(store: Store, nquads: bytes) -> LoadResult:
-    """Load an N-Quads run into ``store``, replacing any graph it names.
+def _parsed_graphs(nquads: bytes) -> tuple[list, set[NamedNode]]:
+    """Parse ``nquads`` and return its quads and the named graphs it names.
 
-    Raises ValueError if the input is not valid N-Quads, or if it does not
-    name at least one graph (see the module docstring on ordering for why
-    parsing happens before any store mutation).
-
-    Raises RuntimeError if, after the insert, the store does not hold every
-    quad that was parsed. The replacement is not atomic (again, see the
-    module docstring), so this is the load saying out loud that it left a
-    partial run behind and must be re-run.
+    Raises ValueError under exactly the conditions load_run() documents: not
+    valid N-Quads, default-graph triples present, or no named graph at all.
+    Split out of load_run() so main() can run the same validation, below,
+    against every input file before Store() is called on any of them: this
+    is where a mistyped run path, an unreadable file, or a file that fails
+    one of these checks gets discovered, and it must happen before the store
+    exists at all.
     """
-    # Parse everything before destroying anything: this list() call forces
-    # the whole file to be read and validated. Only after it succeeds do we
-    # know which graphs to drop, and only then do we drop them. Reordering
-    # this so the store is touched first is the mutation this module exists
-    # to prevent; see the module docstring.
     try:
         quads = list(parse(nquads, format=RdfFormat.N_QUADS))
     except SyntaxError as error:
@@ -130,6 +124,27 @@ def load_run(store: Store, nquads: bytes) -> LoadResult:
 
     if not graph_names:
         raise ValueError("input names no graphs; nothing to load")
+
+    return quads, graph_names
+
+
+def load_run(store: Store, nquads: bytes) -> LoadResult:
+    """Load an N-Quads run into ``store``, replacing any graph it names.
+
+    Raises ValueError if the input is not valid N-Quads, or if it does not
+    name at least one graph (see the module docstring on ordering for why
+    parsing happens before any store mutation).
+
+    Raises RuntimeError if, after the insert, the store does not hold every
+    quad that was parsed. The replacement is not atomic (again, see the
+    module docstring), so this is the load saying out loud that it left a
+    partial run behind and must be re-run.
+    """
+    # Parse and validate everything before destroying anything. Only after
+    # it succeeds do we know which graphs to drop, and only then do we drop
+    # them. Reordering this so the store is touched first is the mutation
+    # this module exists to prevent; see the module docstring.
+    quads, graph_names = _parsed_graphs(nquads)
 
     replaced = sorted(
         graph.value for graph in graph_names if store.contains_named_graph(graph)
@@ -170,9 +185,24 @@ def main(argv: list[str] | None = None) -> int:
         print("usage: load_run.py STORE_PATH RUN.nq [RUN.nq ...]", file=sys.stderr)
         return 2
 
+    run_paths = args[1:]
+    # Read and validate every run file before Store(args[0]) below, which is
+    # what creates the store's on-disk directory if it does not exist yet.
+    # A mistyped run path, an unreadable file, or one _parsed_graphs refuses
+    # must be discovered here, before that directory exists, not after: this
+    # module's own docstring explains why a truncated file must not touch an
+    # existing run, and creating the store directory for a run that then
+    # fails to load is the same mistake pointed at a store that never
+    # existed before this invocation.
+    contents = []
+    for path in run_paths:
+        data = Path(path).read_bytes()
+        _parsed_graphs(data)
+        contents.append(data)
+
     store = Store(args[0])
-    for path in args[1:]:
-        result = load_run(store, Path(path).read_bytes())
+    for path, data in zip(run_paths, contents):
+        result = load_run(store, data)
         if result.replaced:
             print(f"{path}: loaded {result.quad_count} quads, replaced {result.replaced}")
         else:

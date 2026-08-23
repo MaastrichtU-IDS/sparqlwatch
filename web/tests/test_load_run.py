@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 from pyoxigraph import DefaultGraph, NamedNode, Store
 
-from load_run import LoadResult, load_run
+from load_run import LoadResult, load_run, main
 
 FIXTURE = Path(__file__).parent / "fixtures" / "run-with-samples.nq"
 TWO_SWEEPS_FIXTURE = Path(__file__).parent / "fixtures" / "run-two-sweeps.nq"
@@ -220,3 +220,23 @@ def test_a_file_naming_no_graph_at_all_is_refused(tmp_path):
         with pytest.raises(ValueError, match="names no graphs"):
             load_run(store, payload)
         assert len(store) == before, f"a refused load ({name}) must not touch the store"
+
+
+def test_a_bad_run_path_leaves_no_store_directory_behind(tmp_path):
+    """The root cause N1's second variant needs: main() used to do
+    ``store = Store(args[0])`` before reading any run file, so a run file
+    that fails to load left a freshly created, empty store directory behind
+    (Store() creates that directory on construction, whether or not
+    anything is ever inserted into it). That directory is then exactly the
+    "opens as a valid but empty store" case app.py's _opened_store refuses,
+    except it was this loader's own failed run that created it, not an
+    operator's typo. Every input file must be read and validated before the
+    store is opened at all."""
+    store_path = tmp_path / "store"
+    bad_run = tmp_path / "empty.nq"
+    bad_run.write_bytes(b"")
+
+    with pytest.raises(ValueError, match="names no graphs"):
+        main([str(store_path), str(bad_run)])
+
+    assert not store_path.exists(), "a rejected run file must not create the store"
