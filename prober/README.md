@@ -523,6 +523,21 @@ The following are deferred deliberately, not oversights:
   registry is seeded from 548 real endpoints, some of which are certainly
   partitioned.
 
+- **An API key in an endpoint's query string is published, permanently.** Every
+  fact's subject is `urn:sparqlwatch:<kind>:<run>:<percent-encoded
+  endpoint>:<metric>`, so the endpoint URL is a reversible part of the identifier
+  of everything we say about it, in a per-run named graph that is immutable and
+  append-only: a published identifier can never be corrected. `registry.rs`
+  refuses a URL whose authority carries userinfo, which covers
+  `http://user:secret@host/sparql`. It does nothing about
+  `https://host/sparql?apikey=...`, because a query parameter's meaning is the
+  operator's, not ours, and a name-based blocklist (`key`, `token`, `apikey`, ...)
+  would be a confident wrong answer in both directions: it would drop legitimate
+  endpoints whose query carries a dataset selector, and admit a credential under
+  a name nobody guessed. Closing it properly needs the registry to distinguish a
+  public URL from a credentialed one, which is a stage 1d question about how the
+  list is seeded. Until then: do not put a secret in `endpoints.toml`.
+
 ## Tests
 
 ```sh
