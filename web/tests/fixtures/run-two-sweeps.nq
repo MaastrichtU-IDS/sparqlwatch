@@ -19,6 +19,18 @@
 # A query answering what is in this endpoint for kadaster must return the
 # 16:00 run's classes (CURRENT_ONLY_CLASS present) and never the 14:00 run's
 # (STALE_ONLY_CLASS absent), because 14:00 is not the most recent run.
+#
+# One further hand edit on top of the mechanical rewrite, for the
+# measurements query's most-recent-run test: kadaster's sw:metric:classes
+# dqv:value in the STALE (14:00) run was changed from "verified" (the value
+# the mechanical copy would have produced, matching the current run) to
+# "indeterminate". Every other verdict is identical between the two runs
+# because the mechanical copy changes nothing but the run IRI, so a
+# most-recent-run test needs at least one verdict that actually differs. The
+# CURRENT (16:00) run's kadaster classes verdict is unchanged: "verified".
+# A query answering kadaster's verdicts must return "verified" for
+# sw:metric:classes (the 16:00 run's value) and never "indeterminate" (the
+# 14:00 run's), because 14:00 is not the most recent run.
 <urn:sparqlwatch:activity:2026-08-22T16:00:00Z> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/prov#Activity> <urn:sparqlwatch:run:2026-08-22T16:00:00Z> .
 <urn:sparqlwatch:activity:2026-08-22T16:00:00Z> <http://www.w3.org/ns/prov#generatedAtTime> "2026-08-22T16:00:00Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <urn:sparqlwatch:run:2026-08-22T16:00:00Z> .
 <urn:sparqlwatch:activity:2026-08-22T16:00:00Z> <urn:sparqlwatch:proberVersion> "0.1.0" <urn:sparqlwatch:run:2026-08-22T16:00:00Z> .
@@ -399,7 +411,7 @@
 <urn:sparqlwatch:measurement:2026-08-22T14:00:00Z:15> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> <urn:sparqlwatch:run:2026-08-22T14:00:00Z> .
 <urn:sparqlwatch:measurement:2026-08-22T14:00:00Z:15> <http://www.w3.org/ns/dqv#computedOn> <https://data.kkg.kadaster.nl/query> <urn:sparqlwatch:run:2026-08-22T14:00:00Z> .
 <urn:sparqlwatch:measurement:2026-08-22T14:00:00Z:15> <http://www.w3.org/ns/dqv#isMeasurementOf> <urn:sparqlwatch:metric:classes> <urn:sparqlwatch:run:2026-08-22T14:00:00Z> .
-<urn:sparqlwatch:measurement:2026-08-22T14:00:00Z:15> <http://www.w3.org/ns/dqv#value> "verified" <urn:sparqlwatch:run:2026-08-22T14:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-22T14:00:00Z:15> <http://www.w3.org/ns/dqv#value> "indeterminate" <urn:sparqlwatch:run:2026-08-22T14:00:00Z> .
 <urn:sparqlwatch:measurement:2026-08-22T14:00:00Z:15> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-08-22T14:00:00Z> <urn:sparqlwatch:run:2026-08-22T14:00:00Z> .
 <urn:sparqlwatch:measurement:2026-08-22T14:00:00Z:15> <urn:sparqlwatch:elapsedMs> "73"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-22T14:00:00Z> .
 <https://ontop.certain.ai.ustp.at/sparql> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dcat#DataService> <urn:sparqlwatch:run:2026-08-22T14:00:00Z> .

@@ -1,0 +1,94 @@
+# What are this endpoint's verdicts? One row per metric measured in the most
+# recent run that ran anything for this endpoint: the metric id, the dqv:value
+# verdict, the conformance level where the metric carries one (only
+# sw:metric:service-description does today), and how long the probe took.
+# Also returned, in the SAME result set but distinguishably: any metric that
+# run recorded as sw:NotMeasured rather than measured, with the reason it was
+# declined (today always "cost-ceiling").
+#
+# ?endpoint is the input. It is substituted with a NamedNode before execution
+# (SEP-0007 substitution, which is why it appears in the SELECT projection:
+# pyoxigraph only substitutes projected variables), so it is never
+# interpolated into this text. See web/queries/endpoint_content.rq's header
+# for the full reasoning; this query reuses it rather than repeating it.
+#
+# A MEASURED row has ?verdict bound (and, where the graph has them, ?level
+# and ?elapsedMs); ?reason is unbound. A DECLINED row has ?reason bound;
+# ?verdict, ?level and ?elapsedMs are unbound. A caller must read those as two
+# different shapes, never as one: "we chose not to run this metric" and "we
+# ran it and got this verdict" are different facts, and the graph is explicit
+# about which applies to a given metric on a given run. Collapsing a declined
+# row into an ordinary measurement (say, by treating ?reason as if it were a
+# verdict) would state a confident value for a metric nobody measured that
+# run.
+#
+# "Most recent run" is decided by the run's activity's prov:generatedAtTime, a
+# typed xsd:dateTime, exactly as in endpoint_content.rq, and for the same
+# reason: today's run IRIs happen to embed an ISO-8601 instant, so string
+# ordering would agree by coincidence, and would silently break the day that
+# shape changes.
+#
+# It is expressed as "no newer run recorded anything (a measurement or a
+# decline) for this endpoint" rather than as an ORDER BY ... LIMIT 1 subquery,
+# and for the identical reason recorded in endpoint_content.rq's header: the
+# value substituted for ?endpoint does not reach inside a subquery's own
+# projection, so the subquery would pick the newest run in the whole store and
+# then fail to join whenever that run did not happen to touch the endpoint
+# being asked about. At 548 endpoints, an endpoint whose probe timed out or
+# whose sweep failed in the latest run hits exactly that case, routinely
+# rather than rarely. FILTER NOT EXISTS is evaluated against the current
+# solution, so ?endpoint stays bound inside it and the comparison stays
+# per-endpoint.
+#
+# The run chosen is the one that recorded ANYTHING for this endpoint, measured
+# or declined, not the newest run per individual metric: one sweep either
+# measures or declines every metric it applies to a given endpoint in the same
+# pass, so an endpoint's measured and declined rows from one run always share
+# that run's single prov:Activity. Mixing "most recent per metric" in here
+# would let a caller see metric:availability from tonight's run beside
+# metric:classes from last week's, two different sweeps' opinions presented as
+# one, which is exactly the blended answer endpoint_content.rq's header warns
+# against for content samples.
+
+PREFIX dqv: <http://www.w3.org/ns/dqv#>
+PREFIX prov: <http://www.w3.org/ns/prov#>
+PREFIX sw: <urn:sparqlwatch:>
+
+SELECT ?endpoint ?run ?generatedAt ?metric ?verdict ?level ?elapsedMs ?reason
+WHERE {
+  GRAPH ?run {
+    ?activity a prov:Activity ;
+              prov:generatedAtTime ?generatedAt .
+    {
+      ?measurement a dqv:QualityMeasurement ;
+                   dqv:computedOn ?endpoint ;
+                   dqv:isMeasurementOf ?metric ;
+                   dqv:value ?verdict ;
+                   prov:wasGeneratedBy ?activity .
+      OPTIONAL { ?measurement sw:level ?level }
+      OPTIONAL { ?measurement sw:elapsedMs ?elapsedMs }
+    }
+    UNION
+    {
+      ?notMeasured a sw:NotMeasured ;
+                   sw:notMeasuredOn ?endpoint ;
+                   sw:notMeasuredMetric ?metric ;
+                   sw:notMeasuredReason ?reason ;
+                   prov:wasGeneratedBy ?activity .
+    }
+  }
+  FILTER NOT EXISTS {
+    GRAPH ?newerRun {
+      {
+        ?newerThing dqv:computedOn ?endpoint
+      }
+      UNION
+      {
+        ?newerThing sw:notMeasuredOn ?endpoint
+      }
+      ?newerActivity a prov:Activity ;
+                     prov:generatedAtTime ?newerGeneratedAt .
+    }
+    FILTER (?newerGeneratedAt > ?generatedAt)
+  }
+}

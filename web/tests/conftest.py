@@ -22,6 +22,7 @@ RUN_TRUNCATED = FIXTURES / "run-truncated.nq"
 RUN_TWO_SWEEPS = FIXTURES / "run-two-sweeps.nq"
 RUN_ZERO_CLASSES = FIXTURES / "run-zero-classes.nq"
 RUN_PROPERTIES_SAMPLE = FIXTURES / "run-properties-sample.nq"
+RUN_DECLINED = FIXTURES / "run-declined.nq"
 
 
 def _loaded_store(tmp_path: Path, name: str, fixture: Path) -> Store:
@@ -67,3 +68,11 @@ def store_properties_sample(tmp_path):
     content query's metric pin can be tested. See the comment in
     web/tests/fixtures/run-properties-sample.nq."""
     return _loaded_store(tmp_path, "store-properties-sample", RUN_PROPERTIES_SAMPLE)
+
+
+@pytest.fixture
+def store_declined(tmp_path):
+    """A real sweep captured at the default cost ceiling, where
+    sw:metric:classes was declined for every endpoint. See the comment in
+    web/tests/fixtures/run-declined.nq for its provenance."""
+    return _loaded_store(tmp_path, "store-declined", RUN_DECLINED)
