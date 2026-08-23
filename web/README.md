@@ -77,8 +77,11 @@ web/.venv/bin/python web/load_run.py path/to/sparqlwatch.db path/to/run.nq
 ### The server has to be stopped first
 
 An on-disk Oxigraph store is a RocksDB database and **only one process can hold
-it open**. `load_run.py` opens the store for writing, so while the server is
-running the load fails:
+it open**. `app.py`'s `_opened_store` opens the store lazily, on the first
+request the server serves, not at startup; from that request onward the
+server process holds the store open for as long as it keeps running. A load
+attempted before that first request can still succeed, but once the server
+has served one request, the load fails:
 
 ```
 OSError: IO error: While lock file: path/to/sparqlwatch.db/LOCK:
