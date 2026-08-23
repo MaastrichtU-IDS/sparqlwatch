@@ -10,6 +10,7 @@ use sparqlwatch_prober::verdict::{Level, Verdict};
 use oxrdf::{NamedNode, Quad, Term};
 use oxrdfio::{RdfFormat, RdfParser};
 use std::collections::{BTreeMap, BTreeSet};
+use std::num::NonZeroUsize;
 use wiremock::http::Method;
 use wiremock::matchers::{method, path, query_param, query_param_is_missing};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -100,6 +101,8 @@ async fn a_sweep_over_one_mock_endpoint_produces_nquads() {
             declarations_read: &_declarations_read,
             not_measured: &[],
             max_cost: Cost::Cheap,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
             content_samples: &[],
         })
             .unwrap();
@@ -935,6 +938,8 @@ async fn sweep_with_description(body: &str, content_type: &str) -> String {
         declarations_read: &declarations_read,
         not_measured: &[],
         max_cost: Cost::Cheap,
+        concurrency: NonZeroUsize::new(1).unwrap(),
+        failed_endpoints: 0,
         content_samples: &[],
     }).unwrap()
 }
@@ -959,6 +964,8 @@ async fn sweep_with_status(status: u16) -> String {
         declarations_read: &declarations_read,
         not_measured: &[],
         max_cost: Cost::Cheap,
+        concurrency: NonZeroUsize::new(1).unwrap(),
+        failed_endpoints: 0,
         content_samples: &[],
     }).unwrap()
 }
@@ -988,6 +995,8 @@ async fn sweep_with_status_and_working_queries(status: u16) -> String {
         declarations_read: &declarations_read,
         not_measured: &[],
         max_cost: Cost::Cheap,
+        concurrency: NonZeroUsize::new(1).unwrap(),
+        failed_endpoints: 0,
         content_samples: &[],
     }).unwrap()
 }
@@ -1014,6 +1023,8 @@ async fn sweep_two_endpoints_one_broken() -> String {
         declarations_read: &declarations_read,
         not_measured: &[],
         max_cost: Cost::Cheap,
+        concurrency: NonZeroUsize::new(1).unwrap(),
+        failed_endpoints: 0,
         content_samples: &[],
     }).unwrap()
 }
@@ -1140,6 +1151,8 @@ async fn a_registry_that_lists_one_url_twice_probes_it_once() {
         declarations_read: &read,
         not_measured: &[],
         max_cost: Cost::Cheap,
+        concurrency: NonZeroUsize::new(1).unwrap(),
+        failed_endpoints: 0,
         content_samples: &[],
     }).unwrap();
 
@@ -1179,6 +1192,8 @@ async fn a_near_duplicate_differing_by_a_trailing_slash_stays_two_entries() {
         declarations_read: &read,
         not_measured: &[],
         max_cost: Cost::Cheap,
+        concurrency: NonZeroUsize::new(1).unwrap(),
+        failed_endpoints: 0,
         content_samples: &[],
     }).unwrap();
 
@@ -1351,6 +1366,8 @@ async fn has_classes_reads_the_iri_c_binds_through_select_iris_not_ask_data() {
         declarations_read: &read,
         not_measured: &[],
         max_cost: Cost::Cheap,
+        concurrency: NonZeroUsize::new(1).unwrap(),
+        failed_endpoints: 0,
         content_samples: &[],
     }).unwrap();
 
@@ -1454,6 +1471,8 @@ async fn a_declined_metric_reaches_the_published_graph_with_no_verdict() {
         declarations_read: &read,
         not_measured: &not_measured,
         max_cost: Cost::Cheap,
+        concurrency: NonZeroUsize::new(1).unwrap(),
+        failed_endpoints: 0,
         content_samples: &[],
     }).unwrap();
     let quads = quads_of(&nq);
@@ -1719,6 +1738,8 @@ async fn the_classes_metric_publishes_the_iris_it_bound() {
         declarations_read: &read,
         not_measured: &not_measured,
         max_cost: Cost::Expensive,
+        concurrency: NonZeroUsize::new(1).unwrap(),
+        failed_endpoints: 0,
         content_samples: &content_samples,
     }).unwrap();
     let quads = quads_of(&nq);
@@ -1826,6 +1847,8 @@ async fn a_declined_metric_publishes_no_sample_and_still_says_why() {
         declarations_read: &read,
         not_measured: &not_measured,
         max_cost: Cost::Cheap,
+        concurrency: NonZeroUsize::new(1).unwrap(),
+        failed_endpoints: 0,
         content_samples: &content_samples,
     }).unwrap();
     let quads = quads_of(&nq);
@@ -1910,6 +1933,8 @@ async fn a_status_the_resolver_distrusts_publishes_no_sample_at_all() {
             declarations_read: &read,
             not_measured: &not_measured,
             max_cost: Cost::Expensive,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
             content_samples: &content_samples,
         })
         .unwrap();
@@ -1983,6 +2008,8 @@ async fn each_sample_names_its_own_endpoint_its_own_values_and_its_own_metric() 
         declarations_read: &read,
         not_measured: &not_measured,
         max_cost: Cost::Expensive,
+        concurrency: NonZeroUsize::new(1).unwrap(),
+        failed_endpoints: 0,
         content_samples: &content_samples,
     })
     .unwrap();

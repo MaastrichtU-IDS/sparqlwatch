@@ -8,6 +8,7 @@ use sparqlwatch_prober::{
     registry::load_endpoints,
     run_sweep, Sweep,
 };
+use std::num::NonZeroUsize;
 use std::time::Duration;
 
 #[derive(Parser)]
@@ -197,6 +198,8 @@ async fn main() -> anyhow::Result<()> {
         declarations_read: &declarations_read,
         not_measured: &not_measured,
         max_cost: args.max_cost,
+        concurrency: NonZeroUsize::new(1).unwrap(),
+        failed_endpoints: 0,
         content_samples: &content_samples,
     })?;
     std::fs::write(&args.out, nq)?;

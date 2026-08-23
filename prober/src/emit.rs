@@ -4,6 +4,7 @@ use oxrdf::vocab::{rdf, xsd};
 use oxrdf::{GraphName, Literal, NamedNode, NamedOrBlankNode, Quad, Term};
 use oxrdfio::{RdfFormat, RdfSerializer};
 use std::collections::{BTreeMap, BTreeSet};
+use std::num::NonZeroUsize;
 
 const DQV: &str = "http://www.w3.org/ns/dqv#";
 const PROV: &str = "http://www.w3.org/ns/prov#";
@@ -44,6 +45,16 @@ pub struct DeclarationsRead {
 pub enum NotMeasuredReason {
     /// The metric's cost exceeded the ceiling the sweep was run with.
     CostCeiling,
+    /// The prober itself failed on this endpoint: the task probing its host
+    /// panicked or was cancelled, so no request was ever answered and no
+    /// observation exists to grade.
+    ///
+    /// Deliberately not an `Indeterminate` measurement row. An `Indeterminate`
+    /// verdict asserts that a measurement happened and was inconclusive, which
+    /// is what an expired budget produces, and a reader could not tell the two
+    /// apart. This says the weaker, true thing: nothing was measured, and the
+    /// reason is on our side rather than the endpoint's.
+    ProberFailed,
 }
 
 impl NotMeasuredReason {
@@ -51,6 +62,7 @@ impl NotMeasuredReason {
     pub fn slug(&self) -> &'static str {
         match self {
             NotMeasuredReason::CostCeiling => "cost-ceiling",
+            NotMeasuredReason::ProberFailed => "prober-failed",
         }
     }
 }
@@ -263,6 +275,20 @@ pub struct RunEmission<'a> {
     /// What the enumerating probes saw, published verbatim and in the
     /// endpoint's own order.
     pub content_samples: &'a [ContentSample],
+    /// How many hosts the sweep talked to at once, recorded on the activity
+    /// beside `max_cost` and for the same reason: it is a parameter of the run,
+    /// not of any one measurement. A consumer comparing one endpoint's
+    /// `elapsedMs` across two runs needs it to tell a slower endpoint from a
+    /// busier sweep.
+    ///
+    /// `NonZeroUsize` because that is what `run_sweep` takes, so the published
+    /// number cannot say a sweep ran zero hosts at once.
+    pub concurrency: NonZeroUsize,
+    /// How many endpoints the run failed on, from `Sweep::failed_endpoints`.
+    /// Published so a reader can tell a complete run from an incomplete one
+    /// without reading a log: the per-endpoint facts say `prober-failed`, and
+    /// this says how many there were in total.
+    pub failed_endpoints: usize,
 }
 
 /// One named graph per run keeps history immutable and lets a bad run be
@@ -280,6 +306,8 @@ pub fn emit_nquads(input: RunEmission) -> anyhow::Result<String> {
         not_measured,
         max_cost,
         content_samples,
+        concurrency,
+        failed_endpoints,
     } = input;
     let graph = GraphName::NamedNode(nn(&format!("urn:sparqlwatch:run:{}", run.0))?);
     let activity = nn(&format!("urn:sparqlwatch:activity:{}", run.0))?;
@@ -317,6 +345,31 @@ pub fn emit_nquads(input: RunEmission) -> anyhow::Result<String> {
         NamedOrBlankNode::NamedNode(activity.clone()),
         nn("urn:sparqlwatch:maxCost")?,
         Term::Literal(Literal::new_simple_literal(max_cost.slug())),
+        graph.clone(),
+    ));
+    // How many hosts were in flight, and how many endpoints the sweep never
+    // measured because the prober failed on them. Both are properties of the
+    // run rather than of any measurement, so both hang off the activity beside
+    // the ceiling above.
+    //
+    // The concurrency belongs in the graph because it changes what `elapsedMs`
+    // means: a request's measured time includes its wait at the per-host gate,
+    // so two runs of one endpoint at different concurrencies are not directly
+    // comparable, and nothing else published here would say why.
+    quads.push(Quad::new(
+        NamedOrBlankNode::NamedNode(activity.clone()),
+        nn("urn:sparqlwatch:concurrency")?,
+        Term::Literal(Literal::new_typed_literal(concurrency.to_string(), xsd::INTEGER)),
+        graph.clone(),
+    ));
+    // Published on every run, including the ordinary `0`, rather than only
+    // when it is non-zero: a consumer has to be able to read "this run failed
+    // on nothing" as a fact, and an absent quad would be indistinguishable
+    // from a run emitted before this fact existed.
+    quads.push(Quad::new(
+        NamedOrBlankNode::NamedNode(activity.clone()),
+        nn("urn:sparqlwatch:failedEndpoints")?,
+        Term::Literal(Literal::new_typed_literal(failed_endpoints.to_string(), xsd::INTEGER)),
         graph.clone(),
     ));
 
@@ -878,6 +931,8 @@ mod tests {
             declarations_read: &[],
             not_measured: &[],
             max_cost: Cost::Cheap,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
             content_samples: &[],
         }).unwrap();
         quads_of(&out)
@@ -942,6 +997,8 @@ mod tests {
             declarations_read: &declarations_read,
             not_measured: &not_measured,
             max_cost: Cost::Cheap,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
             content_samples: &content_samples,
         })
         .unwrap()
@@ -955,6 +1012,14 @@ mod tests {
         // because subjects are the one thing this stage changes. Everything
         // else is what a published consumer reads, so a change here is a change
         // to the data model and has to be deliberate.
+        //
+        // Moved once, on 2026-08-23, by stage 1c-b3: the emitter now publishes
+        // two more run-level facts on the activity, `urn:sparqlwatch:concurrency`
+        // and `urn:sparqlwatch:failedEndpoints`, so the multiset gained those two
+        // pairs and the count went from 41 to 43. Nothing else moved. The
+        // baseline is not weakened to tolerate additions, because its whole
+        // value is that an unintended predicate cannot slip in; an intended one
+        // costs this paragraph.
         const BASELINE_PAIRS: &[(&str, &str)] = &[
         ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<http://www.w3.org/ns/dcat#DataService>"),
         ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<http://www.w3.org/ns/dcat#DataService>"),
@@ -979,10 +1044,12 @@ mod tests {
         ("http://www.w3.org/ns/prov#wasGeneratedBy", "<urn:sparqlwatch:activity:r1>"),
         ("http://www.w3.org/ns/prov#wasGeneratedBy", "<urn:sparqlwatch:activity:r1>"),
         ("http://www.w3.org/ns/prov#wasGeneratedBy", "<urn:sparqlwatch:activity:r1>"),
+        ("urn:sparqlwatch:concurrency", "\"1\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
         ("urn:sparqlwatch:declarationsRead", "\"false\"^^<http://www.w3.org/2001/XMLSchema#boolean>"),
         ("urn:sparqlwatch:declarationsRead", "\"true\"^^<http://www.w3.org/2001/XMLSchema#boolean>"),
         ("urn:sparqlwatch:elapsedMs", "\"12\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
         ("urn:sparqlwatch:elapsedMs", "\"34\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
+        ("urn:sparqlwatch:failedEndpoints", "\"0\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
         ("urn:sparqlwatch:level", "\"1\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
         ("urn:sparqlwatch:level", "\"2\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
         ("urn:sparqlwatch:maxCost", "\"cheap\""),
@@ -1004,7 +1071,7 @@ mod tests {
         ("urn:sparqlwatch:sampledValue", "<https://a.example/vocab#Apple>"),
         ("urn:sparqlwatch:sampledValue", "<https://a.example/vocab#Zebra>"),
         ];
-        const BASELINE_QUADS: usize = 41;
+        const BASELINE_QUADS: usize = 43;
         let qs = quads_of(&baseline_emission());
         let mut pairs: Vec<(String, String)> = qs
             .iter()
@@ -1199,6 +1266,8 @@ mod tests {
             declarations_read: &[],
             not_measured: &[],
             max_cost: Cost::Cheap,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
             content_samples: &[],
         });
         assert!(out.is_ok(), "a bad metric id must not cost the sweep its output");
@@ -1220,6 +1289,8 @@ mod tests {
             declarations_read: &[],
             not_measured: &[],
             max_cost: Cost::Cheap,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
             content_samples: &[],
         }).unwrap();
         let expected = GraphName::NamedNode(
@@ -1325,6 +1396,8 @@ mod tests {
             declarations_read: &[],
             not_measured: &[],
             max_cost: Cost::Cheap,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
             content_samples: &[],
         })
             .expect("one junk endpoint must not discard the sweep");
@@ -1402,6 +1475,8 @@ mod tests {
             declarations_read: &facts,
             not_measured: &[],
             max_cost: Cost::Cheap,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
             content_samples: &[],
         }).unwrap();
         let qs = quads_of(&out);
@@ -1440,6 +1515,8 @@ mod tests {
             declarations_read: &facts,
             not_measured: &[],
             max_cost: Cost::Cheap,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
             content_samples: &[],
         }).unwrap();
         let qs = quads_of(&out);
@@ -1462,6 +1539,8 @@ mod tests {
                 reason: NotMeasuredReason::CostCeiling,
             }],
             max_cost: Cost::Cheap,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
             content_samples: &[],
         })
         .unwrap();
@@ -1492,6 +1571,8 @@ mod tests {
             declarations_read: &[],
             not_measured: &nm,
             max_cost: Cost::Cheap,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
             content_samples: &[],
         }).unwrap();
 
@@ -1539,6 +1620,8 @@ mod tests {
             declarations_read: &[],
             not_measured: &nm,
             max_cost: Cost::Cheap,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
             content_samples: &[],
         }).unwrap();
         let qs = quads_of(&out);
@@ -1604,6 +1687,8 @@ mod tests {
             declarations_read: &[],
             not_measured: &nm,
             max_cost: Cost::Expensive,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
             content_samples: &[],
         }).unwrap();
         let qs = quads_of(&out);
@@ -1673,6 +1758,8 @@ mod tests {
             declarations_read: &[],
             not_measured: &nm,
             max_cost: Cost::Cheap,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
             content_samples: &[],
         }).unwrap();
         let qs = quads_of(&out);
@@ -1724,6 +1811,8 @@ mod tests {
             declarations_read: &[],
             not_measured: &nm,
             max_cost: Cost::Cheap,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
             content_samples: &[],
         }).unwrap();
         let qs = quads_of(&out);
@@ -1751,6 +1840,8 @@ mod tests {
             declarations_read: &[],
             not_measured: &nm,
             max_cost: Cost::Cheap,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
             content_samples: &[],
         })
             .expect("one junk endpoint must not discard the sweep");
@@ -1774,6 +1865,8 @@ mod tests {
                 declarations_read: &[],
                 not_measured: &[],
                 max_cost: ceiling,
+                concurrency: NonZeroUsize::new(1).unwrap(),
+                failed_endpoints: 0,
                 content_samples: &[],
             }).unwrap();
             let qs = quads_of(&out);
@@ -1790,6 +1883,98 @@ mod tests {
             assert_eq!(activity, "<urn:sparqlwatch:activity:r1>",
                        "the ceiling is a property of the run's activity, not of a measurement");
         }
+    }
+
+    /// Two more facts about the run itself, beside the ceiling above: how many
+    /// hosts the sweep talked to at once, and how many endpoints it failed on.
+    ///
+    /// The first is what lets a consumer comparing `elapsedMs` across two runs
+    /// tell a slower endpoint from a busier sweep. The second lets one tell a
+    /// complete run from an incomplete one without reading a log, which is
+    /// otherwise the only place the count appears.
+    #[test]
+    fn the_run_records_the_concurrency_it_ran_at_and_the_endpoints_it_failed() {
+        let out = emit_nquads(RunEmission {
+            run: &RunId("r1".into()),
+            generated_at: AT,
+            metric_revision: REV,
+            rows: &rows(),
+            declarations_read: &[],
+            not_measured: &[],
+            max_cost: Cost::Cheap,
+            content_samples: &[],
+            concurrency: NonZeroUsize::new(4).unwrap(),
+            failed_endpoints: 2,
+        })
+        .unwrap();
+        let qs = quads_of(&out);
+        let four = Term::Literal(Literal::new_typed_literal("4", xsd::INTEGER));
+        let two = Term::Literal(Literal::new_typed_literal("2", xsd::INTEGER));
+        assert_eq!(
+            objects(&qs, "urn:sparqlwatch:concurrency"),
+            vec![&four],
+            "the run states how many hosts it probed at once"
+        );
+        assert_eq!(
+            objects(&qs, "urn:sparqlwatch:failedEndpoints"),
+            vec![&two],
+            "the run states how many endpoints it failed on"
+        );
+        for p in ["urn:sparqlwatch:concurrency", "urn:sparqlwatch:failedEndpoints"] {
+            let subject = qs
+                .iter()
+                .find(|q| q.predicate.as_str() == p)
+                .map(|q| q.subject.to_string())
+                .unwrap_or_else(|| panic!("no {p} quad was published at all"));
+            assert_eq!(
+                subject, "<urn:sparqlwatch:activity:r1>",
+                "{p} is a property of the run's activity, not of a measurement"
+            );
+        }
+    }
+
+    /// A metric nobody measured because the prober failed on its endpoint is
+    /// not a metric nobody measured because it costs too much. The two reasons
+    /// are published as different slugs, so a consumer reading one run can tell
+    /// an incomplete sweep from a deliberate decline.
+    #[test]
+    fn a_prober_failure_is_a_different_reason_from_a_cost_ceiling() {
+        let nm = vec![
+            NotMeasured {
+                endpoint: "https://a.example/sparql".into(),
+                metric_id: "availability".into(),
+                reason: NotMeasuredReason::ProberFailed,
+            },
+            NotMeasured {
+                endpoint: "https://a.example/sparql".into(),
+                metric_id: "classes".into(),
+                reason: NotMeasuredReason::CostCeiling,
+            },
+        ];
+        let out = emit_nquads(RunEmission {
+            run: &RunId("r1".into()),
+            generated_at: AT,
+            metric_revision: REV,
+            rows: &[],
+            declarations_read: &[],
+            not_measured: &nm,
+            max_cost: Cost::Cheap,
+            content_samples: &[],
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 1,
+        })
+        .unwrap();
+        let qs = quads_of(&out);
+        let mut reasons: Vec<String> = objects(&qs, "urn:sparqlwatch:notMeasuredReason")
+            .iter()
+            .map(|t| t.to_string())
+            .collect();
+        reasons.sort();
+        assert_eq!(
+            reasons,
+            vec!["\"cost-ceiling\"".to_string(), "\"prober-failed\"".to_string()],
+            "the two reasons must be distinguishable in the graph"
+        );
     }
 
     fn sample(values: &[&str], truncated: bool) -> ContentSample {
@@ -1818,6 +2003,8 @@ mod tests {
                 declarations_read: &[],
                 not_measured: &[],
                 max_cost: Cost::Cheap,
+                concurrency: NonZeroUsize::new(1).unwrap(),
+                failed_endpoints: 0,
                 content_samples: &[s],
             }).unwrap();
         assert!(nq.contains("urn:sparqlwatch:ContentSample"));
@@ -1842,6 +2029,8 @@ mod tests {
                 declarations_read: &[],
                 not_measured: &[],
                 max_cost: Cost::Expensive,
+                concurrency: NonZeroUsize::new(1).unwrap(),
+                failed_endpoints: 0,
                 content_samples: &[sample(&["http://example.org/A"], true)],
             }).unwrap();
         let qs = quads_of(&out);
@@ -1878,6 +2067,8 @@ mod tests {
                 reason: NotMeasuredReason::CostCeiling,
             }],
             max_cost: Cost::Cheap,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
             content_samples: &[sample(&["http://example.org/A", "http://example.org/B"], false)],
         })
         .unwrap();
@@ -1931,6 +2122,8 @@ mod tests {
             declarations_read: &[],
             not_measured: &nm,
             max_cost: Cost::Cheap,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
             content_samples: &[sample(&["http://example.org/A"], false)],
         })
         .unwrap();
@@ -1968,6 +2161,8 @@ mod tests {
             declarations_read: &[],
             not_measured: &[],
             max_cost: Cost::Expensive,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
             content_samples: &[sample(
                 &["http://example.org/Zebra", "http://example.org/Apple", "http://example.org/Mango"],
                 false,
@@ -2029,6 +2224,8 @@ mod tests {
             declarations_read: &[],
             not_measured: &[],
             max_cost: Cost::Expensive,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
             content_samples: &[
                 sample(&["http://example.org/A"], false),
                 ContentSample {
@@ -2065,6 +2262,8 @@ mod tests {
             declarations_read: &[],
             not_measured: &[],
             max_cost: Cost::Expensive,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
             content_samples: &[
                 sample(&["https://a.example/A"], false),
                 sample(&["https://a.example/B"], false),
@@ -2101,6 +2300,8 @@ mod tests {
             declarations_read: &[],
             not_measured: &[],
             max_cost: Cost::Expensive,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
             content_samples: &[
                 ContentSample {
                     endpoint: "not an iri at all".into(),
@@ -2145,6 +2346,8 @@ mod tests {
             declarations_read: &[],
             not_measured: &[],
             max_cost: Cost::Expensive,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
             content_samples: &[sample(&["not an iri", "nor this one"], false)],
         })
         .unwrap();
@@ -2167,6 +2370,8 @@ mod tests {
             declarations_read: &[],
             not_measured: &[],
             max_cost: Cost::Expensive,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
             content_samples: &[sample(
                 &["http://example.org/A", "not an iri", "http://example.org/B", "no space allowed"],
                 false,
