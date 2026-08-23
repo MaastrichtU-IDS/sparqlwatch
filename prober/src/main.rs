@@ -64,7 +64,31 @@ struct Args {
     /// a decision nobody has taken.
     #[arg(long, default_value_t = DEFAULT_RETRY_AFTER_CAP.as_secs())]
     retry_after_cap_s: u64,
+    /// How many HOSTS to probe at once. Endpoints are grouped by host and each
+    /// group is probed sequentially, so this bounds how many groups run
+    /// together, never how many requests one host receives at once: that stays
+    /// at one, gated by `--min-gap-ms`.
+    ///
+    /// Four by default, for politeness rather than throughput: four hosts in
+    /// flight with a 2s per-host gap is roughly two requests per second in
+    /// aggregate, which is a defensible load for a service that probes
+    /// strangers uninvited.
+    ///
+    /// `NonZeroUsize`, so zero is refused here by the parser rather than
+    /// repaired downstream: `Semaphore::new(0)` does not fail, it hangs, and a
+    /// sweep that probes nothing and reports nothing is the worst failure this
+    /// crate has.
+    #[arg(long, default_value_t = DEFAULT_CONCURRENCY)]
+    concurrency: NonZeroUsize,
 }
+
+/// Four hosts at once. A named constant because `default_value_t` needs a
+/// value of the field's own type, and `NonZeroUsize::new(4).unwrap()` inside
+/// the attribute would put a `.unwrap()` in the flag declaration. The test
+/// below still asserts on the PARSED args rather than on this constant, for
+/// the reason the cost ceiling's test records: asserting on the constant would
+/// pass even if `default_value_t` were changed to name something else.
+const DEFAULT_CONCURRENCY: NonZeroUsize = NonZeroUsize::new(4).unwrap();
 
 /// `--at` is interpolated into two IRIs and published as an `xsd:dateTime`, so
 /// a value like `banana` would produce an ill-typed literal and a nonsense
@@ -142,6 +166,18 @@ fn validate_instant(at: &str) -> anyhow::Result<()> {
 /// `checked_sub` rather than an addition: `--min-gap-ms` is arbitrary operator
 /// input, and `Duration` addition panics on overflow, which would turn a typo
 /// into a crash instead of this message.
+///
+/// This stays the only budget relation a sweep needs BECAUSE one host is
+/// probed by one task at a time (see `--concurrency`, which counts hosts). The
+/// per-host guard in `politeness::acquire` is held until the request returns,
+/// so a second endpoint of the same host would wait for the guard, not just
+/// for the gap: gap plus the whole first request, and on a throttled host gap
+/// plus request plus the honoured `Retry-After` plus the retry, which is the
+/// 2 + 30 + 20 + 30 = 82 seconds priced out on `--retry-after-cap-s` above,
+/// inside a 60-second metric budget. Relaxing per-host serialisation would
+/// therefore need this check rewritten around that HOLD term rather than
+/// around the gap, and until then the term is absent by construction: no
+/// endpoint ever waits on another endpoint's host guard.
 fn validate_min_gap(min_gap: Duration, budget: Budget) -> anyhow::Result<()> {
     let room = budget.metric.checked_sub(budget.request).unwrap_or(Duration::ZERO);
     if min_gap >= room {
@@ -177,7 +213,10 @@ async fn main() -> anyhow::Result<()> {
         Duration::from_millis(args.min_gap_ms),
         Duration::from_secs(args.retry_after_cap_s),
     );
-    let client = Client::new(budget, politeness)?;
+    // An `Arc` because `run_sweep` spawns one task per host group and a spawned
+    // future must be `'static`: every group holds its own handle on the one
+    // client, which is also what keeps the per-host gate global to the sweep.
+    let client = std::sync::Arc::new(Client::new(budget, politeness)?);
 
     // A pure function of the definitions, so the published revision is
     // reproducible from the same metrics.toml. It identifies the definitions,
@@ -188,8 +227,8 @@ async fn main() -> anyhow::Result<()> {
     // The policy lives here, in one place. `run_sweep` receives both halves as
     // data and never learns what a ceiling is.
     let (run, declined) = within_cost(&defs, args.max_cost);
-    let Sweep { rows, declarations_read, not_measured, content_samples } =
-        run_sweep(&endpoints, &run, &declined, &client, budget).await;
+    let Sweep { rows, declarations_read, not_measured, content_samples, failed_endpoints } =
+        run_sweep(&endpoints, &run, &declined, &client, budget, args.concurrency).await;
     let nq = emit_nquads(RunEmission {
         run: &RunId(args.at.clone()),
         generated_at: &args.at,
@@ -198,15 +237,28 @@ async fn main() -> anyhow::Result<()> {
         declarations_read: &declarations_read,
         not_measured: &not_measured,
         max_cost: args.max_cost,
-        concurrency: NonZeroUsize::new(1).unwrap(),
-        failed_endpoints: 0,
+        concurrency: args.concurrency,
+        failed_endpoints,
         content_samples: &content_samples,
     })?;
     std::fs::write(&args.out, nq)?;
     tracing::info!(endpoints = endpoints.len(), measurements = rows.len(),
                    not_measured = not_measured.len(), content_samples = content_samples.len(),
-                   max_cost = args.max_cost.slug(),
-                   revision = %revision, out = %args.out, "sweep complete");
+                   max_cost = args.max_cost.slug(), concurrency = args.concurrency,
+                   failed_endpoints, revision = %revision, out = %args.out, "sweep complete");
+    // Non-zero AFTER the file is written, never instead of writing it. The run
+    // is worth keeping: every endpoint the sweep failed on carries its own
+    // `prober-failed` facts, and the activity carries the count, so the graph
+    // says what happened. The exit status is for the scheduler, which has no
+    // other way to learn that this run was incomplete.
+    if failed_endpoints > 0 {
+        anyhow::bail!(
+            "{failed_endpoints} of {} endpoints were not probed because the prober failed on \
+             them; {} was still written and records each of them as prober-failed",
+            endpoints.len(),
+            args.out,
+        );
+    }
     Ok(())
 }
 
@@ -331,6 +383,37 @@ mod tests {
         assert!(err.contains("request budget") && err.contains("metric budget"),
                 "names both budgets in the relationship: {err}");
         assert!(err.contains("30000ms"), "names the ceiling to stay under: {err}");
+    }
+
+    /// Four hosts at once, and the reason is politeness rather than
+    /// throughput: four in flight with a 2s per-host gap is roughly two
+    /// requests per second in aggregate, which is a defensible load for a
+    /// service that probes strangers uninvited. Asserted on the PARSED args,
+    /// not on `DEFAULT_CONCURRENCY`, for the same reason as the ceiling below.
+    #[test]
+    fn the_default_concurrency_is_four_hosts() {
+        let args = Args::parse_from(["prober", "--at", "2026-01-01T00:00:00Z"]);
+        assert_eq!(args.concurrency.get(), 4, "a plain run talks to four hosts at once");
+    }
+
+    /// `Semaphore::new(0)` does not fail, it hangs: every group would wait
+    /// forever for a permit that cannot exist, and a sweep that probes nothing
+    /// and reports nothing is the worst failure this crate has. `NonZeroUsize`
+    /// makes it unrepresentable, so the refusal happens in the parser and
+    /// nothing downstream has to repair a caller's zero.
+    #[test]
+    fn a_concurrency_of_zero_is_refused_before_anything_is_probed() {
+        assert!(
+            Args::try_parse_from([
+                "prober",
+                "--at",
+                "2026-01-01T00:00:00Z",
+                "--concurrency",
+                "0"
+            ])
+            .is_err(),
+            "zero must not parse: a semaphore with no permits hangs rather than failing"
+        );
     }
 
     #[test]

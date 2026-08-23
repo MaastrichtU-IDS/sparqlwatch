@@ -15,8 +15,14 @@ use crate::client::Client;
 use crate::declare::{parse_declarations_for, Declarations};
 use crate::emit::{ContentSample, DeclarationsRead, MeasurementRow, NotMeasured, NotMeasuredReason};
 use crate::metrics::{MetricDef, ProbeKind};
+use crate::politeness::host_key;
 use crate::resolve::{resolve, resolve_fetch, Declared};
 use crate::verdict::Verdict;
+use std::collections::HashMap;
+use std::num::NonZeroUsize;
+use std::sync::Arc;
+use tokio::sync::Semaphore;
+use tokio::task::JoinSet;
 
 /// Everything one sweep produced, flat and ready to emit: one entry per
 /// (endpoint, metric) in `rows`, one per endpoint in `declarations_read`, one
@@ -34,10 +40,42 @@ pub struct Sweep {
     /// `absent`; and neither does one the resolver would not confirm, because
     /// a sample is an assertion and an unconfirmed observation supports none.
     pub content_samples: Vec<ContentSample>,
+    /// How many endpoints the sweep produced no observation for at all,
+    /// because the task probing their host never returned. Each of them
+    /// carries a `NotMeasured` fact per metric instead, so the count is a
+    /// summary of facts already in the lists above rather than the only
+    /// record of them, and `main.rs` exits non-zero on it after writing the
+    /// output.
+    pub failed_endpoints: usize,
 }
 
-/// Probe every metric against every endpoint. Endpoints are processed
-/// independently so one slow host cannot delay another's results.
+/// Probe every metric against every endpoint.
+///
+/// The unit of concurrency is a HOST, not an endpoint: endpoints are grouped
+/// by `politeness::host_key`, each group is one sequential task, and
+/// `concurrency` bounds how many groups run at once. So `concurrency` means
+/// "how many hosts we talk to at once", and one host is never asked two things
+/// at once whatever it is set to.
+///
+/// That is what keeps the budget arithmetic to the one relation `main.rs`
+/// validates. `politeness::acquire`'s guard is held until the request returns,
+/// so a competing endpoint on the same host would wait for the guard rather
+/// than for the gap: gap plus the whole first request, and on a throttled host
+/// gap plus request plus the honoured `Retry-After` plus the retry, which is 82
+/// seconds inside a 60-second metric budget. A cancelled metric budget does not
+/// warn, so the symptom would be healthy-but-slow endpoints quietly reported
+/// `indeterminate`, which is exactly the population this project exists to
+/// characterise. One endpoint per host in flight removes that term by
+/// construction.
+///
+/// It also settles dispatch order without a heuristic: grouping by host is what
+/// spreads the work, so no round-robin is needed, and "concurrency only buys
+/// parallelism across different hosts" is a property of the code rather than an
+/// intention.
+///
+/// Output order is INPUT order, never completion order: each endpoint keeps its
+/// input index as a slot and `assemble` walks the slots afterwards. A sweep's
+/// output therefore does not depend on which host answered first.
 ///
 /// Three nested budgets bound the work: per request (in the HTTP client), per
 /// metric, and per endpoint. When the endpoint budget expires mid-loop the
@@ -76,18 +114,137 @@ pub async fn run_sweep(
     endpoints: &[String],
     defs: &[MetricDef],
     declined: &[MetricDef],
-    client: &Client,
+    client: &Arc<Client>,
     budget: Budget,
+    concurrency: NonZeroUsize,
+) -> Sweep {
+    // Endpoints grouped by host, each keeping its input index as its slot, in
+    // first-seen host order. First-seen rather than sorted so the endpoints a
+    // registry lists first are also the ones dispatched first when there are
+    // more hosts than permits, and deterministic either way, which a `HashMap`
+    // iteration order would not be.
+    let mut groups: Vec<Vec<(usize, String)>> = Vec::new();
+    let mut group_of: HashMap<String, usize> = HashMap::new();
+    for (slot, ep) in endpoints.iter().enumerate() {
+        let key = host_key(ep);
+        match group_of.get(&key) {
+            Some(existing) => groups[*existing].push((slot, ep.clone())),
+            None => {
+                group_of.insert(key, groups.len());
+                groups.push(vec![(slot, ep.clone())]);
+            }
+        }
+    }
+    let permits = Arc::new(Semaphore::new(concurrency.get()));
+    // One shared copy of the definitions for the whole sweep. A `to_vec()` per
+    // endpoint would be 548 copies of the definition list at stage 1d.
+    let shared_defs = Arc::new(defs.to_vec());
+    let mut tasks: JoinSet<Vec<(usize, EndpointSweep)>> = JoinSet::new();
+    // Which endpoints each task is probing. `JoinSet::join_next`'s error arm
+    // carries only a `JoinError`, whose only identifying information is
+    // `JoinError::id()`, so without this map a task that panicked could not
+    // even be logged with the endpoints it was probing. It is for the log
+    // alone: the slots it covered are filled by `assemble` from their own
+    // emptiness, so a missing entry here costs a name in one log line and
+    // nothing in the published graph.
+    let mut covering: HashMap<tokio::task::Id, Vec<String>> = HashMap::new();
+    for group in groups {
+        let named: Vec<String> = group.iter().map(|(_, ep)| ep.clone()).collect();
+        // Everything the task touches is owned by it: `probe_one_endpoint`
+        // borrows the endpoint, the definitions and the client, and a spawned
+        // future must be `'static`.
+        let permits = Arc::clone(&permits);
+        let defs = Arc::clone(&shared_defs);
+        let client = Arc::clone(client);
+        let handle = tasks.spawn(async move {
+            // Held for the WHOLE group, not per endpoint: a permit is the
+            // right to talk to this host at all, and releasing it between two
+            // of its endpoints would let another group's endpoint start while
+            // this host still has work queued behind the same guard.
+            let _permit = permits
+                .acquire()
+                .await
+                .expect("the sweep owns this semaphore and never closes it");
+            let mut done = Vec::with_capacity(group.len());
+            for (slot, ep) in group {
+                done.push((slot, probe_one_endpoint(&ep, &defs, &client, budget).await));
+            }
+            done
+        });
+        covering.insert(handle.id(), named);
+    }
+    let mut slots: Vec<Option<EndpointSweep>> = endpoints.iter().map(|_| None).collect();
+    while let Some(joined) = tasks.join_next().await {
+        match joined {
+            Ok(done) => {
+                for (slot, swept) in done {
+                    slots[slot] = Some(swept);
+                }
+            }
+            // A panic in one group costs that whole group, since its results
+            // are built inside the task, so the log names every endpoint it
+            // covered rather than one. The slots stay empty and `assemble`
+            // publishes a `prober-failed` fact for each of them: an endpoint
+            // that contributed nothing at all would leave the site serving the
+            // previous run's verdicts as current.
+            Err(failure) => {
+                let named = covering.get(&failure.id()).cloned().unwrap_or_default();
+                tracing::error!(
+                    endpoints = ?named, error = %failure,
+                    "the task probing these endpoints failed; every metric on them is \
+                     published as not measured, reason prober-failed"
+                );
+            }
+        }
+    }
+    assemble(slots, endpoints, defs, declined)
+}
+
+/// Turn one slot per endpoint into the four flat fact lists, walking
+/// `endpoints` in input order so the output does not depend on which task
+/// finished first.
+fn assemble(
+    slots: Vec<Option<EndpointSweep>>,
+    endpoints: &[String],
+    defs: &[MetricDef],
+    declined: &[MetricDef],
 ) -> Sweep {
     let mut rows = Vec::new();
     let mut declarations_read = Vec::new();
     let mut not_measured = Vec::new();
     let mut content_samples = Vec::new();
-    for ep in endpoints {
-        let swept = probe_one_endpoint(ep, defs, client, budget).await;
-        declarations_read.push(DeclarationsRead { endpoint: ep.clone(), read: swept.declarations_read });
-        rows.extend(swept.rows);
-        content_samples.extend(swept.content_samples);
+    let mut failed_endpoints = 0;
+    for (ep, slot) in endpoints.iter().zip(slots) {
+        match slot {
+            Some(swept) => {
+                declarations_read
+                    .push(DeclarationsRead { endpoint: ep.clone(), read: swept.declarations_read });
+                rows.extend(swept.rows);
+                content_samples.extend(swept.content_samples);
+            }
+            // Nothing was observed, so there is nothing to grade: no rows, and
+            // no `declarationsRead` either, since whether the description was
+            // readable is precisely what this run did not find out. One
+            // `NotMeasured` per metric that would have run instead.
+            //
+            // `ProberFailed` rather than `Indeterminate` rows: an
+            // `Indeterminate` verdict asserts that a measurement happened and
+            // was inconclusive, which is what an expired budget produces, so a
+            // reader could not tell a crashed sweep from a slow endpoint. The
+            // declined metrics keep their `CostCeiling` facts below, so no
+            // (endpoint, metric) pair gets two `NotMeasured` facts and
+            // `emit`'s duplicate-subject guard is not triggered.
+            None => {
+                failed_endpoints += 1;
+                for def in defs {
+                    not_measured.push(NotMeasured {
+                        endpoint: ep.clone(),
+                        metric_id: def.id.clone(),
+                        reason: NotMeasuredReason::ProberFailed,
+                    });
+                }
+            }
+        }
         // One fact per (endpoint, declined metric), recorded whatever the
         // budget did: the reason is the ceiling, which was decided before any
         // probing started, so an endpoint whose budget expired still owes the
@@ -100,7 +257,7 @@ pub async fn run_sweep(
             });
         }
     }
-    Sweep { rows, declarations_read, not_measured, content_samples }
+    Sweep { rows, declarations_read, not_measured, content_samples, failed_endpoints }
 }
 
 /// One endpoint's results, accumulated in place as `probe_endpoint` earns
@@ -354,5 +511,134 @@ async fn probe_endpoint(
             level: None,
             elapsed_ms: elapsed,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::metrics::{Cost, ProbeKind};
+
+    fn def(id: &str) -> MetricDef {
+        MetricDef {
+            id: id.into(),
+            label: id.into(),
+            dimension: "content".into(),
+            kind: ProbeKind::Liveness,
+            query: Some("SELECT ?s WHERE { ?s ?p ?o } LIMIT 1".into()),
+            expect: None,
+            var: None,
+            declared_by: None,
+            graded: false,
+            cost: Cost::Cheap,
+            sample_limit: None,
+        }
+    }
+
+    /// One endpoint's finished work: a row per metric, a description read, and
+    /// one sample. What a slot holds when its group came back.
+    fn swept(ep: &str, defs: &[MetricDef]) -> EndpointSweep {
+        EndpointSweep {
+            rows: defs
+                .iter()
+                .map(|d| MeasurementRow {
+                    endpoint: ep.to_string(),
+                    metric_id: d.id.clone(),
+                    verdict: Verdict::Verified,
+                    level: None,
+                    elapsed_ms: Some(7),
+                })
+                .collect(),
+            declarations_read: true,
+            content_samples: vec![ContentSample {
+                endpoint: ep.to_string(),
+                metric_id: defs[0].id.clone(),
+                values: vec!["http://example.org/C".to_string()],
+                truncated: false,
+            }],
+        }
+    }
+
+    /// A unit test on `assemble` over already-normalised slots, and not on
+    /// `run_sweep`, because `JoinError` has no public constructor: a fold typed
+    /// over one cannot be tested at all, which is why the translation from a
+    /// join failure to an empty slot happens at the `join_next` site and the
+    /// judgement about an empty slot happens here.
+    #[test]
+    fn a_failed_group_still_carries_facts_for_every_endpoint_in_it() {
+        let a = "https://a.example/sparql";
+        let b = "https://b.example/sparql";
+        let c = "https://c.example/sparql";
+        let endpoints = vec![a.to_string(), b.to_string(), c.to_string()];
+        let defs = vec![def("availability"), def("has-classes")];
+        let declined = vec![def("classes")];
+        let slots = vec![Some(swept(a, &defs)), None, Some(swept(c, &defs))];
+
+        let sweep = assemble(slots, &endpoints, &defs, &declined);
+
+        assert_eq!(sweep.failed_endpoints, 1, "one slot came back empty");
+        // The survivors keep their place, and the failure between them does not
+        // shift anything.
+        assert_eq!(
+            sweep.rows.iter().map(|r| r.endpoint.as_str()).collect::<Vec<_>>(),
+            vec![a, a, c, c],
+            "the survivors' rows stay in input order"
+        );
+        assert_eq!(
+            sweep.declarations_read.iter().map(|d| d.endpoint.as_str()).collect::<Vec<_>>(),
+            vec![a, c],
+            "the failed endpoint publishes no declarationsRead: whether its description \
+             was readable is exactly what this run did not find out"
+        );
+        assert_eq!(
+            sweep.content_samples.iter().map(|s| s.endpoint.as_str()).collect::<Vec<_>>(),
+            vec![a, c]
+        );
+
+        // The failed endpoint's own facts: one `NotMeasured` per metric that
+        // would have run, saying the prober failed, plus its `CostCeiling`
+        // facts unchanged. Not `Indeterminate` rows: nothing was observed.
+        assert_eq!(
+            sweep
+                .not_measured
+                .iter()
+                .filter(|n| n.endpoint == b)
+                .map(|n| (n.metric_id.as_str(), n.reason))
+                .collect::<Vec<_>>(),
+            vec![
+                ("availability", NotMeasuredReason::ProberFailed),
+                ("has-classes", NotMeasuredReason::ProberFailed),
+                ("classes", NotMeasuredReason::CostCeiling),
+            ]
+        );
+        assert!(
+            !sweep.rows.iter().any(|r| r.endpoint == b),
+            "a failed endpoint gets no measurement row: an Indeterminate one would assert \
+             that a measurement happened and was inconclusive"
+        );
+
+        // No (endpoint, metric) pair carries two `NotMeasured` facts, which is
+        // what would make `emit`'s duplicate-subject guard publish neither.
+        let mut pairs: Vec<(&str, &str)> = sweep
+            .not_measured
+            .iter()
+            .map(|n| (n.endpoint.as_str(), n.metric_id.as_str()))
+            .collect();
+        let before = pairs.len();
+        pairs.sort_unstable();
+        pairs.dedup();
+        assert_eq!(pairs.len(), before, "a pair got two NotMeasured facts");
+
+        // The property the whole arrangement exists for: every endpoint the
+        // sweep covered contributes at least one fact. An empty slot would let
+        // `web/queries/endpoint_measurements.rq` keep serving last night's
+        // verdicts as current, with nothing anywhere saying this run failed.
+        for ep in &endpoints {
+            assert!(
+                sweep.rows.iter().any(|r| &r.endpoint == ep)
+                    || sweep.not_measured.iter().any(|n| &n.endpoint == ep),
+                "{ep} contributed nothing to the run graph"
+            );
+        }
     }
 }
