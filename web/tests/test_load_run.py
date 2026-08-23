@@ -134,3 +134,46 @@ def test_load_result_reports_the_quad_count(tmp_path):
     result = load_run(store, FIXTURE.read_bytes())
     assert result.quad_count == 278
     assert isinstance(result, LoadResult)
+
+
+def test_an_interrupted_insert_says_what_the_store_is_left_holding(tmp_path, monkeypatch):
+    """The window web/load_run.py admits it cannot close. remove_graph and extend
+    are two store operations and pyoxigraph 0.5.9 has no transaction API, so an
+    insert stopped by a full disk or an OOM kill leaves the graphs dropped and
+    nothing inserted: measured at 278 quads going to zero. It cannot be made
+    atomic, so it must be loud instead. The count is what makes it actionable,
+    because the .nq file is the source of truth and a run graph is immutable: an
+    operator told '0 of 278' re-runs the load and gets the run back exactly, as
+    the end of this test does."""
+    store = Store(str(tmp_path / "s"))
+    load_run(store, FIXTURE.read_bytes())
+
+    def full_disk(self, quads):
+        raise OSError("simulated full disk during insert")
+
+    monkeypatch.setattr(Store, "extend", full_disk)
+    with pytest.raises(RuntimeError, match="loaded 0 of 278 quads") as raised:
+        load_run(store, FIXTURE.read_bytes())
+    assert isinstance(raised.value.__cause__, OSError), (
+        "the underlying failure must still be reachable, not swallowed"
+    )
+    assert len(store) == 0, "the window is real: the run is gone until it is re-loaded"
+
+    monkeypatch.undo()
+    again = load_run(store, FIXTURE.read_bytes())
+    assert again.quad_count == 278
+    assert len(store) == 278, "re-loading the same file restores the run exactly"
+    assert bool(store.query(
+        'ASK { GRAPH ?g { ?m <http://www.w3.org/ns/dqv#value> "verified" } }'
+    )), "and restores its content, not merely its quad count"
+
+
+def test_an_insert_that_silently_stores_nothing_is_not_a_successful_load(tmp_path, monkeypatch):
+    """Worse than the crash above, because nothing anywhere would say the run is
+    missing. A LoadResult reporting 278 quads over an empty graph is the store
+    lying about what it holds, so the count is verified against the store rather
+    than against the parse."""
+    monkeypatch.setattr(Store, "extend", lambda self, quads: None)
+    store = Store(str(tmp_path / "s"))
+    with pytest.raises(RuntimeError, match="loaded 0 of 278 quads"):
+        load_run(store, FIXTURE.read_bytes())
