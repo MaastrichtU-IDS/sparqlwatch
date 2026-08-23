@@ -1,4 +1,4 @@
-# Stage 2-0: A Store, and the First Query That Answers a Task
+# Stage 2-1: A Store, and the First Query That Answers a Task
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -424,7 +424,7 @@ reader can tell whether their own run worked.
 - [ ] **Step 2: Spec**
 
 The delivery sequence has no entry for this, and a review flagged that inventing a
-"Stage 2-0" row is inconsistent with how that table is structured and with how
+"Stage 2-0" row was inconsistent with how that table is structured and with how
 earlier slices were recorded. Read the table first and follow its existing
 convention for a partial delivery, rather than adding a new row shaped unlike its
 neighbours.
