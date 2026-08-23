@@ -1,0 +1,62 @@
+# What is in this endpoint? The classes a sweep sampled from it, how many it
+# found, and whether that list was cut short.
+#
+# ?endpoint is the input. It is substituted with a NamedNode before execution
+# (SEP-0007 substitution, which is why it appears in the SELECT projection:
+# pyoxigraph only substitutes projected variables), so it is never
+# interpolated into this text.
+#
+# One row per sampled class. The run, its timestamp, the size and the
+# truncation flag repeat on every row because they all describe the single
+# sample those classes came from. No rows at all means no run in the store
+# sampled this endpoint's classes, which is a different answer from a sweep
+# that sampled and found nothing: see web/endpoint_content.py.
+#
+# A sample is tied to its run by the graph it lives in, not by
+# prov:wasGeneratedBy, because a sample is not obliged to carry that link
+# (web/tests/fixtures/run-truncated.nq has none) whereas every quad the
+# prober writes lands in its run's graph by construction.
+#
+# "Most recent" is decided by the activity's prov:generatedAtTime, a typed
+# xsd:dateTime, and NOT by ordering the run IRI as a string. Today's run IRIs
+# happen to embed an ISO-8601 instant, so string ordering would agree with
+# this on every fixture we have and would quietly start returning a stale run
+# the day that IRI shape changes. Ordering by the timestamp the data actually
+# models has no such trapdoor.
+#
+# It is expressed as "no newer run sampled this same endpoint" rather than as
+# an ORDER BY ... LIMIT 1 subquery. Both read the same at first glance, and
+# the subquery form is wrong: the value substituted for ?endpoint does not
+# reach inside a subquery's own projection, so the subquery would pick the
+# newest run in the whole store and then fail to join whenever that run did
+# not happen to sample the endpoint being asked about. NOT EXISTS is
+# evaluated against the current solution, so ?endpoint is bound inside it and
+# the comparison stays per-endpoint.
+
+PREFIX prov: <http://www.w3.org/ns/prov#>
+PREFIX sw: <urn:sparqlwatch:>
+
+SELECT ?endpoint ?run ?generatedAt ?size ?truncated ?class
+WHERE {
+  GRAPH ?run {
+    ?sample sw:sampledFrom ?endpoint ;
+            sw:sampledBy sw:metric:classes ;
+            sw:sampleSize ?size ;
+            sw:sampleTruncated ?truncated .
+    ?activity a prov:Activity ;
+              prov:generatedAtTime ?generatedAt .
+    # OPTIONAL so a sample that genuinely found no classes still reports its
+    # size and truncation flag instead of vanishing, which the caller could
+    # not tell apart from never having been sampled at all.
+    OPTIONAL { ?sample sw:sampledValue ?class }
+  }
+  FILTER NOT EXISTS {
+    GRAPH ?newerRun {
+      ?newerSample sw:sampledFrom ?endpoint ;
+                   sw:sampledBy sw:metric:classes .
+      ?newerActivity a prov:Activity ;
+                     prov:generatedAtTime ?newerGeneratedAt .
+    }
+    FILTER (?newerGeneratedAt > ?generatedAt)
+  }
+}
