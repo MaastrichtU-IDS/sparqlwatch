@@ -176,8 +176,16 @@ fn validate_instant(at: &str) -> anyhow::Result<()> {
 /// 2 + 30 + 20 + 30 = 82 seconds priced out on `--retry-after-cap-s` above,
 /// inside a 60-second metric budget. Relaxing per-host serialisation would
 /// therefore need this check rewritten around that HOLD term rather than
-/// around the gap, and until then the term is absent by construction: no
-/// endpoint ever waits on another endpoint's host guard.
+/// around the gap.
+///
+/// Until then the term is absent for the host an endpoint NAMES: no endpoint
+/// waits on another endpoint's guard for the host it was pointed at, because
+/// `run_sweep` groups on the same `host_key` the gate acquires. It is NOT
+/// absent for a redirect: `client::gated_hop` gates each hop on that hop's own
+/// host, so an endpoint redirected into another host of the same sweep can
+/// wait one hold there, and that wait is inside this budget. See the known
+/// limitation in `README.md`; it is unclosable at dispatch time, since the
+/// redirect target is only learned by following it.
 fn validate_min_gap(min_gap: Duration, budget: Budget) -> anyhow::Result<()> {
     let room = budget.metric.checked_sub(budget.request).unwrap_or(Duration::ZERO);
     if min_gap >= room {

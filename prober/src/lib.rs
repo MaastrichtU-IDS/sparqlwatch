@@ -24,13 +24,26 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
-/// Everything one sweep produced, flat and ready to emit: one entry per
-/// (endpoint, metric) in `rows`, one per endpoint in `declarations_read`, one
-/// per (endpoint, declined metric) in `not_measured`. See `run_sweep` for what
-/// each of them means and how the budgets shape them.
+/// Everything one sweep produced, flat and ready to emit. For an endpoint the
+/// sweep measured: one entry per (endpoint, metric) in `rows`, one entry in
+/// `declarations_read`, and one per (endpoint, declined metric) in
+/// `not_measured`. See `run_sweep` for what each of them means and how the
+/// budgets shape them.
+///
+/// For an endpoint the sweep FAILED on, all three read differently, and
+/// `assemble` is where that is decided: no row and no `declarations_read`
+/// entry, because nothing was observed, and `not_measured` carries every
+/// metric that would have run (reason `prober-failed`) as well as the declined
+/// ones (reason `cost-ceiling`). `failed_endpoints` counts those endpoints, so
+/// a consumer that needs "one row per (endpoint, metric)" has to read it
+/// rather than assume it.
 pub struct Sweep {
     pub rows: Vec<MeasurementRow>,
     pub declarations_read: Vec<DeclarationsRead>,
+    /// Two disjoint families of fact, not one: the metrics `main.rs` declined
+    /// at the cost ceiling, and the metrics that would have run on an endpoint
+    /// the sweep failed on. `NotMeasuredReason` is what tells them apart, and
+    /// one (endpoint, metric) pair is only ever in one of them.
     pub not_measured: Vec<NotMeasured>,
     /// What the enumerating metrics saw, one entry per (endpoint, metric that
     /// declared a `sample_limit`, reached a positive verdict, and bound at
@@ -65,8 +78,19 @@ pub struct Sweep {
 /// seconds inside a 60-second metric budget. A cancelled metric budget does not
 /// warn, so the symptom would be healthy-but-slow endpoints quietly reported
 /// `indeterminate`, which is exactly the population this project exists to
-/// characterise. One endpoint per host in flight removes that term by
-/// construction.
+/// characterise. One endpoint per host in flight removes that term for the host
+/// an endpoint NAMES, which is what the registry gives us: the grouping key
+/// here is the same `host_key` that `politeness::acquire` gates on, so two
+/// endpoints in different groups can never contend for one guard.
+///
+/// One case is left open, and this arrangement cannot close it.
+/// `client::gated_hop` takes the gate for the host each HOP touches, and a
+/// `Location` can point anywhere, so an endpoint that redirects into another
+/// host being swept at the same time does wait on that host's guard, for up to
+/// the same hold. Grouping cannot prevent it: the redirect target is unknown
+/// until the endpoint is probed, and following it ungated is the thing
+/// `gated_hop` exists to prevent. `README.md`'s known limitations price what
+/// that wait costs.
 ///
 /// It also settles dispatch order without a heuristic: grouping by host is what
 /// spreads the work, so no round-robin is needed, and "concurrency only buys
@@ -92,15 +116,22 @@ pub struct Sweep {
 /// the one thing this layer knows and the resolver cannot: judgement about an
 /// *observation* never happens outside `resolve()`.
 ///
-/// Alongside the rows, every endpoint gets exactly one `DeclarationsRead`
-/// fact: whether its queryless description fetch produced a parseable graph
-/// of at least one triple. `Declared::claimed` cannot answer this on its
-/// own -- `false` there means either "declares nothing" or "we could not
-/// read it", and the two are distinguished only by this fact.
+/// Alongside the rows, every endpoint this sweep OBSERVED gets exactly one
+/// `DeclarationsRead` fact: whether its queryless description fetch produced a
+/// parseable graph of at least one triple. `Declared::claimed` cannot answer
+/// this on its own -- `false` there means either "declares nothing" or "we
+/// could not read it", and the two are distinguished only by this fact.
 /// `EndpointSweep::declarations_read` starts `false` and is set inside
 /// `probe_endpoint` as soon as the fetch's `Declarations` are known, so an
 /// endpoint whose budget expires before that point (never fetched at all)
 /// still gets a fact, honestly `false`, rather than none.
+///
+/// An endpoint whose task never returned gets NO such fact, which is the one
+/// exception and is deliberate: a budget expiry means we fetched or tried to
+/// fetch, so `false` is an honest report of the parse, whereas a failed task
+/// means we do not know whether the description was readable, and `false`
+/// would be an assertion about a fetch that may never have been made.
+/// `assemble` carries that decision and the unit test pins it.
 ///
 /// `declined` is the other half of the definition list: metrics the caller
 /// decided not to run. This function does not filter and does not know what a
@@ -161,6 +192,17 @@ pub async fn run_sweep(
             // right to talk to this host at all, and releasing it between two
             // of its endpoints would let another group's endpoint start while
             // this host still has work queued behind the same guard.
+            //
+            // It is held across a `Retry-After` stand-down too, because the
+            // wait happens inside `politeness::acquire` under this permit: a
+            // host that asked for an hour keeps its permit until the endpoint
+            // budget cancels the wait, then does it again for the next
+            // endpoint in the group. Bounded by that budget, 600s per
+            // endpoint, and it is the same cost `README.md` already states as
+            // a shared host costing the sum of its endpoints however high
+            // `--concurrency` is set. Releasing the permit while a host is
+            // stood down would need a task per endpoint, which is the
+            // arrangement whose guard waits do not fit a metric budget.
             let _permit = permits
                 .acquire()
                 .await

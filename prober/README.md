@@ -98,11 +98,27 @@ hop takes the gate for the host that hop actually touches, which is not
 necessarily the host the probe was pointed at. A three-hop chain therefore costs
 two gaps, and that is the honest price of a promise with no exceptions in it. A
 chain longer than five hops, a cycle, or a `Location` we cannot resolve is
-`indeterminate`: we never reached an answer. `--concurrency` cannot weaken any
-of that: endpoints are grouped by host and each group is probed by one task, so
-two endpoints of one host are never in flight together and the gate is never
-contended between them. Raising the flag adds hosts in flight, never requests
-to a host.
+`indeterminate`: we never reached an answer.
+
+`--concurrency` does not weaken any of the three guarantees, and it generalises
+the first one only as far as the host an endpoint NAMES. Endpoints are grouped
+by that host and each group is probed by one task, so two endpoints of one host
+are never in flight together and never contend for its gate: raising the flag
+adds hosts in flight, never requests to a host it was pointed at. The hop case
+just described is the exception, because a redirect is gated on the host the hop
+actually touches: an endpoint redirecting into another host of the same sweep
+queues at that host's gate, which a sequential sweep never did because nothing
+else was running. The gate itself still holds, one request in flight and one
+gap; what it costs is that the wait is charged to the redirecting endpoint's
+metric budget. See Known limitations.
+
+The unit of all three guarantees is `host_key`'s answer, not the server itself.
+Two spellings it keys apart (`a.example.` and `a.example`, or `http://x:443/`
+and `https://x/`) are two groups, so with concurrency they can carry two request
+streams to one server, and a `Retry-After` stand-down recorded under one key
+does not defer the other. There is no budget consequence, because the grouping
+key and the gate key are the same function and so nothing waits on anything; the
+cost is politeness, and the fix is a registry that spells one server one way.
 
 `--min-gap-ms` is validated at startup, before any probing: the gap plus the
 30s request budget has to stay under the 60s metric budget, or the pause alone
@@ -565,6 +581,30 @@ The following are deferred deliberately, not oversights:
   a name nobody guessed. Closing it properly needs the registry to distinguish a
   public URL from a credentialed one, which is a stage 1d question about how the
   list is seeded. Until then: do not put a secret in `endpoints.toml`.
+
+- **A cross-host redirect can wait at another endpoint's gate, and that wait is
+  charged to the metric budget.** `--concurrency` groups endpoints by the host
+  they name, but a redirect is gated on the host each hop actually touches (see
+  `gated_hop`, and the test `a_probe_redirected_to_another_host_gates_the_new_host`),
+  so an endpoint that redirects into another host being swept at the same moment
+  queues at that host's gate. The review of stage 1c-b3 verified it with mocks:
+  two endpoints at `--concurrency 2`, the first redirecting to the second's
+  host, produced arrivals `a, b, b, a, b, b` with consecutive arrivals at the
+  shared host 456 ms apart against a `delay + gap` of 450 ms, so one guard was
+  serving two groups. At production values that wait is up to
+  `gap + request` = 32 s, or `2 + 30 + 20 + 30` = 82 s if the shared host is
+  throttled, inside the 60 s metric budget; a cancelled metric budget is silent,
+  so the endpoint would read `indeterminate` with nothing saying why. Grouping
+  cannot close it, because the redirect target is only knowable by following the
+  redirect, and following one without the gate is exactly what the per-hop gate
+  exists to prevent. The common case is unaffected: `host_key` ignores the
+  scheme, so an `http` to `https` redirect on one host stays inside one group and
+  costs another gap and nothing else. How often the cross-host case arises in a
+  real registry is **unquantified**. Of the three endpoints in the shipped
+  `endpoints.toml`, measured on 2026-08-24, none redirects at all: a queryless
+  GET returns 404, 200 and 500 respectively, with no `Location`. So the shipped
+  list does not exercise this, and 1d's 548-endpoint registry is where it would
+  first be measurable.
 
 ## Tests
 
