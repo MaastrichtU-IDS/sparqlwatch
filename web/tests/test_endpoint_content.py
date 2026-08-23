@@ -40,10 +40,15 @@ def test_ontop_content_is_its_own(store):
 
 
 def test_an_endpoint_with_no_sample_is_not_an_empty_endpoint(store):
-    """qlever is in the fixture with no sample, because its enumeration exceeded
-    the request budget. The answer must be distinguishable from an endpoint that
-    genuinely holds no classes: returning an empty list for both would publish a
-    confident wrong answer in the UI."""
+    """qlever is in the fixture with no class sample, and the reason is a
+    timeout, not a decline: the same graph carries its metric:classes
+    measurement as dqv:value "indeterminate" with sw:elapsedMs "30003", the 30
+    second request budget running out. The fixture holds no sw:NotMeasured
+    resource at all (it was captured with --max-cost expensive). So the answer
+    must be distinguishable from an endpoint that genuinely holds no classes:
+    returning an empty list for both would publish a confident wrong answer in
+    the UI. What sampled=False does NOT say is which of those reasons applied;
+    this query never reads the measurement row that would tell it."""
     r = endpoint_content(store, "https://qlever.dev/api/osm-planet")
     assert r.sampled is False
     assert r.classes == []

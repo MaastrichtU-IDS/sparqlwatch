@@ -34,9 +34,27 @@ class EndpointContent:
     ``sampled`` is the field that keeps this honest. An endpoint no run has
     sampled and an endpoint sampled to find nothing both have an empty
     ``classes``, and a UI that cannot tell them apart will state the second
-    while meaning the first. ``sampled is False`` means nobody has looked;
-    ``sampled is True`` with ``classes == []`` means somebody looked and the
-    endpoint held no classes.
+    while meaning the first.
+
+    ``sampled is False`` means exactly one thing: no run in this store
+    published a class sample for this endpoint. It does NOT mean nobody
+    looked. At least three situations reach it: a sample never attempted, a
+    metric declined by the run's cost ceiling (which the prober records as a
+    sw:NotMeasured fact), and a probe that ran and could not finish. The last
+    is what the real fixture's qlever.dev/api/osm-planet is: its measurement
+    row for sw:metric:classes carries dqv:value "indeterminate" with
+    sw:elapsedMs "30003", the 30 second request budget running out. The graph
+    distinguishes those cases on that measurement row, but this query does not
+    read it, so this field does not report which one applied. Rendering
+    ``sampled is False`` as "nobody has looked" states a confident wrong
+    answer about an endpoint the monitor measured for thirty seconds.
+
+    ``sampled is True`` with ``classes == []`` is a sample that reports a size
+    and lists nothing. The prober does not emit one today: it skips a sample
+    with no values on purpose, so that a size of 0 cannot be misread as "this
+    endpoint has no classes". So that state is defence rather than a case seen
+    in the wild, and web/tests/fixtures/run-zero-classes.nq is synthetic for
+    exactly that reason.
 
     ``run`` and ``generated_at`` say which sweep the answer came from, so a
     reader can judge how current it is, and ``truncated`` says whether the

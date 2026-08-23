@@ -94,7 +94,12 @@ came from. Anything more is speculation about a UI that does not exist yet.
   marked truncated must never be presented as a complete class list, and a metric
   that was declined must be distinguishable from one that found nothing. Both
   facts are already in the graph: `sw:sampleTruncated`, and the `sw:NotMeasured`
-  resource.
+  resource. (Correction, carried up from Task 3's own note below and confirmed by
+  the final review: the fixture this branch ships contains **no** `sw:NotMeasured`
+  resource, and the endpoint the tests use as "no sample", qlever, is a 30 second
+  request-budget timeout recorded as `dqv:value "indeterminate"`, not a
+  cost-ceiling decline. The read query reports neither reason: it reports only
+  that no run published a class sample.)
 - No em-dashes anywhere.
 - Tests offline. No network in any test: the fixture is a committed run file.
 - Prove every test by mutation, and verify each mutation applied **semantically**,

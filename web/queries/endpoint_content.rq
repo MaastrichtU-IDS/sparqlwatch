@@ -9,8 +9,13 @@
 # One row per sampled class. The run, its timestamp, the size and the
 # truncation flag repeat on every row because they all describe the single
 # sample those classes came from. No rows at all means no run in the store
-# sampled this endpoint's classes, which is a different answer from a sweep
-# that sampled and found nothing: see web/endpoint_content.py.
+# published a class sample for this endpoint, which is a different answer from
+# a sweep that sampled and found nothing: see web/endpoint_content.py. It does
+# not say why there is no sample. A metric never attempted, one declined by
+# the cost ceiling, and one whose probe timed out (the fixture's qlever, at
+# dqv:value "indeterminate" after 30003 ms) all look the same from here: the
+# reason is on that endpoint's measurement row for the metric, which this
+# query does not read.
 #
 # A sample is tied to its run by the graph it lives in, not by
 # prov:wasGeneratedBy, because a sample is not obliged to carry that link
@@ -47,7 +52,11 @@ WHERE {
               prov:generatedAtTime ?generatedAt .
     # OPTIONAL so a sample that genuinely found no classes still reports its
     # size and truncation flag instead of vanishing, which the caller could
-    # not tell apart from never having been sampled at all.
+    # not tell apart from there being no sample at all. The prober does not
+    # emit such a sample today (it skips one with no values, so a size of 0
+    # cannot be misread as "this endpoint has no classes"), so this is defence
+    # rather than a live case, and web/tests/fixtures/run-zero-classes.nq is
+    # the synthetic fixture that pins it.
     OPTIONAL { ?sample sw:sampledValue ?class }
   }
   FILTER NOT EXISTS {

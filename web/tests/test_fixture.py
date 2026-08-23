@@ -8,8 +8,11 @@ Fixture provenance:
   It carries content samples for two endpoints: data.kkg.kadaster.nl/query
   (59 sampled classes) and ontop.certain.ai.ustp.at/sparql (50 sampled
   classes). A third endpoint, qlever.dev/api/osm-planet, appears in the run
-  with no content sample, because its class enumeration exceeded the request
-  budget rather than being declined outright.
+  with no content sample. The reason is a timeout and not a cost-ceiling
+  decline: its metric:classes measurement in the same graph is dqv:value
+  "indeterminate" with sw:elapsedMs "30003", the 30 second request budget
+  running out. The run was captured with ``--max-cost expensive``, where
+  nothing is declined, so it holds no ``sw:NotMeasured`` resource at all.
 
 - ``fixtures/run-truncated.nq`` is SYNTHETIC: hand-built because no endpoint
   in the registry holds more than 200 classes, so a real
