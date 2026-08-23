@@ -179,3 +179,102 @@ python -m pytest
 All tests are offline: they read committed fixture files under
 `web/tests/fixtures/` and never open a network connection. See
 `web/tests/test_fixture.py` for what each fixture is and where it came from.
+
+## Run the server
+
+With the venv activated:
+
+```bash
+cd web
+python -m uvicorn app:app --reload
+```
+
+The server listens on `http://localhost:8000` by default. `--reload` watches for
+Python changes and restarts the server; omit it for production.
+
+The single HTTP resource is the current state of a monitored endpoint:
+
+```
+GET /endpoint?url=<percent-encoded endpoint URL>
+```
+
+The endpoint URL must be percent-encoded. For example, `https://data.kkg.kadaster.nl/query`
+becomes `https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery`:
+
+```bash
+curl 'http://localhost:8000/endpoint?url=https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery'
+```
+
+### Why a query parameter instead of a path
+
+The thing being identified (a SPARQL endpoint URL) is itself a URL with slashes, so it
+must travel either percent-encoded inside the path or as a query parameter. This service
+uses the query parameter for two reasons:
+
+1. **Path parameters are decoded twice.** A {url:path} parameter is unquoted by the ASGI
+   server and again by the framework, so an endpoint URL containing a percent sequence of
+   its own comes back as a different URL. A query string is unquoted exactly once, so the
+   endpoint URL round-trips byte for byte.
+2. **Encoded slashes are not reliably deliverable.** Apache's AllowEncodedSlashes defaults
+   to Off (it answers 404), and nginx normalises path slashes by default. Behind such a
+   front end, a path-based resource would stop resolving, while the query string is passed
+   through untouched.
+
+The cost: the resource IRI carries a query string, which is less pretty than a path and
+cannot be extended by appending path segments. Correctness beats aesthetics, so the query
+parameter is the right choice.
+
+### Content negotiation
+
+The same endpoint resource is served in two representations, chosen by the `Accept` header:
+
+- `text/html` returns an HTML page with metrics, verdicts, and sampled classes
+- `text/turtle`, `application/rdf+xml`, `application/n-triples`, `application/n-quads`
+  return RDF serialised in that format
+
+The server honours quality values (`q=`). For example, `Accept: text/html;q=0.9, text/turtle`
+prefers Turtle over HTML because Turtle has no explicit q-value (defaults to 1.0) while HTML
+has q=0.9. `Accept: */*;q=1, text/html;q=0` prefers any specific type over HTML, so if Turtle
+is available, Turtle is returned even though the client also says it will accept `*/*`.
+
+A request with no `Accept` header defaults to HTML. An unknown endpoint (one with no recent
+measurement in the store) returns HTTP 404. An unsupported media type returns 406.
+
+### RDF and HTML agreement
+
+The HTML and RDF are two representations of one resource, derived independently:
+
+- **HTML** comes from Python queries (`endpoint_measurements.py`, `endpoint_content.py`)
+  that build a view model for the template to render
+- **RDF** comes from a CONSTRUCT query (`queries/endpoint_description.rq`) serialised
+  directly from the store without rebuilding in Python
+
+This separation ensures that the two representations cannot disagree: nothing in the RDF
+is re-derived from the HTML. A test asserts that both renderings represent every verdict
+identically.
+
+### Verdict encoding
+
+Every verdict state (the state a metric is in: verified, undeclared-but-verified, etc.)
+has exactly one definition: a colour, a legend glyph, and a text summary. That definition
+lives in exactly one place, `web/verdict_encoding.py`, and both the HTML template and the
+test suite derive from it. Nothing hard-codes a colour or a glyph.
+
+The design artboards under `design/` predate `docs/design/verdict-encoding.md` and may
+disagree with it. The artboards remain authoritative for layout, typography, spacing and
+theme tokens; they are not authoritative for verdict encoding.
+
+### What does not exist
+
+The design spec lists four read paths and several write features. This slice delivers one.
+
+**Not built:**
+- Leaderboard (filterable, sortable by dimension)
+- Per-metric pages (definition, computation method, which endpoints fail it)
+- History (per-endpoint measurement history)
+- Evidence (request, response headers, timing for each measurement)
+- Faceted search
+- Embedded query editor (`@sib-swiss/sparql-editor`)
+- Read-only public SPARQL endpoint
+
+All of these are in the spec under stages 3 onwards and remain future work.
