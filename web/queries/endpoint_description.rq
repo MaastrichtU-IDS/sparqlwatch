@@ -1,0 +1,154 @@
+# Everything this service currently knows about one endpoint, as RDF rather
+# than as rows: the measurements and declines of the most recent run that
+# recorded anything for it, and the class sample of the most recent run that
+# sampled it. This is the machine-readable representation of the endpoint
+# resource (see web/app.py); web/queries/endpoint_measurements.rq and
+# web/queries/endpoint_content.rq answer the same two questions as SELECT
+# rows for the HTML representation.
+#
+# Why a CONSTRUCT and not the two SELECTs. The store already holds RDF. If
+# the RDF representation were assembled in Python from SELECT bindings, then
+# the two representations of this resource would be two independent
+# re-derivations of the same facts, and the RDF one would be free to state
+# something the graph does not: a verdict rebuilt from a row is a verdict
+# some code chose to write, not one the prober published. Here every triple
+# in the template also appears, verbatim, in some run graph in the store, so
+# the RDF representation cannot assert anything the graph does not already
+# say. The only information deliberately dropped is the graph name, because
+# a CONSTRUCT yields triples; the run is still identifiable through
+# prov:wasGeneratedBy and the activity's prov:generatedAtTime, which are
+# emitted with the measurements.
+#
+# ?endpoint is the input. It is substituted with a NamedNode before
+# execution (SEP-0007 substitution), so it is never interpolated into this
+# text. Unlike the SELECT queries beside it, a CONSTRUCT has no projection
+# to list it in, and pyoxigraph 0.5.9 substitutes it anyway: verified by
+# running this shape with ?endpoint absent from the template and getting one
+# endpoint's rows rather than every endpoint's.
+#
+# Three branches, and they do NOT share one run. The measurements and the
+# declines come from the most recent run that recorded either for this
+# endpoint (one sweep either measures or declines every metric it applies to
+# an endpoint in the same pass, so those two always share a run), while the
+# class sample comes from the most recent run that sampled this endpoint,
+# which can be an older one: a sweep whose classes probe timed out or was
+# declined by the cost ceiling publishes no sample at all. That is exactly
+# the run selection endpoint_measurements.rq and endpoint_content.rq each
+# make on their own, and it has to be, because the HTML representation is
+# built from those two queries and the two representations must agree.
+#
+# Each branch's "most recent" is the run whose activity has the greatest
+# prov:generatedAtTime, expressed as "no newer run recorded this for this
+# endpoint" rather than as an ORDER BY ... LIMIT 1 subquery. Both the choice
+# of the typed xsd:dateTime over the run IRI's string form and the choice of
+# FILTER NOT EXISTS over a subquery are argued at length in
+# endpoint_content.rq's header; the reasoning is identical here and is not
+# repeated.
+
+PREFIX dqv: <http://www.w3.org/ns/dqv#>
+PREFIX prov: <http://www.w3.org/ns/prov#>
+PREFIX sw: <urn:sparqlwatch:>
+
+CONSTRUCT {
+  ?measurement a dqv:QualityMeasurement ;
+               dqv:computedOn ?endpoint ;
+               dqv:isMeasurementOf ?metric ;
+               dqv:value ?verdict ;
+               prov:wasGeneratedBy ?activity ;
+               sw:level ?level ;
+               sw:elapsedMs ?elapsedMs .
+  ?notMeasured a sw:NotMeasured ;
+               sw:notMeasuredOn ?endpoint ;
+               sw:notMeasuredMetric ?declinedMetric ;
+               sw:notMeasuredReason ?reason ;
+               prov:wasGeneratedBy ?declineActivity .
+  ?activity a prov:Activity ;
+            prov:generatedAtTime ?generatedAt .
+  ?declineActivity a prov:Activity ;
+                   prov:generatedAtTime ?generatedAt .
+  # No rdf:type triple for the sample, even though every committed run
+  # carries one: this branch's WHERE clause matches exactly what
+  # endpoint_content.rq matches, so that a sample the HTML representation
+  # shows can never be one the RDF representation omits. Requiring the type
+  # here to be allowed to emit it would make the two disagree about any
+  # untyped sample.
+  ?sample sw:sampledFrom ?endpoint ;
+          sw:sampledBy sw:metric:classes ;
+          sw:sampleSize ?size ;
+          sw:sampleTruncated ?truncated ;
+          sw:sampledValue ?class .
+}
+WHERE {
+  {
+    GRAPH ?run {
+      ?measurement a dqv:QualityMeasurement ;
+                   dqv:computedOn ?endpoint ;
+                   dqv:isMeasurementOf ?metric ;
+                   dqv:value ?verdict ;
+                   prov:wasGeneratedBy ?activity .
+      ?activity a prov:Activity ;
+                prov:generatedAtTime ?generatedAt .
+      # OPTIONAL because only sw:metric:service-description carries a
+      # conformance level today, and an unbound variable in a CONSTRUCT
+      # template simply drops its triple rather than failing the solution.
+      OPTIONAL { ?measurement sw:level ?level }
+      OPTIONAL { ?measurement sw:elapsedMs ?elapsedMs }
+    }
+    FILTER NOT EXISTS {
+      GRAPH ?newerRun {
+        { ?newerThing dqv:computedOn ?endpoint }
+        UNION
+        { ?newerThing sw:notMeasuredOn ?endpoint }
+        ?newerActivity a prov:Activity ;
+                       prov:generatedAtTime ?newerGeneratedAt .
+      }
+      FILTER (?newerGeneratedAt > ?generatedAt)
+    }
+  }
+  UNION
+  {
+    GRAPH ?declineRun {
+      ?notMeasured a sw:NotMeasured ;
+                   sw:notMeasuredOn ?endpoint ;
+                   sw:notMeasuredMetric ?declinedMetric ;
+                   sw:notMeasuredReason ?reason ;
+                   prov:wasGeneratedBy ?declineActivity .
+      ?declineActivity a prov:Activity ;
+                       prov:generatedAtTime ?generatedAt .
+    }
+    FILTER NOT EXISTS {
+      GRAPH ?newerRun {
+        { ?newerThing dqv:computedOn ?endpoint }
+        UNION
+        { ?newerThing sw:notMeasuredOn ?endpoint }
+        ?newerActivity a prov:Activity ;
+                       prov:generatedAtTime ?newerGeneratedAt .
+      }
+      FILTER (?newerGeneratedAt > ?generatedAt)
+    }
+  }
+  UNION
+  {
+    GRAPH ?sampleRun {
+      ?sample sw:sampledFrom ?endpoint ;
+              sw:sampledBy sw:metric:classes ;
+              sw:sampleSize ?size ;
+              sw:sampleTruncated ?truncated .
+      ?sampleActivity a prov:Activity ;
+                      prov:generatedAtTime ?sampleGeneratedAt .
+      # OPTIONAL for the same reason as in endpoint_content.rq: a sample
+      # that genuinely found no classes must still report its size and its
+      # truncation flag instead of vanishing.
+      OPTIONAL { ?sample sw:sampledValue ?class }
+    }
+    FILTER NOT EXISTS {
+      GRAPH ?newerSampleRun {
+        ?newerSample sw:sampledFrom ?endpoint ;
+                     sw:sampledBy sw:metric:classes .
+        ?newerSampleActivity a prov:Activity ;
+                             prov:generatedAtTime ?newerSampleGeneratedAt .
+      }
+      FILTER (?newerSampleGeneratedAt > ?sampleGeneratedAt)
+    }
+  }
+}
