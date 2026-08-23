@@ -9,10 +9,9 @@ fastapi==0.141.1
 starlette==1.6.0
 uvicorn==0.52.4
 
-# Templating. Not imported yet: task 3 of the endpoint-page stage owns
-# web/templates/endpoint.html, and app.py renders its placeholder page in
-# Python until then. Pinned here because the venv this file describes is the
-# one that has to render that template.
+# Templating. web/templates/endpoint.html is rendered through it, with
+# autoescaping on: every value on that page (endpoint URLs, class IRIs,
+# metric ids) comes from a measured third party.
 jinja2==3.1.6
 
 # Tests. httpx2 rather than httpx: starlette 1.6.0's test client imports

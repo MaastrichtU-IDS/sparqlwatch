@@ -24,13 +24,17 @@ means the RDF cannot state anything the store does not already hold. It also
 means the agreement test in web/tests/test_negotiation.py compares two
 genuinely independent derivations rather than two views of one list.
 
-What is deliberately NOT here yet: the real page. Task 3 of this stage owns
-web/templates/endpoint.html, the verdict encoding and the styling. The HTML
-below is the minimum the negotiation tests need, and it carries the
-data-metric / data-verdict / data-declined attributes that the agreement
-test reads. Those attributes are a contract: a template that drops them
-leaves this service with no way to check that what a person is shown matches
-what a machine is served.
+The HTML is web/templates/endpoint.html, rendered from the view model
+_page_context builds below. Two things about it are load-bearing rather than
+cosmetic:
+
+  * The verdict encoding comes from web/verdict_encoding.py, which is the
+    single implementation of docs/design/verdict-encoding.md. Nothing in this
+    file or in the template decides how a state is drawn.
+  * The data-metric / data-verdict / data-declined attributes are a contract.
+    web/tests/test_negotiation.py reads them to compare what a person is
+    shown against what a machine is served, and a template that drops them
+    leaves this service with no way to check that the two agree.
 """
 
 from __future__ import annotations
@@ -38,10 +42,13 @@ from __future__ import annotations
 import html
 import os
 from functools import lru_cache
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, Query, Request, Response
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 from pyoxigraph import NamedNode, RdfFormat, Store, Variable, serialize
 
+import verdict_encoding
 from endpoint_content import EndpointContent, endpoint_content
 from endpoint_measurements import EndpointMeasurements, endpoint_measurements
 from queries import read_query
@@ -247,58 +254,239 @@ def _endpoint_rdf(store: Store, endpoint: str, media_type: str) -> bytes:
     return serialize(triples, format=RdfFormat.from_media_type(media_type))
 
 
+# ---------------------------------------------------------------------------
+# The page
+# ---------------------------------------------------------------------------
+_TEMPLATES = Environment(
+    loader=FileSystemLoader(Path(__file__).parent / "templates"),
+    # Autoescaping on, because every value on this page is data from a
+    # measured third party: endpoint URLs, class IRIs and metric ids all come
+    # from somewhere this project does not control.
+    autoescape=select_autoescape(default_for_string=True, default=True),
+    trim_blocks=True,
+    lstrip_blocks=True,
+)
+
+_METRIC_PREFIX = "urn:sparqlwatch:metric:"
+
+# The metric whose query produces the class sample. This mirrors the pin
+# inside web/queries/endpoint_content.rq: that query asks only about
+# sw:metric:classes, so this is the metric whose measurement row explains an
+# absent sample. If the query's pin ever moves, this moves with it.
+_CLASSES_METRIC = _METRIC_PREFIX + "classes"
+
+# The truncation state, in words. A truncated sample is the one thing on this
+# page that must not be legible only as a border style: a reader who cannot
+# see the dashed outline, or who is hearing the page read aloud, would
+# otherwise take a cut-off list for a complete vocabulary.
+TRUNCATED_TEXT = "truncated: more may exist beyond the limit"
+COMPLETE_TEXT = "complete: not truncated"
+
+
+def _metric_name(metric: str) -> str:
+    """A metric id as the page shows it.
+
+    The local name of a sparqlwatch metric IRI, and the whole IRI for anything
+    else, so a metric from a prober this page has never heard of still renders
+    as something a reader can look up rather than being dropped.
+    """
+    if metric.startswith(_METRIC_PREFIX):
+        return metric[len(_METRIC_PREFIX) :]
+    return metric
+
+
+def _rows(measurements: EndpointMeasurements) -> list[dict]:
+    """One row per metric the run recorded, verdicts and declines together.
+
+    They are merged into one list, sorted by metric id, rather than shown as
+    two sections: the reader's question is "what does this run say about this
+    metric", and a metric the run declined belongs in the same place as the
+    others, drawn in the state that says we did not look.
+    """
+    rows = []
+    for verdict in measurements.verdicts:
+        state = verdict_encoding.presentation(verdict.verdict)
+        recognised = state is not verdict_encoding.UNRECOGNISED
+        rows.append(
+            {
+                "metric": verdict.metric,
+                "name": _metric_name(verdict.metric),
+                "declined": False,
+                "reason": None,
+                "verdict": verdict.verdict,
+                "slug": state.slug,
+                "css_class": verdict_encoding.css_class(state.slug),
+                "token": state.token,
+                # An unrecognised value is shown verbatim: relabelling it
+                # would hide which value the store actually holds.
+                "state_text": state.label if recognised else verdict.verdict,
+                "detail": _detail(verdict, recognised),
+                "elapsed_ms": verdict.elapsed_ms,
+            }
+        )
+    for declined in measurements.declined:
+        state = verdict_encoding.presentation(verdict_encoding.NOT_MEASURED)
+        rows.append(
+            {
+                "metric": declined.metric,
+                "name": _metric_name(declined.metric),
+                "declined": True,
+                "reason": declined.reason,
+                "verdict": None,
+                "slug": state.slug,
+                "css_class": verdict_encoding.css_class(state.slug),
+                "token": state.token,
+                # Not a verdict, and it does not read like one: no value is
+                # stated, only the fact that we chose not to look and why.
+                "state_text": f"{state.label} ({declined.reason})",
+                "detail": "we declined to look, so this says nothing about the endpoint",
+                "elapsed_ms": None,
+            }
+        )
+    return sorted(rows, key=lambda row: row["metric"])
+
+
+def _detail(verdict, recognised: bool) -> str | None:
+    """The extra clause a row carries beside its state, or nothing."""
+    if not recognised:
+        return "unrecognised verdict, shown as the store recorded it"
+    if verdict.level is not None:
+        return f"conformance level {verdict.level}"
+    return None
+
+
+def _legend(rows: list[dict]) -> list[dict]:
+    """The seven states, with how many rows on this page are in each.
+
+    Built from verdict_encoding.STATES, and the swatch takes the same class as
+    the chips, so a swatch cannot explain a drawing the chips do not use. All
+    seven are listed even at a count of zero: the legend explains an encoding,
+    not this endpoint, and a reader comparing two endpoints should not find the
+    key changing shape between them.
+    """
+    counts: dict[str, int] = {}
+    for row in rows:
+        counts[row["slug"]] = counts.get(row["slug"], 0) + 1
+
+    states = list(verdict_encoding.STATES)
+    # The eighth entry appears only when something on the page needed it.
+    if counts.get(verdict_encoding.UNRECOGNISED.slug):
+        states.append(verdict_encoding.UNRECOGNISED)
+
+    return [
+        {
+            "slug": state.slug,
+            "label": state.label,
+            "meaning": state.meaning,
+            "css_class": verdict_encoding.css_class(state.slug),
+            "count": counts.get(state.slug, 0),
+        }
+        for state in states
+    ]
+
+
+def _sample(
+    measurements: EndpointMeasurements, content: EndpointContent
+) -> dict:
+    """The class sample, or an account of why there is not one.
+
+    The account is read out of the graph rather than assumed. There is no
+    single reason a sample is missing: the fixtures alone hold a probe that ran
+    for thirty seconds and returned nothing (qlever, sw:metric:classes
+    "indeterminate", sw:elapsedMs 30003) and a run that declined the metric on
+    its cost ceiling. Rendering either as an empty class list would tell a
+    reader the endpoint holds no classes, which is a confident wrong answer,
+    and naming the wrong cause would be another one.
+    """
+    if content.sampled:
+        return {
+            "present": True,
+            "size": content.size,
+            "truncated": content.truncated,
+            "truncation_text": (
+                TRUNCATED_TEXT if content.truncated else COMPLETE_TEXT
+            ),
+            "classes": content.classes,
+            "absence_text": None,
+        }
+
+    for declined in measurements.declined:
+        if declined.metric == _CLASSES_METRIC:
+            return _absence(
+                f"No class sample from this run: it did not measure the "
+                f"classes metric at all, recording the reason "
+                f"'{declined.reason}'. Nobody looked, so this is not "
+                f"a report that the endpoint holds no classes."
+            )
+
+    for verdict in measurements.verdicts:
+        if verdict.metric == _CLASSES_METRIC:
+            elapsed = (
+                f" after {verdict.elapsed_ms} ms"
+                if verdict.elapsed_ms is not None
+                else ""
+            )
+            return _absence(
+                f"No class sample from this run: the classes metric read "
+                f"'{verdict.verdict}'{elapsed} and produced no list. "
+                f"The probe looked and came back empty-handed, which is not a "
+                f"report that the endpoint holds no classes."
+            )
+
+    return _absence(
+        "No class sample from this run, and this run recorded no measurement "
+        "of the classes metric either. This page therefore says nothing about "
+        "what classes the endpoint holds."
+    )
+
+
+def _absence(text: str) -> dict:
+    return {
+        "present": False,
+        "size": None,
+        "truncated": None,
+        "truncation_text": None,
+        "classes": [],
+        "absence_text": text,
+    }
+
+
+def _page_context(
+    endpoint: str,
+    measurements: EndpointMeasurements,
+    content: EndpointContent,
+) -> dict:
+    """Everything the template renders, decided here rather than in the page.
+
+    The template loops and formats; it makes no judgement about what a missing
+    sample means or how a state is drawn. Both of those are decisions with a
+    right answer, and they belong where they can be tested.
+    """
+    rows = _rows(measurements)
+    return {
+        "endpoint": endpoint,
+        # A sample-only endpoint (web/tests/fixtures/run-truncated.nq) has no
+        # run to name here, and saying so is the point: the page must not
+        # imply a sweep that did not happen.
+        "run": measurements.run or content.run,
+        "generated_at": measurements.generated_at or content.generated_at,
+        "rows": rows,
+        "legend": _legend(rows),
+        "sample": _sample(measurements, content),
+        "chip_width": verdict_encoding.CHIP_WIDTH_PX,
+        "chip_height": verdict_encoding.CHIP_HEIGHT_PX,
+        "encoding_css": verdict_encoding.css_rules(),
+    }
+
+
 def _endpoint_html(
     endpoint: str,
     measurements: EndpointMeasurements,
     content: EndpointContent,
 ) -> str:
-    """The placeholder page. Task 3 replaces this with a real template.
-
-    It states only what the store supports: one row per measured metric, one
-    per declined metric, and the class sample's size and truncation flag in
-    words rather than a list, because a list here would be the first step
-    towards rendering a truncated sample as a complete vocabulary. The
-    data- attributes are the contract described in the module docstring.
-    """
-    name = html.escape(endpoint)
-    rows = []
-    for verdict in measurements.verdicts:
-        rows.append(
-            f'    <li data-metric="{html.escape(verdict.metric)}" '
-            f'data-verdict="{html.escape(verdict.verdict)}">'
-            f"{html.escape(verdict.metric)}: {html.escape(verdict.verdict)}</li>"
-        )
-    for declined in measurements.declined:
-        rows.append(
-            f'    <li data-metric="{html.escape(declined.metric)}" '
-            f'data-declined="{html.escape(declined.reason)}">'
-            f"{html.escape(declined.metric)}: not measured "
-            f"({html.escape(declined.reason)})</li>"
-        )
-
-    if content.sampled:
-        sample = (
-            f"{content.size} classes sampled"
-            + (
-                ", truncated: more may exist beyond the limit"
-                if content.truncated
-                else ""
-            )
-        )
-    else:
-        sample = "no class sample from this run"
-
-    return "\n".join(
-        [
-            f"<title>{name}</title>",
-            f"<h1>{name}</h1>",
-            f'<p data-run="{html.escape(measurements.run or "")}">'
-            f'{html.escape(measurements.generated_at or "no run")}</p>',
-            "  <ul>",
-            *rows,
-            "  </ul>",
-            f'<p data-sample="{html.escape(sample)}">{html.escape(sample)}</p>',
-        ]
+    """The page, rendered."""
+    return _TEMPLATES.get_template("endpoint.html").render(
+        **_page_context(endpoint, measurements, content)
     )
 
 
