@@ -277,9 +277,15 @@ pub struct RunEmission<'a> {
     pub content_samples: &'a [ContentSample],
     /// How many hosts the sweep talked to at once, recorded on the activity
     /// beside `max_cost` and for the same reason: it is a parameter of the run,
-    /// not of any one measurement. A consumer comparing one endpoint's
-    /// `elapsedMs` across two runs needs it to tell a slower endpoint from a
-    /// busier sweep.
+    /// not of any one measurement.
+    ///
+    /// It does NOT change what `elapsedMs` measures. `client::gated_chain`
+    /// publishes the sum of the hops' own durations and each hop's timer starts
+    /// after the gate is acquired, precisely so our politeness is never
+    /// published as somebody's response time. What it does explain is the run's
+    /// wall-clock duration, and whether the cross-host redirect contention in
+    /// `run_sweep`'s doc could have cost a metric here at all: at a concurrency
+    /// of one no other group was running, so it could not.
     ///
     /// `NonZeroUsize` because that is what `run_sweep` takes, so the published
     /// number cannot say a sweep ran zero hosts at once.
@@ -352,10 +358,13 @@ pub fn emit_nquads(input: RunEmission) -> anyhow::Result<String> {
     // run rather than of any measurement, so both hang off the activity beside
     // the ceiling above.
     //
-    // The concurrency belongs in the graph because it changes what `elapsedMs`
-    // means: a request's measured time includes its wait at the per-host gate,
-    // so two runs of one endpoint at different concurrencies are not directly
-    // comparable, and nothing else published here would say why.
+    // The concurrency belongs in the graph as a parameter of the run, not
+    // because it changes what `elapsedMs` means. It does not: `gated_chain`
+    // sums the hops' own durations and each hop's timer starts after the gate
+    // is acquired, so a gate wait is never published as a response time. It is
+    // published because it explains the run's wall-clock duration and because
+    // it is what tells a consumer whether the cross-host redirect contention
+    // documented on `run_sweep` could have reached this run's metric budgets.
     quads.push(Quad::new(
         NamedOrBlankNode::NamedNode(activity.clone()),
         nn("urn:sparqlwatch:concurrency")?,
