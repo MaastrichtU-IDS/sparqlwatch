@@ -32,20 +32,47 @@ const lit = (t) => {
 // Verdict presentation. Mirrors the design: colour never carries the meaning
 // alone. Dashed borders mark "works but undeclared" and "indeterminate", and
 // `absent` has no border at all so it reads as empty rather than as another grey.
+// Verdict presentation, on THREE channels that are all independent of colour:
+// border style, whether the chip is filled, and border weight. Colour still
+// carries meaning for a reader who can see it, but never carries it alone.
+//
+// This replaced an encoding with two collisions. Border style alone had solid
+// covering `verified`, `declared-only` and `declared-but-wrong`, and dashed
+// covering `undeclared-but-verified` and `indeterminate`. So a reader who cannot
+// separate green from amber could not tell "works, just undeclared" from "we
+// never found out", and, worse, a reader who cannot separate grey from red could
+// not tell `declared-only` (neutral) from `declared-but-wrong` (the worst verdict
+// in the vocabulary). Seven states need more than four border styles.
+//
+// The channels carry meaning rather than being arbitrary:
+//   filled        = we have positive evidence the capability works
+//   dashed        = no declaration was seen for it
+//   2px           = something is actively wrong, not merely missing
+//   no border     = nothing was there
+//   dotted        = we did not look
 const VERDICT = {
-  'verified':                { label: 'verified',            token: 'good',  style: 'solid'  },
-  'undeclared-but-verified': { label: 'works, not declared', token: 'good',  style: 'dashed' },
-  'declared-only':           { label: 'declared only',       token: 'muted', style: 'solid'  },
-  'absent':                  { label: 'absent',              token: 'dim',   style: 'none'   },
-  'declared-but-wrong':      { label: 'declared but wrong',  token: 'crit',  style: 'solid'  },
-  'indeterminate':           { label: 'indeterminate',       token: 'warn',  style: 'dashed' },
+  'verified':                { label: 'verified',            token: 'good',  style: 'solid',  fill: true,  weight: 1 },
+  'undeclared-but-verified': { label: 'works, not declared', token: 'good',  style: 'dashed', fill: true,  weight: 1 },
+  'declared-only':           { label: 'declared only',       token: 'muted', style: 'solid',  fill: false, weight: 1 },
+  'declared-but-wrong':      { label: 'declared but wrong',  token: 'crit',  style: 'solid',  fill: true,  weight: 2 },
+  'indeterminate':           { label: 'indeterminate',       token: 'warn',  style: 'dashed', fill: false, weight: 1 },
+  'absent':                  { label: 'absent',              token: 'dim',   style: 'none',   fill: false, weight: 1 },
   // Not a verdict. A declined metric was never measured, so it has no verdict at
-  // all; this row exists so the viewer can show that state instead of an empty
-  // gap that reads as "this metric does not exist". Dotted, so it is distinct
-  // from solid (measured), dashed (undeclared or indeterminate) and from
-  // `absent`, which alone has no border.
-  'not-measured':            { label: 'not measured',        token: 'dim',   style: 'dotted' },
+  // all; this exists so the viewer shows that state rather than an empty gap
+  // that reads as "this metric does not exist".
+  'not-measured':            { label: 'not measured',        token: 'dim',   style: 'dotted', fill: false, weight: 1 },
 };
+
+// One place builds a chip's border and fill, so the table and the legend cannot
+// drift apart. They did not share this before, which is how a `dotted` style
+// silently rendered as solid in one of them.
+function chipStyle(v) {
+  const border = v.style === 'none'
+    ? `${v.weight}px solid transparent`
+    : `${v.weight}px ${v.style} var(--${v.token})`;
+  const fill = v.fill ? 'background: var(--chip-fill);' : '';
+  return `border: ${border}; ${fill}`;
+}
 
 const ABBR = {
   availability: 'A', cors: 'C', 'service-description': 'S',
@@ -96,29 +123,45 @@ function collect(quads) {
     else if (q.p === `${SW}notMeasuredOn`) row(q.s).nmEndpoint = iri(q.o);
     else if (q.p === `${SW}notMeasuredMetric`) row(q.s).nmMetric = iri(q.o).replace(`${SW}metric:`, '');
     else if (q.p === `${SW}notMeasuredReason`) row(q.s).nmReason = lit(q.o);
+    // A content sample, same reasoning as the not-measured fact above: its own
+    // predicates only, so it needs its own arms rather than folding into the
+    // dqv:* branches. `sampledValue` is repeated per subject, so it accumulates
+    // into an array instead of overwriting a single field.
+    else if (q.p === `${SW}sampledFrom`) row(q.s).sampleEndpoint = iri(q.o);
+    else if (q.p === `${SW}sampledBy`) row(q.s).sampleMetric = iri(q.o).replace(`${SW}metric:`, '');
+    else if (q.p === `${SW}sampleSize`) row(q.s).sampleSize = Number(lit(q.o));
+    else if (q.p === `${SW}sampleTruncated`) row(q.s).sampleTruncated = lit(q.o) === 'true';
+    else if (q.p === `${SW}sampledValue`) (row(q.s).sampleValues ??= []).push(iri(q.o));
   }
   const all = [...m.values()];
   const rows = all.filter((r) => r.endpoint && r.metric && r.verdict);
   const declined = all
     .filter((r) => r.nmEndpoint && r.nmMetric)
     .map((r) => ({ endpoint: r.nmEndpoint, metric: r.nmMetric, reason: r.nmReason }));
-  return { run, rows, declined };
+  // Order preserved from the N-Quads themselves (insertion order of the Map),
+  // which is the emitter's own per-endpoint enumeration order, not re-sorted
+  // here on top of it.
+  const samples = all
+    .filter((r) => r.sampleEndpoint && r.sampleMetric)
+    .map((r) => ({
+      endpoint: r.sampleEndpoint,
+      metric: r.sampleMetric,
+      size: r.sampleSize ?? 0,
+      truncated: !!r.sampleTruncated,
+      values: r.sampleValues ?? [],
+    }));
+  return { run, rows, declined, samples };
 }
 
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 function chip(metric, verdict) {
-  const v = VERDICT[verdict] ?? { label: verdict, token: 'dim', style: 'none' };
-  const border = v.style === 'none' ? 'transparent'
-    : v.style === 'dashed' ? `1px dashed var(--${v.token})`
-    : v.style === 'dotted' ? `1px dotted var(--${v.token})` : `1px solid var(--${v.token})`;
-  const b = v.style === 'none' ? 'border: 1px solid transparent' : `border: ${border}`;
-  const bg = verdict === 'verified' ? 'background: var(--overlay);' : '';
-  return `<span class="chip" title="${esc(ABBR[metric] ? metric : metric)}: ${esc(v.label)}"
-    style="${b}; ${bg} color: var(--${v.token})">${esc(ABBR[metric] ?? metric[0].toUpperCase())}</span>`;
+  const v = VERDICT[verdict] ?? { label: verdict, token: 'dim', style: 'none', fill: false, weight: 1 };
+  return `<span class="chip" title="${esc(metric)}: ${esc(v.label)}"
+    style="${chipStyle(v)} color: var(--${v.token})">${esc(ABBR[metric] ?? metric[0].toUpperCase())}</span>`;
 }
 
-function render({ run, rows, declined = [] }) {
+function render({ run, rows, declined = [], samples = [] }) {
   const endpoints = [...new Set([...rows.map((r) => r.endpoint), ...declined.map((d) => d.endpoint)])].sort();
   const metrics = metricsIn(rows, declined);
   const wasDeclined = (ep, m) => declined.some((d) => d.endpoint === ep && d.metric === m);
@@ -145,13 +188,39 @@ function render({ run, rows, declined = [] }) {
     </tr>`;
   }).join('\n');
 
-  const legend = Object.entries(VERDICT).map(([k, v]) => {
-    const b = v.style === 'none' ? '1px solid transparent'
-      : v.style === 'dashed' ? `1px dashed var(--${v.token})`
-    : v.style === 'dotted' ? `1px dotted var(--${v.token})` : `1px solid var(--${v.token})`;
-    const bg = k === 'verified' || k === 'absent' ? 'background: var(--overlay);' : '';
-    return `<span class="leg"><i style="border:${b}; ${bg}"></i>${esc(v.label)} <b>${counts[k] ?? 0}</b></span>`;
-  }).join('');
+  // A content sample is not a dataset description (see docs/design and the
+  // prober README): it is a bounded, ordered list of values one metric's
+  // query actually bound. The one thing this block must not do is let a
+  // truncated list read as a complete one, so the truncation state sits next
+  // to the count, in the same visual weight, rather than being something a
+  // reader has to open the list to discover.
+  const samplesSection = samples.length ? `
+  <div class="panel">
+    <h2>Content samples</h2>
+    <div class="note" style="margin-top:0">A sample is an observation from one bounded query, not a description of a
+    dataset: the thing behind an endpoint may be several datasets or, as with <code>ontop</code> here, a virtual graph
+    over a relational store. Values are listed in the order the endpoint returned them.</div>
+    ${samples.map((s) => `
+    <details class="sample">
+      <summary>
+        <span class="name">${esc(s.endpoint.replace(/^https?:\/\//, ''))}</span>
+        <span class="dim">${esc(s.metric)}</span>
+        <span class="count">${s.size} value${s.size === 1 ? '' : 's'}</span>
+        <span class="trunc ${s.truncated ? 'trunc-yes' : 'trunc-no'}">${s.truncated
+          ? 'truncated: more may exist beyond the limit'
+          : 'complete: not truncated'}</span>
+      </summary>
+      <ul class="sample-values">${s.values.map((v) => `<li>${esc(v)}</li>`).join('')}</ul>
+    </details>`).join('')}
+  </div>` : '';
+
+  // Built through the same `chipStyle` the chips use, so a swatch always looks
+  // like the thing it explains. It did not before: the legend gave `absent` a
+  // fill the chips never had, so the one verdict that claims a negative was
+  // explained by a swatch that did not match it.
+  const legend = Object.entries(VERDICT).map(([k, v]) =>
+    `<span class="leg"><i style="${chipStyle(v)}"></i>${esc(v.label)} <b>${counts[k] ?? 0}</b></span>`
+  ).join('');
 
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -162,6 +231,12 @@ function render({ run, rows, declined = [] }) {
     --bg:#0a1929; --bg2:#112a3f; --border:#2a5580; --text:#d0e4f5; --bright:#fff;
     --muted:#7fa5c8; --dim:#5c7c9c; --accent:#4fc3f7; --good:#66bb6a; --warn:#ffb74d;
     --crit:#ef5350; --overlay:rgba(255,255,255,.05); --mono:ui-monospace,'Cascadia Code',monospace;
+    /* A chip is 26x22px, where --overlay's 5% white is invisible. Desaturating
+       the page showed filled and empty chips reading identically, which defeats
+       the one channel separating "works" from "we never found out". 16% is the
+       point at which the difference survives greyscale without the fill
+       competing with the border for attention. */
+    --chip-fill:rgba(255,255,255,.16);
     color-scheme: dark;
   }
   * { box-sizing: border-box; }
@@ -188,6 +263,21 @@ function render({ run, rows, declined = [] }) {
   .leg i { width:20px; height:15px; border-radius:3px; display:inline-block; }
   .leg b { color:var(--bright); font-variant-numeric:tabular-nums; }
   .note { margin-top:11px; font-size:12px; color:var(--muted); max-width:780px; }
+  .sample { margin-top:10px; border:1px solid var(--border); border-radius:5px; padding:9px 12px; }
+  .sample + .sample { margin-top:8px; }
+  .sample summary { cursor:pointer; display:flex; align-items:center; gap:12px; flex-wrap:wrap; list-style:none; }
+  .sample summary::-webkit-details-marker { display:none; }
+  .sample summary::before { content:'\\25b8'; color:var(--dim); margin-right:-4px; }
+  .sample[open] summary::before { content:'\\25be'; }
+  .sample .name { font-family:var(--mono); font-size:12.5px; color:var(--bright); }
+  .sample .count { font-variant-numeric:tabular-nums; color:var(--muted); font-size:12px; }
+  .sample .trunc { font-size:11px; padding:2px 7px; border-radius:3px; margin-left:auto; }
+  .sample .trunc-no { color:var(--good); border:1px solid var(--good); }
+  .sample .trunc-yes { color:var(--warn); border:1px dashed var(--warn); }
+  .sample-values { margin:10px 0 0; padding:8px 10px; max-height:220px; overflow-y:auto;
+    background:var(--bg); border:1px solid var(--border); border-radius:4px;
+    font-family:var(--mono); font-size:11.5px; color:var(--muted); list-style:none; }
+  .sample-values li { padding:1px 0; word-break:break-all; }
 </style></head><body>
 <header>
   <div class="logo">
@@ -209,9 +299,12 @@ function render({ run, rows, declined = [] }) {
     ${legend}
     <div class="note">Chips are A availability, C CORS, P CORS preflight, S service description, G GeoSPARQL functions, D geometry data, K classes.
     A metric this page does not recognise still renders, labelled by its own id with its first letter as the chip.
-    Dashed means the capability works but is not declared, or could not be determined. Absent has no border: it is the only verdict
-    that claims a negative, and it is claimed only where a parsed answer established one.</div>
+    The encoding never rests on colour. A filled chip means we have positive evidence the capability works; a dashed border means no
+    declaration was seen for it; a heavier border means something is actively wrong rather than merely missing; a dotted border means we did not look;
+    and no border at all means nothing was there. Absent is the only verdict that claims a negative, and it is claimed only where a parsed answer
+    established one.</div>
   </div>
+  ${samplesSection}
 </main></body></html>`;
 }
 

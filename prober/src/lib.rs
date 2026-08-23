@@ -13,7 +13,7 @@ pub mod resolve;
 use crate::budget::{Budget, Expired};
 use crate::client::Client;
 use crate::declare::{parse_declarations_for, Declarations};
-use crate::emit::{DeclarationsRead, MeasurementRow, NotMeasured, NotMeasuredReason};
+use crate::emit::{ContentSample, DeclarationsRead, MeasurementRow, NotMeasured, NotMeasuredReason};
 use crate::metrics::{MetricDef, ProbeKind};
 use crate::resolve::{resolve, resolve_fetch, Declared};
 use crate::verdict::Verdict;
@@ -52,21 +52,44 @@ use crate::verdict::Verdict;
 /// the policy in one place and the mechanism in another is deliberate: a
 /// second reason for declining a metric changes `main.rs` and the reason enum,
 /// not this loop.
+pub struct Sweep {
+    pub rows: Vec<MeasurementRow>,
+    pub declarations_read: Vec<DeclarationsRead>,
+    pub not_measured: Vec<NotMeasured>,
+    /// What the enumerating metrics saw, one entry per (endpoint, metric that
+    /// declared a `sample_limit`, reached a positive verdict, and bound at
+    /// least one value). A metric that declared no `sample_limit` contributes
+    /// nothing here; neither does one whose probe bound nothing, because an
+    /// empty list is not a sample and the measurement row already says
+    /// `absent`; and neither does one the resolver would not confirm, because
+    /// a sample is an assertion and an unconfirmed observation supports none.
+    pub content_samples: Vec<ContentSample>,
+}
+
 pub async fn run_sweep(
     endpoints: &[String],
     defs: &[MetricDef],
     declined: &[MetricDef],
     client: &Client,
     budget: Budget,
-) -> (Vec<MeasurementRow>, Vec<DeclarationsRead>, Vec<NotMeasured>) {
+) -> Sweep {
     let mut rows = Vec::new();
     let mut declarations_read = Vec::new();
     let mut not_measured = Vec::new();
+    let mut content_samples = Vec::new();
     for ep in endpoints {
         let mut ep_rows: Vec<MeasurementRow> = Vec::new();
         let mut read = false;
         let outcome = budget
-            .with_endpoint_budget(probe_endpoint(ep, defs, client, budget, &mut ep_rows, &mut read))
+            .with_endpoint_budget(probe_endpoint(
+                ep,
+                defs,
+                client,
+                budget,
+                &mut ep_rows,
+                &mut read,
+                &mut content_samples,
+            ))
             .await;
         if outcome.is_err() {
             tracing::warn!(endpoint = %ep, reached = ep_rows.len(), of = defs.len(),
@@ -100,7 +123,7 @@ pub async fn run_sweep(
             });
         }
     }
-    (rows, declarations_read, not_measured)
+    Sweep { rows, declarations_read, not_measured, content_samples }
 }
 
 const VAR_REQUIRED: &str = "a bindings-reading probe kind requires `var`; load_metrics enforces it";
@@ -122,6 +145,7 @@ async fn probe_endpoint(
     budget: Budget,
     rows: &mut Vec<MeasurementRow>,
     declarations_read: &mut bool,
+    content_samples: &mut Vec<ContentSample>,
 ) {
     // One queryless fetch per endpoint, not one per metric: six metrics must
     // not mean six identical GETs landing in an operator's log. Its outcome
@@ -230,6 +254,49 @@ async fn probe_endpoint(
         let observed = budget.with_metric_budget(fut).await;
         let declared = Declared::from(&declarations, def);
         let verdict = resolve(def, declared, observed.as_ref().map_err(|e| *e));
+        // The bindings are kept only for a metric that asked to enumerate. Up
+        // to here they were used to reach a verdict and then dropped, so an
+        // endpoint could be reported as having classes without ever saying
+        // which, for a task whose whole purpose is knowing what is in an
+        // endpoint before writing a query.
+        if let Some(limit) = def.sample_limit {
+            // Gated on the VERDICT, not on the response status. A sample is an
+            // assertion about the endpoint's data, so it may only be published
+            // where the resolver confirmed the capability: `Verified` or
+            // `UndeclaredButVerified`. Everything else, `Indeterminate` above
+            // all, means we do not know what this endpoint holds, and a graph
+            // that says "we could not determine whether this endpoint has
+            // classes" must not also say "here are its 59 classes, complete".
+            //
+            // The rejected alternative was to re-check the status here, the way
+            // `resolve`'s `SelectIris` arm checks `answered_ok`. That would be
+            // the third copy of the same rule (`resolve_fetch` and the
+            // `Liveness` positive case were both fixed by adding one), so the
+            // rules could drift apart in silence and a future change to them
+            // would have to find every copy. Riding on the verdict means the
+            // sample and the measurement cannot disagree by construction, and a
+            // change to the status rules carries the sample with it.
+            let confirmed = matches!(verdict, Verdict::Verified | Verdict::UndeclaredButVerified);
+            if let Ok(o) = &observed {
+                // The empty check stays alongside the verdict gate rather than
+                // relying on it: no current kind reaches a positive verdict
+                // with nothing bound, and if one ever does, a sample of size
+                // zero is still not a sample.
+                if confirmed && !o.bindings.is_empty() {
+                    content_samples.push(ContentSample {
+                        endpoint: ep.to_string(),
+                        metric_id: def.id.clone(),
+                        values: o.bindings.clone(),
+                        // `>=`, not `==`, deliberately. An endpoint that
+                        // ignores `LIMIT` and returns more than the cap has
+                        // still handed us a sample we cannot call complete;
+                        // `==` would call exactly that case complete, which is
+                        // the one failure this fact exists to prevent.
+                        truncated: o.bindings.len() >= limit,
+                    });
+                }
+            }
+        }
         // An expired metric budget measured nothing, so it reports no elapsed
         // time rather than a zero one.
         let elapsed = observed.as_ref().ok().map(|o| o.elapsed_ms);

@@ -424,6 +424,7 @@ mod tests {
             declared_by: None,
             graded: false,
             cost: Cost::Cheap,
+            sample_limit: None,
         }
     }
 

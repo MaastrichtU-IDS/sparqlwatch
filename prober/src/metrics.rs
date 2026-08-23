@@ -142,6 +142,53 @@ pub struct MetricDef {
     /// means cheap, but an unrecognized value is a load error, not a guess.
     #[serde(default)]
     pub cost: Cost,
+    /// `Some(n)` means this metric enumerates: publish up to `n` bindings and
+    /// say whether the cap was hit. `None` means it publishes no sample.
+    /// Checked at load time against the `LIMIT` in the metric's own query, so
+    /// the two places that must agree cannot drift in silence.
+    #[serde(default)]
+    pub sample_limit: Option<usize>,
+}
+
+/// Drop everything from a `#` to the end of its line. `metrics.toml` uses
+/// triple-quoted multi-line query blocks, so a SPARQL comment inside one is
+/// entirely plausible, and a comment mentioning a limit must not be read as
+/// one: `LIMIT 50` plus a trailing `# raise back to limit 200` would otherwise
+/// satisfy a declared `sample_limit = 200` while the query returned 50, and 50
+/// of a cap of 200 is published as COMPLETE. That is the precise failure the
+/// cross-check exists to block.
+///
+/// Crude in the same direction as `query_limit` itself: a `#` inside an IRI or
+/// a string literal truncates that line too, so such a query loses its `LIMIT`
+/// and fails to load. That is the acceptable failure. A matcher that fails
+/// loudly is fine; one that PASSES something it should reject is not.
+fn without_sparql_comments(query: &str) -> String {
+    query
+        .lines()
+        .map(|line| match line.find('#') {
+            Some(i) => &line[..i],
+            None => line,
+        })
+        .collect::<Vec<&str>>()
+        .join("\n")
+}
+
+/// Pull the integer following the last case-insensitive `LIMIT` in `query`,
+/// if any. Deliberately crude: this reads our own hand-written
+/// `metrics.toml`, not arbitrary SPARQL, and a wrong read here is a load
+/// error rather than a wrong measurement, so a full parser would be the
+/// wrong amount of machinery for the risk it removes.
+fn query_limit(query: &str) -> Option<u64> {
+    let query = without_sparql_comments(query);
+    let lower = query.to_ascii_lowercase();
+    let pos = lower.rfind("limit")?;
+    let rest = query[pos + "limit".len()..].trim_start();
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        None
+    } else {
+        digits.parse().ok()
+    }
 }
 
 /// Same reason as `MetricDef` above: a stray table at the top level (a second
@@ -194,6 +241,47 @@ pub fn load_metrics(toml_src: &str) -> anyhow::Result<Vec<MetricDef>> {
                 m.id,
                 m.kind
             );
+        }
+        if let Some(limit) = m.sample_limit {
+            // `SelectIris` alone, deliberately narrower than "reads bindings".
+            // `AskData` reads bindings too, but through `ask_literal`, which
+            // collects the LEXICAL FORMS OF LITERALS, and `emit.rs` publishes
+            // every sampled value through `NamedNode::new`. So an `AskData`
+            // sample would drop most literals and republish any whose lexical
+            // form happens to parse as an IRI as a resource the endpoint never
+            // mentioned, losing the datatype either way. That is a wrong fact
+            // about somebody's data, and a half-supported path is worse than a
+            // closed one, so the path is closed here rather than at emission:
+            // this is where a definition is judged, and nothing ships an
+            // `AskData` sample today.
+            //
+            // To lift this, the sample must carry per value whether it is an
+            // IRI or a literal (with its datatype), and the emitter must emit
+            // accordingly. Until both exist, widening this check publishes
+            // wrong term types.
+            if m.kind != ProbeKind::SelectIris {
+                anyhow::bail!(
+                    "metric '{}' of kind {:?} declares a `sample_limit`, but only `SelectIris` may sample: \
+                     every sampled value is published as an IRI, so any other kind would publish the wrong term type",
+                    m.id,
+                    m.kind
+                );
+            }
+            let query_limit = m.query.as_deref().and_then(query_limit);
+            match query_limit {
+                None => anyhow::bail!(
+                    "metric '{}' declares sample_limit={} but its query has no `LIMIT`",
+                    m.id,
+                    limit
+                ),
+                Some(q) if q != limit as u64 => anyhow::bail!(
+                    "metric '{}' declares sample_limit={} but its query's LIMIT is {}",
+                    m.id,
+                    limit,
+                    q
+                ),
+                Some(_) => {}
+            }
         }
     }
     Ok(f.metric)
@@ -255,9 +343,10 @@ pub fn definitions_revision(defs: &[MetricDef]) -> String {
             declared_by,
             graded,
             cost,
+            sample_limit,
         } = d;
         canonical.push_str(&format!(
-            "{}\x1f{}\x1f{}\x1f{:?}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{:?}\x1e",
+            "{}\x1f{}\x1f{}\x1f{:?}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{:?}\x1f{}\x1e",
             id,
             label,
             dimension,
@@ -268,6 +357,7 @@ pub fn definitions_revision(defs: &[MetricDef]) -> String {
             declared_by.as_deref().unwrap_or(""),
             graded,
             cost,
+            sample_limit.map(|n| n.to_string()).unwrap_or_default(),
         ));
     }
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
@@ -422,6 +512,7 @@ query = "SELECT ?thing WHERE {{ ?s ?p ?thing }} LIMIT 1"
             declared_by,
             graded,
             cost,
+            sample_limit,
         } = d.clone();
 
         let variants: Vec<(&str, MetricDef)> = vec![
@@ -472,6 +563,17 @@ query = "SELECT ?thing WHERE {{ ?s ?p ?thing }} LIMIT 1"
                         Cost::Cheap => Cost::Expensive,
                         Cost::Expensive => Cost::Cheap,
                     },
+                    ..d.clone()
+                },
+            ),
+            // It changes what we publish, so it changes the revision. Bypasses
+            // `load_metrics`'s cross-check on purpose: this constructs a
+            // `MetricDef` directly, and the check belongs to the loader, not
+            // to the struct.
+            (
+                "sample_limit",
+                MetricDef {
+                    sample_limit: Some(sample_limit.unwrap_or(0) + 1),
                     ..d.clone()
                 },
             ),
@@ -681,5 +783,139 @@ query = "SELECT ?s WHERE { ?s ?p ?o } LIMIT 1"
                 "the CLI must accept the same token"
             );
         }
+    }
+
+    #[test]
+    fn a_metric_without_a_sample_limit_publishes_no_sample() {
+        let defs = load_metrics(
+            "[[metric]]\nid=\"m\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"Liveness\"\nquery=\"ASK{}\"\n"
+        ).unwrap();
+        assert_eq!(defs[0].sample_limit, None);
+    }
+
+    #[test]
+    fn a_sample_limit_must_match_the_querys_limit() {
+        // The id is deliberately distinctive. An earlier version used id = "m"
+        // and asserted err.contains("m"), which is satisfied by any message
+        // containing the letter m, the word "metric" included: it could not
+        // fail, while its failure message claimed to check that the error names
+        // the metric.
+        // Two places that must agree will drift. The loader is where that is caught,
+        // and a mismatch is a broken definition file, not something to guess about.
+        let src = |lim: &str, q_lim: &str| format!(
+            "[[metric]]\nid=\"zebra-sample\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"SelectIris\"\nvar=\"c\"\n\
+             sample_limit={lim}\nquery=\"SELECT DISTINCT ?c WHERE {{ ?s a ?c }} LIMIT {q_lim}\"\n"
+        );
+        assert!(load_metrics(&src("200", "200")).is_ok());
+        let err = load_metrics(&src("200", "50")).unwrap_err().to_string();
+        assert!(err.contains("zebra-sample"), "the error must name the metric: {err}");
+        assert!(err.contains("200") && err.contains("50"), "and both numbers: {err}");
+    }
+
+    #[test]
+    fn ask_data_may_not_declare_a_sample_limit_yet() {
+        // AskData does read bindings, but `ask_literal` reads the lexical forms of
+        // LITERALS, and `emit.rs` publishes every sampled value as an IRI. So an
+        // AskData sample would drop most literals and republish any whose lexical
+        // form parses as an IRI as a resource the endpoint never mentioned:
+        // "http://example.org/NotActuallyAnIri" as a plain string comes back out of
+        // the graph as `<http://example.org/NotActuallyAnIri>`, and the datatype is
+        // lost either way. That is a wrong fact about somebody's data, so the path
+        // is closed rather than half-supported. Nothing ships an AskData sample
+        // today, so nothing is lost by closing it.
+        //
+        // To lift this, `ContentSample` must carry per value whether it is an IRI
+        // or a literal (with its datatype) and the emitter must emit accordingly.
+        // Then this test inverts back, and a geometry sample becomes possible.
+        let src = "[[metric]]\nid=\"wkt-sample\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"AskData\"\nvar=\"g\"\n\
+                   sample_limit=25\nquery=\"SELECT ?g WHERE { ?s ?p ?g } LIMIT 25\"\n";
+        let err = load_metrics(src).unwrap_err().to_string();
+        assert!(err.contains("wkt-sample"), "the error must name the metric: {err}");
+        assert!(err.contains("SelectIris"), "and say which kind may sample: {err}");
+    }
+
+    #[test]
+    fn a_comment_cannot_stand_in_for_the_querys_real_limit() {
+        // The reviewer's input, verbatim in shape: `metrics.toml` uses
+        // triple-quoted multi-line query blocks, so a SPARQL comment inside one is
+        // plausible, and `rfind("limit")` landed in the comment. The query is
+        // bounded at 50, truncation is then computed as `50 >= 200` = false, and a
+        // list truncated at 50 is published as COMPLETE: the single failure this
+        // cross-check exists to prevent.
+        let commented = "[[metric]]\nid=\"zebra-sample\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"SelectIris\"\nvar=\"c\"\n\
+             sample_limit=200\nquery=\"\"\"\nSELECT DISTINCT ?c WHERE { ?s a ?c } LIMIT 50\n\
+             # lowered from 200 after the qlever timeout; raise back to limit 200 when budgets allow\n\"\"\"\n";
+        let err = load_metrics(commented).unwrap_err().to_string();
+        assert!(err.contains("zebra-sample"), "the error must name the metric: {err}");
+        assert!(
+            err.contains("50"),
+            "and report the LIMIT the query really carries, not the one the comment mentions: {err}"
+        );
+
+        // A `#` in an IRI is not a comment, and stripping to end of line takes the
+        // rest of the line with it. This query has no real `LIMIT` at all, and used
+        // to load because `limit200` sat inside the IRI: an unbounded `SELECT
+        // DISTINCT ?c` sent to a stranger's server.
+        let in_an_iri = "[[metric]]\nid=\"zebra-sample\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"SelectIris\"\nvar=\"c\"\n\
+             sample_limit=200\nquery=\"SELECT DISTINCT ?c WHERE { ?s <http://example.org/vocab#limit200> ?c }\"\n";
+        assert!(
+            load_metrics(in_an_iri).is_err(),
+            "no LIMIT is no LIMIT, whatever an identifier happens to spell"
+        );
+
+        // The same crudeness in the other direction, asserted so it stays a known
+        // failure rather than a surprise: a `#` inside a string literal truncates
+        // its line too, so an otherwise honest query loses its `LIMIT` and refuses
+        // to load. A matcher that fails loudly is fine; one that passes something
+        // it should reject is not.
+        let hash_in_a_literal = "[[metric]]\nid=\"zebra-sample\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"SelectIris\"\nvar=\"c\"\n\
+             sample_limit=200\nquery=\"SELECT DISTINCT ?c WHERE { ?s a ?c FILTER(?c != \\\"#\\\") } LIMIT 200\"\n";
+        assert!(
+            load_metrics(hash_in_a_literal).is_err(),
+            "the crude matcher refuses rather than guessing, and a load error is the safe direction"
+        );
+
+        // And an ordinary comment that says nothing about a limit still loads, so
+        // the fix does not cost the file its comments.
+        let harmless = "[[metric]]\nid=\"zebra-sample\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"SelectIris\"\nvar=\"c\"\n\
+             sample_limit=200\nquery=\"\"\"\n# every class, bounded, in whichever graph the endpoint defaults to\n\
+             SELECT DISTINCT ?c WHERE { ?s a ?c } LIMIT 200\n\"\"\"\n";
+        assert!(load_metrics(harmless).is_ok(), "a comment is not a limit, and not a problem either");
+    }
+
+    #[test]
+    fn a_sample_limit_without_a_query_limit_is_a_load_error() {
+        // An unbounded enumeration is not something we send to a stranger's server.
+        assert!(load_metrics(
+            "[[metric]]\nid=\"m\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"SelectIris\"\nvar=\"c\"\n\
+             sample_limit=200\nquery=\"SELECT DISTINCT ?c WHERE { ?s a ?c }\"\n"
+        ).is_err());
+    }
+
+    #[test]
+    fn a_sample_limit_on_a_kind_that_reads_no_bindings_is_a_load_error() {
+        // Liveness and Cors never populate `bindings`, so a sample limit on one is a
+        // promise the probe cannot keep. Same doctrine as the `var` check. The check
+        // is now narrower than this test needs (only `SelectIris` may sample, see
+        // the AskData test above), and this case stays because a kind that reads no
+        // bindings at all is a different mistake from one that reads the wrong term
+        // type.
+        assert!(load_metrics(
+            "[[metric]]\nid=\"m\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"Liveness\"\n\
+             sample_limit=200\nquery=\"ASK{} LIMIT 200\"\n"
+        ).is_err());
+    }
+
+    #[test]
+    fn sample_limit_is_part_of_the_definitions_revision() {
+        let with = "[[metric]]\nid=\"m\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"SelectIris\"\nvar=\"c\"\n\
+                    sample_limit=200\nquery=\"SELECT ?c WHERE { ?s a ?c } LIMIT 200\"\n";
+        let without = "[[metric]]\nid=\"m\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"SelectIris\"\nvar=\"c\"\n\
+                       query=\"SELECT ?c WHERE { ?s a ?c } LIMIT 200\"\n";
+        assert_ne!(
+            definitions_revision(&load_metrics(with).unwrap()),
+            definitions_revision(&load_metrics(without).unwrap()),
+            "it changes what we publish, so it changes the revision"
+        );
     }
 }

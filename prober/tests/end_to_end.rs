@@ -1,10 +1,11 @@
 use sparqlwatch_prober::budget::Budget;
 use sparqlwatch_prober::client::Client;
-use sparqlwatch_prober::emit::{emit_nquads, NotMeasured, NotMeasuredReason, RunId};
+use sparqlwatch_prober::emit::{emit_nquads, NotMeasured, NotMeasuredReason, RunEmission, RunId};
 use sparqlwatch_prober::metrics::{load_metrics, within_cost, Cost, MetricDef, ProbeKind};
 use sparqlwatch_prober::politeness::Politeness;
 use sparqlwatch_prober::registry::load_endpoints;
 use sparqlwatch_prober::run_sweep;
+use sparqlwatch_prober::Sweep;
 use sparqlwatch_prober::verdict::{Level, Verdict};
 use oxrdf::{NamedNode, Quad, Term};
 use oxrdfio::{RdfFormat, RdfParser};
@@ -48,7 +49,7 @@ async fn a_sweep_over_one_mock_endpoint_produces_nquads() {
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
     let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let url = format!("{}/sparql", server.uri());
-    let (rows, _declarations_read, _not_measured) = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
+    let Sweep { rows, declarations_read: _declarations_read, not_measured: _not_measured, content_samples: _content_samples } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
 
     assert_eq!(rows.len(), defs.len(), "one measurement per metric per endpoint");
 
@@ -91,7 +92,16 @@ async fn a_sweep_over_one_mock_endpoint_produces_nquads() {
     assert_eq!(got, expected);
 
     let nq =
-        emit_nquads(&RunId("test".into()), "2026-08-20T08:00:00Z", "test-revision", &rows, &_declarations_read, &[], Cost::Cheap)
+        emit_nquads(RunEmission {
+            run: &RunId("test".into()),
+            generated_at: "2026-08-20T08:00:00Z",
+            metric_revision: "test-revision",
+            rows: &rows,
+            declarations_read: &_declarations_read,
+            not_measured: &[],
+            max_cost: Cost::Cheap,
+            content_samples: &[],
+        })
             .unwrap();
     let quads: Vec<Quad> = RdfParser::from_format(RdfFormat::NQuads)
         .for_slice(nq.as_bytes())
@@ -142,7 +152,7 @@ async fn the_two_cors_metrics_are_not_the_same_probe() {
     let defs = load_shipped_metrics();
     let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let url = format!("{}/sparql", server.uri());
-    let (rows, _read, _not_measured) = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
+    let Sweep { rows, declarations_read: _read, not_measured: _not_measured, content_samples: _content_samples } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
     let verdict = |id: &str| rows.iter().find(|r| r.metric_id == id).unwrap().verdict;
 
     assert_eq!(
@@ -167,7 +177,7 @@ async fn the_two_cors_metrics_are_not_the_same_probe() {
 async fn an_unreachable_endpoint_yields_indeterminate_not_a_panic() {
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
     let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
-    let (rows, _declarations_read, _not_measured) = without_deadlocking(run_sweep(&["http://127.0.0.1:1/sparql".to_string()], &defs, &[], &client, Budget::default())).await;
+    let Sweep { rows, declarations_read: _declarations_read, not_measured: _not_measured, content_samples: _content_samples } = without_deadlocking(run_sweep(&["http://127.0.0.1:1/sparql".to_string()], &defs, &[], &client, Budget::default())).await;
     assert_eq!(rows.len(), defs.len());
     assert!(rows.iter().all(|r| r.verdict == Verdict::Indeterminate));
 }
@@ -196,11 +206,12 @@ async fn a_metric_binding_a_nonstandard_variable_is_extracted_via_its_declared_v
         declared_by: None,
         graded: false,
         cost: Cost::Cheap,
+        sample_limit: None,
     };
 
     let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let url = format!("{}/sparql", server.uri());
-    let (rows, _declarations_read, _not_measured) = without_deadlocking(run_sweep(&[url], &[def], &[], &client, Budget::default())).await;
+    let Sweep { rows, declarations_read: _declarations_read, not_measured: _not_measured, content_samples: _content_samples } = without_deadlocking(run_sweep(&[url], &[def], &[], &client, Budget::default())).await;
 
     assert_eq!(rows.len(), 1);
     assert_eq!(
@@ -232,7 +243,7 @@ async fn the_sweep_fetches_the_description_once_per_endpoint() {
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
     let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let url = format!("{}/sparql", server.uri());
-    let (rows, _declarations_read, _not_measured) = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
+    let Sweep { rows, declarations_read: _declarations_read, not_measured: _not_measured, content_samples: _content_samples } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
 
     let queryless = server.received_requests().await.unwrap().iter()
         .filter(|r| r.method == Method::GET && r.url.query().is_none()).count();
@@ -259,7 +270,7 @@ async fn a_fetched_description_puts_a_level_on_its_row() {
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
     let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let url = format!("{}/sparql", server.uri());
-    let (rows, _declarations_read, _not_measured) = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
+    let Sweep { rows, declarations_read: _declarations_read, not_measured: _not_measured, content_samples: _content_samples } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
 
     let row = rows.iter().find(|r| r.metric_id == "service-description").unwrap();
     assert_eq!(row.verdict, Verdict::Verified);
@@ -292,11 +303,12 @@ async fn a_non_graded_fetch_metric_carries_no_level() {
         declared_by: None,
         graded: false,
         cost: Cost::Cheap,
+        sample_limit: None,
     };
 
     let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let url = format!("{}/sparql", server.uri());
-    let (rows, _declarations_read, _not_measured) = without_deadlocking(run_sweep(std::slice::from_ref(&url), &[def], &[], &client, Budget::default())).await;
+    let Sweep { rows, declarations_read: _declarations_read, not_measured: _not_measured, content_samples: _content_samples } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &[def], &[], &client, Budget::default())).await;
 
     let row = &rows[0];
     assert_eq!(row.verdict, Verdict::Verified, "the fetch itself still succeeds");
@@ -328,7 +340,7 @@ async fn a_declared_and_working_capability_resolves_to_verified_through_the_swee
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
     let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let url = format!("{}/sparql", server.uri());
-    let (rows, _declarations_read, _not_measured) = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
+    let Sweep { rows, declarations_read: _declarations_read, not_measured: _not_measured, content_samples: _content_samples } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
 
     let row = rows.iter().find(|r| r.metric_id == "geo-functions").unwrap();
     assert_eq!(
@@ -375,7 +387,7 @@ async fn a_description_served_as_rdf_xml_is_parsed_not_silently_dropped() {
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
     let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let url = format!("{}/sparql", server.uri());
-    let (rows, _declarations_read, _not_measured) = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
+    let Sweep { rows, declarations_read: _declarations_read, not_measured: _not_measured, content_samples: _content_samples } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
 
     let description = rows.iter().find(|r| r.metric_id == "service-description").unwrap();
     assert_eq!(description.verdict, Verdict::Verified, "the body did parse, as RDF/XML");
@@ -426,7 +438,7 @@ async fn sweep_description_served_as(
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
     let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let url = format!("{}/sparql", server.uri());
-    let (rows, read, _not_measured) = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
+    let Sweep { rows, declarations_read: read, not_measured: _not_measured, content_samples: _content_samples } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
     let row = |id: &str| rows.iter().find(|r| r.metric_id == id).unwrap();
     assert_eq!(read.len(), 1);
     let description = row("service-description");
@@ -519,6 +531,7 @@ async fn an_endpoint_budget_expiry_still_yields_one_row_per_metric() {
             declared_by: None,
             graded: false,
             cost: Cost::Cheap,
+            sample_limit: None,
         })
         .collect();
 
@@ -530,7 +543,7 @@ async fn an_endpoint_budget_expiry_still_yields_one_row_per_metric() {
     let client = Client::new(budget, Politeness::unlimited()).unwrap();
     let url = format!("{}/sparql", server.uri());
     let started = std::time::Instant::now();
-    let (rows, _declarations_read, _not_measured) = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, budget)).await;
+    let Sweep { rows, declarations_read: _declarations_read, not_measured: _not_measured, content_samples: _content_samples } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, budget)).await;
     let took = started.elapsed();
 
     assert_eq!(rows.len(), defs.len(), "one row per (endpoint, metric) regardless of timing");
@@ -584,6 +597,7 @@ async fn a_budget_expiry_after_the_fetch_still_publishes_declarations_read() {
             declared_by: None,
             graded: false,
             cost: Cost::Cheap,
+            sample_limit: None,
         })
         .collect();
 
@@ -594,7 +608,7 @@ async fn a_budget_expiry_after_the_fetch_still_publishes_declarations_read() {
     };
     let client = Client::new(budget, Politeness::unlimited()).unwrap();
     let url = format!("{}/sparql", server.uri());
-    let (rows, read, _not_measured) = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, budget)).await;
+    let Sweep { rows, declarations_read: read, not_measured: _not_measured, content_samples: _content_samples } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, budget)).await;
 
     // The budget really did cut the loop short, or this proves nothing about
     // the write position.
@@ -663,7 +677,7 @@ async fn each_endpoints_row_carries_the_level_computed_for_that_endpoint() {
 
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
     let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
-    let (rows, _declarations_read, _not_measured) = without_deadlocking(run_sweep(&[bare_url.clone(), rich_url.clone()], &defs, &[], &client, Budget::default())).await;
+    let Sweep { rows, declarations_read: _declarations_read, not_measured: _not_measured, content_samples: _content_samples } = without_deadlocking(run_sweep(&[bare_url.clone(), rich_url.clone()], &defs, &[], &client, Budget::default())).await;
 
     let level_at = |url: &str| {
         let row = rows.iter()
@@ -717,7 +731,7 @@ async fn a_description_reached_through_a_redirect_is_still_scoped_to_us() {
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
     let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let url = format!("{}/a", server.uri());
-    let (rows, _declarations_read, _not_measured) = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
+    let Sweep { rows, declarations_read: _declarations_read, not_measured: _not_measured, content_samples: _content_samples } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
 
     let geo = rows.iter().find(|r| r.metric_id == "geo-functions").unwrap();
     assert_eq!(
@@ -757,7 +771,7 @@ async fn a_neighbouring_datasets_declaration_is_not_credited_to_this_endpoint() 
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
     let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let url = format!("{}/plain/sparql", server.uri());
-    let (rows, _declarations_read, _not_measured) = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
+    let Sweep { rows, declarations_read: _declarations_read, not_measured: _not_measured, content_samples: _content_samples } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
 
     let geo = rows.iter().find(|r| r.metric_id == "geo-functions").unwrap();
     assert_eq!(
@@ -801,8 +815,17 @@ async fn sweep_with_description(body: &str, content_type: &str) -> String {
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
     let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let url = format!("{}/sparql", server.uri());
-    let (rows, declarations_read, _not_measured) = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
-    emit_nquads(&RunId("test".into()), "2026-08-20T08:00:00Z", "test-revision", &rows, &declarations_read, &[], Cost::Cheap).unwrap()
+    let Sweep { rows, declarations_read, not_measured: _not_measured, content_samples: _content_samples } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
+    emit_nquads(RunEmission {
+        run: &RunId("test".into()),
+        generated_at: "2026-08-20T08:00:00Z",
+        metric_revision: "test-revision",
+        rows: &rows,
+        declarations_read: &declarations_read,
+        not_measured: &[],
+        max_cost: Cost::Cheap,
+        content_samples: &[],
+    }).unwrap()
 }
 
 /// Sweep one mock endpoint where every request, queryless or not, gets
@@ -816,8 +839,17 @@ async fn sweep_with_status(status: u16) -> String {
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
     let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let url = format!("{}/sparql", server.uri());
-    let (rows, declarations_read, _not_measured) = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
-    emit_nquads(&RunId("test".into()), "2026-08-20T08:00:00Z", "test-revision", &rows, &declarations_read, &[], Cost::Cheap).unwrap()
+    let Sweep { rows, declarations_read, not_measured: _not_measured, content_samples: _content_samples } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
+    emit_nquads(RunEmission {
+        run: &RunId("test".into()),
+        generated_at: "2026-08-20T08:00:00Z",
+        metric_revision: "test-revision",
+        rows: &rows,
+        declarations_read: &declarations_read,
+        not_measured: &[],
+        max_cost: Cost::Cheap,
+        content_samples: &[],
+    }).unwrap()
 }
 
 /// As `sweep_with_status`, except the query probes (everything but the
@@ -836,8 +868,17 @@ async fn sweep_with_status_and_working_queries(status: u16) -> String {
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
     let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let url = format!("{}/sparql", server.uri());
-    let (rows, declarations_read, _not_measured) = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
-    emit_nquads(&RunId("test".into()), "2026-08-20T08:00:00Z", "test-revision", &rows, &declarations_read, &[], Cost::Cheap).unwrap()
+    let Sweep { rows, declarations_read, not_measured: _not_measured, content_samples: _content_samples } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
+    emit_nquads(RunEmission {
+        run: &RunId("test".into()),
+        generated_at: "2026-08-20T08:00:00Z",
+        metric_revision: "test-revision",
+        rows: &rows,
+        declarations_read: &declarations_read,
+        not_measured: &[],
+        max_cost: Cost::Cheap,
+        content_samples: &[],
+    }).unwrap()
 }
 
 /// Two endpoints: one mock server answering every request, and one address
@@ -853,8 +894,17 @@ async fn sweep_two_endpoints_one_broken() -> String {
     let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let good = format!("{}/sparql", server.uri());
     let broken = "http://127.0.0.1:1/sparql".to_string();
-    let (rows, declarations_read, _not_measured) = without_deadlocking(run_sweep(&[good, broken], &defs, &[], &client, Budget::default())).await;
-    emit_nquads(&RunId("test".into()), "2026-08-20T08:00:00Z", "test-revision", &rows, &declarations_read, &[], Cost::Cheap).unwrap()
+    let Sweep { rows, declarations_read, not_measured: _not_measured, content_samples: _content_samples } = without_deadlocking(run_sweep(&[good, broken], &defs, &[], &client, Budget::default())).await;
+    emit_nquads(RunEmission {
+        run: &RunId("test".into()),
+        generated_at: "2026-08-20T08:00:00Z",
+        metric_revision: "test-revision",
+        rows: &rows,
+        declarations_read: &declarations_read,
+        not_measured: &[],
+        max_cost: Cost::Cheap,
+        content_samples: &[],
+    }).unwrap()
 }
 
 fn quads_of(run: &str) -> Vec<Quad> {
@@ -970,8 +1020,17 @@ async fn a_registry_that_lists_one_url_twice_probes_it_once() {
 
     let defs = load_shipped_metrics();
     let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
-    let (rows, read, _not_measured) = without_deadlocking(run_sweep(&endpoints, &defs, &[], &client, Budget::default())).await;
-    let run = emit_nquads(&RunId("test".into()), "2026-08-20T08:00:00Z", "test-revision", &rows, &read, &[], Cost::Cheap).unwrap();
+    let Sweep { rows, declarations_read: read, not_measured: _not_measured, content_samples: _content_samples } = without_deadlocking(run_sweep(&endpoints, &defs, &[], &client, Budget::default())).await;
+    let run = emit_nquads(RunEmission {
+        run: &RunId("test".into()),
+        generated_at: "2026-08-20T08:00:00Z",
+        metric_revision: "test-revision",
+        rows: &rows,
+        declarations_read: &read,
+        not_measured: &[],
+        max_cost: Cost::Cheap,
+        content_samples: &[],
+    }).unwrap();
 
     assert_eq!(count_declarations_read_quads(&run), 1, "one endpoint, one fact, whatever the registry said");
     assert_eq!(rows.len(), defs.len(), "one row per metric, not two");
@@ -1000,8 +1059,17 @@ async fn a_near_duplicate_differing_by_a_trailing_slash_stays_two_entries() {
 
     let defs = load_shipped_metrics();
     let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
-    let (rows, read, _not_measured) = without_deadlocking(run_sweep(&endpoints, &defs, &[], &client, Budget::default())).await;
-    let run = emit_nquads(&RunId("test".into()), "2026-08-20T08:00:00Z", "test-revision", &rows, &read, &[], Cost::Cheap).unwrap();
+    let Sweep { rows, declarations_read: read, not_measured: _not_measured, content_samples: _content_samples } = without_deadlocking(run_sweep(&endpoints, &defs, &[], &client, Budget::default())).await;
+    let run = emit_nquads(RunEmission {
+        run: &RunId("test".into()),
+        generated_at: "2026-08-20T08:00:00Z",
+        metric_revision: "test-revision",
+        rows: &rows,
+        declarations_read: &read,
+        not_measured: &[],
+        max_cost: Cost::Cheap,
+        content_samples: &[],
+    }).unwrap();
 
     assert_eq!(count_declarations_read_quads(&run), 2, "two entries, two facts");
     assert_eq!(rows.len(), 2 * defs.len(), "one row per metric per entry");
@@ -1163,8 +1231,17 @@ async fn has_classes_reads_the_iri_c_binds_through_select_iris_not_ask_data() {
     let defs = load_shipped_metrics();
     let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let url = format!("{}/sparql", server.uri());
-    let (rows, read, _not_measured) = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
-    let run = emit_nquads(&RunId("test".into()), "2026-08-20T08:00:00Z", "test-revision", &rows, &read, &[], Cost::Cheap).unwrap();
+    let Sweep { rows, declarations_read: read, not_measured: _not_measured, content_samples: _content_samples } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
+    let run = emit_nquads(RunEmission {
+        run: &RunId("test".into()),
+        generated_at: "2026-08-20T08:00:00Z",
+        metric_revision: "test-revision",
+        rows: &rows,
+        declarations_read: &read,
+        not_measured: &[],
+        max_cost: Cost::Cheap,
+        content_samples: &[],
+    }).unwrap();
 
     assert_eq!(
         verdict_of(&run, "has-classes"),
@@ -1187,7 +1264,7 @@ struct Swept {
 async fn sweep_against(server: &MockServer, run: &[MetricDef], declined: &[MetricDef]) -> Swept {
     let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let url = format!("{}/sparql", server.uri());
-    let (rows, _read, not_measured) =
+    let Sweep { rows, declarations_read: _read, not_measured, content_samples: _content_samples } =
         without_deadlocking(run_sweep(std::slice::from_ref(&url), run, declined, &client, Budget::default())).await;
     Swept { rows, not_measured }
 }
@@ -1256,10 +1333,18 @@ async fn a_declined_metric_reaches_the_published_graph_with_no_verdict() {
     let (run, declined) = within_cost(&load_shipped_metrics(), Cost::Cheap);
     let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let url = format!("{}/sparql", server.uri());
-    let (rows, read, not_measured) =
+    let Sweep { rows, declarations_read: read, not_measured, content_samples: _content_samples } =
         without_deadlocking(run_sweep(std::slice::from_ref(&url), &run, &declined, &client, Budget::default())).await;
-    let nq = emit_nquads(&RunId("test".into()), "2026-08-20T08:00:00Z", "test-revision",
-                         &rows, &read, &not_measured, Cost::Cheap).unwrap();
+    let nq = emit_nquads(RunEmission {
+        run: &RunId("test".into()),
+        generated_at: "2026-08-20T08:00:00Z",
+        metric_revision: "test-revision",
+        rows: &rows,
+        declarations_read: &read,
+        not_measured: &not_measured,
+        max_cost: Cost::Cheap,
+        content_samples: &[],
+    }).unwrap();
     let quads = quads_of(&nq);
 
     let classes = NamedNode::new("urn:sparqlwatch:metric:classes").unwrap();
@@ -1308,7 +1393,7 @@ async fn a_declined_metric_is_recorded_once_per_endpoint() {
 
     let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let urls = vec![format!("{}/sparql", a.uri()), format!("{}/sparql", b.uri())];
-    let (_rows, _read, not_measured) =
+    let Sweep { rows: _rows, declarations_read: _read, not_measured, content_samples: _content_samples } =
         without_deadlocking(run_sweep(&urls, &run, &declined, &client, Budget::default())).await;
 
     assert_eq!(
@@ -1345,7 +1430,7 @@ async fn a_throttled_endpoint_is_not_reported_available_even_with_a_parseable_bo
         let def = defs.iter().find(|d| d.id == "availability").unwrap().clone();
         let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
         let url = format!("{}/sparql", server.uri());
-        let (rows, _read, _nm) =
+        let Sweep { rows, declarations_read: _read, not_measured: _nm, content_samples: _content_samples } =
             without_deadlocking(run_sweep(std::slice::from_ref(&url), &[def], &[], &client, Budget::default())).await;
 
         assert_eq!(
@@ -1399,7 +1484,7 @@ async fn a_host_that_asked_for_an_hour_indeterminates_the_rest_of_its_sweep() {
     // own retry, and the host is deferred all the same.
     let client = Client::new(budget, Politeness::new(std::time::Duration::ZERO)).unwrap();
     let url = format!("{}/sparql", server.uri());
-    let (rows, _declarations_read, _not_measured) =
+    let Sweep { rows, declarations_read: _declarations_read, not_measured: _not_measured, content_samples: _content_samples } =
         without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, budget)).await;
 
     assert_eq!(server.received_requests().await.unwrap().len(), 1,
@@ -1418,4 +1503,417 @@ async fn a_host_that_asked_for_an_hour_indeterminates_the_rest_of_its_sweep() {
         .map(|r| r.metric_id.as_str()).collect();
     assert_eq!(measured, ["service-description"],
                "only the throttled request measured a time; the cancelled metrics measured nothing");
+}
+
+// --- Content samples -------------------------------------------------------
+//
+// The point of the whole slice: `classes` already ran `SELECT DISTINCT ?c ...
+// LIMIT 200`, used the bindings to reach a verdict, and threw them away, so
+// the published graph could say "this endpoint has classes: verified" and not
+// which classes, for a task whose entire purpose is knowing what is in an
+// endpoint before you write a query.
+
+/// An endpoint that binds `?c` to exactly these IRIs, in this order, for every
+/// query it is asked. The order is the endpoint's, and it is evidence.
+async fn an_endpoint_binding_classes(values: &[&str]) -> MockServer {
+    let bindings: Vec<String> = values
+        .iter()
+        .map(|v| format!(r#"{{"c":{{"type":"uri","value":"{v}"}}}}"#))
+        .collect();
+    let body = format!(
+        r#"{{"head":{{"vars":["c"]}},"results":{{"bindings":[{}]}},"boolean":true}}"#,
+        bindings.join(",")
+    );
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(body))
+        .mount(&server)
+        .await;
+    server
+}
+
+/// A `SelectIris` metric that enumerates up to `limit`. `sample_limit` 200 in
+/// the shipped file is impractical to fill from a mock, so the truncation tests
+/// drive a definition whose cap is small; `load_metrics` checks the two agree,
+/// and the query here is written to match.
+fn enumerating_metric(limit: usize) -> MetricDef {
+    MetricDef {
+        id: "classes-small".into(),
+        label: "Distinct classes, small cap".into(),
+        dimension: "content".into(),
+        kind: ProbeKind::SelectIris,
+        query: Some(format!("SELECT DISTINCT ?c WHERE {{ ?s a ?c }} LIMIT {limit}")),
+        expect: None,
+        var: Some("c".into()),
+        declared_by: None,
+        graded: false,
+        cost: Cost::Expensive,
+        sample_limit: Some(limit),
+    }
+}
+
+async fn sample_from(server: &MockServer, def: &MetricDef) -> Vec<sparqlwatch_prober::emit::ContentSample> {
+    let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
+    let url = format!("{}/sparql", server.uri());
+    let Sweep { content_samples, .. } = without_deadlocking(run_sweep(
+        std::slice::from_ref(&url),
+        std::slice::from_ref(def),
+        &[],
+        &client,
+        Budget::default(),
+    ))
+    .await;
+    content_samples
+}
+
+/// Deliberately not alphabetical: the endpoint's order is evidence about the
+/// endpoint, so an implementation that sorts must fail this, and one that
+/// publishes the right NUMBER of placeholder IRIs must fail it too. This
+/// project has shipped a count-only assertion before.
+const ZEBRA: &str = "http://example.org/Zebra";
+const APPLE: &str = "http://example.org/Apple";
+const MANGO: &str = "http://example.org/Mango";
+
+#[tokio::test]
+async fn the_classes_metric_publishes_the_iris_it_bound() {
+    let server = an_endpoint_binding_classes(&[ZEBRA, APPLE, MANGO]).await;
+    let defs = load_shipped_metrics();
+    let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
+    let url = format!("{}/sparql", server.uri());
+    let Sweep { rows, declarations_read: read, not_measured, content_samples } =
+        without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default())).await;
+
+    // Only the metric that declared a `sample_limit` publishes one:
+    // `has-classes` binds the very same `?c` in this sweep and must publish
+    // nothing, or the cheap probe would quietly enumerate too.
+    let ids: Vec<&str> = content_samples.iter().map(|s| s.metric_id.as_str()).collect();
+    assert_eq!(ids, ["classes"], "only a metric declaring a sample_limit enumerates");
+    let sample = &content_samples[0];
+    assert_eq!(
+        sample.values,
+        vec![ZEBRA.to_string(), APPLE.to_string(), MANGO.to_string()],
+        "the IRIs the endpoint returned, in its order, not ours"
+    );
+    assert_eq!(sample.endpoint, url);
+    assert!(!sample.truncated, "three of a cap of 200 is not truncated");
+
+    // And it survives emission: a requirement met in memory and lost on disk is
+    // not met. Read back as quads, in order.
+    let nq = emit_nquads(RunEmission {
+        run: &RunId("test".into()),
+        generated_at: "2026-08-20T08:00:00Z",
+        metric_revision: "test-revision",
+        rows: &rows,
+        declarations_read: &read,
+        not_measured: &not_measured,
+        max_cost: Cost::Expensive,
+        content_samples: &content_samples,
+    }).unwrap();
+    let quads = quads_of(&nq);
+    let published: Vec<String> = quads.iter()
+        .filter(|q| q.predicate.as_str() == "urn:sparqlwatch:sampledValue")
+        .map(|q| match &q.object {
+            Term::NamedNode(n) => n.as_str().to_string(),
+            other => panic!("a sampled value must be an IRI, got {other}"),
+        })
+        .collect();
+    assert_eq!(published, vec![ZEBRA.to_string(), APPLE.to_string(), MANGO.to_string()],
+               "the published order is the endpoint's order");
+    // The sample is joinable to the endpoint and to the metric that took it.
+    let subject = quads.iter()
+        .find(|q| q.predicate.as_str() == "urn:sparqlwatch:sampledValue")
+        .map(|q| q.subject.clone())
+        .expect("a sample must reach the graph");
+    assert!(quads.iter().any(|q| q.subject == subject
+        && q.predicate.as_str() == "urn:sparqlwatch:sampledFrom"
+        && q.object == Term::NamedNode(NamedNode::new(&url).unwrap())));
+    assert!(quads.iter().any(|q| q.subject == subject
+        && q.predicate.as_str() == "urn:sparqlwatch:sampledBy"
+        && q.object == Term::NamedNode(NamedNode::new("urn:sparqlwatch:metric:classes").unwrap())));
+
+    // And the verdict has not moved: this slice adds a fact, it does not
+    // regrade anything.
+    assert_eq!(verdict_of(&nq, "classes"), Verdict::Verified);
+    assert_eq!(verdict_of(&nq, "has-classes"), Verdict::Verified);
+}
+
+#[tokio::test]
+async fn a_sample_that_fills_the_limit_is_marked_truncated() {
+    // Exactly at the cap. A 201st value may exist and we did not see it, so a
+    // reader must not treat this list as the endpoint's classes.
+    let server = an_endpoint_binding_classes(&[ZEBRA, APPLE, MANGO]).await;
+    let samples = sample_from(&server, &enumerating_metric(3)).await;
+    assert_eq!(samples.len(), 1);
+    assert_eq!(samples[0].values, vec![ZEBRA.to_string(), APPLE.to_string(), MANGO.to_string()]);
+    assert!(samples[0].truncated,
+            "three values under a cap of three tells us nothing about a fourth");
+}
+
+#[tokio::test]
+async fn an_endpoint_that_ignores_the_limit_is_still_a_truncated_sample() {
+    // The reason the implementation says `>=` and not `==`. Endpoints that
+    // ignore `LIMIT` are not hypothetical, and under `==` this case would be
+    // published as a complete list: the confident wrong answer this fact
+    // exists to prevent.
+    let extra = "http://example.org/Quince";
+    let server = an_endpoint_binding_classes(&[ZEBRA, APPLE, MANGO, extra]).await;
+    let samples = sample_from(&server, &enumerating_metric(3)).await;
+    assert_eq!(samples.len(), 1);
+    assert_eq!(
+        samples[0].values,
+        vec![ZEBRA.to_string(), APPLE.to_string(), MANGO.to_string(), extra.to_string()],
+        "everything the endpoint sent is kept: we do not trim it to the cap we asked for"
+    );
+    assert!(samples[0].truncated,
+            "an endpoint that returned MORE than the cap has still given us a sample we cannot call complete");
+}
+
+#[tokio::test]
+async fn a_sample_under_the_limit_is_not_marked_truncated() {
+    // Two of a cap of three: we saw them all, for that query's graph scope, so
+    // a consumer may treat the list as complete.
+    let server = an_endpoint_binding_classes(&[ZEBRA, APPLE]).await;
+    let samples = sample_from(&server, &enumerating_metric(3)).await;
+    assert_eq!(samples.len(), 1);
+    assert_eq!(samples[0].values, vec![ZEBRA.to_string(), APPLE.to_string()]);
+    assert!(!samples[0].truncated, "two of a cap of three is the whole answer");
+}
+
+#[tokio::test]
+async fn a_metric_that_binds_nothing_publishes_no_sample() {
+    // An empty list is not a sample. The measurement row already says `absent`,
+    // and publishing a sample of size zero would give a consumer a node to join
+    // that says nothing the verdict did not.
+    let server = an_endpoint_binding_classes(&[]).await;
+    let samples = sample_from(&server, &enumerating_metric(3)).await;
+    assert!(samples.is_empty(), "nothing bound, nothing sampled: {samples:?}");
+}
+
+#[tokio::test]
+async fn a_declined_metric_publishes_no_sample_and_still_says_why() {
+    // At the default cost ceiling `classes` is declined, so there is no sample
+    // to publish, and the existing NotMeasured fact is what tells a reader the
+    // absence is a choice rather than an empty endpoint. No new machinery: the
+    // distinction is already published.
+    let server = an_endpoint_binding_classes(&[ZEBRA, APPLE, MANGO]).await;
+    let (run, declined) = within_cost(&load_shipped_metrics(), Cost::Cheap);
+    assert!(declined.iter().any(|d| d.id == "classes"),
+            "the fixture assumes the cheap ceiling declines classes");
+    let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
+    let url = format!("{}/sparql", server.uri());
+    let Sweep { rows, declarations_read: read, not_measured, content_samples } =
+        without_deadlocking(run_sweep(std::slice::from_ref(&url), &run, &declined, &client, Budget::default())).await;
+
+    assert!(content_samples.is_empty(),
+            "a metric that was never run cannot have sampled anything: {content_samples:?}");
+    let nq = emit_nquads(RunEmission {
+        run: &RunId("test".into()),
+        generated_at: "2026-08-20T08:00:00Z",
+        metric_revision: "test-revision",
+        rows: &rows,
+        declarations_read: &read,
+        not_measured: &not_measured,
+        max_cost: Cost::Cheap,
+        content_samples: &content_samples,
+    }).unwrap();
+    let quads = quads_of(&nq);
+    assert!(!quads.iter().any(|q| q.predicate.as_str().starts_with("urn:sparqlwatch:sample")),
+            "no sample quad of any kind reaches the graph");
+    // ...and the reader is still told why there is nothing here.
+    assert!(quads.iter().any(|q| q.predicate.as_str() == "urn:sparqlwatch:notMeasuredMetric"
+        && q.object == Term::NamedNode(NamedNode::new("urn:sparqlwatch:metric:classes").unwrap())),
+        "the absence is published as a choice, not left as a silence");
+    assert!(quads.iter().any(|q| q.predicate.as_str() == "urn:sparqlwatch:notMeasuredReason"
+        && q.object == Term::Literal(oxrdf::Literal::new_simple_literal("cost-ceiling"))));
+    // The cheap counterpart still measured, and its verdict has not moved.
+    assert_eq!(verdict_of(&nq, "has-classes"), Verdict::Verified);
+}
+
+/// An endpoint that answers every query with `status` and a SPARQL-results
+/// body carrying real bindings. Not hypothetical: a service under load, or an
+/// intermediary in front of one, answers `429`/`503` with whatever body it has,
+/// and `select_iris` parses bindings out of any status.
+async fn an_endpoint_answering(status: u16, values: &[&str]) -> MockServer {
+    let bindings: Vec<String> = values
+        .iter()
+        .map(|v| format!(r#"{{"c":{{"type":"uri","value":"{v}"}}}}"#))
+        .collect();
+    let body = format!(
+        r#"{{"head":{{"vars":["c"]}},"results":{{"bindings":[{}]}}}}"#,
+        bindings.join(",")
+    );
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/sparql"))
+        .respond_with(
+            ResponseTemplate::new(status)
+                .insert_header("content-type", "application/sparql-results+json")
+                .set_body_string(body),
+        )
+        .mount(&server)
+        .await;
+    server
+}
+
+#[tokio::test]
+async fn a_status_the_resolver_distrusts_publishes_no_sample_at_all() {
+    // The verdict and the sample are asserted together in one test, because
+    // agreement between them is the whole point: a graph saying both "we could
+    // not determine whether this endpoint has classes" and "here are its
+    // classes, complete" is worse than either half alone, since a consumer
+    // joining on `sampledFrom` never sees the measurement that contradicts it.
+    for status in [429u16, 500, 502, 503] {
+        let server = an_endpoint_answering(status, &[ZEBRA, APPLE]).await;
+        let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
+        let url = format!("{}/sparql", server.uri());
+        let def = enumerating_metric(3);
+        let Sweep { rows, declarations_read: read, not_measured, content_samples } =
+            without_deadlocking(run_sweep(
+                std::slice::from_ref(&url),
+                std::slice::from_ref(&def),
+                &[],
+                &client,
+                Budget::default(),
+            ))
+            .await;
+
+        assert_eq!(
+            rows.iter().map(|r| r.verdict).collect::<Vec<_>>(),
+            vec![Verdict::Indeterminate],
+            "status {status} carrying bindings is not the engine confirming anything"
+        );
+        assert!(
+            content_samples.is_empty(),
+            "status {status}: the resolver refused to trust this response, so there is \
+             nothing to publish a sample from: {content_samples:?}"
+        );
+
+        // And nothing reaches the graph either: a requirement met in memory and
+        // lost on disk is not met.
+        let nq = emit_nquads(RunEmission {
+            run: &RunId("test".into()),
+            generated_at: "2026-08-22T08:00:00Z",
+            metric_revision: "test-revision",
+            rows: &rows,
+            declarations_read: &read,
+            not_measured: &not_measured,
+            max_cost: Cost::Expensive,
+            content_samples: &content_samples,
+        })
+        .unwrap();
+        assert_eq!(
+            verdict_of(&nq, "classes-small"),
+            Verdict::Indeterminate,
+            "status {status}: the measurement is unchanged by this gate"
+        );
+        assert!(
+            !nq.contains("urn:sparqlwatch:sample"),
+            "status {status}: no sample quad of any kind, so the graph cannot contradict itself"
+        );
+        assert!(
+            !nq.contains(ZEBRA),
+            "status {status}: and no value from the distrusted body leaks in by another route"
+        );
+    }
+}
+
+#[tokio::test]
+async fn each_sample_names_its_own_endpoint_its_own_values_and_its_own_metric() {
+    // Two endpoints, returning DIFFERENT classes, in one sweep. A
+    // single-endpoint fixture cannot tell a correct implementation from one
+    // that hardcodes what it names, which is why two mutations survived the
+    // whole suite green before this test existed: hardcoding the sample's
+    // `metric_id`, and re-attributing every sample to `endpoints[0]`.
+    // `content_samples` is a shared accumulator threaded through
+    // `probe_endpoint` as a `&mut Vec`, so cross-endpoint leakage is exactly
+    // the shape a real bug in it would take.
+    let first = an_endpoint_binding_classes(&[ZEBRA, APPLE]).await;
+    let second = an_endpoint_binding_classes(&[MANGO]).await;
+    let a = format!("{}/sparql", first.uri());
+    let b = format!("{}/sparql", second.uri());
+    let def = enumerating_metric(3);
+    // Deliberately not the shipped id: a sample labelled "classes" whatever
+    // took it would pass a fixture built on the shipped metric.
+    assert_eq!(def.id, "classes-small", "the fixture's point is an id that is not `classes`");
+    let client = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
+    let Sweep { rows, declarations_read: read, not_measured, content_samples } =
+        without_deadlocking(run_sweep(
+            &[a.clone(), b.clone()],
+            std::slice::from_ref(&def),
+            &[],
+            &client,
+            Budget::default(),
+        ))
+        .await;
+
+    assert_eq!(content_samples.len(), 2, "two endpoints that both sampled are two samples");
+    let of = |ep: &str| {
+        content_samples
+            .iter()
+            .find(|s| s.endpoint == ep)
+            .unwrap_or_else(|| panic!("no sample attributed to {ep}: {content_samples:?}"))
+    };
+    // Looked up by endpoint, never by index: the values are what prove the
+    // attribution, so each endpoint must carry back exactly what it returned.
+    assert_eq!(of(&a).values, vec![ZEBRA.to_string(), APPLE.to_string()]);
+    assert_eq!(of(&b).values, vec![MANGO.to_string()]);
+    for s in &content_samples {
+        assert_eq!(s.metric_id, "classes-small", "the sample names the metric that took it");
+    }
+
+    // The same three facts, read back out of the graph, since that is what a
+    // consumer actually joins on.
+    let nq = emit_nquads(RunEmission {
+        run: &RunId("test".into()),
+        generated_at: "2026-08-22T08:00:00Z",
+        metric_revision: "test-revision",
+        rows: &rows,
+        declarations_read: &read,
+        not_measured: &not_measured,
+        max_cost: Cost::Expensive,
+        content_samples: &content_samples,
+    })
+    .unwrap();
+    let quads = quads_of(&nq);
+    let subject_for = |ep: &str| {
+        quads
+            .iter()
+            .find(|q| {
+                q.predicate.as_str() == "urn:sparqlwatch:sampledFrom"
+                    && matches!(&q.object, Term::NamedNode(n) if n.as_str() == ep)
+            })
+            .map(|q| q.subject.clone())
+            .unwrap_or_else(|| panic!("no sample subject sampledFrom {ep}"))
+    };
+    let published = |ep: &str| -> Vec<String> {
+        let subj = subject_for(ep);
+        quads
+            .iter()
+            .filter(|q| q.subject == subj && q.predicate.as_str() == "urn:sparqlwatch:sampledValue")
+            .map(|q| match &q.object {
+                Term::NamedNode(n) => n.as_str().to_string(),
+                other => panic!("a sampled value must be an IRI, got {other}"),
+            })
+            .collect()
+    };
+    assert_eq!(published(&a), vec![ZEBRA.to_string(), APPLE.to_string()]);
+    assert_eq!(published(&b), vec![MANGO.to_string()]);
+    assert_ne!(subject_for(&a), subject_for(&b), "two samples, two subjects");
+    for ep in [&a, &b] {
+        let subj = subject_for(ep);
+        assert!(
+            quads.iter().any(|q| q.subject == subj
+                && q.predicate.as_str() == "urn:sparqlwatch:sampledBy"
+                && q.object
+                    == Term::NamedNode(
+                        NamedNode::new("urn:sparqlwatch:metric:classes-small").unwrap()
+                    )),
+            "the sample from {ep} must name the metric that took it"
+        );
+    }
+
+    // No verdict moved: both endpoints answered, so both are verified, exactly
+    // as they were before samples existed.
+    assert_eq!(verdict_of(&nq, "classes-small"), Verdict::Verified);
 }
