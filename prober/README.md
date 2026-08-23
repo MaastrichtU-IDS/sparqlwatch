@@ -528,8 +528,9 @@ The following are deferred deliberately, not oversights:
   endpoint>:<metric>`, so the endpoint URL is a reversible part of the identifier
   of everything we say about it, in a per-run named graph that is immutable and
   append-only: a published identifier can never be corrected. `registry.rs`
-  refuses a URL whose authority carries userinfo, which covers
-  `http://user:secret@host/sparql`. It does nothing about
+  refuses a URL whose authority carries a non-empty userinfo component, whatever
+  the scheme, so both `http://user:secret@host/sparql` and
+  `ftp://user:secret@host/sparql` are dropped at load. It does nothing about
   `https://host/sparql?apikey=...`, because a query parameter's meaning is the
   operator's, not ours, and a name-based blocklist (`key`, `token`, `apikey`, ...)
   would be a confident wrong answer in both directions: it would drop legitimate

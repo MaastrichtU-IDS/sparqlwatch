@@ -1,7 +1,8 @@
 //! Loading `endpoints.toml`: the list of endpoints one sweep probes.
 //!
 //! There are two rules here beyond parsing. The list holds each entry once,
-//! and no entry carries credentials in its authority.
+//! and no entry's authority carries a non-empty userinfo component, whatever
+//! its scheme.
 //!
 //! The first, because `run_sweep` emits exactly one `declarationsRead` fact per
 //! LIST ENTRY, so a URL listed twice put two of those facts on one endpoint IRI
@@ -38,8 +39,8 @@ pub fn load_endpoints(toml_text: &str) -> anyhow::Result<Vec<String>> {
     Ok(without_credentials(&dedupe(&file.endpoint)))
 }
 
-/// `endpoints` with every entry whose authority carries userinfo dropped, and
-/// one warning per entry dropped.
+/// `endpoints` with every entry whose authority carries a non-empty userinfo
+/// component dropped, whatever its scheme, and one warning per entry dropped.
 ///
 /// The endpoint string goes verbatim into every subject `emit::subject_iri`
 /// builds, reversibly, in a run graph this project never rewrites. So admitting
@@ -57,13 +58,20 @@ pub fn load_endpoints(toml_text: &str) -> anyhow::Result<Vec<String>> {
 /// The warning names the host, not the URL, because repeating the URL would
 /// copy the credential into the log this function exists to keep it out of.
 ///
-/// An API key in a query string is NOT caught here and stays a known exposure;
-/// it is recorded under Known limitations in `prober/README.md`.
+/// What this does NOT catch is an API key in a query string, which stays a
+/// known exposure recorded under Known limitations in `prober/README.md`. The
+/// userinfo half is scheme-agnostic: `politeness::authority` delimits an
+/// authority on `//`, so `ftp://alice:s3cret@a.example/sparql` is dropped like
+/// any `http` one. Whether a non-http endpoint belongs in the registry at all
+/// is a separate question, and a scheme allowlist here would change what gets
+/// swept, so it is left to stage 1d's triage of the seeding dumps.
 pub fn without_credentials(endpoints: &[String]) -> Vec<String> {
     let mut kept: Vec<String> = Vec::with_capacity(endpoints.len());
     for (position, ep) in endpoints.iter().enumerate() {
         let authority = crate::politeness::authority(ep);
-        if authority.userinfo.is_some() {
+        // Non-empty, not merely present: RFC 3986 permits an empty userinfo
+        // component, and `http://@a.example/sparql` carries nothing to leak.
+        if authority.userinfo.is_some_and(|u| !u.is_empty()) {
             tracing::warn!(
                 host = %authority.host_port,
                 position,
@@ -260,6 +268,39 @@ mod tests {
             assert_eq!(loaded, v(&[kept]));
         });
         assert!(logs.is_empty(), "a legitimate endpoint must be quiet, logged: {logs}");
+    }
+
+    #[test]
+    fn credentials_are_dropped_whatever_the_scheme() {
+        // `NamedNode::new` accepts any absolute IRI, and `run_sweep` builds
+        // rows for every registry entry, so a non-http URL reaches emission
+        // and its password lands reversibly in every subject about it. The
+        // authority is delimited by `//` whatever the scheme, so the check
+        // does not depend on recognising the scheme.
+        let logs = logs_of(|| {
+            let loaded = load_endpoints(
+                r#"endpoint = ["ftp://alice:s3cret@a.example/sparql", "sparql://bob:hunter2@c.example/x", "https://b.example/sparql"]"#,
+            )
+            .unwrap();
+            assert_eq!(loaded, v(&["https://b.example/sparql"]));
+        });
+        assert_eq!(logs.matches("WARN").count(), 2, "one warning each: {logs}");
+        assert!(!logs.contains("s3cret"), "the credential must not reach the log: {logs}");
+        assert!(!logs.contains("hunter2"), "the credential must not reach the log: {logs}");
+    }
+
+    #[test]
+    fn an_empty_userinfo_is_not_a_credential() {
+        // RFC 3986 permits an empty userinfo component, and such a URL carries
+        // nothing to leak. Dropping it would remove a legal endpoint from
+        // every sweep for no gain, which is the same mistake as testing for a
+        // bare `@`.
+        let kept = "http://@a.example/sparql";
+        let logs = logs_of(|| {
+            let loaded = load_endpoints(&format!(r#"endpoint = ["{kept}"]"#)).unwrap();
+            assert_eq!(loaded, v(&[kept]));
+        });
+        assert!(logs.is_empty(), "nothing was dropped, so nothing to warn about: {logs}");
     }
 
     #[test]
