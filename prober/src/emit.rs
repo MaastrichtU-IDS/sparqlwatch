@@ -646,6 +646,132 @@ mod tests {
         qs.iter().filter(|q| q.predicate.as_str() == predicate).map(|q| &q.object).collect()
     }
 
+    /// One emission exercising every fact list `emit_nquads` writes, so the
+    /// frozen baseline in `only_the_subjects_changed` covers every predicate
+    /// the emitter can produce. No two entries of any list share an
+    /// (endpoint, metric) pair, so the baseline says nothing about the
+    /// duplicate case, which has its own test.
+    fn baseline_emission() -> String {
+        let rows = vec![
+            MeasurementRow {
+                endpoint: "https://a.example/sparql".into(),
+                metric_id: "availability".into(),
+                verdict: Verdict::Verified,
+                level: None,
+                elapsed_ms: Some(12),
+            },
+            MeasurementRow {
+                endpoint: "https://a.example/sparql".into(),
+                metric_id: "cors".into(),
+                verdict: Verdict::Absent,
+                level: Some(Level(2)),
+                elapsed_ms: Some(34),
+            },
+            MeasurementRow {
+                endpoint: "https://b.example/sparql".into(),
+                metric_id: "service-description".into(),
+                verdict: Verdict::DeclaredOnly,
+                level: Some(Level(1)),
+                elapsed_ms: None,
+            },
+        ];
+        let declarations_read = vec![
+            DeclarationsRead { endpoint: "https://a.example/sparql".into(), read: true },
+            DeclarationsRead { endpoint: "https://b.example/sparql".into(), read: false },
+        ];
+        let not_measured = vec![NotMeasured {
+            endpoint: "https://b.example/sparql".into(),
+            metric_id: "classes".into(),
+            reason: NotMeasuredReason::CostCeiling,
+        }];
+        let content_samples = vec![ContentSample {
+            endpoint: "https://a.example/sparql".into(),
+            metric_id: "classes".into(),
+            values: vec![
+                "https://a.example/vocab#Zebra".into(),
+                "https://a.example/vocab#Apple".into(),
+            ],
+            truncated: true,
+        }];
+        emit_nquads(RunEmission {
+            run: &RunId("r1".into()),
+            generated_at: AT,
+            metric_revision: REV,
+            rows: &rows,
+            declarations_read: &declarations_read,
+            not_measured: &not_measured,
+            max_cost: Cost::Cheap,
+            content_samples: &content_samples,
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn only_the_subjects_changed() {
+        // Baseline frozen from the pre-1c-b3 emitter on 2026-08-23: the sorted
+        // (predicate, object) multiset and the quad count for the fixture
+        // `baseline_emission` builds. Subjects are deliberately not part of it,
+        // because subjects are the one thing this stage changes. Everything
+        // else is what a published consumer reads, so a change here is a change
+        // to the data model and has to be deliberate.
+        const BASELINE_PAIRS: &[(&str, &str)] = &[
+        ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<http://www.w3.org/ns/dcat#DataService>"),
+        ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<http://www.w3.org/ns/dcat#DataService>"),
+        ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<http://www.w3.org/ns/dqv#QualityMeasurement>"),
+        ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<http://www.w3.org/ns/dqv#QualityMeasurement>"),
+        ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<http://www.w3.org/ns/dqv#QualityMeasurement>"),
+        ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<http://www.w3.org/ns/prov#Activity>"),
+        ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<urn:sparqlwatch:ContentSample>"),
+        ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<urn:sparqlwatch:NotMeasured>"),
+        ("http://www.w3.org/ns/dqv#computedOn", "<https://a.example/sparql>"),
+        ("http://www.w3.org/ns/dqv#computedOn", "<https://a.example/sparql>"),
+        ("http://www.w3.org/ns/dqv#computedOn", "<https://b.example/sparql>"),
+        ("http://www.w3.org/ns/dqv#isMeasurementOf", "<urn:sparqlwatch:metric:availability>"),
+        ("http://www.w3.org/ns/dqv#isMeasurementOf", "<urn:sparqlwatch:metric:cors>"),
+        ("http://www.w3.org/ns/dqv#isMeasurementOf", "<urn:sparqlwatch:metric:service-description>"),
+        ("http://www.w3.org/ns/dqv#value", "\"absent\""),
+        ("http://www.w3.org/ns/dqv#value", "\"declared-only\""),
+        ("http://www.w3.org/ns/dqv#value", "\"verified\""),
+        ("http://www.w3.org/ns/prov#generatedAtTime", "\"2026-08-20T08:00:00Z\"^^<http://www.w3.org/2001/XMLSchema#dateTime>"),
+        ("http://www.w3.org/ns/prov#wasGeneratedBy", "<urn:sparqlwatch:activity:r1>"),
+        ("http://www.w3.org/ns/prov#wasGeneratedBy", "<urn:sparqlwatch:activity:r1>"),
+        ("http://www.w3.org/ns/prov#wasGeneratedBy", "<urn:sparqlwatch:activity:r1>"),
+        ("http://www.w3.org/ns/prov#wasGeneratedBy", "<urn:sparqlwatch:activity:r1>"),
+        ("http://www.w3.org/ns/prov#wasGeneratedBy", "<urn:sparqlwatch:activity:r1>"),
+        ("urn:sparqlwatch:declarationsRead", "\"false\"^^<http://www.w3.org/2001/XMLSchema#boolean>"),
+        ("urn:sparqlwatch:declarationsRead", "\"true\"^^<http://www.w3.org/2001/XMLSchema#boolean>"),
+        ("urn:sparqlwatch:elapsedMs", "\"12\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
+        ("urn:sparqlwatch:elapsedMs", "\"34\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
+        ("urn:sparqlwatch:level", "\"1\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
+        ("urn:sparqlwatch:level", "\"2\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
+        ("urn:sparqlwatch:maxCost", "\"cheap\""),
+        ("urn:sparqlwatch:metricDefinitionRevision", "\"abc123\""),
+        ("urn:sparqlwatch:notMeasuredMetric", "<urn:sparqlwatch:metric:classes>"),
+        ("urn:sparqlwatch:notMeasuredOn", "<https://b.example/sparql>"),
+        ("urn:sparqlwatch:notMeasuredReason", "\"cost-ceiling\""),
+        ("urn:sparqlwatch:proberVersion", "\"0.1.0\""),
+        ("urn:sparqlwatch:sampleSize", "\"2\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
+        ("urn:sparqlwatch:sampleTruncated", "\"true\"^^<http://www.w3.org/2001/XMLSchema#boolean>"),
+        ("urn:sparqlwatch:sampledBy", "<urn:sparqlwatch:metric:classes>"),
+        ("urn:sparqlwatch:sampledFrom", "<https://a.example/sparql>"),
+        ("urn:sparqlwatch:sampledValue", "<https://a.example/vocab#Apple>"),
+        ("urn:sparqlwatch:sampledValue", "<https://a.example/vocab#Zebra>"),
+        ];
+        const BASELINE_QUADS: usize = 41;
+        let qs = quads_of(&baseline_emission());
+        let mut pairs: Vec<(String, String)> = qs
+            .iter()
+            .map(|q| (q.predicate.as_str().to_string(), q.object.to_string()))
+            .collect();
+        pairs.sort();
+        let expected: Vec<(String, String)> = BASELINE_PAIRS
+            .iter()
+            .map(|(p, o)| ((*p).to_string(), (*o).to_string()))
+            .collect();
+        assert_eq!(pairs, expected, "a predicate or an object changed");
+        assert_eq!(qs.len(), BASELINE_QUADS, "the quad count changed");
+    }
+
     #[test]
     fn every_quad_lands_in_the_run_graph() {
         let out = emit_nquads(RunEmission {
