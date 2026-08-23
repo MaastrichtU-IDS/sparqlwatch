@@ -1,0 +1,42 @@
+# SYNTHETIC fixture. Not a captured sweep.
+# Hand-built to render literals that carry HTML markup, which no captured
+# sweep does and no endpoint in this project's registry has ever returned.
+#
+# Why the literals and not the IRIs. An IRI cannot contain '<', '>' or '"'
+# at all, and pyoxigraph rejects one that tries, so a class IRI or an
+# endpoint IRI is a value that CANNOT carry markup onto the page. The values
+# that can are the literals, and three of them reach the page verbatim:
+# dqv:value (shown as recorded whenever the verdict is not one of the six,
+# and written into data-verdict), sw:notMeasuredReason (written into
+# data-declined and into the state text beside the chip) and
+# prov:generatedAtTime. They arrive from whatever N-Quads web/load_run.py was
+# handed, which is not something this tier controls.
+#
+# The two values below are the ordinary attribute-breakout and
+# tag-injection shapes: each opens with a double quote to close whatever
+# attribute it lands in, then opens an element. Jinja's autoescaping is what
+# stops them, and web/tests/test_page.py asserts the escaped result rather
+# than the fixture, so switching autoescaping off for either channel fails.
+#
+# dqv:value is also NOT one of the six verdicts, so the page draws it in the
+# unrecognised state and shows it as recorded. That is deliberate: relabelling
+# a value this build does not know would hide what the store holds.
+#
+# 15 quads, one run graph (urn:sparqlwatch:run:2026-08-23T00:00:00Z), one
+# endpoint, one dqv:QualityMeasurement whose value carries markup, one
+# sw:NotMeasured whose reason carries markup, and no sw:ContentSample.
+<urn:sparqlwatch:activity:2026-08-23T00:00:00Z> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/prov#Activity> <urn:sparqlwatch:run:2026-08-23T00:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-23T00:00:00Z> <http://www.w3.org/ns/prov#generatedAtTime> "2026-08-23T00:00:00Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <urn:sparqlwatch:run:2026-08-23T00:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-23T00:00:00Z> <urn:sparqlwatch:proberVersion> "0.1.0" <urn:sparqlwatch:run:2026-08-23T00:00:00Z> .
+<https://hostile-literals.example/sparql> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dcat#DataService> <urn:sparqlwatch:run:2026-08-23T00:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T00:00:00Z:0> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> <urn:sparqlwatch:run:2026-08-23T00:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T00:00:00Z:0> <http://www.w3.org/ns/dqv#computedOn> <https://hostile-literals.example/sparql> <urn:sparqlwatch:run:2026-08-23T00:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T00:00:00Z:0> <http://www.w3.org/ns/dqv#isMeasurementOf> <urn:sparqlwatch:metric:classes> <urn:sparqlwatch:run:2026-08-23T00:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T00:00:00Z:0> <http://www.w3.org/ns/dqv#value> "\"><script>alert(1)</script>" <urn:sparqlwatch:run:2026-08-23T00:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T00:00:00Z:0> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-08-23T00:00:00Z> <urn:sparqlwatch:run:2026-08-23T00:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T00:00:00Z:0> <urn:sparqlwatch:elapsedMs> "11"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-23T00:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T00:00:00Z:0> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <urn:sparqlwatch:NotMeasured> <urn:sparqlwatch:run:2026-08-23T00:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T00:00:00Z:0> <urn:sparqlwatch:notMeasuredOn> <https://hostile-literals.example/sparql> <urn:sparqlwatch:run:2026-08-23T00:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T00:00:00Z:0> <urn:sparqlwatch:notMeasuredMetric> <urn:sparqlwatch:metric:geo-data> <urn:sparqlwatch:run:2026-08-23T00:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T00:00:00Z:0> <urn:sparqlwatch:notMeasuredReason> "\"><img src=x onerror=\"alert(2)\">" <urn:sparqlwatch:run:2026-08-23T00:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T00:00:00Z:0> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-08-23T00:00:00Z> <urn:sparqlwatch:run:2026-08-23T00:00:00Z> .

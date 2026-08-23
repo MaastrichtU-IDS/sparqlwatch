@@ -25,6 +25,7 @@ RUN_PROPERTIES_SAMPLE = FIXTURES / "run-properties-sample.nq"
 RUN_DECLINED = FIXTURES / "run-declined.nq"
 RUN_CLASSES_ABSENT = FIXTURES / "run-classes-absent.nq"
 RUN_LATER_SAMPLE_ONLY = FIXTURES / "run-later-sample-only.nq"
+RUN_HOSTILE_LITERALS = FIXTURES / "run-hostile-literals.nq"
 
 
 def _loaded_store(tmp_path: Path, name: str, *fixtures: Path) -> Store:
@@ -121,4 +122,15 @@ def store_later_sample(tmp_path):
     web/tests/fixtures/run-later-sample-only.nq."""
     return _loaded_store(
         tmp_path, "store-later-sample", RUN_WITH_SAMPLES, RUN_LATER_SAMPLE_ONLY
+    )
+
+
+@pytest.fixture
+def store_hostile_literals(tmp_path):
+    """A run whose dqv:value and sw:notMeasuredReason literals carry HTML
+    markup, which is the channel that can carry it: an IRI cannot hold '<',
+    '>' or '"' at all. See the comment in
+    web/tests/fixtures/run-hostile-literals.nq."""
+    return _loaded_store(
+        tmp_path, "store-hostile-literals", RUN_HOSTILE_LITERALS
     )

@@ -47,6 +47,12 @@ KADASTER = "https://data.kkg.kadaster.nl/query"
 QLEVER = "https://qlever.dev/api/osm-planet"
 TRUNCATED = "https://truncated.example/sparql"
 NO_CLASSES = "https://no-classes.example/sparql"
+HOSTILE = "https://hostile-literals.example/sparql"
+
+# run-hostile-literals.nq's two literals, verbatim. Each opens with a double
+# quote to close whatever attribute it lands in, then opens an element.
+HOSTILE_VERDICT = '"><script>alert(1)</script>'
+HOSTILE_REASON = '"><img src=x onerror="alert(2)">'
 
 RUN = "urn:sparqlwatch:run:"
 # The three sweeps the two-run stores below are built from. Each is the
@@ -805,15 +811,102 @@ def test_the_class_list_holds_every_sampled_value(client_for, store):
     assert f"{KADASTER_CLASS_COUNT} classes sampled" in text
 
 
-def test_a_class_iri_is_escaped_not_interpolated(client_for, store):
-    """Every value on this page is data from a third party. An endpoint that
-    returns a class IRI containing markup must not be able to write markup
-    into the page, so the rendered document holds no raw angle bracket from
-    any sampled value."""
+def test_the_class_list_renders_bare_iris(client_for, store):
+    """Each sampled value is rendered as the IRI it is, nothing around it.
+
+    This is a claim about the rendering, not about escaping: an IRI cannot
+    contain '<', '>' or '"' at all and pyoxigraph rejects one that tries, so
+    a class IRI is a value that cannot carry markup onto this page whatever
+    the template does with it. The escaping guarantee is asserted on the
+    literals, which can, in
+    test_a_hostile_literal_is_escaped_in_the_attribute_and_the_text below.
+    """
     text = page(client_for(store), KADASTER)
     listed = [row["data-class"] for row in with_attribute(text, "data-class")]
     assert all(value.startswith("http") for value in listed)
-    assert "<http" not in text
+    assert "<http" not in text, "an IRI is rendered bare, not in N-Triples <>"
+
+
+def test_a_hostile_literal_is_escaped_in_the_attribute_and_the_text(
+    client_for, store_hostile_literals
+):
+    """Markup in a literal must not become markup on the page.
+
+    The values that can carry it are the literals, because an IRI cannot hold
+    an angle bracket. run-hostile-literals.nq carries two: a dqv:value the
+    page shows verbatim (it is not one of the six verdicts, so it is drawn
+    unrecognised and reported as recorded) and an sw:notMeasuredReason. Both
+    reach the page through two channels, an attribute and the text a reader
+    sees, so both are checked on both, and each is checked to have arrived
+    intact as well as inert: escaping that mangled the value would hide what
+    the store holds, which is the other half of the same requirement.
+    """
+    text = page(client_for(store_hostile_literals), HOSTILE)
+
+    # Nothing either literal asked for became an element or a raw tag.
+    tags = {tag for tag, _ in elements(text)}
+    assert "script" not in tags
+    assert "img" not in tags
+    assert "<script" not in text
+    assert "<img" not in text
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in text
+
+    # The unrecognised verdict, on both channels, unchanged.
+    assert row_for(text, M + "classes")["data-verdict"] == HOSTILE_VERDICT
+    assert row_cells(text, M + "classes")["m-state"] == HOSTILE_VERDICT
+
+    # The decline reason, on both channels, unchanged.
+    assert row_for(text, M + "geo-data")["data-declined"] == HOSTILE_REASON
+    assert (
+        row_cells(text, M + "geo-data")["m-state"]
+        == f"not measured ({HOSTILE_REASON})"
+    )
+
+    # And in the sentence explaining why there is no class sample, which
+    # quotes the verdict it read.
+    note = texts_with(text, "data-sample")
+    assert len(note) == 1
+    assert f"'{HOSTILE_VERDICT}'" in note[0]
+
+
+def test_an_unrecognised_verdict_is_drawn_and_explained_as_unrecognised(
+    client_for, store_hostile_literals, store
+):
+    """A value this build has no encoding for is shown, not dropped or
+    relabelled.
+
+    The legend's eighth entry exists only when a page needed it, so a page
+    without such a value must not carry it: a key that changes shape between
+    endpoints for no reason makes the reader compare two different keys. The
+    JavaScript viewer drew an unknown value in absent's presentation, which
+    renders "we have no idea what this means" as "we established that nothing
+    was there".
+    """
+    text = page(client_for(store_hostile_literals), HOSTILE)
+
+    drawn = {row["data-metric"]: state for row, state in chips(text)}
+    assert drawn[M + "classes"] == {
+        verdict_encoding.css_class(verdict_encoding.UNRECOGNISED.slug)
+    }
+    assert (
+        row_cells(text, M + "classes")["m-detail"]
+        == "unrecognised verdict, shown as the store recorded it"
+    )
+
+    legend = legend_cells(text)
+    assert list(legend) == [
+        state.slug for state in verdict_encoding.STATES
+    ] + [verdict_encoding.UNRECOGNISED.slug]
+    assert (
+        legend[verdict_encoding.UNRECOGNISED.slug]["l-label"]
+        == verdict_encoding.UNRECOGNISED.label
+    )
+    assert legend[verdict_encoding.UNRECOGNISED.slug]["l-count"] == "1"
+
+    # kadaster's eight verdicts are all in the table, so its legend has seven.
+    assert verdict_encoding.UNRECOGNISED.slug not in legend_cells(
+        page(client_for(store), KADASTER)
+    )
 
 
 # ---------------------------------------------------------------------------

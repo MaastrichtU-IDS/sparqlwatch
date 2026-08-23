@@ -86,8 +86,14 @@
 
   /* Generated from docs/design/verdict-encoding.md's table by
      verdict_encoding.css_rules(). The chips and the legend swatches use these
-     same classes, so a swatch always draws the thing it explains. */
-{{ encoding_css }}
+     same classes, so a swatch always draws the thing it explains.
+
+     Marked safe because this is CSS this repository generates from a closed
+     table in verdict_encoding.py, not a value from a measured endpoint: no
+     part of it comes from the store or from the request. Autoescaping it
+     instead would turn a quote in a future token value into &#34; inside a
+     stylesheet, which is a silent drawing bug rather than an escape. */
+{{ encoding_css | safe }}
 </style>
 </head>
 <body>
