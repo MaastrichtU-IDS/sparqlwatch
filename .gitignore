@@ -2,6 +2,7 @@ target/
 __pycache__/
 .venv/
 *.pyc
+.pytest_cache/
 .env
 data/
 design/sparqlwatch-ui.html
