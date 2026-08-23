@@ -20,6 +20,8 @@ FIXTURES = Path(__file__).parent / "fixtures"
 RUN_WITH_SAMPLES = FIXTURES / "run-with-samples.nq"
 RUN_TRUNCATED = FIXTURES / "run-truncated.nq"
 RUN_TWO_SWEEPS = FIXTURES / "run-two-sweeps.nq"
+RUN_ZERO_CLASSES = FIXTURES / "run-zero-classes.nq"
+RUN_PROPERTIES_SAMPLE = FIXTURES / "run-properties-sample.nq"
 
 
 def _loaded_store(tmp_path: Path, name: str, fixture: Path) -> Store:
@@ -49,3 +51,19 @@ def store_two_sweeps(tmp_path):
     'most recent run' logic is testable. See the comment in
     web/tests/fixtures/run-two-sweeps.nq for how it is derived."""
     return _loaded_store(tmp_path, "store-two-sweeps", RUN_TWO_SWEEPS)
+
+
+@pytest.fixture
+def store_zero_classes(tmp_path):
+    """A synthetic sample that reports a size of 0 and lists no values, which
+    the prober deliberately never writes. See the comment in
+    web/tests/fixtures/run-zero-classes.nq."""
+    return _loaded_store(tmp_path, "store-zero-classes", RUN_ZERO_CLASSES)
+
+
+@pytest.fixture
+def store_properties_sample(tmp_path):
+    """A synthetic sample from a metric other than classes, so that the
+    content query's metric pin can be tested. See the comment in
+    web/tests/fixtures/run-properties-sample.nq."""
+    return _loaded_store(tmp_path, "store-properties-sample", RUN_PROPERTIES_SAMPLE)

@@ -1,0 +1,22 @@
+# SYNTHETIC fixture. Not a captured sweep.
+# Hand-built because every sweep this project has captured samples classes
+# and nothing else: sampling properties is a later spec stage (2b), so a
+# sample carrying sw:sampledBy sw:metric:properties cannot be captured live
+# yet. The shape is the same as a class sample except for that one object.
+# Exists to make the sw:sampledBy sw:metric:classes pin in
+# web/queries/endpoint_content.rq testable: delete that line and every
+# other test in this suite stays green, because no other fixture holds a
+# sample from a second metric. This endpoint's sampled PROPERTIES would
+# then be returned as its classes, by a function documented as answering
+# which classes are in there.
+<urn:sparqlwatch:activity:2026-08-25T00:00:00Z> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/prov#Activity> <urn:sparqlwatch:run:2026-08-25T00:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-25T00:00:00Z> <http://www.w3.org/ns/prov#generatedAtTime> "2026-08-25T00:00:00Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <urn:sparqlwatch:run:2026-08-25T00:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-25T00:00:00Z> <urn:sparqlwatch:proberVersion> "0.1.0" <urn:sparqlwatch:run:2026-08-25T00:00:00Z> .
+<https://properties-only.example/sparql> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dcat#DataService> <urn:sparqlwatch:run:2026-08-25T00:00:00Z> .
+<urn:sparqlwatch:content-sample:2026-08-25T00:00:00Z:0> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <urn:sparqlwatch:ContentSample> <urn:sparqlwatch:run:2026-08-25T00:00:00Z> .
+<urn:sparqlwatch:content-sample:2026-08-25T00:00:00Z:0> <urn:sparqlwatch:sampledFrom> <https://properties-only.example/sparql> <urn:sparqlwatch:run:2026-08-25T00:00:00Z> .
+<urn:sparqlwatch:content-sample:2026-08-25T00:00:00Z:0> <urn:sparqlwatch:sampledBy> <urn:sparqlwatch:metric:properties> <urn:sparqlwatch:run:2026-08-25T00:00:00Z> .
+<urn:sparqlwatch:content-sample:2026-08-25T00:00:00Z:0> <urn:sparqlwatch:sampleTruncated> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> <urn:sparqlwatch:run:2026-08-25T00:00:00Z> .
+<urn:sparqlwatch:content-sample:2026-08-25T00:00:00Z:0> <urn:sparqlwatch:sampleSize> "2"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-25T00:00:00Z> .
+<urn:sparqlwatch:content-sample:2026-08-25T00:00:00Z:0> <urn:sparqlwatch:sampledValue> <https://properties-only.example/vocab#hasPart> <urn:sparqlwatch:run:2026-08-25T00:00:00Z> .
+<urn:sparqlwatch:content-sample:2026-08-25T00:00:00Z:0> <urn:sparqlwatch:sampledValue> <https://properties-only.example/vocab#partOf> <urn:sparqlwatch:run:2026-08-25T00:00:00Z> .

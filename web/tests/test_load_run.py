@@ -9,7 +9,7 @@ destroying an existing run before the parse failure is noticed.
 from pathlib import Path
 
 import pytest
-from pyoxigraph import NamedNode, Store
+from pyoxigraph import DefaultGraph, NamedNode, Store
 
 from load_run import LoadResult, load_run
 
@@ -101,7 +101,11 @@ def test_a_file_with_no_named_graphs_is_refused(tmp_path):
     default_graph_only = (
         b"<http://example.com/s> <http://example.com/p> <http://example.com/o> .\n"
     )
-    with pytest.raises(ValueError):
+    # Match the reason, not merely the exception type. Replacing this branch's
+    # raise with a continue also makes the load fail, but through the "names no
+    # graphs" guard below it, so a bare pytest.raises(ValueError) passes over a
+    # loader that no longer refuses default-graph triples at all.
+    with pytest.raises(ValueError, match="default-graph triples"):
         load_run(store, default_graph_only)
 
     assert len(store) == before, "a refused load must not touch the store"
@@ -177,3 +181,42 @@ def test_an_insert_that_silently_stores_nothing_is_not_a_successful_load(tmp_pat
     store = Store(str(tmp_path / "s"))
     with pytest.raises(RuntimeError, match="loaded 0 of 278 quads"):
         load_run(store, FIXTURE.read_bytes())
+
+
+def test_a_named_graph_file_with_one_default_graph_triple_is_refused_whole(tmp_path):
+    """The case that tells this refusal apart from the empty-input guard. This
+    file names a run graph, so skipping the default-graph triple instead of
+    refusing would leave the load looking successful while that triple settles
+    in the store's default graph, where, as load_run's comment says, no run
+    graph could ever be dropped to get rid of it again. All or nothing: the
+    whole file is refused and the store is untouched."""
+    store = Store(str(tmp_path / "s"))
+    load_run(store, FIXTURE.read_bytes())
+    before = len(store)
+
+    mixed = FIXTURE.read_bytes() + (
+        b"<http://example.com/s> <http://example.com/p> <http://example.com/o> .\n"
+    )
+    with pytest.raises(ValueError, match="default-graph triples"):
+        load_run(store, mixed)
+
+    assert len(store) == before, "a refused load must not touch the store"
+    assert not list(store.quads_for_pattern(None, None, None, DefaultGraph())), (
+        "nothing may reach the store's default graph"
+    )
+
+
+def test_a_file_naming_no_graph_at_all_is_refused(tmp_path):
+    """An empty or comment-only .nq parses cleanly and names nothing, so it is
+    not a run: accepting it would report a successful load of zero quads and
+    tell an operator whose prober died before writing anything that the run is
+    in the store. Its own guard, and its own test: deleting that guard leaves
+    every other test here green."""
+    store = Store(str(tmp_path / "s"))
+    load_run(store, FIXTURE.read_bytes())
+    before = len(store)
+
+    for name, payload in (("empty", b""), ("comments only", b"# nothing here\n")):
+        with pytest.raises(ValueError, match="names no graphs"):
+            load_run(store, payload)
+        assert len(store) == before, f"a refused load ({name}) must not touch the store"
