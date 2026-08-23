@@ -238,8 +238,10 @@ The same endpoint resource is served in two representations, chosen by the `Acce
 
 The server honours quality values (`q=`). For example, `Accept: text/html;q=0.9, text/turtle`
 prefers Turtle over HTML because Turtle has no explicit q-value (defaults to 1.0) while HTML
-has q=0.9. `Accept: */*;q=1, text/html;q=0` prefers any specific type over HTML, so if Turtle
-is available, Turtle is returned even though the client also says it will accept `*/*`.
+has q=0.9. `Accept: */*;q=1, text/html;q=0` returns Turtle, because a representation's q
+comes from the most specific range that matches it rather than from the highest one: the
+`text/html;q=0` is an explicit refusal of HTML, and reading the `*/*;q=1` as the winner
+instead would turn that refusal into an offer.
 
 A request with no `Accept` header defaults to HTML. An unknown endpoint (one the store holds
 no facts about at all) returns HTTP 404. An unsupported media type returns 406.
