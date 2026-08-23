@@ -182,10 +182,12 @@ All tests are offline: they read committed fixture files under
 
 ## Run the server
 
-With the venv activated:
+With the venv activated, first load a run into the store (see "Load a run into the
+store" above). Then set the store path and start the server:
 
 ```bash
 cd web
+export SPARQLWATCH_STORE="path/to/sparqlwatch.db"
 python -m uvicorn app:app --reload
 ```
 
@@ -229,16 +231,18 @@ parameter is the right choice.
 The same endpoint resource is served in two representations, chosen by the `Accept` header:
 
 - `text/html` returns an HTML page with metrics, verdicts, and sampled classes
-- `text/turtle`, `application/rdf+xml`, `application/n-triples`, `application/n-quads`
-  return RDF serialised in that format
+- `text/turtle`, `application/rdf+xml`, `application/n-triples`, `application/ld+json`
+  return RDF serialised in that format. Dataset formats like N-Quads are not offered
+  because the CONSTRUCT query yields triples, which a dataset format would serialise
+  into a default graph, incorrectly implying that the run's named-graph structure was preserved.
 
 The server honours quality values (`q=`). For example, `Accept: text/html;q=0.9, text/turtle`
 prefers Turtle over HTML because Turtle has no explicit q-value (defaults to 1.0) while HTML
 has q=0.9. `Accept: */*;q=1, text/html;q=0` prefers any specific type over HTML, so if Turtle
 is available, Turtle is returned even though the client also says it will accept `*/*`.
 
-A request with no `Accept` header defaults to HTML. An unknown endpoint (one with no recent
-measurement in the store) returns HTTP 404. An unsupported media type returns 406.
+A request with no `Accept` header defaults to HTML. An unknown endpoint (one the store holds
+no facts about at all) returns HTTP 404. An unsupported media type returns 406.
 
 ### RDF and HTML agreement
 
@@ -249,16 +253,18 @@ The HTML and RDF are two representations of one resource, derived independently:
 - **RDF** comes from a CONSTRUCT query (`queries/endpoint_description.rq`) serialised
   directly from the store without rebuilding in Python
 
-This separation ensures that the two representations cannot disagree: nothing in the RDF
-is re-derived from the HTML. A test asserts that both renderings represent every verdict
-identically.
+Both come from the same store by two independent queries, neither re-derived from the other.
+A test asserts that both renderings represent every verdict identically.
 
 ### Verdict encoding
 
 Every verdict state (the state a metric is in: verified, undeclared-but-verified, etc.)
-has exactly one definition: a colour, a legend glyph, and a text summary. That definition
-lives in exactly one place, `web/verdict_encoding.py`, and both the HTML template and the
-test suite derive from it. Nothing hard-codes a colour or a glyph.
+has exactly one definition: a border style, whether the swatch is filled, a border weight,
+and a colour. That definition lives in exactly one place, `web/verdict_encoding.py`, and
+both the HTML template and the test suite derive from it. The border, fill, and weight
+are independent of colour so that a reader who cannot separate colours can still
+distinguish every state. Colour is a redundant fourth channel. Nothing hard-codes any
+of these properties.
 
 The design artboards under `design/` predate `docs/design/verdict-encoding.md` and may
 disagree with it. The artboards remain authoritative for layout, typography, spacing and
