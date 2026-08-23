@@ -334,12 +334,25 @@ pub fn emit_nquads(input: RunEmission) -> anyhow::Result<String> {
     // `registry::dedupe` drops a repeated endpoint before a sweep starts, so
     // nothing in the current pipeline is expected to reach this: it is belt and
     // braces, kept because the cost of being wrong is permanent. `dedupe`'s own
-    // doc comment records the reciprocal half of that arrangement.
+    // doc comment records the reciprocal half of that arrangement. `dedupe` is
+    // also the only guard the `declarations_read` loop below has, because that
+    // fact's subject is the bare endpoint IRI rather than one of these derived
+    // ones, so there is no run-scoped subject here to count.
     //
-    // The payload is what would distinguish two facts about one pair, so it
-    // covers every field the loops below publish and nothing else: a verdict
+    // Keyed on the subject, so it catches a pair repeated WITHIN one kind. It
+    // says nothing across kinds: a pair that is both measured and declared
+    // not-measured lands on two nodes by design (`FactKind::prefix`) and both
+    // are published. Keeping those two consistent is `run_sweep`'s job, not
+    // this function's.
+    //
+    // The payload is what would distinguish two facts about one pair: a verdict
     // with its level and elapsed time, a reason, or a value list with its
-    // truncation flag.
+    // truncation flag. The sample payload is deliberately the raw value list
+    // and not the `writable` subset the loop actually publishes, so two samples
+    // differing only in a value that cannot be written are treated as
+    // conflicting and neither is published. That is the conservative direction,
+    // and computing `writable` twice to sharpen it would double the
+    // unwritable-value warnings for no gain a consumer can see.
     let mut payloads: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for r in rows {
         if let Ok(s) = subject_iri(FactKind::Measurement, run, &r.endpoint, &r.metric_id) {
@@ -977,7 +990,13 @@ mod tests {
         ("urn:sparqlwatch:notMeasuredMetric", "<urn:sparqlwatch:metric:classes>"),
         ("urn:sparqlwatch:notMeasuredOn", "<https://b.example/sparql>"),
         ("urn:sparqlwatch:notMeasuredReason", "\"cost-ceiling\""),
-        ("urn:sparqlwatch:proberVersion", "\"0.1.0\""),
+        (
+            "urn:sparqlwatch:proberVersion",
+            // Not a frozen literal: the emitter writes `env!("CARGO_PKG_VERSION")`
+            // at `:303`, so a version bump would otherwise red this test with
+            // "a predicate or an object changed", which is not what changed.
+            concat!("\"", env!("CARGO_PKG_VERSION"), "\""),
+        ),
         ("urn:sparqlwatch:sampleSize", "\"2\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
         ("urn:sparqlwatch:sampleTruncated", "\"true\"^^<http://www.w3.org/2001/XMLSchema#boolean>"),
         ("urn:sparqlwatch:sampledBy", "<urn:sparqlwatch:metric:classes>"),
@@ -1035,15 +1054,52 @@ mod tests {
     fn a_subject_does_not_depend_on_where_its_row_sat() {
         // The property 1c-b4 needs: an endpoint's chunk can be emitted alone
         // and still name the node the full run would.
-        let a = subjects_of(&emit(&[
-            row("https://a.example/sparql", "cors", Verdict::Verified),
-            row("https://b.example/sparql", "classes", Verdict::Absent),
-        ]));
-        let b = subjects_of(&emit(&[
-            row("https://b.example/sparql", "classes", Verdict::Absent),
-            row("https://a.example/sparql", "cors", Verdict::Verified),
-        ]));
-        assert_eq!(a, b);
+        //
+        // Compared against the subjects the helper builds, not against the
+        // other emission. Comparing the two emissions to each other passes
+        // under the running index this stage replaced as well, because
+        // reversing two rows leaves the subject SET `{...:0, ...:1}` unchanged.
+        let run = RunId("r1".into());
+        let expected: BTreeSet<String> = [
+            ("https://a.example/sparql", "cors"),
+            ("https://b.example/sparql", "classes"),
+        ]
+        .iter()
+        .map(|(endpoint, metric)| {
+            subject_iri(FactKind::Measurement, &run, endpoint, metric)
+                .unwrap()
+                .to_string()
+        })
+        .collect();
+        let measured = |rows: &[MeasurementRow]| -> BTreeSet<String> {
+            emit(rows)
+                .iter()
+                .filter(|q| {
+                    q.predicate.as_ref() == rdf::TYPE
+                        && q.object
+                            == Term::NamedNode(
+                                NamedNode::new("http://www.w3.org/ns/dqv#QualityMeasurement")
+                                    .unwrap(),
+                            )
+                })
+                .map(|q| q.subject.to_string())
+                .collect()
+        };
+        assert_eq!(
+            measured(&[
+                row("https://a.example/sparql", "cors", Verdict::Verified),
+                row("https://b.example/sparql", "classes", Verdict::Absent),
+            ]),
+            expected
+        );
+        assert_eq!(
+            measured(&[
+                row("https://b.example/sparql", "classes", Verdict::Absent),
+                row("https://a.example/sparql", "cors", Verdict::Verified),
+            ]),
+            expected,
+            "the same two rows in the other order must name the same two nodes"
+        );
     }
 
     #[test]
@@ -1991,6 +2047,45 @@ mod tests {
             .map(|q| q.subject.to_string())
             .collect();
         assert_eq!(subjects.len(), 2, "two sampled (endpoint, metric) pairs are two samples");
+    }
+
+    #[test]
+    fn a_conflicting_repeated_sample_publishes_nothing_about_that_pair() {
+        // The same policy as a contradicted measurement, on the fact type
+        // whose loop has the most control flow around the guard (the
+        // `writable` pre-pass and its early `continue`), so a later edit to
+        // that loop cannot quietly drop the guard. Publishing the first of two
+        // disagreeing samples would assert that this endpoint's classes are
+        // {A}, permanently, having discarded an observation that said {B}.
+        let out = emit_nquads(RunEmission {
+            run: &RunId("r1".into()),
+            generated_at: AT,
+            metric_revision: REV,
+            rows: &[],
+            declarations_read: &[],
+            not_measured: &[],
+            max_cost: Cost::Expensive,
+            content_samples: &[
+                sample(&["https://a.example/A"], false),
+                sample(&["https://a.example/B"], false),
+            ],
+        })
+        .expect("a contradicted sample must not cost the sweep its output");
+        let qs = quads_of(&out);
+        assert!(
+            objects(&qs, "urn:sparqlwatch:sampledValue").is_empty(),
+            "published a sampled value for a contradicted pair: {out}"
+        );
+        assert!(
+            objects(&qs, "urn:sparqlwatch:sampleSize").is_empty(),
+            "published a sample size for a contradicted pair: {out}"
+        );
+        assert!(
+            !qs.iter().any(|q| q.predicate.as_ref() == rdf::TYPE
+                && q.object
+                    == Term::NamedNode(NamedNode::new("urn:sparqlwatch:ContentSample").unwrap())),
+            "published a sample node for a contradicted pair: {out}"
+        );
     }
 
     #[test]
