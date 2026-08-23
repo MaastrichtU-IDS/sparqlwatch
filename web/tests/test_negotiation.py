@@ -14,13 +14,15 @@ Every value asserted here is a real value of the committed fixtures under
 web/tests/fixtures/; see each fixture's header comment for its provenance.
 """
 
+import gc
 from html.parser import HTMLParser
+from pathlib import Path
 
 import pytest
 from pyoxigraph import Literal, NamedNode, RdfFormat, Store, parse
 from starlette.testclient import TestClient
 
-from app import ENDPOINT_PATH, app, get_store
+from app import STORE_PATH_VARIABLE, ENDPOINT_PATH, app, get_store
 
 KADASTER = "https://data.kkg.kadaster.nl/query"
 TRUNCATED = "https://truncated.example/sparql"
@@ -660,3 +662,55 @@ def test_an_endpoint_sampled_only_by_another_metric_is_404_that_says_what_was_ch
         assert "no measurement, no decline and no class sample" in body
         assert "recorded anything about" not in body
         assert PROPERTIES_ONLY in response.text
+
+
+# ---------------------------------------------------------------------------
+# The store the server opens
+# ---------------------------------------------------------------------------
+# These are the only tests here that read SPARQLWATCH_STORE. Every other test
+# in this file replaces get_store through app.dependency_overrides and never
+# touches a path on disk.
+FIXTURE = Path(__file__).parent / "fixtures" / "run-with-samples.nq"
+
+
+def test_a_store_path_with_nothing_at_it_is_refused(tmp_path, monkeypatch):
+    """A typo in SPARQLWATCH_STORE must not become an empty store.
+
+    Store() creates the RocksDB directory when it is missing, so a mistyped
+    path used to produce a server that answered every request with "no
+    measurement, no decline and no class sample in this store mentions ...".
+    That is true of the empty store it had just created, and it is
+    indistinguishable from a registry nobody has swept, so the operator's
+    mistake was reported as a fact about the endpoints.
+    """
+    missing = tmp_path / "typo"
+    monkeypatch.setenv(STORE_PATH_VARIABLE, str(missing))
+    with pytest.raises(RuntimeError) as raised:
+        get_store()
+    assert STORE_PATH_VARIABLE in str(raised.value)
+    assert str(missing) in str(raised.value)
+    assert not missing.exists(), "the mistake must not create a store"
+
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    monkeypatch.setenv(STORE_PATH_VARIABLE, str(empty))
+    with pytest.raises(RuntimeError):
+        get_store()
+
+
+def test_a_store_path_holding_a_store_is_opened(tmp_path, monkeypatch):
+    """The other half of the check: a real store still opens.
+
+    Without this, the refusal above would pass just as well if it refused
+    everything, and the server would never start at all.
+    """
+    path = tmp_path / "sparqlwatch.db"
+    built = Store(str(path))
+    built.load(FIXTURE.read_bytes(), format=RdfFormat.N_QUADS)
+    # An on-disk Oxigraph store cannot be opened twice at once, so this test
+    # has to let go of its own handle before asking the app to open the path.
+    del built
+    gc.collect()
+
+    monkeypatch.setenv(STORE_PATH_VARIABLE, str(path))
+    assert len(get_store()) > 0

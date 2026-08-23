@@ -74,6 +74,25 @@ The same thing from the command line, for one or more files at once:
 web/.venv/bin/python web/load_run.py path/to/sparqlwatch.db path/to/run.nq
 ```
 
+### The server has to be stopped first
+
+An on-disk Oxigraph store is a RocksDB database and **only one process can hold
+it open**. `load_run.py` opens the store for writing, so while the server is
+running the load fails:
+
+```
+OSError: IO error: While lock file: path/to/sparqlwatch.db/LOCK:
+Resource temporarily unavailable
+```
+
+This applies to every load, not only the first one: **stop the server, load the
+run, start the server again.** For a monitor whose whole point is repeated
+sweeps that is the routine operation, not an exception, and a prober CronJob
+writing runs on a schedule (spec stage 4) cannot load them into a store a
+running server holds. Serving from a second store and swapping, or reading
+through a process that does not hold the write lock, is a deployment question
+this stage does not answer.
+
 ### What the load does and does not guarantee
 
 `load_run()` **parses the entire file before touching the store**. A prober
@@ -183,7 +202,8 @@ All tests are offline: they read committed fixture files under
 ## Run the server
 
 With the venv activated, first load a run into the store (see "Load a run into the
-store" above). Then set the store path and start the server:
+store" above; the server must be stopped while a run is loaded, every time). Then
+set the store path and start the server:
 
 ```bash
 cd web
@@ -193,6 +213,13 @@ python -m uvicorn app:app --reload
 
 The server listens on `http://localhost:8000` by default. `--reload` watches for
 Python changes and restarts the server; omit it for production.
+
+`SPARQLWATCH_STORE` must name an existing directory with something in it. A path
+that does not exist, or an empty one, is refused when the store is first opened
+rather than created: `Store()` creates the RocksDB directory when it is missing,
+so a typo used to produce a server whose every response was a 404 saying the
+store held nothing about the endpoint. That was true of the empty store it had
+just created and indistinguishable from a registry nobody has swept.
 
 The single HTTP resource is the current state of a monitored endpoint:
 

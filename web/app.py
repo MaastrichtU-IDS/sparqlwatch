@@ -240,14 +240,32 @@ STORE_PATH_VARIABLE = "SPARQLWATCH_STORE"
 
 @lru_cache(maxsize=None)
 def _opened_store(path: str) -> Store:
-    """One Store object per path per process.
+    """One Store object per path per process, opened once and checked once.
 
     Not a convenience: an on-disk Oxigraph store is a RocksDB database and
     cannot be opened twice at once, so opening it per request would fail
     under the second concurrent request. Caching here rather than at import
     time keeps the open lazy, which is what lets the tests replace this
     dependency without ever touching a real store path.
+
+    The path is required to exist and to hold something, because Store()
+    CREATES the RocksDB directory when it is missing. A typo in
+    SPARQLWATCH_STORE therefore produced a server that answered every
+    request with "no measurement, no decline and no class sample in this
+    store mentions ...", which is true of the empty store it had just
+    created and indistinguishable from a registry nobody has swept. Failing
+    on the first open reports the operator's mistake as the operator's
+    mistake.
     """
+    directory = Path(path)
+    if not directory.is_dir() or not any(directory.iterdir()):
+        raise RuntimeError(
+            f"{STORE_PATH_VARIABLE} is {path!r}, which is not an existing "
+            f"directory with anything in it. Opening it would create an "
+            f"empty store, and every endpoint would then answer 404 as "
+            f"though no sweep had ever run. Build the store first with "
+            f"web/load_run.py."
+        )
     return Store(path)
 
 
