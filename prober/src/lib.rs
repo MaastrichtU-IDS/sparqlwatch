@@ -18,40 +18,10 @@ use crate::metrics::{MetricDef, ProbeKind};
 use crate::resolve::{resolve, resolve_fetch, Declared};
 use crate::verdict::Verdict;
 
-/// Probe every metric against every endpoint. Endpoints are processed
-/// independently so one slow host cannot delay another's results.
-///
-/// Three nested budgets bound the work: per request (in the HTTP client), per
-/// metric, and per endpoint. When the endpoint budget expires mid-loop the
-/// metrics not reached still get rows, recorded as `Indeterminate`, so the
-/// one-row-per-(endpoint, metric) invariant holds whatever the timing.
-///
-/// A metric whose kind has no implemented probe is skipped without issuing any
-/// request, and also recorded as `Indeterminate`, so the gap stays visible in
-/// the published output rather than being papered over.
-///
-/// Every verdict here comes from `resolve()` or from a budget expiry, which is
-/// the one thing this layer knows and the resolver cannot: judgement about an
-/// *observation* never happens outside `resolve()`.
-///
-/// Alongside the rows, every endpoint gets exactly one `DeclarationsRead`
-/// fact: whether its queryless description fetch produced a parseable graph
-/// of at least one triple. `Declared::claimed` cannot answer this on its
-/// own -- `false` there means either "declares nothing" or "we could not
-/// read it", and the two are distinguished only by this fact. `read` starts
-/// `false` and is set inside `probe_endpoint` as soon as the fetch's
-/// `Declarations` are known, so an endpoint whose budget expires before that
-/// point (never fetched at all) still gets a fact, honestly `false`, rather
-/// than none.
-///
-/// `declined` is the other half of the definition list: metrics the caller
-/// decided not to run. This function does not filter and does not know what a
-/// ceiling is -- `main.rs` calls `metrics::within_cost` and passes both halves
-/// -- it simply records one `NotMeasured` per (endpoint, declined metric) so
-/// the gap is published as a fact rather than left as a missing row. Keeping
-/// the policy in one place and the mechanism in another is deliberate: a
-/// second reason for declining a metric changes `main.rs` and the reason enum,
-/// not this loop.
+/// Everything one sweep produced, flat and ready to emit: one entry per
+/// (endpoint, metric) in `rows`, one per endpoint in `declarations_read`, one
+/// per (endpoint, declined metric) in `not_measured`. See `run_sweep` for what
+/// each of them means and how the budgets shape them.
 pub struct Sweep {
     pub rows: Vec<MeasurementRow>,
     pub declarations_read: Vec<DeclarationsRead>,
@@ -66,6 +36,42 @@ pub struct Sweep {
     pub content_samples: Vec<ContentSample>,
 }
 
+/// Probe every metric against every endpoint. Endpoints are processed
+/// independently so one slow host cannot delay another's results.
+///
+/// Three nested budgets bound the work: per request (in the HTTP client), per
+/// metric, and per endpoint. When the endpoint budget expires mid-loop the
+/// metrics not reached still get rows, recorded as `Indeterminate`, so the
+/// one-row-per-(endpoint, metric) invariant holds whatever the timing. That
+/// fill, and the accumulator whose ownership makes the partial results survive
+/// the expiry at all, both live in `probe_one_endpoint`.
+///
+/// A metric whose kind has no implemented probe is skipped without issuing any
+/// request, and also recorded as `Indeterminate`, so the gap stays visible in
+/// the published output rather than being papered over.
+///
+/// Every verdict here comes from `resolve()` or from a budget expiry, which is
+/// the one thing this layer knows and the resolver cannot: judgement about an
+/// *observation* never happens outside `resolve()`.
+///
+/// Alongside the rows, every endpoint gets exactly one `DeclarationsRead`
+/// fact: whether its queryless description fetch produced a parseable graph
+/// of at least one triple. `Declared::claimed` cannot answer this on its
+/// own -- `false` there means either "declares nothing" or "we could not
+/// read it", and the two are distinguished only by this fact.
+/// `EndpointSweep::declarations_read` starts `false` and is set inside
+/// `probe_endpoint` as soon as the fetch's `Declarations` are known, so an
+/// endpoint whose budget expires before that point (never fetched at all)
+/// still gets a fact, honestly `false`, rather than none.
+///
+/// `declined` is the other half of the definition list: metrics the caller
+/// decided not to run. This function does not filter and does not know what a
+/// ceiling is -- `main.rs` calls `metrics::within_cost` and passes both halves
+/// -- it simply records one `NotMeasured` per (endpoint, declined metric) so
+/// the gap is published as a fact rather than left as a missing row. Keeping
+/// the policy in one place and the mechanism in another is deliberate: a
+/// second reason for declining a metric changes `main.rs` and the reason enum,
+/// not this loop.
 pub async fn run_sweep(
     endpoints: &[String],
     defs: &[MetricDef],
@@ -78,39 +84,10 @@ pub async fn run_sweep(
     let mut not_measured = Vec::new();
     let mut content_samples = Vec::new();
     for ep in endpoints {
-        let mut ep_rows: Vec<MeasurementRow> = Vec::new();
-        let mut read = false;
-        let outcome = budget
-            .with_endpoint_budget(probe_endpoint(
-                ep,
-                defs,
-                client,
-                budget,
-                &mut ep_rows,
-                &mut read,
-                &mut content_samples,
-            ))
-            .await;
-        if outcome.is_err() {
-            tracing::warn!(endpoint = %ep, reached = ep_rows.len(), of = defs.len(),
-                           "endpoint budget expired; remaining metrics are indeterminate");
-            // The budget expiring tells us nothing about the metrics we never
-            // got to, and we did not measure their elapsed time either. Route
-            // the verdict through `resolve` rather than writing one here:
-            // judgement belongs in one place, and `resolve` already maps an
-            // expired budget to `Indeterminate`.
-            for def in defs.iter().skip(ep_rows.len()) {
-                ep_rows.push(MeasurementRow {
-                    endpoint: ep.clone(),
-                    metric_id: def.id.clone(),
-                    verdict: resolve(def, Declared { claimed: false }, Err(Expired)),
-                    level: None,
-                    elapsed_ms: None,
-                });
-            }
-        }
-        declarations_read.push(DeclarationsRead { endpoint: ep.clone(), read });
-        rows.extend(ep_rows);
+        let swept = probe_one_endpoint(ep, defs, client, budget).await;
+        declarations_read.push(DeclarationsRead { endpoint: ep.clone(), read: swept.declarations_read });
+        rows.extend(swept.rows);
+        content_samples.extend(swept.content_samples);
         // One fact per (endpoint, declined metric), recorded whatever the
         // budget did: the reason is the ceiling, which was decided before any
         // probing started, so an endpoint whose budget expired still owes the
@@ -126,26 +103,96 @@ pub async fn run_sweep(
     Sweep { rows, declarations_read, not_measured, content_samples }
 }
 
+/// One endpoint's results, accumulated in place as `probe_endpoint` earns
+/// them.
+///
+/// The value is owned by `probe_one_endpoint`, which is the caller of the
+/// endpoint budget's `timeout`, and never by the future that timeout wraps.
+/// That ownership is the entire reason this type exists. `tokio::time::timeout`
+/// DROPS the future it wraps on expiry, and a dropped future returns nothing,
+/// so anything `probe_endpoint` returned instead of writing here would be lost
+/// for every endpoint whose budget expires -- the ordinary case for a slow or
+/// black-holed host, not an edge case. Lost, specifically: every row already
+/// measured, after which the expiry fill would see no rows at all and write
+/// `Indeterminate` over real verdicts and their `elapsedMs`; every sample
+/// already collected; and a `declarations_read` we had just earned the right
+/// to publish as `true`.
+///
+/// Belonging to the unit of work rather than to the sweep loop is also what
+/// lets one endpoint be probed inside a task of its own: the borrow is created
+/// and consumed inside `probe_one_endpoint`, so the future borrows nothing the
+/// scheduler owns.
+#[derive(Default)]
+struct EndpointSweep {
+    /// The metrics reached so far, in definition order. Its length is
+    /// therefore also how far the loop got, which is what the expiry fill in
+    /// `probe_one_endpoint` resumes from.
+    rows: Vec<MeasurementRow>,
+    /// Whether the queryless description fetch produced a parseable graph of
+    /// at least one triple. Starts `false`, so an endpoint whose budget expired
+    /// before the fetch finished publishes an honest `false` rather than
+    /// nothing.
+    declarations_read: bool,
+    /// This endpoint's share of `Sweep::content_samples`, under the same rules.
+    content_samples: Vec<ContentSample>,
+}
+
+/// Probe one endpoint, under the endpoint budget: the unit of work a sweep
+/// schedules.
+///
+/// The accumulator is created here, outside the `timeout`, and lent to
+/// `probe_endpoint`, so a budget that expires mid-loop still yields everything
+/// measured before it did. See `EndpointSweep` for why that is not a style
+/// choice.
+async fn probe_one_endpoint(
+    ep: &str,
+    defs: &[MetricDef],
+    client: &Client,
+    budget: Budget,
+) -> EndpointSweep {
+    let mut acc = EndpointSweep::default();
+    let outcome = budget
+        .with_endpoint_budget(probe_endpoint(ep, defs, client, budget, &mut acc))
+        .await;
+    if outcome.is_err() {
+        tracing::warn!(endpoint = %ep, reached = acc.rows.len(), of = defs.len(),
+                       "endpoint budget expired; remaining metrics are indeterminate");
+        // The budget expiring tells us nothing about the metrics we never
+        // got to, and we did not measure their elapsed time either. Route
+        // the verdict through `resolve` rather than writing one here:
+        // judgement belongs in one place, and `resolve` already maps an
+        // expired budget to `Indeterminate`.
+        for def in defs.iter().skip(acc.rows.len()) {
+            acc.rows.push(MeasurementRow {
+                endpoint: ep.to_string(),
+                metric_id: def.id.clone(),
+                verdict: resolve(def, Declared { claimed: false }, Err(Expired)),
+                level: None,
+                elapsed_ms: None,
+            });
+        }
+    }
+    acc
+}
+
 const VAR_REQUIRED: &str = "a bindings-reading probe kind requires `var`; load_metrics enforces it";
 
-/// One endpoint's metrics, in definition order, appending as it goes so a
-/// caller that cancels this future can still see how far it got.
+/// One endpoint's metrics, in definition order, appending to `acc` as it goes
+/// so a caller that cancels this future can still see how far it got.
 ///
-/// `declarations_read` is set the same way, as a side effect on a borrowed
-/// `bool`, for the same reason: `run_sweep` wraps this whole function in the
-/// endpoint budget, and a cancelled future returns nothing, so a fact that
-/// depended on this call's return value would simply be lost whenever the
-/// budget expired before the fetch finished. Starting `false` and setting it
-/// true only once a graph is actually in hand keeps the fact honest under
-/// cancellation too.
+/// `acc.declarations_read` is set the same way, as a side effect on the
+/// borrowed accumulator, for the same reason: `probe_one_endpoint` wraps this
+/// whole function in the endpoint budget, and a cancelled future returns
+/// nothing, so a fact that depended on this call's return value would simply be
+/// lost whenever the budget expired before the fetch finished. Starting `false`
+/// and setting it true only once a graph is actually in hand keeps the fact
+/// honest under cancellation too.
 async fn probe_endpoint(
     ep: &str,
     defs: &[MetricDef],
     client: &Client,
     budget: Budget,
-    rows: &mut Vec<MeasurementRow>,
-    declarations_read: &mut bool,
-    content_samples: &mut Vec<ContentSample>,
+    acc: &mut EndpointSweep,
 ) {
     // One queryless fetch per endpoint, not one per metric: six metrics must
     // not mean six identical GETs landing in an operator's log. Its outcome
@@ -185,7 +232,7 @@ async fn probe_endpoint(
     // declares something and then hits a syntax error mid-parse (`declare.rs`
     // keeps what parsed before the error) reads `true` even though
     // `resolve_fetch` below grades that same fetch `Indeterminate`.
-    *declarations_read = declarations.triples > 0;
+    acc.declarations_read = declarations.triples > 0;
     let (fetch_verdict, fetch_level) = resolve_fetch(&declarations, fetch_outcome.as_ref().map_err(|e| *e));
     // Same principle as every other row: an expired or failed fetch measured
     // nothing, so it reports no elapsed time rather than a zero one.
@@ -195,7 +242,7 @@ async fn probe_endpoint(
         // The description was already fetched once above; this row reports
         // that outcome rather than issuing a second, redundant fetch.
         if def.kind == ProbeKind::FetchWellKnown {
-            rows.push(MeasurementRow {
+            acc.rows.push(MeasurementRow {
                 endpoint: ep.to_string(),
                 metric_id: def.id.clone(),
                 verdict: fetch_verdict,
@@ -218,7 +265,7 @@ async fn probe_endpoint(
         // `FetchWellKnown` is handled above), but the mechanism stays for
         // whichever future kind arrives without one.
         if !def.kind.has_probe() {
-            rows.push(MeasurementRow {
+            acc.rows.push(MeasurementRow {
                 endpoint: ep.to_string(),
                 metric_id: def.id.clone(),
                 verdict: Verdict::Indeterminate,
@@ -283,7 +330,7 @@ async fn probe_endpoint(
                 // with nothing bound, and if one ever does, a sample of size
                 // zero is still not a sample.
                 if confirmed && !o.bindings.is_empty() {
-                    content_samples.push(ContentSample {
+                    acc.content_samples.push(ContentSample {
                         endpoint: ep.to_string(),
                         metric_id: def.id.clone(),
                         values: o.bindings.clone(),
@@ -300,7 +347,7 @@ async fn probe_endpoint(
         // An expired metric budget measured nothing, so it reports no elapsed
         // time rather than a zero one.
         let elapsed = observed.as_ref().ok().map(|o| o.elapsed_ms);
-        rows.push(MeasurementRow {
+        acc.rows.push(MeasurementRow {
             endpoint: ep.to_string(),
             metric_id: def.id.clone(),
             verdict,
