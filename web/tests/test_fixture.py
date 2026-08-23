@@ -52,6 +52,13 @@ Fixture provenance:
   where the sample is the newer of the two; run-with-samples.nq beside
   run-declined.nq gives the other direction, an older sample under a newer
   sweep that declined the metric.
+
+- ``fixtures/run-hostile-literals.nq`` is SYNTHETIC: one dqv:value and one
+  sw:notMeasuredReason carrying HTML markup, which no captured sweep holds.
+  They are the literals, not the IRIs, because an IRI cannot contain '<',
+  '>' or '"' at all and pyoxigraph rejects one that tries, so the literals
+  are the values that can carry markup onto the page. Both reach the page
+  verbatim, in a data- attribute and in the text a reader sees.
 """
 
 from pathlib import Path

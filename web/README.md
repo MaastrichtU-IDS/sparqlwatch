@@ -283,7 +283,9 @@ ranges do parse and which names none we can serve returns 406, because that is a
 what it wants.
 
 A request with no `url` parameter returns HTTP 400 with a plain-text body, not FastAPI's
-default 422 JSON, so that no response on this resource ignores `Accept`.
+default 422 JSON. It is the same class of client error as the malformed `url` below, and
+negotiation runs first, so a client that can read none of these representations still gets
+the 406 rather than a JSON validation body it did not ask for.
 
 A `url` that cannot be an absolute IRI (an empty one, which is what a submitted-but-empty
 form field sends, or one with a trailing space, which is what a copy-paste sends) returns

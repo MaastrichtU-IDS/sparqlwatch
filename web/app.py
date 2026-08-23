@@ -678,11 +678,12 @@ def endpoint_resource(
             media_type="text/plain; charset=utf-8",
         )
 
-    # No url at all. FastAPI's own answer is a 422 with a JSON body, which
-    # was the one response on this resource that ignored Accept: a person
-    # following the README's curl example without the parameter got JSON. A
-    # missing url and a malformed one are the same class of client error, so
-    # they get the same status and the same kind of body.
+    # No url at all. FastAPI's own answer is a 422 with a JSON body, produced
+    # before this function runs and therefore without negotiating: a person
+    # following the README's curl example without the parameter got JSON
+    # whatever they asked for. A missing url and a malformed one are the same
+    # class of client error, so they get the same status and the same kind of
+    # body, and the 406 above still comes first.
     if url is None:
         return Response(
             content=(
