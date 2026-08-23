@@ -24,6 +24,7 @@ Every value asserted here is a real value of the committed fixtures under
 web/tests/fixtures/; see each fixture's header comment for its provenance.
 """
 
+import re
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -406,6 +407,63 @@ def test_every_state_has_exactly_one_generated_rule():
         selector = "." + verdict_encoding.css_class(state.slug) + " "
         assert rules.count(selector) == 1
     assert rules.count("{") == len(verdict_encoding.STATES) + 1
+
+
+def _generated_declarations():
+    """The emitted stylesheet, as class name -> declaration body.
+
+    Read out of css_rules() rather than off the table. _declarations() is a
+    separate function with its own mapping step from the three channels to
+    CSS, so the table's injectivity does not reach the stylesheet by
+    construction, and the stylesheet is what the reader sees.
+    """
+    bodies = {}
+    for line in verdict_encoding.css_rules().splitlines():
+        selector, brace, rest = line.strip().partition("{")
+        assert brace, f"not a rule: {line!r}"
+        bodies[selector.strip().lstrip(".")] = " ".join(rest.rstrip("}").split())
+    return bodies
+
+
+# A theme colour variable, and nothing else. "transparent" is deliberately
+# NOT matched: absent's border is realised as "1px solid transparent", which
+# is an absence of ink rather than a hue, so it is a channel value that
+# survives greyscale and must stay in the comparison below. Erasing it would
+# make absent and declared-only look like a collision that they are not.
+_COLOUR_TOKEN = re.compile(r"var\(--[a-z0-9-]+\)")
+
+
+def test_no_two_generated_rules_differ_only_by_colour():
+    """The injectivity the encoding rests on, asserted on the CSS emitted.
+
+    test_no_two_states_share_a_border_fill_weight_triple asserts it on the
+    table. Nothing asserted it on the rules, and the emitter maps the table
+    to CSS itself: collapsing its border-style mapping to a constant made
+    verified and undeclared-but-verified byte-identical and left three more
+    states differing only by colour token, with every other test in this file
+    green. That is the drift this module exists to prevent, and it is the
+    drift that happened in the JavaScript viewer, where a dotted style
+    rendered as solid.
+
+    Two states whose rules differ only in the colour they name are one state
+    to a reader who cannot separate the colours, whatever the table says.
+    """
+    bodies = _generated_declarations()
+    assert set(bodies) == {
+        verdict_encoding.css_class(state.slug)
+        for state in (*verdict_encoding.STATES, verdict_encoding.UNRECOGNISED)
+    }
+
+    colourless = {}
+    for name, body in bodies.items():
+        without_colour = _COLOUR_TOKEN.sub("COLOUR", body)
+        assert without_colour not in colourless, (
+            f"{name} and {colourless[without_colour]} emit rules that differ "
+            f"only in the colour they name ({without_colour}), so they are "
+            f"the same state to a reader who cannot separate the colours"
+        )
+        colourless[without_colour] = name
+    assert len(colourless) == len(bodies) == len(verdict_encoding.STATES) + 1
 
 
 def test_a_borderless_state_still_reserves_its_border():
