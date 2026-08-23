@@ -862,11 +862,17 @@ def test_the_class_list_renders_bare_iris(client_for, store):
     the template does with it. The escaping guarantee is asserted on the
     literals, which can, in
     test_a_hostile_literal_is_escaped_in_the_attribute_and_the_text below.
+
+    Reads the rendered text of each data-class element rather than searching
+    the raw HTML source: the N-Triples form of an IRI is `&lt;http`, not
+    `<http`, so a source-text search for `<http` can only ever catch a
+    template that writes a literal '<' of its own outside an attribute.
     """
     text = page(client_for(store), KADASTER)
     listed = [row["data-class"] for row in with_attribute(text, "data-class")]
     assert all(value.startswith("http") for value in listed)
-    assert "<http" not in text, "an IRI is rendered bare, not in N-Triples <>"
+    rendered = texts_with(text, "data-class")
+    assert rendered == listed, "each value must render as the bare IRI, not wrapped in <>"
 
 
 def test_a_hostile_literal_is_escaped_in_the_attribute_and_the_text(
