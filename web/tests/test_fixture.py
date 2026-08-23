@@ -59,6 +59,30 @@ Fixture provenance:
   '>' or '"' at all and pyoxigraph rejects one that tries, so the literals
   are the values that can carry markup onto the page. Both reach the page
   verbatim, in a data- attribute and in the text a reader sees.
+
+- ``fixtures/run-new-subjects.nq`` is SYNTHETIC and DERIVED from the real run,
+  the same way ``run-two-sweeps.nq`` is: the full real run from
+  run-with-samples.nq, with its run IRI and prov:generatedAtTime advanced
+  from 2026-08-22T16:00:00Z to 2026-08-22T20:00:00Z, and every
+  ``urn:sparqlwatch:measurement:<run>:<row index>`` and
+  ``urn:sparqlwatch:content-sample:<run>:<row index>`` subject rewritten into
+  the derived scheme prober/src/emit.rs's ``subject_iri`` produces after
+  stage 1c-b3:
+  ``urn:sparqlwatch:<kind>:<run>:<percent-encoded endpoint>:<metric id>``.
+  It is the FIRST fixture in that derived scheme; every other fixture in this
+  list, including run-with-samples.nq itself, still carries the old row-index
+  shape, which is exactly the point: after stage 1c-b3 the prober can no
+  longer produce that shape, so a production store holds both for as long as
+  history is kept, and this is the only fixture pairing that puts both in one
+  store (see ``conftest.py``'s ``store_new_subjects``). Two further hand
+  edits on top of the mechanical rewrite, mirroring run-two-sweeps.nq's one
+  hand edit: kadaster's sw:metric:classes dqv:value in this (20:00) run was
+  changed from "verified" to "indeterminate", and one of its sampled classes
+  was swapped from ``owl:Restriction`` to
+  ``urn:sparqlwatch:test:new-scheme-only-class``, so that "which run's verdict
+  and sample come back" is testable regardless of which subject scheme either
+  run uses. See the comment at the top of that file for the exact
+  construction.
 """
 
 from pathlib import Path
@@ -74,6 +98,7 @@ CLASSES_ABSENT_FIXTURE = Path(__file__).parent / "fixtures" / "run-classes-absen
 LATER_SAMPLE_FIXTURE = (
     Path(__file__).parent / "fixtures" / "run-later-sample-only.nq"
 )
+NEW_SUBJECTS_FIXTURE = Path(__file__).parent / "fixtures" / "run-new-subjects.nq"
 
 
 def test_the_fixture_loads_and_reopens(tmp_path):
@@ -159,6 +184,25 @@ def test_the_classes_absent_fixture_measures_absent_and_samples_nothing(tmp_path
     assert not bool(store.query(
         "ASK { GRAPH ?g { ?s <urn:sparqlwatch:sampledFrom> ?e } }"
     )), "there must be no content sample at all"
+
+
+def test_the_new_subjects_fixture_is_the_shape_it_claims(tmp_path):
+    """run-new-subjects.nq is derived from the real run (see the comment at
+    the top of that file): the same 278 quads as run-with-samples.nq, with
+    the run IRI advanced and every subject rewritten into the derived scheme.
+    Same quad count as the real run because the rewrite touches subjects and
+    two values, never adds or drops a triple."""
+    store = Store(str(tmp_path / "s"))
+    store.load(NEW_SUBJECTS_FIXTURE.read_bytes(), format=RdfFormat.N_QUADS)
+    assert len(store) == 278, f"the new-subjects fixture is 278 quads, got {len(store)}"
+    assert len(list(store.named_graphs())) == 1, "one run, one named graph"
+    assert bool(store.query(
+        "ASK { GRAPH ?g { ?s <urn:sparqlwatch:sampledValue> "
+        "<urn:sparqlwatch:test:new-scheme-only-class> } }"
+    )), "the hand-swapped class must be present"
+    assert not bool(store.query(
+        "ASK { GRAPH ?g { <urn:sparqlwatch:measurement:2026-08-22T20:00:00Z:0> ?p ?o } }"
+    )), "no subject may keep the old row-index shape"
 
 
 def test_the_later_sample_fixture_samples_without_measuring(tmp_path):

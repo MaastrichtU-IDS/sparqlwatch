@@ -26,6 +26,7 @@ RUN_DECLINED = FIXTURES / "run-declined.nq"
 RUN_CLASSES_ABSENT = FIXTURES / "run-classes-absent.nq"
 RUN_LATER_SAMPLE_ONLY = FIXTURES / "run-later-sample-only.nq"
 RUN_HOSTILE_LITERALS = FIXTURES / "run-hostile-literals.nq"
+RUN_NEW_SUBJECTS = FIXTURES / "run-new-subjects.nq"
 
 
 def _loaded_store(tmp_path: Path, name: str, *fixtures: Path) -> Store:
@@ -133,4 +134,18 @@ def store_hostile_literals(tmp_path):
     web/tests/fixtures/run-hostile-literals.nq."""
     return _loaded_store(
         tmp_path, "store-hostile-literals", RUN_HOSTILE_LITERALS
+    )
+
+
+@pytest.fixture
+def store_new_subjects(tmp_path):
+    """Two real endpoints' worth of facts, published twice: once in the OLD
+    row-index subject scheme (run-with-samples.nq, 16:00) and once in the NEW
+    derived subject scheme (run-new-subjects.nq, 20:00, the one the prober
+    writes after stage 1c-b3). This is the only fixture pairing that puts both
+    subject schemes in one store, which is the shape a production store holds
+    for as long as history is kept. See the comment in
+    web/tests/fixtures/run-new-subjects.nq for its construction."""
+    return _loaded_store(
+        tmp_path, "store-new-subjects", RUN_WITH_SAMPLES, RUN_NEW_SUBJECTS
     )

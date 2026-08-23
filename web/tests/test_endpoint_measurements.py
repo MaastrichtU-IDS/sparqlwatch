@@ -6,6 +6,9 @@ web/tests/fixtures/. See each fixture's header comment (or, for
 run-with-samples.nq, web/tests/test_fixture.py) for its provenance.
 """
 
+from pyoxigraph import NamedNode
+
+from endpoint_content import endpoint_content
 from endpoint_measurements import endpoint_measurements
 
 KADASTER = "https://data.kkg.kadaster.nl/query"
@@ -20,6 +23,18 @@ CURRENT_RUN = "urn:sparqlwatch:run:2026-08-22T16:00:00Z"
 STALE_RUN = "urn:sparqlwatch:run:2026-08-22T14:00:00Z"
 CURRENT_CLASSES_VERDICT = "verified"
 STALE_CLASSES_VERDICT = "indeterminate"
+
+# run-new-subjects.nq beside run-with-samples.nq: the same kadaster endpoint
+# published once under the OLD row-index subject scheme (16:00) and once
+# under the NEW derived subject scheme (20:00, the one prober/src/emit.rs's
+# subject_iri produces after stage 1c-b3). The constants come from
+# run-new-subjects.nq's header comment.
+NEW_RUN = "urn:sparqlwatch:run:2026-08-22T20:00:00Z"
+OLD_RUN = "urn:sparqlwatch:run:2026-08-22T16:00:00Z"
+NEW_SCHEME_CLASSES_VERDICT = "indeterminate"
+OLD_SCHEME_CLASSES_VERDICT = "verified"
+NEW_SCHEME_ONLY_CLASS = "urn:sparqlwatch:test:new-scheme-only-class"
+OLD_SCHEME_ONLY_CLASS = "http://www.w3.org/2002/07/owl#Restriction"
 
 
 def _verdicts_by_metric(result):
@@ -93,6 +108,55 @@ def test_the_most_recent_run_wins_for_measurements(store_two_sweeps):
     v = _verdicts_by_metric(r)
     assert v[M + "classes"].verdict == CURRENT_CLASSES_VERDICT
     assert v[M + "classes"].verdict != STALE_CLASSES_VERDICT
+
+
+def test_the_old_and_new_subject_schemes_coexist_and_the_newer_wins(store_new_subjects):
+    """web/tests/fixtures/run-new-subjects.nq (NEW derived subject scheme,
+    20:00) loaded beside run-with-samples.nq (OLD row-index scheme, 16:00).
+    Both name kadaster. web/queries/endpoint_measurements.rq and
+    endpoint_content.rq match on predicates (dqv:computedOn, sw:sampledFrom,
+    and so on), never on the shape of the subject IRI, so the most-recent-run
+    selection must pick the newer run's verdict and sample regardless of
+    which scheme produced its subjects. Assert the exact values, not a row
+    count: both runs measure the same 8 metrics and sample the same-sized
+    class list, so a query that blended or picked the wrong run would still
+    look plausible by count alone."""
+    m = endpoint_measurements(store_new_subjects, KADASTER)
+    assert m.run == NEW_RUN
+    assert len(m.verdicts) == 8
+
+    v = _verdicts_by_metric(m)
+    assert v[M + "classes"].verdict == NEW_SCHEME_CLASSES_VERDICT
+    assert v[M + "classes"].verdict != OLD_SCHEME_CLASSES_VERDICT
+
+    c = endpoint_content(store_new_subjects, KADASTER)
+    assert c.run == NEW_RUN
+    assert c.sampled is True
+    assert c.size == 59, "the sample size run-new-subjects.nq's kadaster sample publishes"
+    assert c.truncated is False
+    assert len(c.classes) == 59
+    assert NEW_SCHEME_ONLY_CLASS in c.classes, "the new run's swapped-in class"
+    assert OLD_SCHEME_ONLY_CLASS not in c.classes, "the old run's class must not leak through"
+
+
+def test_the_old_scheme_run_is_still_reachable_once_the_newer_one_is_gone(store_new_subjects):
+    """Deleting the NEW-scheme run's graph must not make the OLD-scheme run
+    (run-with-samples.nq, 16:00) unreachable. If either query secretly
+    depended on the new derived subject shape rather than on predicates
+    alone, the old row-index subjects would already be invisible to it and
+    removing the newer run would surface nothing rather than the old run's
+    real values."""
+    store_new_subjects.remove_graph(NamedNode(NEW_RUN))
+
+    m = endpoint_measurements(store_new_subjects, KADASTER)
+    assert m.run == OLD_RUN
+    v = _verdicts_by_metric(m)
+    assert v[M + "classes"].verdict == OLD_SCHEME_CLASSES_VERDICT
+
+    c = endpoint_content(store_new_subjects, KADASTER)
+    assert c.run == OLD_RUN
+    assert OLD_SCHEME_ONLY_CLASS in c.classes
+    assert NEW_SCHEME_ONLY_CLASS not in c.classes
 
 
 def test_a_level_is_returned_where_the_graph_has_one_and_absent_where_not(store):
