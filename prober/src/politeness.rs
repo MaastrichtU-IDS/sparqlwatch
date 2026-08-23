@@ -14,6 +14,77 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+/// The parse `host_key` performs, exposed because `registry` needs the same
+/// answer to a different question.
+pub struct Authority {
+    /// The scheme actually recognised, `None` for a string carrying none. Kept
+    /// because which default port `host_key` may strip depends on it.
+    pub scheme: Option<&'static str>,
+    /// The userinfo component, without its trailing `@`, or `None` when the
+    /// authority has none. Userinfo is credentials, not identity: `host_key`
+    /// drops it so two requests to one host carrying different credentials
+    /// still serialise behind each other, and `registry::without_credentials`
+    /// refuses such an endpoint outright, because the endpoint string is
+    /// published verbatim inside every subject `emit::subject_iri` builds.
+    pub userinfo: Option<String>,
+    /// The authority with any userinfo removed, port still attached.
+    pub host_port: String,
+}
+
+/// Split a URL into the scheme, userinfo and host of its authority.
+///
+/// No URL crate is a dependency, so this is hand-rolled: lowercase, strip a
+/// scheme if present, take everything up to the first `/`, `?` or `#` as the
+/// authority, then split off anything up to and including the last `@`
+/// (userinfo). A string with no recognisable scheme, delimiter or `@` falls
+/// straight through this same pipeline and comes out as its own trimmed,
+/// lowercased self in `host_port`: the registry is seeded from a real-world
+/// dump that certainly contains junk, and collapsing every unparseable string
+/// into one constant bucket would serialise unrelated hosts behind each other.
+///
+/// The lowercasing happens BEFORE the scheme is matched, not after, because
+/// schemes are case-insensitive (RFC 3986 section 3.1) and a real-world dump
+/// of 548 URLs is exactly where `HTTP://` turns up. Matching case-sensitively
+/// stripped nothing from such a URL, and the first `/` of its `//` then made
+/// the authority `"http:"`: one shared bucket for every mixed-case URL in the
+/// registry, serialising unrelated hosts behind each other, and a second
+/// bucket for a host that already had one, which is the direction that lets
+/// two requests to one host overlap.
+///
+/// The authority ends at the first `/`, `?` or `#`, whichever comes first, and
+/// not at the `/` alone: `http://example.org?query=x` has no path at all, so
+/// cutting on `/` only carried the query into the key and gave one host as
+/// many buckets as it had query strings. It is also what keeps
+/// `http://a.example/sparql?contact=x@y.example` free of userinfo: the `@`
+/// there sits in the query, past where the authority ended.
+pub fn authority(url: &str) -> Authority {
+    let lowered = url.trim().to_ascii_lowercase();
+    let s = lowered.as_str();
+    let (scheme, rest) = if let Some(r) = s.strip_prefix("https://") {
+        (Some("https"), r)
+    } else if let Some(r) = s.strip_prefix("http://") {
+        (Some("http"), r)
+    } else {
+        (None, s)
+    };
+    let authority = match rest.find(['/', '?', '#']) {
+        Some(i) => &rest[..i],
+        None => rest,
+    };
+    // Userinfo is credentials, not identity: everything up to and including
+    // the last `@`. A raw `@` cannot appear in a host, so the last one
+    // delimits it.
+    let (userinfo, host_port) = match authority.rfind('@') {
+        Some(i) => (Some(authority[..i].to_string()), &authority[i + 1..]),
+        None => (None, authority),
+    };
+    Authority {
+        scheme,
+        userinfo,
+        host_port: host_port.to_string(),
+    }
+}
+
 /// The politeness identity of a URL: lowercased host plus port, ignoring
 /// scheme, path, query and userinfo. Two URLs with the same key are one
 /// server and must never be probed concurrently.
@@ -30,58 +101,16 @@ use std::time::{Duration, Instant};
 /// to prevent. Because the default port depends on the scheme, the scheme is
 /// not thrown away before that decision is made, even though it plays no
 /// part in the final key.
-///
-/// No URL crate is a dependency, so this is hand-rolled: lowercase, strip a
-/// scheme if present, take everything up to the first `/`, `?` or `#` as the
-/// authority, drop anything up to and including the last `@` (userinfo), and
-/// strip a port that is the default for whichever scheme was seen. A string
-/// with no recognisable scheme, delimiter or `@` falls straight through this
-/// same pipeline and comes out as its own trimmed, lowercased self: the
-/// registry is seeded from a real-world dump that certainly contains junk,
-/// and collapsing every unparseable string into one constant bucket would
-/// serialise unrelated hosts behind each other.
-///
-/// The lowercasing happens BEFORE the scheme is matched, not after, because
-/// schemes are case-insensitive (RFC 3986 section 3.1) and a real-world dump
-/// of 548 URLs is exactly where `HTTP://` turns up. Matching case-sensitively
-/// stripped nothing from such a URL, and the first `/` of its `//` then made
-/// the authority `"http:"`: one shared bucket for every mixed-case URL in the
-/// registry, serialising unrelated hosts behind each other, and a second
-/// bucket for a host that already had one, which is the direction that lets
-/// two requests to one host overlap.
-///
-/// The authority ends at the first `/`, `?` or `#`, whichever comes first, and
-/// not at the `/` alone: `http://example.org?query=x` has no path at all, so
-/// cutting on `/` only carried the query into the key and gave one host as
-/// many buckets as it had query strings.
 pub fn host_key(url: &str) -> String {
-    let s = url.trim().to_ascii_lowercase();
-    let s = s.as_str();
-    let (scheme, rest) = if let Some(r) = s.strip_prefix("https://") {
-        (Some("https"), r)
-    } else if let Some(r) = s.strip_prefix("http://") {
-        (Some("http"), r)
-    } else {
-        (None, s)
-    };
-    let authority = match rest.find(['/', '?', '#']) {
-        Some(i) => &rest[..i],
-        None => rest,
-    };
-    // Userinfo is credentials, not identity: everything up to and including
-    // the last `@`. A raw `@` cannot appear in a host, so the last one
-    // delimits it.
-    let authority = match authority.rfind('@') {
-        Some(i) => &authority[i + 1..],
-        None => authority,
-    };
-    let host = match scheme {
-        Some("https") => authority.strip_suffix(":443").unwrap_or(authority),
-        Some("http") => authority.strip_suffix(":80").unwrap_or(authority),
-        _ => authority,
+    let parsed = authority(url);
+    let host_port = parsed.host_port.as_str();
+    let host = match parsed.scheme {
+        Some("https") => host_port.strip_suffix(":443").unwrap_or(host_port),
+        Some("http") => host_port.strip_suffix(":80").unwrap_or(host_port),
+        _ => host_port,
     };
     if host.is_empty() {
-        return s.to_string();
+        return url.trim().to_ascii_lowercase();
     }
     host.to_string()
 }
