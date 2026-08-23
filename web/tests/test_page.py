@@ -174,6 +174,108 @@ def row_for(text, metric):
     return rows[0]
 
 
+class _RowCells(HTMLParser):
+    """The text of each named cell inside each metric row, by metric id.
+
+    The row's own text is every cell run together, so a test that read the
+    row could not tell the state apart from the metric name, the detail or
+    the elapsed time, and a test that searched the whole document would pass
+    on the legend, which lists every state label on every page. These are the
+    three cells the template contracts to carry a claim about one metric:
+    ``m-state`` is the state written out in words beside the chip,
+    ``m-detail`` the graded conformance level, and ``m-time`` the elapsed
+    time. A cell the row does not render is absent from the mapping rather
+    than empty, which is a different thing from a cell that rendered nothing.
+    """
+
+    CELLS = ("m-state", "m-detail", "m-time")
+
+    def __init__(self):
+        super().__init__()
+        self.rows = {}
+        self._metric = None
+        self._cell = None
+        self._buffer = []
+
+    def handle_starttag(self, tag, attrs):
+        attributes = dict(attrs)
+        if "data-metric" in attributes:
+            self._metric = attributes["data-metric"]
+            self.rows[self._metric] = {}
+            return
+        if self._metric is None:
+            return
+        named = classes_of(attributes) & set(self.CELLS)
+        if named:
+            assert len(named) == 1, f"one cell carries {named}"
+            self._cell = named.pop()
+            self._buffer = []
+
+    def handle_endtag(self, tag):
+        if self._cell is None:
+            return
+        self.rows[self._metric][self._cell] = " ".join(
+            "".join(self._buffer).split()
+        )
+        self._cell = None
+
+    def handle_data(self, data):
+        if self._cell is not None:
+            self._buffer.append(data)
+
+
+def row_cells(text, metric):
+    """One metric row's named cells, as the reader sees them."""
+    parser = _RowCells()
+    parser.feed(text)
+    assert metric in parser.rows, f"{metric} has no row on this page"
+    return parser.rows[metric]
+
+
+class _LegendCells(HTMLParser):
+    """Each legend entry's label and count, by state slug."""
+
+    CELLS = ("l-label", "l-count")
+
+    def __init__(self):
+        super().__init__()
+        self.entries = {}
+        self._slug = None
+        self._cell = None
+        self._buffer = []
+
+    def handle_starttag(self, tag, attrs):
+        attributes = dict(attrs)
+        if "data-state" in attributes:
+            self._slug = attributes["data-state"]
+            self.entries[self._slug] = {}
+            return
+        if self._slug is None:
+            return
+        named = classes_of(attributes) & set(self.CELLS)
+        if named:
+            self._cell = named.pop()
+            self._buffer = []
+
+    def handle_endtag(self, tag):
+        if self._cell is None:
+            return
+        self.entries[self._slug][self._cell] = " ".join(
+            "".join(self._buffer).split()
+        )
+        self._cell = None
+
+    def handle_data(self, data):
+        if self._cell is not None:
+            self._buffer.append(data)
+
+
+def legend_cells(text):
+    parser = _LegendCells()
+    parser.feed(text)
+    return parser.entries
+
+
 def classes_of(attrs):
     return set(attrs.get("class", "").split())
 
@@ -378,16 +480,94 @@ def test_a_verdict_is_drawn_in_its_own_states_class(client_for, store):
 
 
 def test_each_state_is_written_out_beside_its_chip(client_for, store):
-    """The state is in the text, not only in the drawing.
+    """The state is in the text of the row, not only in the drawing.
 
-    A chip is an aid for a reader who can see it. Someone hearing this page
-    read aloud gets nothing from a border style, so the state is spelled out
-    as well: qlever's service-description is absent and its classes metric is
-    indeterminate, and both words appear.
+    A chip is an aid for a reader who can see it, and it carries
+    aria-hidden="true" precisely because it is not the channel the state
+    travels on. Someone hearing this page read aloud gets nothing from a
+    border style, so the state is spelled out in the row itself.
+
+    Asserted per named metric, with the value the graph holds. Searching the
+    whole document for a state label cannot fail: the legend lists all seven
+    on every page, so emptying every row's state text leaves such a test
+    green while removing the entire textual channel.
     """
     text = page(client_for(store), QLEVER)
-    for label in ("absent", "indeterminate", "verified"):
-        assert label in text
+    assert row_cells(text, M + "service-description")["m-state"] == "absent"
+    assert row_cells(text, M + "classes")["m-state"] == "indeterminate"
+    assert row_cells(text, M + "availability")["m-state"] == "verified"
+    assert row_cells(text, M + "geo-functions")["m-state"] == "indeterminate"
+
+    # The same page, and the same channel, for the two states whose label is
+    # not their slug: kadaster's geo-functions is undeclared-but-verified,
+    # which reads "works, not declared".
+    kadaster = page(client_for(store), KADASTER)
+    assert (
+        row_cells(kadaster, M + "geo-functions")["m-state"]
+        == verdict_encoding.presentation("undeclared-but-verified").label
+    )
+    assert row_cells(kadaster, M + "classes")["m-state"] == "verified"
+
+
+def test_a_declined_metric_writes_out_the_state_and_the_reason(
+    client_for, store_declined
+):
+    """A decline is not a verdict, and its row says so in words as well.
+
+    "not measured (cost-ceiling)" states no value about the endpoint and
+    names why nobody looked. Drawn as a dotted border alone it would be
+    indistinguishable, to a reader who cannot see it, from a measurement.
+    """
+    text = page(client_for(store_declined), KADASTER)
+    assert (
+        row_cells(text, M + "classes")["m-state"] == "not measured (cost-ceiling)"
+    )
+
+
+def test_a_graded_metric_states_the_level_the_graph_recorded(client_for, store):
+    """The conformance level is the only graded value on the page.
+
+    run-with-samples.nq carries sw:level on exactly two measurements, both
+    for service-description: 1 for kadaster and 0 for qlever. Asserting the
+    value rather than the presence of the word is what makes this catch a
+    page that prints one level for every row, and asserting a metric with no
+    level catches a page that invents one.
+    """
+    kadaster = page(client_for(store), KADASTER)
+    assert (
+        row_cells(kadaster, M + "service-description")["m-detail"]
+        == "conformance level 1"
+    )
+    assert "m-detail" not in row_cells(kadaster, M + "has-classes")
+
+    qlever = page(client_for(store), QLEVER)
+    assert (
+        row_cells(qlever, M + "service-description")["m-detail"]
+        == "conformance level 0"
+    )
+
+
+def test_a_row_states_the_elapsed_time_the_graph_recorded(
+    client_for, store, store_declined
+):
+    """The elapsed time is a measured value, so it comes from the graph.
+
+    qlever's classes probe ran 30003 ms (the 30 second budget running out)
+    and kadaster's service-description 151 ms, both recorded in
+    run-with-samples.nq. A declined metric was never run, so its row states
+    no time at all: printing a zero there would read as an instant answer.
+    """
+    qlever = page(client_for(store), QLEVER)
+    assert row_cells(qlever, M + "classes")["m-time"] == "30003 ms"
+
+    kadaster = page(client_for(store), KADASTER)
+    assert (
+        row_cells(kadaster, M + "service-description")["m-time"] == "151 ms"
+    )
+    assert row_cells(kadaster, M + "classes")["m-time"] == "73 ms"
+
+    declined = page(client_for(store_declined), KADASTER)
+    assert row_cells(declined, M + "classes")["m-time"] == ""
 
 
 # ---------------------------------------------------------------------------
@@ -585,6 +765,41 @@ def test_the_legend_explains_all_seven_states(client_for, store):
     text = page(client_for(store), KADASTER)
     listed = [row["data-state"] for row in with_attribute(text, "data-state")]
     assert listed == [state.slug for state in verdict_encoding.STATES]
+
+
+def test_the_legend_labels_and_counts_the_states_on_this_page(
+    client_for, store
+):
+    """The legend's count is a claim about this page, and it is checked.
+
+    kadaster's eight measured metrics in run-with-samples.nq are seven
+    verified and one undeclared-but-verified, so those are the only two
+    non-zero counts, and every other state is listed at zero rather than
+    dropped: the legend explains an encoding, not this endpoint. qlever's
+    counts differ on the same fixture, which is what makes this catch a
+    legend printing one number everywhere.
+    """
+    kadaster = legend_cells(page(client_for(store), KADASTER))
+    assert {
+        slug: entry["l-count"] for slug, entry in kadaster.items()
+    } == {
+        "verified": "7",
+        "undeclared-but-verified": "1",
+        "declared-only": "0",
+        "declared-but-wrong": "0",
+        "indeterminate": "0",
+        "absent": "0",
+        "not-measured": "0",
+    }
+    for state in verdict_encoding.STATES:
+        assert kadaster[state.slug]["l-label"] == state.label
+
+    qlever = legend_cells(page(client_for(store), QLEVER))
+    assert {
+        slug: entry["l-count"]
+        for slug, entry in qlever.items()
+        if entry["l-count"] != "0"
+    } == {"verified": "5", "indeterminate": "2", "absent": "1"}
 
 
 def test_a_legend_swatch_is_drawn_exactly_like_the_chip_it_explains(
