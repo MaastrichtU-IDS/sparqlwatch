@@ -51,8 +51,24 @@ run against itself with a single verdict altered, exactly one measurement had tw
 `dqv:value`s.
 
 A graph that asserts a measurement is both `verified` and `indeterminate` is worse
-than either, and the run graph is supposed to be immutable. So the loader drops
-the graphs named in the file, then loads.
+than either, and the run graph is supposed to be immutable.
+
+**D2a. PARSE EVERYTHING BEFORE DESTROYING ANYTHING.** An earlier revision of this
+plan said "drop the graphs named in the file, then load", and a review found that
+**loses an entire run**. I verified it: with a real run in the store and a
+truncated re-run file, dropping first and then loading leaves the store at **0
+quads and 0 graphs**, because the load fails after the destruction. A truncated
+`.nq` is not a contrived input either: it is exactly what a crashed or interrupted
+prober produces, which is the whole reason stage 1c-b4 exists.
+
+So the order is: parse the incoming bytes **completely** (`pyoxigraph.parse`, which
+never touches the store), derive the graph names from the parsed quads, and only
+then drop and insert. I verified the safe order: the same malformed file is
+rejected before the store is touched, leaving all 278 quads and 1 graph intact,
+and a subsequent good load still replaces cleanly.
+
+Never destroy until the replacement is in hand. Say that in a comment, because
+"drop then load" reads as the obvious implementation and is the wrong one.
 
 **D3. Queries are files, not strings inside code.** This project's stated thesis
 is that scoring is computed as queries over stored observations, so a query is a
@@ -122,13 +138,30 @@ Facts you will need, verified:
 dependencies float is not one anybody should trust, and the spec's rejection of
 umakadata cites its EOL stack as the decisive reason.
 
-- [ ] **Step 2: Copy the fixture in**
+- [ ] **Step 2: Copy the fixture in, and build the two the real run cannot provide**
 
 Copy the real run into `web/tests/fixtures/run-with-samples.nq` and commit it. It
-is 278 quads and carries content samples for two endpoints, so it exercises the
-interesting paths. State its provenance in a comment at the top of the test file
-that uses it: which endpoints, which date, and that it is a real sweep rather than
-a hand-written fixture.
+is 278 quads and carries content samples for two endpoints. State its provenance
+in a comment in the test file that uses it: which endpoints, which date, and that
+it is a real sweep.
+
+**Two more fixtures are needed, because the real run cannot exercise two cases the
+query must get right.** A review found that without them, a wrong implementation
+passes everything:
+
+- `run-truncated.nq`: a sample with `sw:sampleTruncated true`. No endpoint in the
+  registry holds more than 200 classes, so this state cannot be captured live.
+  Hand-write a small one and mark it **synthetic** in a comment saying why. Note
+  that the limit is not in the graph, only the size and the flag, so a small
+  truncated sample is perfectly coherent.
+  Without this fixture, an implementation that hardcodes `truncated = False`
+  passes every other test in this plan.
+
+- `run-two-sweeps.nq`: the **same endpoint** sampled in two runs with **different**
+  values, so "the most recent run" is testable. Derive it from the real run by
+  rewriting the run IRI and altering a value, and say so. Without it, a query that
+  unions every run's samples passes every other test, which the review verified by
+  building exactly that query.
 
 - [ ] **Step 3: A test that proves the store works**
 
@@ -238,12 +271,26 @@ Say in a comment why replacing is right, citing the two-verdict case rather than
 duplication, since RDF set semantics already handle duplication and a reader who
 thinks that is the reason will "simplify" this away.
 
+- [ ] **Step 3a: The input shapes a review found untested**
+
+Add a test for each, because each is reachable and none is covered above:
+
+- **a malformed file** must leave an existing run untouched. This is the D2a case
+  and the most important test in this task: I measured a real run going from 278
+  quads to 0 under the naive order.
+- **a file with no named graphs** (only default-graph triples). Decide what that
+  means, state it, and test it. Refusing is defensible; silently loading into the
+  default graph is not, since every run this project emits is a named graph and a
+  file without one is a different thing than it claims to be.
+- **a file with several named graphs** must replace all of them and nothing else.
+
 - [ ] **Step 4: Prove the tests are load-bearing**
 
 Mutations, each verified applied: load without dropping (the changed-rerun test
 must fail); drop every graph rather than the named ones (the coexist test must
-fail); report `replaced` as always empty (the result test must fail). Restore
-between each.
+fail); report `replaced` as always empty (the result test must fail); drop before
+parsing (the malformed-file test must fail, and this is the one that would have
+shipped data loss). Restore between each.
 
 - [ ] **Step 5: Commit**
 
@@ -269,6 +316,15 @@ git commit -m "feat(web): load a run by replacing its graph, never merging into 
   not return another's values.
 
 - [ ] **Step 1: Write the failing tests**
+
+One correction to this plan's earlier narrative, found by review and worth knowing
+before you write these: **the fixture contains no `sw:NotMeasured` resource at
+all.** It was captured with `--max-cost expensive`, where nothing is declined, so
+`not_measured` was zero. qlever's absence of a sample there is a 30 second request
+timeout producing `dqv:value "indeterminate"`, not a cost-ceiling decline. The
+test below is still the right test, but its reason is the timeout, not the ceiling.
+Distinguishing a declined metric from a timed-out one is worth a second fixture in
+a later slice; do not claim this one covers it.
 
 Against the fixture, whose real values are known:
 
@@ -299,8 +355,35 @@ def test_an_endpoint_with_no_sample_is_not_an_empty_endpoint(store):
     assert r.classes == []
 ```
 
-The second test is the one that catches a query ignoring its parameter, and the
-third is the one that keeps the UI honest.
+```python
+def test_a_truncated_sample_is_reported_as_truncated(store_truncated):
+    """An implementation that hardcodes truncated=False passes every other test
+    here, because no real endpoint in the registry exceeds the 200 cap. A list a
+    reader believes is complete when it is not is the failure the whole sampling
+    design guards against, so it needs its own fixture."""
+    r = endpoint_content(store_truncated, TRUNCATED_ENDPOINT)
+    assert r.truncated is True
+
+def test_only_the_most_recent_run_is_returned(store_two_sweeps):
+    """The same endpoint sampled twice. A query that unions every run passes all
+    the tests above and reports stale classes beside current ones, with no way for
+    a reader to tell which is which. Assert the VALUES, not just the count: a
+    union of two runs can coincidentally have a plausible size."""
+    r = endpoint_content(store_two_sweeps, REPEATED_ENDPOINT)
+    assert CURRENT_ONLY_CLASS in r.classes
+    assert STALE_ONLY_CLASS not in r.classes, "a stale run's values must not appear"
+```
+
+The parameter test catches a query ignoring its argument; the not-sampled test
+keeps the UI honest; and these two catch the wrong implementations a review
+actually built against this plan.
+
+**Define your pytest fixtures explicitly.** The tests above name `store`,
+`store_truncated` and `store_two_sweeps`, and this plan does not say what they
+are. Put them in a `conftest.py`, each loading its own fixture file into a
+`tmp_path` store, and do **not** make them session-scoped over a shared store: a
+test that mutates a shared store makes every later test's result depend on
+ordering.
 
 - [ ] **Step 2: Run them and watch them fail**
 
@@ -340,9 +423,14 @@ reader can tell whether their own run worked.
 
 - [ ] **Step 2: Spec**
 
-The delivery sequence has no entry for this. Add one, and mark stage 2's status
-honestly: the storage and the first read query exist; scoring as queries does not.
-Do not claim stage 2 or stage 3.
+The delivery sequence has no entry for this, and a review flagged that inventing a
+"Stage 2-0" row is inconsistent with how that table is structured and with how
+earlier slices were recorded. Read the table first and follow its existing
+convention for a partial delivery, rather than adding a new row shaped unlike its
+neighbours.
+
+Mark stage 2's status honestly whichever way you record it: the storage and one
+read query exist; scoring as queries does not. Do not claim stage 2 or stage 3.
 
 - [ ] **Step 3: Commit**
 
