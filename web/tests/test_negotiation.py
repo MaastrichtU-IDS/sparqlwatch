@@ -25,10 +25,41 @@ from app import ENDPOINT_PATH, app, get_store
 KADASTER = "https://data.kkg.kadaster.nl/query"
 TRUNCATED = "https://truncated.example/sparql"
 UNKNOWN = "https://nobody-has-ever-probed-this.example/sparql"
+PROPERTIES_ONLY = "https://properties-only.example/sparql"
 
 DQV = "http://www.w3.org/ns/dqv#"
+PROV = "http://www.w3.org/ns/prov#"
 SW = "urn:sparqlwatch:"
 M = SW + "metric:"
+
+ACTIVITY = SW + "activity:"
+SAMPLING_SWEEP = "2026-08-22T16:00:00Z"
+DECLINING_SWEEP = "2026-08-22T18:00:00Z"
+
+# Every metric run-two-sweeps.nq measures on kadaster in its current (16:00)
+# run, with the verdict that run recorded. All eight, because "both
+# renderings represent every verdict identically" is the claim being made.
+CURRENT_VERDICTS = {
+    M + "availability": "verified",
+    M + "classes": "verified",
+    M + "cors": "verified",
+    M + "cors-preflight": "verified",
+    M + "geo-data": "verified",
+    M + "geo-functions": "undeclared-but-verified",
+    M + "has-classes": "verified",
+    M + "service-description": "verified",
+}
+
+# The url values that cannot be an absolute IRI, so cannot name an endpoint.
+# An empty one is what a submitted-but-empty form field sends and a trailing
+# space is what a copy-paste sends, so neither is exotic.
+MALFORMED_URLS = (
+    "not a url",
+    "",
+    "http://a b/",
+    "<script>",
+    "https://data.kkg.kadaster.nl/query ",
+)
 
 CURRENT_CLASSES_VERDICT = "verified"
 STALE_CLASSES_VERDICT = "indeterminate"
@@ -139,6 +170,29 @@ def html_declined(response):
         for element in parser.elements
         if "data-metric" in element and "data-declined" in element
     }
+
+
+def objects_of(store, subject, predicate):
+    return {
+        quad.object
+        for quad in store.quads_for_pattern(subject, predicate, None)
+    }
+
+
+def rdf_verdicts(graph):
+    """The metric -> verdict mapping the RDF document states.
+
+    Read out of the served document rather than out of the store, so this is
+    what a machine consuming this resource would conclude.
+    """
+    verdicts = {}
+    for quad in graph.quads_for_pattern(
+        None, NamedNode(DQV + "isMeasurementOf"), None
+    ):
+        values = objects_of(graph, quad.subject, NamedNode(DQV + "value"))
+        assert len(values) == 1, f"{quad.subject} carries {len(values)} verdicts"
+        verdicts[quad.object.value] = values.pop().value
+    return verdicts
 
 
 def test_accept_html_serves_html(client_for, store):
@@ -337,32 +391,28 @@ def test_an_endpoint_known_only_by_a_content_sample_is_served(
 def test_the_two_representations_agree(client_for, store_two_sweeps):
     """The defect this file exists to prevent.
 
-    run-two-sweeps.nq measures kadaster's sw:metric:classes as "verified" in
-    the current (16:00) run and "indeterminate" in the stale (14:00) one.
-    The HTML path picks its run through endpoint_measurements.rq's SELECT and
-    the RDF path through endpoint_description.rq's CONSTRUCT, so the two can
-    drift: this asserts they agree, and that they agree on the current run's
-    value rather than merely on each other.
+    run-two-sweeps.nq measures eight metrics on kadaster, and its
+    sw:metric:classes reads "verified" in the current (16:00) run and
+    "indeterminate" in the stale (14:00) one. The HTML path picks its run
+    through endpoint_measurements.rq's SELECT and the RDF path through
+    endpoint_description.rq's CONSTRUCT, so the two can drift: this asserts
+    that all eight agree, and that they agree on the current run's values
+    rather than merely on each other.
     """
     client = client_for(store_two_sweeps)
 
     shown = html_verdicts(get(client, KADASTER, accept="text/html"))
-    assert shown[M + "classes"] == CURRENT_CLASSES_VERDICT
-
     graph = graph_of(get(client, KADASTER, accept="text/turtle"))
-    measurement = subjects_with(
-        graph, NamedNode(DQV + "isMeasurementOf"), NamedNode(M + "classes")
-    )
-    assert len(measurement) == 1, "two runs measured this metric; one is current"
-    served = {
-        quad.object.value
-        for quad in graph.quads_for_pattern(
-            measurement.copy().pop(), NamedNode(DQV + "value"), None
-        )
-    }
-    assert served == {shown[M + "classes"]}
-    assert served == {CURRENT_CLASSES_VERDICT}
-    assert STALE_CLASSES_VERDICT not in served
+    served = rdf_verdicts(graph)
+
+    # Every metric the current run measured, in both renderings, with the
+    # value that run recorded. One metric would leave seven unchecked, and
+    # the drift this guards against does not have to touch every metric.
+    assert shown == CURRENT_VERDICTS
+    assert served == CURRENT_VERDICTS
+    assert served == shown
+    assert shown[M + "classes"] == CURRENT_CLASSES_VERDICT
+    assert STALE_CLASSES_VERDICT not in served.values()
     assert STALE_RUN_STAMP not in response_text_of(graph), (
         "the stale run's measurement IRIs must not appear at all"
     )
@@ -386,3 +436,125 @@ def test_the_html_reports_a_decline_as_a_decline(client_for, store_declined):
     assert response.status_code == 200
     assert html_declined(response)[M + "classes"] == "cost-ceiling"
     assert M + "classes" not in html_verdicts(response)
+
+
+def test_the_rdf_dates_the_sample_by_the_sweep_that_took_it(
+    client_for, store_stale_sample
+):
+    """A consumer must be able to tell which sweep saw what.
+
+    In this store the newest run that measured kadaster is the 18:00 sweep,
+    which declined sw:metric:classes, and the newest run that sampled it is
+    the 16:00 one. The document therefore carries two activities, and every
+    fact in it has to hang off the right one: a document holding one activity
+    and an unlinked sample invites the consumer to date the sample to the
+    sweep that declined to look.
+    """
+    graph = graph_of(
+        get(client_for(store_stale_sample), KADASTER, accept="text/turtle")
+    )
+
+    samples = subjects_with(
+        graph, NamedNode(SW + "sampledBy"), NamedNode(M + "classes")
+    )
+    assert len(samples) == 1
+    sample = samples.pop()
+    assert objects_of(graph, sample, NamedNode(PROV + "wasGeneratedBy")) == {
+        NamedNode(ACTIVITY + SAMPLING_SWEEP)
+    }
+    assert objects_of(
+        graph,
+        NamedNode(ACTIVITY + SAMPLING_SWEEP),
+        NamedNode(PROV + "generatedAtTime"),
+    ) == {
+        Literal(
+            SAMPLING_SWEEP,
+            datatype=NamedNode("http://www.w3.org/2001/XMLSchema#dateTime"),
+        )
+    }
+
+    declines = subjects_with(
+        graph, NamedNode(SW + "notMeasuredMetric"), NamedNode(M + "classes")
+    )
+    assert len(declines) == 1
+    assert objects_of(
+        graph, declines.pop(), NamedNode(PROV + "wasGeneratedBy")
+    ) == {NamedNode(ACTIVITY + DECLINING_SWEEP)}
+
+    stamps = {
+        quad.object.value
+        for quad in graph.quads_for_pattern(
+            None, NamedNode(PROV + "generatedAtTime"), None
+        )
+    }
+    assert stamps == {SAMPLING_SWEEP, DECLINING_SWEEP}
+
+
+def test_a_sample_with_no_provenance_is_still_served(
+    client_for, store_truncated
+):
+    """run-truncated.nq's sample carries no prov:wasGeneratedBy, which the
+    real prober always writes but this synthetic fixture does not. The
+    provenance the document can carry is OPTIONAL for exactly that reason: a
+    sample the HTML shows must never be one the RDF omits."""
+    graph = graph_of(
+        get(client_for(store_truncated), TRUNCATED, accept="text/turtle")
+    )
+    samples = subjects_with(
+        graph, NamedNode(SW + "sampledFrom"), NamedNode(TRUNCATED)
+    )
+    assert len(samples) == 1
+    assert objects_of(
+        graph, samples.pop(), NamedNode(PROV + "wasGeneratedBy")
+    ) == set()
+
+
+def test_a_malformed_url_is_a_400(client_for, store):
+    """A string that cannot be an IRI is a malformed request, not an
+    identifier that missed.
+
+    A 500 tells the client the service is broken when the request was, and
+    these are the two ordinary ways a person sends one: an empty form field
+    and a copy-paste with a trailing space. A well-formed IRI this store has
+    never heard of stays a 404, which is a statement about the store.
+    """
+    client = client_for(store)
+    for url in MALFORMED_URLS:
+        for accept in ("text/html", "text/turtle"):
+            response = get(client, url, accept=accept)
+            assert response.status_code == 400, f"{url!r} as {accept}"
+            assert "not a valid absolute IRI" in response.text
+
+    for url in ("urn:x", "javascript:alert(1)"):
+        assert get(client, url, accept="text/html").status_code == 404, url
+
+
+def test_a_malformed_url_is_not_repaired(client_for, store):
+    """The trailing space is not trimmed away.
+
+    The endpoint IRI round-trips byte for byte by design (see the URL shape
+    comment in web/app.py), so normalising the value would make the page
+    describe a different endpoint from the one asked for.
+    """
+    response = get(client_for(store), KADASTER + " ", accept="text/html")
+    assert response.status_code == 400
+    assert "classes sampled" not in response.text
+
+
+def test_an_endpoint_sampled_only_by_another_metric_is_404_that_says_what_was_checked(
+    client_for, store_properties_sample
+):
+    """The 404 body must not claim ignorance the store contradicts.
+
+    run-properties-sample.nq holds six quads about this endpoint, including a
+    dcat:DataService declaration and a sample of its properties. What is
+    missing is a measurement, a decline, and a class sample, which is what
+    the route actually looks for, so that is what the body says.
+    """
+    for accept in ("text/html", "text/turtle"):
+        response = get(client_for(store_properties_sample), PROPERTIES_ONLY, accept=accept)
+        assert response.status_code == 404
+        body = response.text.lower()
+        assert "no measurement, no decline and no class sample" in body
+        assert "recorded anything about" not in body
+        assert PROPERTIES_ONLY in response.text

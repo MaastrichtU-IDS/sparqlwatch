@@ -243,8 +243,45 @@ comes from the most specific range that matches it rather than from the highest 
 `text/html;q=0` is an explicit refusal of HTML, and reading the `*/*;q=1` as the winner
 instead would turn that refusal into an offer.
 
-A request with no `Accept` header defaults to HTML. An unknown endpoint (one the store holds
-no facts about at all) returns HTTP 404. An unsupported media type returns 406.
+A request with no `Accept` header defaults to HTML. An unsupported media type returns 406.
+
+A `url` that cannot be an absolute IRI (an empty one, which is what a submitted-but-empty
+form field sends, or one with a trailing space, which is what a copy-paste sends) returns
+HTTP 400. The value is not trimmed or otherwise repaired: the endpoint IRI round-trips byte
+for byte, and normalising it would make the response describe a different endpoint from the
+one asked for.
+
+An endpoint for which the store holds no measurement, no decline and no class sample returns
+HTTP 404, and the body says exactly that rather than claiming the store holds no facts about
+the endpoint at all. It can hold others: `endpoint_content.rq` asks only about
+`sw:metric:classes`, so an endpoint known only by a sample from another metric 404s while the
+store describes it (`tests/fixtures/run-properties-sample.nq` is that shape). A knownness test
+that is not tied to one metric belongs to spec stage 2b, where properties sampling lands.
+
+### Which sweep saw what
+
+The two questions this resource answers are answered by two independent run selections:
+`endpoint_measurements.rq` picks the newest run that measured or declined anything for the
+endpoint, and `endpoint_content.rq` picks the newest run that published a class sample for
+it. Those are different runs whenever the newest sweep declined `sw:metric:classes`, which
+the prober does at its default cost ceiling, so it is the ordinary case rather than an odd
+one.
+
+Both facts are kept, and each is attributed to the sweep that observed it. When the two runs
+are the same run, the page reads as one sweep's report and says nothing about a second. When
+they differ:
+
+- the header sentence covers the verdicts only, and names the measuring sweep's timestamp
+- the class sample carries its own run and timestamp (`data-sample-run`,
+  `data-sample-generated-at`) and a sentence beside it naming the sweep that took it
+- a run that declined `sw:metric:classes` says so in the sample panel, so a reader is not left
+  to assume the sample beside it is this sweep's
+- the RDF emits both activities with their own `prov:generatedAtTime`, and links the sample to
+  its own activity by `prov:wasGeneratedBy` where the store holds that link
+
+Neither the page nor the RDF says which of the two sweeps is the later one. That is a
+comparison of `xsd:dateTime` values, and both timestamps are printed so a reader or a
+consumer can make it.
 
 ### RDF and HTML agreement
 
@@ -256,7 +293,9 @@ The HTML and RDF are two representations of one resource, derived independently:
   directly from the store without rebuilding in Python
 
 Both come from the same store by two independent queries, neither re-derived from the other.
-A test asserts that both renderings represent every verdict identically.
+`test_the_two_representations_agree` asserts that the two renderings state the same verdict
+for every one of the eight metrics its fixture measures, and that both state the current
+run's values rather than merely agreeing with each other.
 
 ### Verdict encoding
 

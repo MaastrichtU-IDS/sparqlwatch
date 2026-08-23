@@ -16,8 +16,8 @@
 # the RDF representation cannot assert anything the graph does not already
 # say. The only information deliberately dropped is the graph name, because
 # a CONSTRUCT yields triples; the run is still identifiable through
-# prov:wasGeneratedBy and the activity's prov:generatedAtTime, which are
-# emitted with the measurements.
+# prov:wasGeneratedBy and the activity's prov:generatedAtTime, which every
+# branch emits, the sample's branch included.
 #
 # ?endpoint is the input. It is substituted with a NamedNode before
 # execution (SEP-0007 substitution), so it is never interpolated into this
@@ -36,6 +36,10 @@
 # the run selection endpoint_measurements.rq and endpoint_content.rq each
 # make on their own, and it has to be, because the HTML representation is
 # built from those two queries and the two representations must agree.
+# Because they do not share a run, each branch emits its own activity and
+# that activity's timestamp: a document that named one activity and left the
+# sample hanging off nothing would invite a consumer to date the sample to
+# the sweep that declined to take it.
 #
 # Each branch's "most recent" is the run whose activity has the greatest
 # prov:generatedAtTime, expressed as "no newer run recorded this for this
@@ -76,7 +80,17 @@ CONSTRUCT {
           sw:sampledBy sw:metric:classes ;
           sw:sampleSize ?size ;
           sw:sampleTruncated ?truncated ;
-          sw:sampledValue ?class .
+          sw:sampledValue ?class ;
+          prov:wasGeneratedBy ?sampleProvenance .
+  # The sample's OWN run, which is routinely not the run the measurements
+  # came from: a sweep that declined sw:metric:classes on its cost ceiling
+  # publishes no sample, so the newest run that sampled this endpoint can be
+  # an older one. Without this the document held a single activity, the
+  # measurements' one, and a sample linked to nothing, so a consumer dating
+  # the sample by the only activity in the document dated it to a sweep that
+  # never took it.
+  ?sampleActivity a prov:Activity ;
+                  prov:generatedAtTime ?sampleGeneratedAt .
 }
 WHERE {
   {
@@ -140,6 +154,15 @@ WHERE {
       # that genuinely found no classes must still report its size and its
       # truncation flag instead of vanishing.
       OPTIONAL { ?sample sw:sampledValue ?class }
+      # OPTIONAL, and bound separately from ?sampleActivity, because a
+      # sample is not obliged to carry this link: every content-sample the
+      # real prober writes does, and the synthetic
+      # web/tests/fixtures/run-truncated.nq does not. Asserting
+      # ?sample prov:wasGeneratedBy ?sampleActivity from the run's activity
+      # alone would emit a triple no run graph holds, which is the one thing
+      # this CONSTRUCT is built not to do; requiring the link instead would
+      # drop a sample the HTML representation still shows.
+      OPTIONAL { ?sample prov:wasGeneratedBy ?sampleProvenance }
     }
     FILTER NOT EXISTS {
       GRAPH ?newerSampleRun {

@@ -625,29 +625,72 @@ def endpoint_resource(
             media_type="text/plain; charset=utf-8",
         )
 
+    # A url that cannot be an absolute IRI cannot name an endpoint, and both
+    # store queries would raise ValueError converting it. That is a malformed
+    # request, not an identifier that missed: 400 rather than 404, because
+    # this store holding nothing about the string is not the interesting
+    # fact, and rather than the 500 an uncaught ValueError produced, which
+    # tells the client the service is broken when the request was. An empty
+    # url is what a submitted-but-empty form field sends and a trailing space
+    # is what a copy-paste sends, so this is an ordinary request rather than
+    # an attack. The value is NOT trimmed, case-folded or otherwise
+    # repaired: the endpoint IRI round-trips byte for byte by design (see
+    # "The URL shape" above), and silently normalising it would make this
+    # resource describe a different endpoint from the one asked for.
+    try:
+        NamedNode(url)
+    except ValueError:
+        # Like the 404 below, this is not a representation of the resource,
+        # so it is not negotiated. It says what was wrong with the request.
+        return Response(
+            content=(
+                f"the url parameter is not a valid absolute IRI, so it "
+                f"cannot name a SPARQL endpoint: {url!r}\n"
+            ),
+            status_code=400,
+            media_type="text/plain; charset=utf-8",
+        )
+
     measurements = endpoint_measurements(store, url)
     content = endpoint_content(store, url)
 
-    # "Known" is "the store holds any fact about this endpoint", not "the
-    # store holds a measurement". web/tests/fixtures/run-truncated.nq is a
-    # class sample with no measurement beside it, and 404ing that would deny
-    # a resource this service demonstrably has facts about.
+    # What is actually checked, and it is narrower than "the store holds any
+    # fact about this endpoint": a measurement, a decline, or a class sample.
+    # endpoint_content.rq pins sw:sampledBy sw:metric:classes, so an endpoint
+    # known only by a sample from another metric reaches this branch while
+    # the store describes it (web/tests/fixtures/run-properties-sample.nq is
+    # exactly that shape). The body therefore says what was looked for
+    # instead of claiming the store knows nothing.
+    #
+    # A knownness test that is not tied to one metric belongs to spec stage
+    # 2b, where properties sampling lands and every properties-only endpoint
+    # would otherwise 404. Widening it here would mean widening
+    # endpoint_content.rq's pin, which is the line that keeps another
+    # metric's values from being published as an endpoint's classes.
+    #
+    # It cannot be narrowed to "holds a measurement" either:
+    # web/tests/fixtures/run-truncated.nq is a class sample with no
+    # measurement beside it, and 404ing that would deny a resource this
+    # service demonstrably has facts about.
     if not measurements.assessed and not content.sampled:
         # The 404 body is not a representation of the resource (there is no
         # resource), so it is not negotiated. A person gets a sentence; a
         # machine gets the status code it actually reads.
+        checked = (
+            "measurement, no decline and no class sample in this store "
+            "mentions"
+        )
         if media_type == HTML_MEDIA_TYPE:
             return Response(
                 content=(
                     f"<title>Not found</title>\n<h1>Not found</h1>\n"
-                    f"<p>No run in this store has recorded anything about "
-                    f"{html.escape(url)}.</p>\n"
+                    f"<p>No {checked} {html.escape(url)}.</p>\n"
                 ),
                 status_code=404,
                 media_type="text/html; charset=utf-8",
             )
         return Response(
-            content=f"no run in this store has recorded anything about {url}\n",
+            content=f"no {checked} {url}\n",
             status_code=404,
             media_type="text/plain; charset=utf-8",
         )
