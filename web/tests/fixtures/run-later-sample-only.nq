@@ -1,0 +1,35 @@
+# SYNTHETIC fixture. Not a captured sweep.
+# Hand-built to be loaded BESIDE fixtures/run-with-samples.nq, which is the
+# real 2026-08-22T16:00:00Z sweep of the same endpoint
+# (data.kkg.kadaster.nl/query). This run is at 22:00 and records ONLY a
+# class sample: no dqv:QualityMeasurement and no sw:NotMeasured fact for the
+# endpoint at all.
+#
+# What the pair reproduces. The two run selections this service makes are
+# independent: the newest run that MEASURED an endpoint
+# (web/queries/endpoint_measurements.rq) and the newest run that SAMPLED it
+# (web/queries/endpoint_content.rq). Loaded together with the 16:00 sweep,
+# the verdicts come from 16:00 and the class sample from 22:00, so the page
+# and the RDF must attribute each fact to its own sweep. The pair
+# run-with-samples.nq + run-declined.nq skews the other way, an older sample
+# under a newer sweep that declined the metric.
+#
+# sw:sampleTruncated is true here for the same reason as in
+# fixtures/run-truncated.nq: the size limit that triggers truncation lives
+# in the prober and not in this graph, so a two-value truncated sample is
+# coherent on its own. Its two values appear in no other fixture, so a test
+# can tell which sweep's sample it is looking at.
+#
+# 12 quads, one run graph (urn:sparqlwatch:run:2026-08-22T22:00:00Z).
+<urn:sparqlwatch:activity:2026-08-22T22:00:00Z> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/prov#Activity> <urn:sparqlwatch:run:2026-08-22T22:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-22T22:00:00Z> <http://www.w3.org/ns/prov#generatedAtTime> "2026-08-22T22:00:00Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <urn:sparqlwatch:run:2026-08-22T22:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-22T22:00:00Z> <urn:sparqlwatch:proberVersion> "0.1.0" <urn:sparqlwatch:run:2026-08-22T22:00:00Z> .
+<https://data.kkg.kadaster.nl/query> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dcat#DataService> <urn:sparqlwatch:run:2026-08-22T22:00:00Z> .
+<urn:sparqlwatch:content-sample:2026-08-22T22:00:00Z:0> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <urn:sparqlwatch:ContentSample> <urn:sparqlwatch:run:2026-08-22T22:00:00Z> .
+<urn:sparqlwatch:content-sample:2026-08-22T22:00:00Z:0> <urn:sparqlwatch:sampledFrom> <https://data.kkg.kadaster.nl/query> <urn:sparqlwatch:run:2026-08-22T22:00:00Z> .
+<urn:sparqlwatch:content-sample:2026-08-22T22:00:00Z:0> <urn:sparqlwatch:sampledBy> <urn:sparqlwatch:metric:classes> <urn:sparqlwatch:run:2026-08-22T22:00:00Z> .
+<urn:sparqlwatch:content-sample:2026-08-22T22:00:00Z:0> <urn:sparqlwatch:sampleTruncated> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> <urn:sparqlwatch:run:2026-08-22T22:00:00Z> .
+<urn:sparqlwatch:content-sample:2026-08-22T22:00:00Z:0> <urn:sparqlwatch:sampleSize> "2"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-22T22:00:00Z> .
+<urn:sparqlwatch:content-sample:2026-08-22T22:00:00Z:0> <urn:sparqlwatch:sampledValue> <urn:sparqlwatch:test:later-sample-class-a> <urn:sparqlwatch:run:2026-08-22T22:00:00Z> .
+<urn:sparqlwatch:content-sample:2026-08-22T22:00:00Z:0> <urn:sparqlwatch:sampledValue> <urn:sparqlwatch:test:later-sample-class-b> <urn:sparqlwatch:run:2026-08-22T22:00:00Z> .
+<urn:sparqlwatch:content-sample:2026-08-22T22:00:00Z:0> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-08-22T22:00:00Z> <urn:sparqlwatch:run:2026-08-22T22:00:00Z> .

@@ -38,6 +38,27 @@ Fixture provenance:
   (spec stage 2b). It exists to make the content query's pin to
   sw:metric:classes testable, so that another metric's values can never be
   published as an endpoint's classes.
+
+- ``fixtures/run-classes-absent.nq`` is SYNTHETIC: a run whose
+  sw:metric:classes measurement reads dqv:value "absent", which no captured
+  sweep holds, with no sample beside it. "absent" is one of the two
+  assertive verdicts, so it is the one missing sample that is a finding
+  rather than a gap, and the page has to say so.
+
+- ``fixtures/run-later-sample-only.nq`` is SYNTHETIC: a run that publishes a
+  class sample for data.kkg.kadaster.nl/query and measures nothing. Loaded
+  beside the real 16:00 sweep it makes "the newest run that measured this
+  endpoint is not the newest run that sampled it" testable in the direction
+  where the sample is the newer of the two; run-with-samples.nq beside
+  run-declined.nq gives the other direction, an older sample under a newer
+  sweep that declined the metric.
+
+- ``fixtures/run-hostile-literals.nq`` is SYNTHETIC: one dqv:value and one
+  sw:notMeasuredReason carrying HTML markup, which no captured sweep holds.
+  They are the literals, not the IRIs, because an IRI cannot contain '<',
+  '>' or '"' at all and pyoxigraph rejects one that tries, so the literals
+  are the values that can carry markup onto the page. Both reach the page
+  verbatim, in a data- attribute and in the text a reader sees.
 """
 
 from pathlib import Path
@@ -49,6 +70,10 @@ TRUNCATED_FIXTURE = Path(__file__).parent / "fixtures" / "run-truncated.nq"
 TWO_SWEEPS_FIXTURE = Path(__file__).parent / "fixtures" / "run-two-sweeps.nq"
 ZERO_CLASSES_FIXTURE = Path(__file__).parent / "fixtures" / "run-zero-classes.nq"
 PROPERTIES_FIXTURE = Path(__file__).parent / "fixtures" / "run-properties-sample.nq"
+CLASSES_ABSENT_FIXTURE = Path(__file__).parent / "fixtures" / "run-classes-absent.nq"
+LATER_SAMPLE_FIXTURE = (
+    Path(__file__).parent / "fixtures" / "run-later-sample-only.nq"
+)
 
 
 def test_the_fixture_loads_and_reopens(tmp_path):
@@ -115,3 +140,44 @@ def test_the_properties_fixture_samples_no_classes(tmp_path):
         "ASK { GRAPH ?g { ?s <urn:sparqlwatch:sampledBy> "
         "<urn:sparqlwatch:metric:classes> } }"
     )), "nothing here may be sampledBy metric:classes"
+
+
+def test_the_classes_absent_fixture_measures_absent_and_samples_nothing(tmp_path):
+    """run-classes-absent.nq is hand-built (see its header). Both halves are
+    the point: the classes verdict is "absent", and there is no
+    sw:ContentSample anywhere, because the prober writes no sample beside
+    that verdict. A fixture that gained one would stop testing the case."""
+    store = Store(str(tmp_path / "s"))
+    store.load(CLASSES_ABSENT_FIXTURE.read_bytes(), format=RdfFormat.N_QUADS)
+    assert len(store) == 16, f"this fixture is 16 quads, got {len(store)}"
+    assert len(list(store.named_graphs())) == 1
+    assert bool(store.query(
+        "ASK { GRAPH ?g { ?m <http://www.w3.org/ns/dqv#isMeasurementOf> "
+        "<urn:sparqlwatch:metric:classes> ; "
+        "<http://www.w3.org/ns/dqv#value> 'absent' } }"
+    )), "the classes metric must read absent"
+    assert not bool(store.query(
+        "ASK { GRAPH ?g { ?s <urn:sparqlwatch:sampledFrom> ?e } }"
+    )), "there must be no content sample at all"
+
+
+def test_the_later_sample_fixture_samples_without_measuring(tmp_path):
+    """run-later-sample-only.nq is hand-built (see its header). It must hold a
+    class sample for kadaster and NO measurement and no decline, because that
+    is what makes the run invisible to endpoint_measurements.rq and so
+    produces the two-run skew it exists for."""
+    store = Store(str(tmp_path / "s"))
+    store.load(LATER_SAMPLE_FIXTURE.read_bytes(), format=RdfFormat.N_QUADS)
+    assert len(store) == 12, f"this fixture is 12 quads, got {len(store)}"
+    assert bool(store.query(
+        "ASK { GRAPH ?g { ?s <urn:sparqlwatch:sampledFrom> "
+        "<https://data.kkg.kadaster.nl/query> ; "
+        "<urn:sparqlwatch:sampledBy> <urn:sparqlwatch:metric:classes> } }"
+    )), "the sample must be kadaster's classes"
+    for predicate in (
+        "<http://www.w3.org/ns/dqv#computedOn>",
+        "<urn:sparqlwatch:notMeasuredOn>",
+    ):
+        assert not bool(store.query(
+            f"ASK {{ GRAPH ?g {{ ?s {predicate} ?e }} }}"
+        )), f"this run must record no {predicate}"

@@ -1,0 +1,35 @@
+# SYNTHETIC fixture. Not a captured sweep.
+# Hand-built because no endpoint in this project's registry has ever
+# answered the classes query with a parsed, empty result: every captured
+# sweep records sw:metric:classes as "verified" or "indeterminate", so a
+# dqv:value "absent" for that metric cannot be captured live today. The
+# shape is the same as any other measured run; only the verdict differs.
+#
+# Why "absent" needs a fixture of its own. It is one of the two ASSERTIVE
+# verdicts in the closed vocabulary: prober/src/resolve.rs records it for a
+# SelectIris probe only when the endpoint answered with a parsed SPARQL-JSON
+# result that bound nothing, which is evidence the endpoint holds no
+# classes rather than an absence of evidence. The prober writes no
+# sw:ContentSample beside it (it skips a sample that bound no values), so
+# this run measures the metric and publishes no sample, and the page must
+# say that the probe established the negative instead of saying, as it
+# would for "indeterminate", that nothing was established.
+#
+# 16 quads, one run graph (urn:sparqlwatch:run:2026-08-22T20:00:00Z), one
+# endpoint, two dqv:QualityMeasurement facts and no sw:ContentSample.
+<urn:sparqlwatch:activity:2026-08-22T20:00:00Z> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/prov#Activity> <urn:sparqlwatch:run:2026-08-22T20:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-22T20:00:00Z> <http://www.w3.org/ns/prov#generatedAtTime> "2026-08-22T20:00:00Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <urn:sparqlwatch:run:2026-08-22T20:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-22T20:00:00Z> <urn:sparqlwatch:proberVersion> "0.1.0" <urn:sparqlwatch:run:2026-08-22T20:00:00Z> .
+<https://no-classes.example/sparql> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dcat#DataService> <urn:sparqlwatch:run:2026-08-22T20:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-22T20:00:00Z:0> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> <urn:sparqlwatch:run:2026-08-22T20:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-22T20:00:00Z:0> <http://www.w3.org/ns/dqv#computedOn> <https://no-classes.example/sparql> <urn:sparqlwatch:run:2026-08-22T20:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-22T20:00:00Z:0> <http://www.w3.org/ns/dqv#isMeasurementOf> <urn:sparqlwatch:metric:classes> <urn:sparqlwatch:run:2026-08-22T20:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-22T20:00:00Z:0> <http://www.w3.org/ns/dqv#value> "absent" <urn:sparqlwatch:run:2026-08-22T20:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-22T20:00:00Z:0> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-08-22T20:00:00Z> <urn:sparqlwatch:run:2026-08-22T20:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-22T20:00:00Z:0> <urn:sparqlwatch:elapsedMs> "42"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-22T20:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-22T20:00:00Z:1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> <urn:sparqlwatch:run:2026-08-22T20:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-22T20:00:00Z:1> <http://www.w3.org/ns/dqv#computedOn> <https://no-classes.example/sparql> <urn:sparqlwatch:run:2026-08-22T20:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-22T20:00:00Z:1> <http://www.w3.org/ns/dqv#isMeasurementOf> <urn:sparqlwatch:metric:availability> <urn:sparqlwatch:run:2026-08-22T20:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-22T20:00:00Z:1> <http://www.w3.org/ns/dqv#value> "verified" <urn:sparqlwatch:run:2026-08-22T20:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-22T20:00:00Z:1> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-08-22T20:00:00Z> <urn:sparqlwatch:run:2026-08-22T20:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-22T20:00:00Z:1> <urn:sparqlwatch:elapsedMs> "37"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-22T20:00:00Z> .

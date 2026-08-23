@@ -1,2 +1,23 @@
+# The store and the queries.
 pyoxigraph==0.5.9
+
+# The HTTP surface. starlette and uvicorn are pinned even though fastapi
+# would pull the first and only the server needs the second: an unpinned
+# transitive dependency is an unversioned dependency, and starlette's test
+# client is the thing the web tests run against.
+fastapi==0.141.1
+starlette==1.6.0
+uvicorn==0.52.4
+
+# Templating. web/templates/endpoint.html is rendered through it, with
+# autoescaping on: every value on that page (endpoint URLs, class IRIs,
+# metric ids) comes from a measured third party.
+jinja2==3.1.6
+
+# Tests. httpx2 rather than httpx: starlette 1.6.0's test client imports
+# httpx2 when it is installed and warns that httpx is deprecated when it is
+# not. Pinning the deprecated path into a new subsystem, in a project that
+# replaced its predecessor for having an end-of-life stack, would be that
+# same mistake in miniature.
 pytest==9.1.1
+httpx2==2.12.0
