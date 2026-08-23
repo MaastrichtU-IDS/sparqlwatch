@@ -243,7 +243,20 @@ comes from the most specific range that matches it rather than from the highest 
 `text/html;q=0` is an explicit refusal of HTML, and reading the `*/*;q=1` as the winner
 instead would turn that refusal into an offer.
 
-A request with no `Accept` header defaults to HTML. An unsupported media type returns 406.
+A `q` value that does not match RFC 9110's `qvalue` grammar is ignored, so the range keeps
+q=1.0: `text/html;q=abc`, `text/html;q=2` and `text/html;q=-1` all serve HTML. Clamping the
+ones `float()` accepts would make `q=-1` an explicit refusal while `q=abc` was served, which
+is two readings of two equally malformed headers. Two ranges of equal specificity matching one
+representation, which RFC 9110 does not define, are resolved by taking the lower `q`, so
+`text/html;q=1, text/html;q=0` and `text/html;q=0, text/html;q=1` agree, and both are 406.
+
+A request with no `Accept` header defaults to HTML, and so does a header from which no media
+range can be read at all (`*`, `garbage`, `,,,`): it expressed no preference. A header whose
+ranges do parse and which names none we can serve returns 406, because that is a client saying
+what it wants.
+
+A request with no `url` parameter returns HTTP 400 with a plain-text body, not FastAPI's
+default 422 JSON, so that no response on this resource ignores `Accept`.
 
 A `url` that cannot be an absolute IRI (an empty one, which is what a submitted-but-empty
 form field sends, or one with a trailing space, which is what a copy-paste sends) returns

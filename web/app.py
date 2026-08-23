@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import html
 import os
+import re
 from functools import lru_cache
 from pathlib import Path
 
@@ -114,13 +115,28 @@ RDF_MEDIA_TYPES = (
 OFFERED_MEDIA_TYPES = (HTML_MEDIA_TYPE,) + RDF_MEDIA_TYPES
 
 
+# RFC 9110's qvalue grammar, exactly:
+#
+#   qvalue = ( "0" [ "." 0*3DIGIT ] ) / ( "1" [ "." 0*3("0") ] )
+#
+# so "0", "0.5", "0.333", "1", "1.0" and "1.000" are q values and "2", "-1",
+# "1.5", "0.1234", "abc" and the empty string are not. Matching the grammar
+# rather than calling float() is what makes the malformed cases agree with
+# each other: float("-1") succeeds, so clamping it to the 0..1 range read an
+# explicit refusal out of a malformed value ("text/html;q=-1" was a 406)
+# while "q=abc" and "q=2" defaulted to 1.0 and were served. The grammar also
+# bounds the value, so nothing needs clamping afterwards.
+_QVALUE = re.compile(r"(?:0(?:\.[0-9]{0,3})?|1(?:\.0{0,3})?)\Z")
+
+
 def _parse_accept(header: str) -> list[tuple[str, str, float]]:
     """Split an Accept header into (type, subtype, q) triples.
 
     Malformed entries are skipped rather than raising: an Accept header is
     client input, and a request with one unparseable entry among several
-    still expressed a usable preference. A missing or unparseable q defaults
-    to 1.0, as RFC 9110 requires.
+    still expressed a usable preference. A q that is not a qvalue is not a
+    preference at all, so the parameter is ignored and the range keeps the
+    q=1.0 that a range with no q has, as RFC 9110 requires.
     """
     parsed: list[tuple[str, str, float]] = []
     for entry in header.split(","):
@@ -136,11 +152,9 @@ def _parse_accept(header: str) -> list[tuple[str, str, float]]:
             name, _, value = parameter.partition("=")
             if name.strip().lower() != "q":
                 continue
-            try:
+            if _QVALUE.match(value.strip()):
                 quality = float(value.strip())
-            except ValueError:
-                quality = 1.0
-        parsed.append((type_, subtype, max(0.0, min(1.0, quality))))
+        parsed.append((type_, subtype, quality))
     return parsed
 
 
@@ -167,6 +181,15 @@ def _quality_for(media_type: str, ranges: list[tuple[str, str, float]]) -> float
         if specificity > best_specificity:
             best_specificity = specificity
             quality = range_quality
+        elif specificity == best_specificity:
+            # Two ranges of equal specificity matching one representation,
+            # which RFC 9110 does not define. Take the LOWER q, so that
+            # "text/html;q=1, text/html;q=0" and "text/html;q=0,
+            # text/html;q=1" agree instead of one being a page and the other
+            # a 406. That is the same reading as the most-specific-wins rule
+            # above: an explicit refusal anywhere in the header must not be
+            # turned into an offer.
+            quality = min(quality, range_quality)
     return quality
 
 
@@ -184,6 +207,18 @@ def choose_representation(accept: str | None) -> str | None:
         return HTML_MEDIA_TYPE
 
     ranges = _parse_accept(accept)
+    if not ranges:
+        # A header from which no range at all could be read expressed no
+        # preference, so it falls back the way a missing header does. This is
+        # "Accept: *" (invalid per RFC 9110, still sent by some clients),
+        # "Accept: garbage" and "Accept: ,,,".
+        #
+        # This is NOT the case below, where the ranges parsed and none of
+        # them can be served: that is a client saying what it wants, and
+        # serving it something else while claiming success is the wrong
+        # answer a 406 exists to avoid.
+        return HTML_MEDIA_TYPE
+
     best_media_type: str | None = None
     best_quality = 0.0
     # OFFERED_MEDIA_TYPES is in server preference order and the comparison is
@@ -603,8 +638,8 @@ def _endpoint_html(
 @app.get(ENDPOINT_PATH)
 def endpoint_resource(
     request: Request,
-    url: str = Query(
-        ...,
+    url: str | None = Query(
+        None,
         description="The SPARQL endpoint URL this resource describes.",
     ),
     store: Store = Depends(get_store),
@@ -622,6 +657,23 @@ def endpoint_resource(
                 "resource offers " + ", ".join(OFFERED_MEDIA_TYPES) + "\n"
             ),
             status_code=406,
+            media_type="text/plain; charset=utf-8",
+        )
+
+    # No url at all. FastAPI's own answer is a 422 with a JSON body, which
+    # was the one response on this resource that ignored Accept: a person
+    # following the README's curl example without the parameter got JSON. A
+    # missing url and a malformed one are the same class of client error, so
+    # they get the same status and the same kind of body.
+    if url is None:
+        return Response(
+            content=(
+                "this resource describes one endpoint, named by a url query "
+                "parameter, and the request carried none: try "
+                + ENDPOINT_PATH
+                + "?url=https://example.org/sparql\n"
+            ),
+            status_code=400,
             media_type="text/plain; charset=utf-8",
         )
 

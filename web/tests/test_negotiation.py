@@ -357,6 +357,81 @@ def test_a_wildcard_subtype_is_matched(client_for, store):
     assert response.headers["content-type"].startswith("text/html")
 
 
+def test_a_malformed_q_value_is_ignored_rather_than_clamped(client_for, store):
+    """Two equally malformed q values must not get opposite outcomes.
+
+    RFC 9110's qvalue grammar is ( "0" [ "." 0*3DIGIT ] ) / ( "1" [ "."
+    0*3("0") ] ), so none of the values below is a q. float() accepts some of
+    them, though, and clamping what it accepted into the 0..1 range made
+    "q=-1" mean "q=0": an explicit refusal read out of a malformed value,
+    while "q=abc" and "q=2" defaulted to 1.0 and were served. A value that is
+    not a q expresses no preference, so the parameter is ignored and the
+    range keeps the q=1.0 it would have had with no parameter at all.
+    """
+    client = client_for(store)
+    for value in ("abc", "", "nan", "inf", "2", "-1", "1.5", "0.1234", "+1"):
+        response = get(client, KADASTER, accept=f"text/html;q={value}")
+        assert response.status_code == 200, f"q={value!r}"
+        assert response.headers["content-type"].startswith("text/html")
+
+    # The grammar's own values still mean what they say, at both ends and
+    # with every permitted number of decimals.
+    for value in ("0", "0.0", "0.000"):
+        assert get(client, KADASTER, accept=f"text/html;q={value}").status_code == 406
+    for value in ("1", "1.0", "1.000", "0.5", "0.333"):
+        served = get(client, KADASTER, accept=f"text/html;q={value}")
+        assert served.status_code == 200, f"q={value!r}"
+    ranked = get(client, KADASTER, accept="text/html;q=0.5, text/turtle;q=0.6")
+    assert ranked.headers["content-type"].startswith("text/turtle")
+
+
+def test_two_equally_specific_ranges_agree_whichever_order(client_for, store):
+    """One header must not mean two things depending on the order it is in.
+
+    RFC 9110 does not define which of two equally specific ranges wins, and
+    breaking the tie on "first one seen" made "text/html;q=1, text/html;q=0"
+    a page and "text/html;q=0, text/html;q=1" a 406. The lower q wins, so an
+    explicit refusal anywhere in the header is honoured, which is the same
+    reading as the most-specific-wins rule.
+    """
+    client = client_for(store)
+    for accept in (
+        "text/html;q=1, text/html;q=0",
+        "text/html;q=0, text/html;q=1",
+    ):
+        assert get(client, KADASTER, accept=accept).status_code == 406, accept
+
+    # The refusal is of HTML, not of the resource: a representation the
+    # header does not refuse is still served.
+    both = get(
+        client, KADASTER, accept="text/html;q=0, text/html;q=1, text/turtle"
+    )
+    assert both.status_code == 200
+    assert both.headers["content-type"].startswith("text/turtle")
+
+
+def test_a_header_with_no_readable_range_falls_back_to_html(client_for, store):
+    """No range at all is no preference, which is not the same as a refusal.
+
+    "Accept: *" is invalid per RFC 9110 and some clients send it anyway;
+    "garbage" and ",,," are the same shape. None of them contains a media
+    range, so none of them says what the client wants, and a header that says
+    nothing is what a missing header is. A 406 there refuses a request that
+    asked for nothing in particular.
+
+    A header whose ranges DO parse and which we cannot serve stays a 406.
+    That distinction is the whole point: it is a client saying what it wants.
+    """
+    client = client_for(store)
+    for accept in ("*", "garbage", ",,,", ";q=1"):
+        response = get(client, KADASTER, accept=accept)
+        assert response.status_code == 200, accept
+        assert response.headers["content-type"].startswith("text/html")
+
+    for accept in ("application/json", "application/json, application/xml"):
+        assert get(client, KADASTER, accept=accept).status_code == 406, accept
+
+
 def test_an_unknown_endpoint_is_404_as_html(client_for, store):
     response = get(client_for(store), UNKNOWN, accept="text/html")
     assert response.status_code == 404
@@ -527,6 +602,33 @@ def test_a_malformed_url_is_a_400(client_for, store):
 
     for url in ("urn:x", "javascript:alert(1)"):
         assert get(client, url, accept="text/html").status_code == 404, url
+
+
+def test_a_missing_url_is_a_400_like_a_malformed_one(client_for, store):
+    """The one response on this resource that ignored Accept.
+
+    FastAPI answers a missing required query parameter with a 422 and a JSON
+    body, so a person following the README's curl example without the
+    parameter got JSON however they negotiated. A missing url and a malformed
+    one are the same class of client error, so they get the same status and
+    the same kind of body, and negotiation still decides first: a client that
+    can read none of our representations gets the 406 either way.
+    """
+    client = client_for(store)
+    for accept in ("text/html", "text/turtle", None):
+        request = client.build_request("GET", ENDPOINT_PATH)
+        if accept is None:
+            del request.headers["accept"]
+        else:
+            request.headers["accept"] = accept
+        response = client.send(request)
+        assert response.status_code == 400, accept
+        assert response.headers["content-type"].startswith("text/plain")
+        assert "url query parameter" in response.text
+
+    unservable = client.build_request("GET", ENDPOINT_PATH)
+    unservable.headers["accept"] = "application/json"
+    assert client.send(unservable).status_code == 406
 
 
 def test_a_malformed_url_is_not_repaired(client_for, store):
