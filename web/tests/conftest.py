@@ -23,11 +23,20 @@ RUN_TWO_SWEEPS = FIXTURES / "run-two-sweeps.nq"
 RUN_ZERO_CLASSES = FIXTURES / "run-zero-classes.nq"
 RUN_PROPERTIES_SAMPLE = FIXTURES / "run-properties-sample.nq"
 RUN_DECLINED = FIXTURES / "run-declined.nq"
+RUN_CLASSES_ABSENT = FIXTURES / "run-classes-absent.nq"
+RUN_LATER_SAMPLE_ONLY = FIXTURES / "run-later-sample-only.nq"
 
 
-def _loaded_store(tmp_path: Path, name: str, fixture: Path) -> Store:
+def _loaded_store(tmp_path: Path, name: str, *fixtures: Path) -> Store:
+    """One store holding every run file given, in the order given.
+
+    More than one is the normal case for a real deployment: a store that has
+    been swept twice holds two run graphs. Two fixtures in one store is how
+    the "different runs answer different questions" cases below are built.
+    """
     store = Store(str(tmp_path / name))
-    store.load(fixture.read_bytes(), format=RdfFormat.N_QUADS)
+    for fixture in fixtures:
+        store.load(fixture.read_bytes(), format=RdfFormat.N_QUADS)
     return store
 
 
@@ -76,3 +85,40 @@ def store_declined(tmp_path):
     sw:metric:classes was declined for every endpoint. See the comment in
     web/tests/fixtures/run-declined.nq for its provenance."""
     return _loaded_store(tmp_path, "store-declined", RUN_DECLINED)
+
+
+@pytest.fixture
+def store_classes_absent(tmp_path):
+    """A run whose sw:metric:classes verdict is "absent", the assertive
+    negative, with no sample beside it. See the comment in
+    web/tests/fixtures/run-classes-absent.nq."""
+    return _loaded_store(tmp_path, "store-classes-absent", RUN_CLASSES_ABSENT)
+
+
+@pytest.fixture
+def store_stale_sample(tmp_path):
+    """Two real sweeps in one store: the 16:00 sweep that sampled kadaster's
+    classes, and the 18:00 sweep that declined sw:metric:classes on its cost
+    ceiling and so published no sample.
+
+    This is the steady state the prober's cost tiers produce, not an edge
+    case: cheap sweeps run often and expensive ones rarely, so the newest run
+    is routinely one that declined the metric that samples content. The
+    newest run that MEASURED this endpoint (18:00) and the newest run that
+    SAMPLED it (16:00) are then different runs, and every fact on the page
+    has to be attributed to the sweep that observed it.
+    """
+    return _loaded_store(
+        tmp_path, "store-stale-sample", RUN_WITH_SAMPLES, RUN_DECLINED
+    )
+
+
+@pytest.fixture
+def store_later_sample(tmp_path):
+    """The same skew as ``store_stale_sample``, running the other way: the
+    16:00 sweep measured kadaster, and a 22:00 run sampled it and measured
+    nothing. See the comment in
+    web/tests/fixtures/run-later-sample-only.nq."""
+    return _loaded_store(
+        tmp_path, "store-later-sample", RUN_WITH_SAMPLES, RUN_LATER_SAMPLE_ONLY
+    )
