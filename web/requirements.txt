@@ -1,0 +1,2 @@
+pyoxigraph==0.5.9
+pytest==9.1.1

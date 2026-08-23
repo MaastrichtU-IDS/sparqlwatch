@@ -1,0 +1,21 @@
+# SYNTHETIC fixture. Not a captured sweep.
+# Hand-built because no endpoint in the registry holds more than 200
+# classes, so sw:sampleTruncated true cannot be captured live. The size
+# limit that triggers truncation lives in the prober, not in this graph:
+# only the sample's size and its sampleTruncated flag are asserted here, so
+# a small truncated sample (3 values) is perfectly coherent on its own.
+# Exists to make 'a truncated sample must be reported as truncated'
+# testable: an implementation that hardcodes truncated = False passes
+# every other test in this plan without this fixture.
+<urn:sparqlwatch:activity:2026-08-23T00:00:00Z> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/prov#Activity> <urn:sparqlwatch:run:2026-08-23T00:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-23T00:00:00Z> <http://www.w3.org/ns/prov#generatedAtTime> "2026-08-23T00:00:00Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <urn:sparqlwatch:run:2026-08-23T00:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-23T00:00:00Z> <urn:sparqlwatch:proberVersion> "0.1.0" <urn:sparqlwatch:run:2026-08-23T00:00:00Z> .
+<https://truncated.example/sparql> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dcat#DataService> <urn:sparqlwatch:run:2026-08-23T00:00:00Z> .
+<urn:sparqlwatch:content-sample:2026-08-23T00:00:00Z:0> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <urn:sparqlwatch:ContentSample> <urn:sparqlwatch:run:2026-08-23T00:00:00Z> .
+<urn:sparqlwatch:content-sample:2026-08-23T00:00:00Z:0> <urn:sparqlwatch:sampledFrom> <https://truncated.example/sparql> <urn:sparqlwatch:run:2026-08-23T00:00:00Z> .
+<urn:sparqlwatch:content-sample:2026-08-23T00:00:00Z:0> <urn:sparqlwatch:sampledBy> <urn:sparqlwatch:metric:classes> <urn:sparqlwatch:run:2026-08-23T00:00:00Z> .
+<urn:sparqlwatch:content-sample:2026-08-23T00:00:00Z:0> <urn:sparqlwatch:sampleTruncated> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> <urn:sparqlwatch:run:2026-08-23T00:00:00Z> .
+<urn:sparqlwatch:content-sample:2026-08-23T00:00:00Z:0> <urn:sparqlwatch:sampleSize> "3"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-23T00:00:00Z> .
+<urn:sparqlwatch:content-sample:2026-08-23T00:00:00Z:0> <urn:sparqlwatch:sampledValue> <https://truncated.example/vocab#ClassA> <urn:sparqlwatch:run:2026-08-23T00:00:00Z> .
+<urn:sparqlwatch:content-sample:2026-08-23T00:00:00Z:0> <urn:sparqlwatch:sampledValue> <https://truncated.example/vocab#ClassB> <urn:sparqlwatch:run:2026-08-23T00:00:00Z> .
+<urn:sparqlwatch:content-sample:2026-08-23T00:00:00Z:0> <urn:sparqlwatch:sampledValue> <https://truncated.example/vocab#ClassC> <urn:sparqlwatch:run:2026-08-23T00:00:00Z> .

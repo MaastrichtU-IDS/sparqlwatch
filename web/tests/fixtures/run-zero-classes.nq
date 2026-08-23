@@ -1,0 +1,22 @@
+# SYNTHETIC fixture. Not a captured sweep.
+# Hand-built because the prober never writes this shape: it skips a sample
+# that bound no values on purpose, so that a sampleSize of 0 cannot be
+# misread as "this endpoint has no classes". A store assembled from another
+# source, or a later prober that changes its mind, can still hold one, and
+# the read query has to answer it honestly either way.
+# Exists to make the OPTIONAL around sw:sampledValue in
+# web/queries/endpoint_content.rq testable: make sw:sampledValue required
+# and this sample vanishes from the answer entirely, so the caller sees
+# sampled = False and cannot tell "sampled, found nothing" apart from "no
+# run ever sampled this endpoint", which is the whole distinction the
+# sampled flag exists to carry. Every other test in this suite stays green
+# under that mutation.
+<urn:sparqlwatch:activity:2026-08-24T00:00:00Z> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/prov#Activity> <urn:sparqlwatch:run:2026-08-24T00:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-24T00:00:00Z> <http://www.w3.org/ns/prov#generatedAtTime> "2026-08-24T00:00:00Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <urn:sparqlwatch:run:2026-08-24T00:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-24T00:00:00Z> <urn:sparqlwatch:proberVersion> "0.1.0" <urn:sparqlwatch:run:2026-08-24T00:00:00Z> .
+<https://zero-classes.example/sparql> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dcat#DataService> <urn:sparqlwatch:run:2026-08-24T00:00:00Z> .
+<urn:sparqlwatch:content-sample:2026-08-24T00:00:00Z:0> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <urn:sparqlwatch:ContentSample> <urn:sparqlwatch:run:2026-08-24T00:00:00Z> .
+<urn:sparqlwatch:content-sample:2026-08-24T00:00:00Z:0> <urn:sparqlwatch:sampledFrom> <https://zero-classes.example/sparql> <urn:sparqlwatch:run:2026-08-24T00:00:00Z> .
+<urn:sparqlwatch:content-sample:2026-08-24T00:00:00Z:0> <urn:sparqlwatch:sampledBy> <urn:sparqlwatch:metric:classes> <urn:sparqlwatch:run:2026-08-24T00:00:00Z> .
+<urn:sparqlwatch:content-sample:2026-08-24T00:00:00Z:0> <urn:sparqlwatch:sampleTruncated> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> <urn:sparqlwatch:run:2026-08-24T00:00:00Z> .
+<urn:sparqlwatch:content-sample:2026-08-24T00:00:00Z:0> <urn:sparqlwatch:sampleSize> "0"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-24T00:00:00Z> .
