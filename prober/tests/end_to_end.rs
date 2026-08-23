@@ -11,7 +11,7 @@ use oxrdf::{NamedNode, Quad, Term};
 use oxrdfio::{RdfFormat, RdfParser};
 use std::collections::{BTreeMap, BTreeSet};
 use wiremock::http::Method;
-use wiremock::matchers::{method, path, query_param_is_missing};
+use wiremock::matchers::{method, path, query_param, query_param_is_missing};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 mod common;
 use common::without_deadlocking;
@@ -623,6 +623,117 @@ async fn a_budget_expiry_after_the_fetch_still_publishes_declarations_read() {
         read[0].read,
         "the description was fetched and parsed before the budget expired, so the published fact must say so"
     );
+}
+
+/// The case the per-endpoint accumulator exists for, and the one nothing else
+/// in this file pins: some metrics finish, and then the endpoint budget
+/// expires. `an_endpoint_budget_expiry_still_yields_one_row_per_metric` above
+/// reaches no metric at all, so every row it inspects is `Indeterminate`
+/// whether or not partial work survived; it cannot tell the two cases apart.
+/// Here the first metric completes with a verdict, an `elapsedMs` and a content
+/// sample before the stall, so a shape that returns the accumulator out of the
+/// cancelled future, rather than writing through one the caller of the timeout
+/// owns, loses all three and overwrites an earned verdict with `Indeterminate`.
+///
+/// The shape: the queryless description fetch and the first metric's query are
+/// answered at once, matched on their exact `query` parameter, while the query
+/// the remaining metrics send stalls far past the endpoint budget.
+#[tokio::test]
+async fn a_partial_endpoint_keeps_the_verdicts_it_already_earned() {
+    const FAST_QUERY: &str = "SELECT ?s WHERE { ?s a ?c } LIMIT 5";
+    const SLOW_QUERY: &str = "SELECT ?s WHERE { ?s ?p ?o } LIMIT 1";
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/sparql")).and(query_param_is_missing("query"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(STUB_TTL.as_bytes().to_vec(), "text/turtle"))
+        .mount(&server).await;
+    Mock::given(method("GET")).and(path("/sparql")).and(query_param("query", FAST_QUERY))
+        .respond_with(ResponseTemplate::new(200).set_body_string(WORKING_QUERY_RESPONSE))
+        .mount(&server).await;
+    Mock::given(method("GET")).and(path("/sparql")).and(query_param("query", SLOW_QUERY))
+        .respond_with(ResponseTemplate::new(200)
+            .set_delay(std::time::Duration::from_millis(1500))
+            .set_body_string(WORKING_QUERY_RESPONSE))
+        .mount(&server).await;
+
+    // First an enumerating metric that answers, so there is a verdict, an
+    // elapsed time and a sample to lose. `declared_by` is None, so `resolve`
+    // grades bound IRIs from a 200 as `Verified`, which is one of the two
+    // verdicts a sample may be published under.
+    let mut defs = vec![MetricDef {
+        id: "classes-sample".into(),
+        label: "enumerates classes".into(),
+        dimension: "content".into(),
+        kind: ProbeKind::SelectIris,
+        query: Some(FAST_QUERY.into()),
+        expect: None,
+        var: Some("s".into()),
+        declared_by: None,
+        graded: false,
+        cost: Cost::Cheap,
+        sample_limit: Some(5),
+    }];
+    // Then the metrics that stall, so the endpoint budget expires with the
+    // first metric's results already in hand.
+    defs.extend((0..2).map(|i| MetricDef {
+        id: format!("liveness-{i}"),
+        label: "answers a trivial query".into(),
+        dimension: "availability".into(),
+        kind: ProbeKind::Liveness,
+        query: Some(SLOW_QUERY.into()),
+        expect: None,
+        var: None,
+        declared_by: None,
+        graded: false,
+        cost: Cost::Cheap,
+        sample_limit: None,
+    }));
+
+    let budget = Budget {
+        request: std::time::Duration::from_secs(5),
+        metric: std::time::Duration::from_secs(5),
+        endpoint: std::time::Duration::from_millis(400),
+    };
+    let client = Client::new(budget, Politeness::unlimited()).unwrap();
+    let url = format!("{}/sparql", server.uri());
+    let Sweep { rows, declarations_read: read, not_measured: _not_measured, content_samples: samples } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, budget)).await;
+
+    assert_eq!(rows.len(), defs.len(), "one row per (endpoint, metric) regardless of timing");
+    for (row, def) in rows.iter().zip(&defs) {
+        assert_eq!(row.metric_id, def.id, "rows stay aligned with the definitions");
+        assert_eq!(row.endpoint, url);
+    }
+    // The budget really did cut the loop short, or this proves nothing.
+    assert!(
+        rows[1..].iter().all(|r| r.verdict == Verdict::Indeterminate),
+        "the metrics the stall kept us from must be Indeterminate, or the loop was never cut short"
+    );
+    assert!(
+        rows[1..].iter().all(|r| r.elapsed_ms.is_none()),
+        "an unmeasured metric has no elapsed time, not a zero one"
+    );
+
+    assert_eq!(
+        rows[0].verdict,
+        Verdict::Verified,
+        "the metric that answered before the stall keeps the verdict it earned; the expiry fill must not write over it"
+    );
+    assert!(
+        rows[0].elapsed_ms.is_some(),
+        "and keeps the elapsed time that was actually measured"
+    );
+
+    assert_eq!(read.len(), 1);
+    assert!(
+        read[0].read,
+        "the description was fetched and parsed before the budget expired, so the published fact must say so"
+    );
+
+    assert_eq!(samples.len(), 1, "the sample collected before the stall survives the expiry");
+    assert_eq!(samples[0].endpoint, url);
+    assert_eq!(samples[0].metric_id, "classes-sample");
+    assert_eq!(samples[0].values, vec!["http://example.org/a".to_string()]);
+    assert!(!samples[0].truncated, "one value under a limit of five is not truncated");
 }
 
 /// A one-triple service description: parseable, so it grades level 1, but it
