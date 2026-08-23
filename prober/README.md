@@ -78,6 +78,7 @@ cargo run -- --at 2026-08-20T12:00:00Z --out run.nq
 | `--max-cost` | `cheap` | Only run metrics with cost at or below this value (`cheap` or `expensive`) |
 | `--min-gap-ms` | `2000` | Minimum pause between two consecutive requests to one host |
 | `--retry-after-cap-s` | `20` | Longest `Retry-After` waited out before one retry of a throttled request |
+| `--concurrency` | `4` | How many HOSTS to probe at once; one host is never asked two things at once |
 
 `--at` is required and is **not** read from the clock, deliberately. It names
 the run graph, it is published as the activity's `prov:generatedAtTime`, and a
@@ -97,7 +98,11 @@ hop takes the gate for the host that hop actually touches, which is not
 necessarily the host the probe was pointed at. A three-hop chain therefore costs
 two gaps, and that is the honest price of a promise with no exceptions in it. A
 chain longer than five hops, a cycle, or a `Location` we cannot resolve is
-`indeterminate`: we never reached an answer.
+`indeterminate`: we never reached an answer. `--concurrency` cannot weaken any
+of that: endpoints are grouped by host and each group is probed by one task, so
+two endpoints of one host are never in flight together and the gate is never
+contended between them. Raising the flag adds hosts in flight, never requests
+to a host.
 
 `--min-gap-ms` is validated at startup, before any probing: the gap plus the
 30s request budget has to stay under the 60s metric budget, or the pause alone
@@ -154,11 +159,10 @@ Seven metrics are `cheap` at the default cost ceiling: availability, cors,
 cors-preflight, geo-functions, geo-data, service-description, has-classes.
 
 Per endpoint, the prober makes 7 requests. Between consecutive requests to one
-host, there is a gap. The sweep is sequential: stage 1c-b3 adds bounded
-concurrency **across endpoints**, never within a host. Per-host concurrency stays
-at one request, which is the guarantee this stage exists to provide, so 1c-b3
-shortens a sweep by overlapping different hosts and changes nothing about how any
-single host is treated. So:
+host, there is a gap. Endpoints are grouped by host and `--concurrency` bounds
+how many of those groups run at once, so concurrency buys parallelism **across
+different hosts** and never within one: per-host concurrency stays at one
+request, whatever the flag says. So, per host group:
 
 - Per endpoint: 7 requests with some latency (call it L per request) plus 6 gaps.
   An endpoint that redirects costs one more gated request and one more gap per
@@ -168,16 +172,28 @@ single host is treated. So:
 - With an average request latency of 300 ms (a rough middle ground for
   network round-trip), the per-endpoint floor is roughly (7 × 0.3) + 12 = 14.1
   seconds.
-- For 548 endpoints at 14.1 seconds each: 548 × 14.1 = 7,726.8 seconds, or about
-  2 hours 9 minutes.
+- For 548 endpoints at 14.1 seconds each: 548 × 14.1 = 7,726.8 seconds
+  sequentially, or about 2 hours 9 minutes; at the default `--concurrency 4`,
+  roughly a quarter of that, about 32 minutes.
 
-This assumes all endpoints are distinct hosts. Since some registry URLs share a
-host, requests to those shared hosts are serialised further by the per-host gate,
-adding time on top of this floor. Request latencies also vary widely; the above
-assumes 300 ms average, which is a middle estimate.
+Every number above is a **floor**, and the failure path is what actually prices
+a sweep. A black-holed endpoint costs its whole 600-second endpoint budget
+rather than 14.1 seconds, so the real bound is `sum(per-endpoint cost) /
+concurrency`: 548 dead endpoints would be `548 × 600 / 4` = 22.8 hours, and at
+a plausible 10% dead it is `(493 × 14.1 + 55 × 600) / 4` = 9,988 seconds, or
+about 2 hours 48 minutes. That is the number to plan a scheduled job around,
+not the healthy-endpoint floor.
 
-The figure is why stage 1c-b3 (bounded concurrency across endpoints) exists. A sequential
-sweep at this scale would time out on a scheduled job.
+It also assumes all endpoints are distinct hosts. Registry URLs that share a
+host are one group and are probed one after another, so a host carrying several
+endpoints costs the sum of them however high `--concurrency` is set. Request
+latencies vary widely too; the 300 ms above is a middle estimate.
+
+Measured, not estimated, on this repository's three-endpoint `endpoints.toml`
+on 2026-08-24: 14.4 seconds at the default `--concurrency 4` and 38.7 seconds
+at `--concurrency 1`. Three endpoints on three hosts is not a registry sweep,
+so it says nothing about the 548-endpoint figures above; it is here because it
+is the only concurrency measurement this project has actually taken.
 
 ## Configuration files
 
@@ -282,8 +298,19 @@ This is not a seventh verdict. The verdict vocabulary stays at six: this fact sa
 measurement did not happen, while a verdict says what was learned about a capability.
 Someone querying for verdicts will never encounter a value that is not one of the six.
 Someone asking why a verdict is missing gets an answer: either it was declined, or the
-budget was exhausted. The run's PROV activity also records `urn:sparqlwatch:maxCost`
-naming the ceiling used.
+budget was exhausted. A second reason, `prober-failed`, says the prober itself
+never got to ask: the task probing that endpoint's host did not return, so
+there was no observation at all rather than an inconclusive one, and every
+metric on that endpoint carries the fact rather than a verdict.
+
+The run's PROV activity records three things about the run itself:
+`urn:sparqlwatch:maxCost` naming the ceiling used,
+`urn:sparqlwatch:concurrency` naming how many hosts were probed at once, and
+`urn:sparqlwatch:failedEndpoints` counting the endpoints the prober failed on.
+The concurrency belongs there because it changes what `elapsedMs` means: a
+request's measured time includes its wait at the per-host gate. A run with a
+non-zero failure count also exits non-zero, after writing its output, so the
+run is preserved and the scheduler still learns it was incomplete.
 
 The labels in that file state only what was actually measured. `geo-data` and
 `has-classes` and `classes` query the default graph AND every named graph, via a `UNION` with a
