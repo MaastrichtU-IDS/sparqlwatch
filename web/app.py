@@ -275,6 +275,12 @@ _METRIC_PREFIX = "urn:sparqlwatch:metric:"
 # absent sample. If the query's pin ever moves, this moves with it.
 _CLASSES_METRIC = _METRIC_PREFIX + "classes"
 
+# The verdict that asserts the negative. It is one of the two assertive
+# values in the closed vocabulary (docs/design/verdict-encoding.md), and the
+# only one a missing class sample can carry, so it is the one verdict whose
+# absence of a sample is a finding rather than a gap.
+_ABSENT = "absent"
+
 # The truncation state, in words. A truncated sample is the one thing on this
 # page that must not be legible only as a border style: a reader who cannot
 # see the dashed outline, or who is hearing the page read aloud, would
@@ -388,67 +394,167 @@ def _legend(rows: list[dict]) -> list[dict]:
 def _sample(
     measurements: EndpointMeasurements, content: EndpointContent
 ) -> dict:
-    """The class sample, or an account of why there is not one.
+    """The class sample, with the sweep that took it, and what this run says.
 
-    The account is read out of the graph rather than assumed. There is no
-    single reason a sample is missing: the fixtures alone hold a probe that ran
-    for thirty seconds and returned nothing (qlever, sw:metric:classes
-    "indeterminate", sw:elapsedMs 30003) and a run that declined the metric on
-    its cost ceiling. Rendering either as an empty class list would tell a
-    reader the endpoint holds no classes, which is a confident wrong answer,
-    and naming the wrong cause would be another one.
+    Two facts can be in play here and they do not have to come from one
+    sweep. endpoint_measurements.rq picks the newest run that MEASURED this
+    endpoint; endpoint_content.rq picks the newest run that SAMPLED it. Those
+    differ the moment a cheap sweep declines sw:metric:classes, which is the
+    prober's default cost ceiling, so a store whose newest run declined the
+    metric is the intended steady state rather than an edge case.
+
+    Both facts are kept and each is attributed to its own sweep. Discarding
+    the sample because a later cheap sweep did not repeat it would throw away
+    a true observation; dating it to the later sweep would state one the
+    graph contradicts. ``run`` and ``generated_at`` below are the SAMPLE's,
+    never the page's, and ``provenance_text`` is the sentence that says so in
+    words whenever the two differ, so a reader can tell which sweep saw what
+    without knowing this codebase.
+
+    ``this_run_text`` is this run's own account of sw:metric:classes, and it
+    is read out of the graph rather than assumed. There is no single reason a
+    run has no sample: the fixtures alone hold a probe that ran for thirty
+    seconds and returned nothing (qlever, sw:metric:classes "indeterminate",
+    sw:elapsedMs 30003), a run that declined the metric on its cost ceiling,
+    and a verdict of "absent", which is the one case where the probe did
+    establish that the endpoint holds no classes. Rendering any of them as an
+    empty class list would tell a reader the endpoint holds no classes;
+    naming the wrong cause, or denying the negative the graph does assert,
+    would be another confident wrong answer.
     """
+    from_another_sweep = (
+        content.sampled
+        and measurements.run is not None
+        and content.run != measurements.run
+    )
+
+    sample = {
+        "present": content.sampled,
+        "size": content.size,
+        "truncated": content.truncated,
+        "truncation_text": (
+            None
+            if not content.sampled
+            else TRUNCATED_TEXT
+            if content.truncated
+            else COMPLETE_TEXT
+        ),
+        "classes": content.classes,
+        "run": content.run,
+        "generated_at": content.generated_at,
+        "from_another_sweep": from_another_sweep,
+        "provenance_text": _provenance(measurements, content, from_another_sweep),
+        "this_run_text": None,
+    }
+
+    if content.sampled and not from_another_sweep:
+        # The single-sweep case: this run took the sample below, so there is
+        # nothing further to say about what this run did or did not see.
+        return sample
+
+    declined = _declined_classes(measurements)
+    if declined is not None:
+        # Reachable with a sample on the page as well as without one: a run
+        # that declined the metric published no class sample of its own
+        # whatever older sweeps published, and the reader is entitled to know
+        # that this run did not look.
+        sample["this_run_text"] = (
+            f"This run did not measure the classes metric at all, recording "
+            f"the reason '{declined.reason}'. Nobody looked in this run, so "
+            f"it reports nothing about what classes the endpoint holds."
+        )
+        return sample
+
     if content.sampled:
-        return {
-            "present": True,
-            "size": content.size,
-            "truncated": content.truncated,
-            "truncation_text": (
-                TRUNCATED_TEXT if content.truncated else COMPLETE_TEXT
-            ),
-            "classes": content.classes,
-            "absence_text": None,
-        }
+        # A sample from another sweep, and this run measured the metric
+        # rather than declining it. Whether this run took a sample of its own
+        # is not knowable from here (endpoint_content.rq answers with the
+        # newest sample only), so nothing is claimed about it: the verdict is
+        # already on the page in its own row, and the sample says which sweep
+        # took it.
+        return sample
 
-    for declined in measurements.declined:
-        if declined.metric == _CLASSES_METRIC:
-            return _absence(
-                f"No class sample from this run: it did not measure the "
-                f"classes metric at all, recording the reason "
-                f"'{declined.reason}'. Nobody looked, so this is not "
-                f"a report that the endpoint holds no classes."
-            )
-
-    for verdict in measurements.verdicts:
-        if verdict.metric == _CLASSES_METRIC:
-            elapsed = (
-                f" after {verdict.elapsed_ms} ms"
-                if verdict.elapsed_ms is not None
-                else ""
-            )
-            return _absence(
+    measured = _measured_classes(measurements)
+    if measured is not None:
+        elapsed = (
+            f" after {measured.elapsed_ms} ms"
+            if measured.elapsed_ms is not None
+            else ""
+        )
+        if measured.verdict == _ABSENT:
+            # The one assertive negative this metric can produce.
+            # prober/src/resolve.rs records "absent" for the classes probe
+            # only when the endpoint answered with a parsed SPARQL-JSON
+            # result that bound nothing, and the prober writes no sample
+            # beside it (it skips a sample with no values). Telling the
+            # reader that this is not a report of an empty endpoint would
+            # contradict the store and bury the finding.
+            sample["this_run_text"] = (
                 f"No class sample from this run: the classes metric read "
-                f"'{verdict.verdict}'{elapsed} and produced no list. "
+                f"'{measured.verdict}'{elapsed}. That verdict is recorded "
+                f"only when the probe ran the classes query and the "
+                f"endpoint's own answer listed nothing, so this run does "
+                f"report that the endpoint holds no classes."
+            )
+        else:
+            sample["this_run_text"] = (
+                f"No class sample from this run: the classes metric read "
+                f"'{measured.verdict}'{elapsed} and produced no list. "
                 f"The probe looked and came back empty-handed, which is not a "
                 f"report that the endpoint holds no classes."
             )
+        return sample
 
-    return _absence(
+    sample["this_run_text"] = (
         "No class sample from this run, and this run recorded no measurement "
         "of the classes metric either. This page therefore says nothing about "
         "what classes the endpoint holds."
     )
+    return sample
 
 
-def _absence(text: str) -> dict:
-    return {
-        "present": False,
-        "size": None,
-        "truncated": None,
-        "truncation_text": None,
-        "classes": [],
-        "absence_text": text,
-    }
+def _declined_classes(measurements: EndpointMeasurements):
+    """This run's decline of the classes metric, if it declined it."""
+    for declined in measurements.declined:
+        if declined.metric == _CLASSES_METRIC:
+            return declined
+    return None
+
+
+def _measured_classes(measurements: EndpointMeasurements):
+    """This run's measurement of the classes metric, if it measured it."""
+    for verdict in measurements.verdicts:
+        if verdict.metric == _CLASSES_METRIC:
+            return verdict
+    return None
+
+
+def _provenance(
+    measurements: EndpointMeasurements,
+    content: EndpointContent,
+    from_another_sweep: bool,
+) -> str | None:
+    """The sentence naming the sweep a sample came from, where it is needed.
+
+    Nothing is said in the single-sweep case, which is most stores today: a
+    clause explaining which sweep saw what would be noise on a page where
+    one sweep saw everything, and the header sentence already dates it.
+
+    The two timestamps are named, never ordered. Which of them is later is a
+    comparison of xsd:dateTime values, and every claim on this page has to be
+    one the graph makes; saying "an earlier sweep" of a sample that is
+    actually the newer one would be a small confident wrong answer of the
+    same kind as the rest.
+    """
+    if from_another_sweep:
+        return (
+            f"This class sample comes from a different sweep, at "
+            f"{content.generated_at}, and not from the sweep at "
+            f"{measurements.generated_at} that the verdicts above come from."
+        )
+    if content.sampled and measurements.run is None:
+        return f"This class sample comes from the sweep at {content.generated_at}."
+    return None
 
 
 def _page_context(
@@ -465,11 +571,15 @@ def _page_context(
     rows = _rows(measurements)
     return {
         "endpoint": endpoint,
-        # A sample-only endpoint (web/tests/fixtures/run-truncated.nq) has no
-        # run to name here, and saying so is the point: the page must not
-        # imply a sweep that did not happen.
-        "run": measurements.run or content.run,
-        "generated_at": measurements.generated_at or content.generated_at,
+        # The MEASURING sweep, and only that one. The class sample carries
+        # its own run and timestamp (see _sample), because the two are
+        # routinely different runs and one timestamp printed over both dates
+        # a sample to a sweep that never took it. A sample-only endpoint
+        # (web/tests/fixtures/run-truncated.nq) has no measuring sweep at
+        # all, and saying so is the point: the page must not imply one that
+        # did not happen.
+        "run": measurements.run,
+        "generated_at": measurements.generated_at,
         "rows": rows,
         "legend": _legend(rows),
         "sample": _sample(measurements, content),

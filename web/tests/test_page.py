@@ -45,6 +45,20 @@ from endpoint_measurements import EndpointMeasurements, MetricVerdict
 KADASTER = "https://data.kkg.kadaster.nl/query"
 QLEVER = "https://qlever.dev/api/osm-planet"
 TRUNCATED = "https://truncated.example/sparql"
+NO_CLASSES = "https://no-classes.example/sparql"
+
+RUN = "urn:sparqlwatch:run:"
+# The three sweeps the two-run stores below are built from. Each is the
+# prov:generatedAtTime of one committed fixture's single run graph.
+SAMPLING_SWEEP = "2026-08-22T16:00:00Z"
+DECLINING_SWEEP = "2026-08-22T18:00:00Z"
+LATER_SAMPLING_SWEEP = "2026-08-22T22:00:00Z"
+
+# run-later-sample-only.nq's two values, which appear in no other fixture.
+LATER_SAMPLE_CLASSES = [
+    "urn:sparqlwatch:test:later-sample-class-a",
+    "urn:sparqlwatch:test:later-sample-class-b",
+]
 
 M = "urn:sparqlwatch:metric:"
 OWL_CLASS = "http://www.w3.org/2002/07/owl#Class"
@@ -107,6 +121,57 @@ def elements(text):
 
 def with_attribute(text, name):
     return [attrs for _, attrs in elements(text) if name in attrs]
+
+
+class _Texts(HTMLParser):
+    """The text inside each element carrying a given attribute.
+
+    Needed because several claims on this page are sentences rather than
+    attributes: which sweep a sample came from, and what a missing sample
+    means. Asserting that a sentence is somewhere in the document would pass
+    while the sentence sat in the legend or in a comment, so these tests read
+    the text of the element that is contracted to carry it.
+    """
+
+    def __init__(self, attribute):
+        super().__init__()
+        self.attribute = attribute
+        self.found = []
+        self._depth = None
+        self._buffer = []
+
+    def handle_starttag(self, tag, attrs):
+        if self._depth is not None:
+            self._depth += 1
+        elif self.attribute in dict(attrs):
+            self._depth = 0
+            self._buffer = []
+
+    def handle_endtag(self, tag):
+        if self._depth is None:
+            return
+        if self._depth == 0:
+            self.found.append(" ".join("".join(self._buffer).split()))
+            self._depth = None
+        else:
+            self._depth -= 1
+
+    def handle_data(self, data):
+        if self._depth is not None:
+            self._buffer.append(data)
+
+
+def texts_with(text, attribute):
+    parser = _Texts(attribute)
+    parser.feed(text)
+    return parser.found
+
+
+def row_for(text, metric):
+    """One metric row's attributes, by metric id."""
+    rows = [row for row, _ in chips(text) if row["data-metric"] == metric]
+    assert len(rows) == 1, f"{metric} appears {len(rows)} times"
+    return rows[0]
 
 
 def classes_of(attrs):
@@ -442,9 +507,9 @@ def test_a_run_that_never_looked_at_classes_borrows_no_reason():
     )
     assert sample["present"] is False
     assert sample["classes"] == []
-    assert "no measurement of the classes metric" in sample["absence_text"]
-    assert "cost-ceiling" not in sample["absence_text"]
-    assert "indeterminate" not in sample["absence_text"]
+    assert "no measurement of the classes metric" in sample["this_run_text"]
+    assert "cost-ceiling" not in sample["this_run_text"]
+    assert "indeterminate" not in sample["this_run_text"]
 
 
 # ---------------------------------------------------------------------------
@@ -560,3 +625,160 @@ def test_the_page_carries_the_generated_rules_and_no_others(client_for, store):
         selector = "." + verdict_encoding.css_class(state.slug)
         assert text.count(selector + " ") == 1
     assert verdict_encoding.css_rules() in text
+
+
+# ---------------------------------------------------------------------------
+# Two sweeps, two facts, two attributions
+# ---------------------------------------------------------------------------
+def test_a_page_from_one_sweep_attributes_everything_to_it(client_for, store):
+    """The common case, and the baseline for the two skewed ones below.
+
+    run-with-samples.nq is a single sweep, so the verdicts and the class
+    sample really are one sweep's observations and the page says so plainly.
+    Nothing here may hedge about a second sweep, because there is not one:
+    a clause explaining which sweep saw what would be noise on every page
+    of a freshly swept store.
+    """
+    text = page(client_for(store), KADASTER)
+
+    assert (
+        f"Everything below is what one probe sweep observed, at "
+        f"{SAMPLING_SWEEP}." in text
+    )
+    head = with_attribute(text, "data-sample-generated-at")
+    assert len(head) == 1
+    assert head[0]["data-sample-generated-at"] == SAMPLING_SWEEP
+    assert head[0]["data-sample-run"] == RUN + SAMPLING_SWEEP
+    assert [row["data-run"] for row in with_attribute(text, "data-run")] == [
+        RUN + SAMPLING_SWEEP
+    ]
+    assert with_attribute(text, "data-sample-provenance") == []
+    assert with_attribute(text, "data-this-run-sample") == []
+    assert "different sweep" not in text
+
+
+def test_an_older_samples_own_sweep_is_named_beside_it(
+    client_for, store_stale_sample
+):
+    """The defect this pair of fixtures exists to catch.
+
+    The 18:00 sweep declined sw:metric:classes on its cost ceiling, which is
+    the prober's default and therefore the intended steady state, so the
+    newest run that MEASURED kadaster and the newest run that SAMPLED it are
+    different runs. Both facts are true and both are kept, and each is
+    attributed to the sweep that observed it: the page must not draw a
+    59-class sample marked complete under a timestamp belonging to a sweep
+    that declined to look at classes at all.
+    """
+    text = page(client_for(store_stale_sample), KADASTER)
+
+    assert [row["data-run"] for row in with_attribute(text, "data-run")] == [
+        RUN + DECLINING_SWEEP
+    ]
+    head = with_attribute(text, "data-sample-generated-at")
+    assert len(head) == 1
+    assert head[0]["data-sample-generated-at"] == SAMPLING_SWEEP
+    assert head[0]["data-sample-run"] == RUN + SAMPLING_SWEEP
+
+    provenance = texts_with(text, "data-sample-provenance")
+    assert len(provenance) == 1, "the sample must say which sweep took it"
+    assert SAMPLING_SWEEP in provenance[0]
+    assert DECLINING_SWEEP in provenance[0]
+
+    # The header sentence covered both facts and dated both to the newer
+    # sweep. It must no longer claim anything about the sample.
+    assert "Everything below is what one probe sweep observed" not in text
+    assert f"Every verdict below is what one probe sweep observed, at {DECLINING_SWEEP}." in text
+
+    # Both facts survive. The decline is still drawn as a decline...
+    declined = row_for(text, M + "classes")
+    assert declined["data-declined"] == "cost-ceiling"
+    this_run = texts_with(text, "data-this-run-sample")
+    assert len(this_run) == 1
+    assert "cost-ceiling" in this_run[0]
+    # ...and the older sweep's 59 classes are still published, not discarded.
+    assert (
+        len(with_attribute(text, "data-class")) == KADASTER_CLASS_COUNT
+    )
+    assert f"{KADASTER_CLASS_COUNT} classes sampled" in text
+    assert COMPLETE_TEXT in text
+
+
+def test_a_newer_samples_own_sweep_is_named_beside_it(
+    client_for, store_later_sample
+):
+    """The same skew running the other way.
+
+    A 22:00 run sampled kadaster and measured nothing, so the verdicts are
+    the 16:00 sweep's and the sample is the 22:00 run's. The page dated
+    everything to 16:00 while showing the 22:00 sample, truncation badge and
+    all. Note what must NOT appear: the 16:00 sweep did publish a sample of
+    its own (this store holds it), so nothing here may say that the sweep the
+    verdicts came from produced no class sample.
+    """
+    text = page(client_for(store_later_sample), KADASTER)
+
+    assert [row["data-run"] for row in with_attribute(text, "data-run")] == [
+        RUN + SAMPLING_SWEEP
+    ]
+    head = with_attribute(text, "data-sample-generated-at")
+    assert len(head) == 1
+    assert head[0]["data-sample-generated-at"] == LATER_SAMPLING_SWEEP
+    assert head[0]["data-sample-run"] == RUN + LATER_SAMPLING_SWEEP
+
+    provenance = texts_with(text, "data-sample-provenance")
+    assert len(provenance) == 1
+    assert LATER_SAMPLING_SWEEP in provenance[0]
+    assert SAMPLING_SWEEP in provenance[0]
+
+    listed = [row["data-class"] for row in with_attribute(text, "data-class")]
+    assert listed == LATER_SAMPLE_CLASSES
+    assert OWL_CLASS not in listed, "that is the 16:00 sample's value"
+    assert "2 classes sampled" in text
+    assert TRUNCATED_TEXT in text
+
+    # The 16:00 verdict for the same metric is still reported as a verdict.
+    assert row_for(text, M + "classes")["data-verdict"] == "verified"
+    assert texts_with(text, "data-this-run-sample") == []
+
+
+# ---------------------------------------------------------------------------
+# absent is a finding, not a shrug
+# ---------------------------------------------------------------------------
+def test_an_absent_classes_verdict_is_reported_as_an_established_negative(
+    client_for, store_classes_absent, store
+):
+    """absent is one of the two assertive verdicts, and the page must not
+    deny it.
+
+    prober/src/resolve.rs records absent for a SelectIris probe only when the
+    endpoint answered with a parsed SPARQL-JSON result that bound nothing,
+    which is the evidence that establishes the negative, and it writes no
+    sample beside it. Telling the reader that this is "not a report that the
+    endpoint holds no classes" contradicts the store, and buries the one
+    negative finding this metric can establish. indeterminate, on the same
+    page shape, is the case where that sentence is true, so both are asserted
+    here.
+    """
+    established = texts_with(page(client_for(store_classes_absent), NO_CLASSES), "data-sample")
+    assert len(established) == 1
+    assert "'absent'" in established[0]
+    assert "42 ms" in established[0]
+    assert "does report that the endpoint holds no classes" in established[0]
+    assert (
+        "is not a report that the endpoint holds no classes"
+        not in established[0]
+    )
+
+    text = page(client_for(store_classes_absent), NO_CLASSES)
+    assert row_for(text, M + "classes")["data-verdict"] == "absent"
+
+    # qlever's classes probe ran out of its 30 second budget, so nothing was
+    # established and the page says exactly that.
+    nothing_established = texts_with(page(client_for(store), QLEVER), "data-sample")
+    assert len(nothing_established) == 1
+    assert "'indeterminate'" in nothing_established[0]
+    assert (
+        "is not a report that the endpoint holds no classes"
+        in nothing_established[0]
+    )

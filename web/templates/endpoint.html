@@ -98,14 +98,21 @@
       <circle cx="11" cy="11" r="6"/><path d="M15.5 15.5 21 21"/><path d="M8 11h6"/></svg>
     sparqlwatch
   </span>
-  <span class="run">{% if run %}run {{ generated_at }}{% else %}no run{% endif %}</span>
+  <span class="run">{% if run %}run {{ generated_at }}{% else %}no measurement sweep{% endif %}</span>
 </header>
 <main>
   <h1>{{ endpoint }}</h1>
   <p class="sub"{% if run %} data-run="{{ run }}"{% endif %}>
-    {% if run -%}
+    {% if run and not sample.from_another_sweep -%}
       Everything below is what one probe sweep observed, at {{ generated_at }}.
       No score and no ranking: each attribute carries its own verdict.
+    {%- elif run -%}
+      {# The class sample below came from a different sweep, so this sentence
+         covers the verdicts only. Saying "everything below" here would date a
+         sample to a sweep that did not take it. #}
+      Every verdict below is what one probe sweep observed, at {{ generated_at }}.
+      No score and no ranking: each attribute carries its own verdict. The class
+      sample further down came from another sweep, and says which beside itself.
     {%- else -%}
       No run in this store has measured this endpoint. What follows is only the
       content sample recorded for it.
@@ -160,11 +167,23 @@
 
   <section class="panel">
     <h2>Classes sampled</h2>
+    {% if sample.this_run_text %}
+    {# What the sweep this page reports says about the classes metric. It is
+       shown beside a sample from another sweep as well as on its own: a run
+       that declined the metric published no sample of its own, whatever an
+       older sweep published. #}
+    <p class="note" data-this-run-sample="none"
+       {%- if not sample.present %} data-sample="absent"{% endif %} style="margin-top: 0">{{ sample.this_run_text }}</p>
+    {% endif %}
     {% if sample.present %}
-    <div class="sample-head" data-sample="present">
+    <div class="sample-head" data-sample="present" data-sample-run="{{ sample.run }}"
+         data-sample-generated-at="{{ sample.generated_at }}">
       <span class="sample-count">{{ sample.size }} class{{ "" if sample.size == 1 else "es" }} sampled</span>
       <span class="trunc {{ 'trunc-yes' if sample.truncated else 'trunc-no' }}">{{ sample.truncation_text }}</span>
     </div>
+    {% if sample.provenance_text %}
+    <p class="note" data-sample-provenance="true">{{ sample.provenance_text }}</p>
+    {% endif %}
     {% if sample.classes %}
     <ul class="sample-values">
       {% for iri in sample.classes %}
@@ -184,8 +203,6 @@
       endpoint returned it. It is not a dataset description and not a count of
       what the endpoint holds.
     </p>
-    {% else %}
-    <p class="note" data-sample="absent" style="margin-top: 0">{{ sample.absence_text }}</p>
     {% endif %}
   </section>
 </main>
