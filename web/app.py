@@ -248,25 +248,41 @@ def _opened_store(path: str) -> Store:
     time keeps the open lazy, which is what lets the tests replace this
     dependency without ever touching a real store path.
 
-    The path is required to exist and to hold something, because Store()
-    CREATES the RocksDB directory when it is missing. A typo in
-    SPARQLWATCH_STORE therefore produced a server that answered every
-    request with "no measurement, no decline and no class sample in this
-    store mentions ...", which is true of the empty store it had just
-    created and indistinguishable from a registry nobody has swept. Failing
-    on the first open reports the operator's mistake as the operator's
-    mistake.
+    The path is required to exist, because Store() CREATES the RocksDB
+    directory when it is missing, and the store it opens is required to
+    hold at least one quad. Checking that the directory is non-empty is not
+    enough: a typo that names the directory a run's .nq files were copied
+    into, or a store directory left behind by a load that raised before
+    inserting anything, are both non-empty directories that hold no run.
+    Either one used to pass a directory-entries check and open as a fresh,
+    empty store, so the server answered every request with "no measurement,
+    no decline and no class sample in this store mentions ...", which is
+    true of the empty store it had just created (or opened) and
+    indistinguishable from a registry nobody has swept. Checking the store's
+    own length, once opened, catches both, at the cost of one open of a
+    store that is about to be opened anyway. Failing on the first open
+    reports the operator's mistake as the operator's mistake.
     """
     directory = Path(path)
-    if not directory.is_dir() or not any(directory.iterdir()):
+    if not directory.is_dir():
         raise RuntimeError(
             f"{STORE_PATH_VARIABLE} is {path!r}, which is not an existing "
-            f"directory with anything in it. Opening it would create an "
-            f"empty store, and every endpoint would then answer 404 as "
+            f"directory. Opening it would create an empty store, and every "
+            f"endpoint would then answer 404 as though no sweep had ever "
+            f"run. Build the store first with web/load_run.py."
+        )
+    store = Store(path)
+    if len(store) == 0:
+        raise RuntimeError(
+            f"{STORE_PATH_VARIABLE} is {path!r}, which opened as a store "
+            f"holding no quads. That is either a store nothing has been "
+            f"loaded into yet, or a path that is not the store at all (the "
+            f"run directory load_run.py's second argument names, say, "
+            f"rather than its first). Every endpoint would answer 404 as "
             f"though no sweep had ever run. Build the store first with "
             f"web/load_run.py."
         )
-    return Store(path)
+    return store
 
 
 def get_store() -> Store:

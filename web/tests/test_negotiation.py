@@ -698,6 +698,26 @@ def test_a_store_path_with_nothing_at_it_is_refused(tmp_path, monkeypatch):
         get_store()
 
 
+def test_a_directory_of_run_files_is_not_mistaken_for_a_store(tmp_path, monkeypatch):
+    """The mistake a directory-entries check cannot see: SPARQLWATCH_STORE
+    pointed at the directory holding the run files, rather than at the
+    store. The documented load_run.py invocation takes the store path and
+    the run path in a row, which makes the two easy to swap.
+
+    The directory is not empty, so a check that only asked "is anything in
+    here" would pass it, and Store() would then create a fresh RocksDB
+    database inside the operator's data directory: exactly the empty store
+    this check exists to refuse.
+    """
+    run_dir = tmp_path / "runs"
+    run_dir.mkdir()
+    (run_dir / "run-with-samples.nq").write_bytes(FIXTURE.read_bytes())
+    monkeypatch.setenv(STORE_PATH_VARIABLE, str(run_dir))
+    with pytest.raises(RuntimeError) as raised:
+        get_store()
+    assert STORE_PATH_VARIABLE in str(raised.value)
+
+
 def test_a_store_path_holding_a_store_is_opened(tmp_path, monkeypatch):
     """The other half of the check: a real store still opens.
 
