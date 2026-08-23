@@ -215,7 +215,11 @@ class _RowCells(HTMLParser):
         named = classes_of(attributes) & set(self.CELLS)
         if named:
             assert len(named) == 1, f"one cell carries {named}"
-            self._cell = named.pop()
+            cell = named.pop()
+            assert cell not in self.rows[self._metric], (
+                f"{cell} appears twice in {self._metric}'s row"
+            )
+            self._cell = cell
             self._buffer = []
 
     def handle_endtag(self, tag):
@@ -237,6 +241,25 @@ def row_cells(text, metric):
     parser.feed(text)
     assert metric in parser.rows, f"{metric} has no row on this page"
     return parser.rows[metric]
+
+
+def test_a_duplicated_row_cell_is_refused_by_the_parser():
+    """The other half of the docstring's claim ("the three cells the template
+    contracts to carry a claim about one metric"): a cell name must not
+    appear twice in one row. Without this, ``handle_endtag`` assigning
+    ``self.rows[self._metric][self._cell] = ...`` simply overwrites the first
+    span with the second, so a template that renders
+    ``<span class="m-state ...">verified</span>`` before the real state span
+    would report "verified absent" nowhere, because the mapping keeps only
+    the last one. See N4 in the re-review for the live consequence."""
+    html = (
+        '<li class="metric-row" data-metric="urn:sparqlwatch:metric:classes">'
+        '<span class="m-state tok-good">verified</span>'
+        '<span class="m-state tok-bad">indeterminate</span>'
+        "</li>"
+    )
+    with pytest.raises(AssertionError, match="m-state"):
+        row_cells(html, "urn:sparqlwatch:metric:classes")
 
 
 class _LegendCells(HTMLParser):
@@ -261,7 +284,11 @@ class _LegendCells(HTMLParser):
             return
         named = classes_of(attributes) & set(self.CELLS)
         if named:
-            self._cell = named.pop()
+            cell = named.pop()
+            assert cell not in self.entries[self._slug], (
+                f"{cell} appears twice in the {self._slug} legend entry"
+            )
+            self._cell = cell
             self._buffer = []
 
     def handle_endtag(self, tag):
@@ -281,6 +308,21 @@ def legend_cells(text):
     parser = _LegendCells()
     parser.feed(text)
     return parser.entries
+
+
+def test_a_duplicated_legend_cell_is_refused_by_the_parser():
+    """The same shape of gap as the row parser above, in ``_LegendCells``:
+    two elements named ``l-label`` in one legend entry must not silently
+    collapse to the last one."""
+    html = (
+        '<li data-state="verified">'
+        '<span class="l-label">Verified</span>'
+        '<span class="l-label">Something else</span>'
+        '<span class="l-count">3</span>'
+        "</li>"
+    )
+    with pytest.raises(AssertionError, match="l-label"):
+        legend_cells(html)
 
 
 def classes_of(attrs):
