@@ -2444,3 +2444,143 @@ async fn concurrency_counts_hosts_not_endpoints() {
         );
     }
 }
+
+/// A definition that panics the task probing an endpoint: `SelectIris` reads a
+/// variable out of the bindings and `lib.rs` says so with
+/// `expect(VAR_REQUIRED)`, so a hand-built definition with no `var` is a
+/// programming error that fails loudly rather than measuring the wrong thing.
+/// `load_metrics` refuses this shape, which is why it has to be hand-built.
+///
+/// This is how the `join_next` error arm is reached through the public API. The
+/// brief's "`JoinError` has no public constructor" is a reason to unit-test the
+/// fold in isolation, which `a_failed_group_still_carries_facts_for_every_endpoint_in_it`
+/// does; it is not a reason to leave the translation untested, because a
+/// panicking task is reachable from here.
+fn panicking_metric() -> MetricDef {
+    MetricDef {
+        id: "boom".into(),
+        label: "reads a variable it never named".into(),
+        dimension: "content".into(),
+        kind: ProbeKind::SelectIris,
+        query: Some("SELECT ?c WHERE { ?s a ?c } LIMIT 1".into()),
+        expect: None,
+        var: None,
+        declared_by: None,
+        graded: false,
+        cost: Cost::Cheap,
+        sample_limit: None,
+    }
+}
+
+#[tokio::test]
+async fn a_panicked_group_publishes_prober_failed_for_every_endpoint_it_held() {
+    // One host with two endpoints, whose group panics on the second metric, and
+    // one host with a single endpoint that survives. The survivor is FIRST in
+    // the input, and the panicking group finishes first, so this also pins that
+    // a failure does not shift the survivor's facts out of input order.
+    //
+    // The survivor survives by budget, not by luck: its mock answers after 3
+    // seconds and its endpoint budget is 1 second, so `probe_one_endpoint`'s
+    // timeout drops the future during the very first request, long before the
+    // panicking definition is dispatched, and the expiry fill gives it a row
+    // per metric. Nothing here depends on how fast the machine is: the delay is
+    // served by the mock, so it cannot arrive early.
+    //
+    // Expect one panic message on stderr from the default hook. That is the
+    // task dying, which is the thing under test; no panic hook is installed,
+    // because a hook is process-wide and the suite runs tests in parallel.
+    let solo = MockServer::start().await;
+    let pair = MockServer::start().await;
+    let log = new_log();
+    mount_recording(&solo, "/x", "solo", std::time::Duration::from_secs(3), &log).await;
+    mount_recording(&pair, "/a", "pair-a", std::time::Duration::ZERO, &log).await;
+    mount_recording(&pair, "/b", "pair-b", std::time::Duration::ZERO, &log).await;
+
+    let (mut run, declined) = probe_and_declined();
+    run.truncate(1); // keep `availability`, so a request happens before the panic
+    run.push(panicking_metric());
+    let budget = Budget {
+        request: std::time::Duration::from_secs(30),
+        metric: std::time::Duration::from_secs(60),
+        endpoint: std::time::Duration::from_secs(1),
+    };
+    let client = std::sync::Arc::new(Client::new(budget, Politeness::unlimited()).unwrap());
+    let eps = vec![
+        format!("{}/x", solo.uri()),
+        format!("{}/a", pair.uri()),
+        format!("{}/b", pair.uri()),
+    ];
+    // `without_deadlocking` rather than an ad-hoc timeout: the failure this
+    // guards against is the sweep never returning at all, which is what a
+    // panicked task poisoning the JoinSet would look like.
+    let Sweep { rows, declarations_read, not_measured, content_samples, failed_endpoints } =
+        without_deadlocking(run_sweep(
+            &eps,
+            &run,
+            &declined,
+            &client,
+            budget,
+            NonZeroUsize::new(2).unwrap(),
+        ))
+        .await;
+
+    // Endpoints, not groups: one task panicked and it was holding two.
+    assert_eq!(failed_endpoints, 2, "the count is of endpoints the sweep failed on");
+
+    // The survivor's facts are all present, and they are the only ones.
+    assert_eq!(
+        rows.iter().map(|r| (r.endpoint.as_str(), r.metric_id.as_str(), r.verdict)).collect::<Vec<_>>(),
+        vec![
+            (eps[0].as_str(), "availability", Verdict::Indeterminate),
+            (eps[0].as_str(), "boom", Verdict::Indeterminate),
+        ],
+        "the surviving endpoint keeps its expiry-filled rows, and the failed ones get none: \
+         an Indeterminate row for them would assert a measurement that never happened"
+    );
+    assert_eq!(
+        declarations_read.iter().map(|d| d.endpoint.as_str()).collect::<Vec<_>>(),
+        vec![eps[0].as_str()],
+        "a failed endpoint publishes no declarationsRead"
+    );
+    assert!(content_samples.is_empty());
+
+    // The whole contract of the failure path, in input order: the survivor's
+    // declined fact, then one prober-failed per metric in `defs` for each
+    // endpoint the panicked task held, each still followed by its own declined
+    // fact.
+    assert_eq!(
+        not_measured
+            .iter()
+            .map(|n| (n.endpoint.as_str(), n.metric_id.as_str(), n.reason))
+            .collect::<Vec<_>>(),
+        vec![
+            (eps[0].as_str(), "classes", NotMeasuredReason::CostCeiling),
+            (eps[1].as_str(), "availability", NotMeasuredReason::ProberFailed),
+            (eps[1].as_str(), "boom", NotMeasuredReason::ProberFailed),
+            (eps[1].as_str(), "classes", NotMeasuredReason::CostCeiling),
+            (eps[2].as_str(), "availability", NotMeasuredReason::ProberFailed),
+            (eps[2].as_str(), "boom", NotMeasuredReason::ProberFailed),
+            (eps[2].as_str(), "classes", NotMeasuredReason::CostCeiling),
+        ],
+        "every endpoint of the panicked group carries one fact per metric, the declined \
+         metrics keep their ceiling reason, and the survivor's facts stay in input order"
+    );
+
+    // A pair with two `NotMeasured` facts would make emit's duplicate-subject
+    // guard publish NOTHING for that pair, which is worse than either fact.
+    let mut pairs: Vec<(&str, &str)> =
+        not_measured.iter().map(|n| (n.endpoint.as_str(), n.metric_id.as_str())).collect();
+    let before = pairs.len();
+    pairs.sort_unstable();
+    pairs.dedup();
+    assert_eq!(pairs.len(), before, "a pair got two NotMeasured facts");
+
+    // The property the exit status and the site's freshness both hang off: no
+    // endpoint the sweep covered contributed nothing at all.
+    for ep in &eps {
+        assert!(
+            rows.iter().any(|r| &r.endpoint == ep) || not_measured.iter().any(|n| &n.endpoint == ep),
+            "{ep} contributed nothing to the run graph"
+        );
+    }
+}
