@@ -68,6 +68,20 @@ and then rediagnosed as naming no graphs. And it does not rescue a corrupt
 file: a syntax error before the last terminator is still in the bytes after
 the cut, so such a file is refused whole, exactly as it was.
 
+A file that parses and carries no terminator anywhere makes no claim about
+sections either way, and the bytes cannot say why. That is what a run from
+before this format looks like, and it is also what a run of this format cut
+inside its HEADER looks like, since sw:emission is the header's last quad. So
+provenance is not asserted, and the two are separated by a fact the file does
+carry instead: a run from before this format still measured endpoints, and a
+header holds only the activity's own metadata. A file with no terminator and
+no endpoint fact at all is therefore refused, the same way an empty file is,
+because loading it would put the store's greatest prov:generatedAtTime on a
+graph that says nothing about finishing, which wins the newest-run aggregate
+in both read queries and silences the unfinished-run detection for every
+endpoint on the site. A file with no terminator and endpoint facts in it
+loads whole, exactly as before.
+
 What it cannot tell apart, and does tolerate: a hand-edited file whose last
 chunk was corrupted on purpose looks exactly like one a crash truncated, and
 its last chunk is dropped rather than the file refused. Nothing in the bytes
@@ -149,8 +163,11 @@ _TERMINATOR_TERMS = frozenset(
     f"<{predicate}>".encode() for predicate in _TERMINATOR_PREDICATES
 )
 # Every terminator's subject is the run's activity, which emit.rs builds as
-# urn:sparqlwatch:activity:<run>. A second anchor beside the predicate.
-_ACTIVITY_PREFIX = b"<urn:sparqlwatch:activity:"
+# urn:sparqlwatch:activity:<run>.
+_ACTIVITY_IRI_PREFIX = "urn:sparqlwatch:activity:"
+# The same prefix in a line's subject position, as a second anchor beside the
+# predicate in _is_terminator_line.
+_ACTIVITY_PREFIX = f"<{_ACTIVITY_IRI_PREFIX}".encode()
 
 
 def _try_parse(nquads: bytes) -> tuple[list | None, SyntaxError | None]:
@@ -173,6 +190,13 @@ def _is_terminator_line(line: bytes) -> bool:
     whitespace puts the subject in the first field and the predicate in the
     second whatever the object turns out to be, and a class IRI can only ever
     reach the third.
+
+    The predicate position is the load-bearing half, and it is the half
+    test_a_sampled_value_spelled_like_a_chunk_marker_is_not_a_boundary
+    exercises. The subject anchor below is belt-and-braces against a line no
+    emitter writes: every terminator emit.rs emits has the run's activity for
+    a subject, so a terminator predicate on any other subject is not a
+    section boundary this loader put there.
     """
     terms = line.split(None, 2)
     return (
@@ -211,6 +235,21 @@ def _last_terminator_end(nquads: bytes) -> int | None:
         line_end = newline
 
 
+def _holds_endpoint_facts(quads: list) -> bool:
+    """Whether ``quads`` says anything about an endpoint at all.
+
+    Every quad emit_header and emit_footer write has the run's activity for a
+    subject; every quad a chunk writes has the endpoint, a measurement, a
+    declined-metric or a content-sample node for a subject (see emit.rs's
+    emit_header, emit_footer and emit_endpoint). So a document whose every
+    subject is an activity carries the run's own metadata and no facts about
+    any endpoint.
+    """
+    return any(
+        not quad.subject.value.startswith(_ACTIVITY_IRI_PREFIX) for quad in quads
+    )
+
+
 def _quads_to_the_last_terminator(nquads: bytes) -> tuple[list, int]:
     """``nquads``' quads up to the end of its last complete section, and how
     many trailing bytes that dropped.
@@ -233,10 +272,32 @@ def _quads_to_the_last_terminator(nquads: bytes) -> tuple[list, int]:
             # zero-quad load and then fail as "names no graphs", which is true
             # of the empty prefix and says nothing about the real fault.
             raise ValueError(f"not valid N-Quads: {error}")
-        # Parses, and carries no terminator anywhere: a run written before
+        # Parses, and carries no terminator anywhere. Two different files
+        # look like this and the bytes do not say which: a run written before
         # this format existed (every captured fixture in tests/fixtures is
-        # one). It promised nothing about sections, so there is nothing to
-        # truncate and it loads whole.
+        # one), and a run of this format cut inside its HEADER, since
+        # sw:emission is the header's last quad so any earlier line boundary
+        # leaves no terminator behind. Provenance is not recoverable, so it is
+        # not asserted; what is available is a second discriminator. A run
+        # from before this format still measured endpoints, and a header holds
+        # only the activity's own metadata, so a file with no endpoint facts
+        # at all is a fragment of a header or a run that recorded nothing.
+        # Neither may load: the graph would carry the store's greatest
+        # prov:generatedAtTime with no sw:emission beside it, win the
+        # newest-run aggregate in both read queries, and silence the
+        # unfinished-run detection for every endpoint on the site.
+        #
+        # ``quads`` empty is left to the "names no graphs" refusal below, which
+        # is where an empty or comment-only file has always been diagnosed.
+        if quads and not _holds_endpoint_facts(quads):
+            raise ValueError(
+                "input holds activity metadata and no endpoint facts, and no "
+                "section terminator: it is either a fragment of a run whose "
+                "header was cut short or an empty run, and neither can be the "
+                "newest activity in the store"
+            )
+        # A run that promised nothing about sections, with facts in it. There
+        # is nothing to truncate and it loads whole.
         return quads, 0
 
     kept, cut_error = _try_parse(nquads[:cut])

@@ -357,10 +357,20 @@ endpoint. Both queries say so in their headers, and both select it with the same
 aggregate subquery: the "no run is newer" form of the same question cost 1.9 s and
 2.2 s per request at 402 run graphs, against 217 ms and 106 ms for the subquery.
 
-A run carrying **none** of the three facts is a run from before the incremental write.
-It promised nothing, so its missing `sw:finalised` says nothing, and neither sentence
-appears: such a page reads exactly as it did before this stage. Reading the absence
-alone as a crash would stamp every historical run in the store as unfinished.
+A run carrying **none** of the three facts makes no claim about finishing either way,
+which is what a run from before the incremental write looks like. It promised nothing,
+so its missing `sw:finalised` says nothing, and neither sentence appears: such a page
+reads exactly as it did before this stage. Reading the absence alone as a crash would
+stamp every historical run in the store as unfinished.
+
+The bytes cannot establish that a run with none of the three facts really predates the
+incremental write, because a run of the new format cut inside its header carries none
+of them either. `load_run.py` separates the two on a fact it does hold: a run from
+before this format still measured endpoints, so a file with no terminator and no
+endpoint fact at all is refused rather than loaded. That refusal is what keeps a
+truncated header out of this table: such a graph would carry the store's greatest
+`prov:generatedAtTime`, win the newest-run subquery, and silence the second sentence
+for every endpoint.
 
 The RDF representation carries the **inputs** to both derivations and never their
 result: the shown run's `sw:emission`, its `sw:finalised` where it has one, its

@@ -473,3 +473,95 @@ def test_an_empty_or_comment_only_file_is_still_refused_as_naming_no_graphs(tmp_
         with pytest.raises(ValueError, match="names no graphs"):
             load_run(store, payload)
         assert not list(store.named_graphs()), f"a refused load ({name}) stores nothing"
+
+
+def test_a_header_cut_short_of_its_terminator_is_refused(tmp_path):
+    """The third case's other half, and the one that used to load silently.
+
+    sw:emission is the header's LAST quad, so a file cut anywhere before it,
+    at a line boundary, parses cleanly and carries no terminator either. It
+    then looked exactly like a run from before this format existed, loaded
+    with discarded_bytes 0, and carried the store's greatest
+    prov:generatedAtTime, which is what both read queries pick the newest run
+    by. One truncated header would silence the unfinished-run detection for
+    every endpoint on the site.
+
+    Nothing in the bytes says which file this is, but there is a second thing
+    the loader already holds: a run from before this format still measured
+    endpoints, and a header holds only the activity's own metadata. So a file
+    that parses, carries no terminator and says nothing about any endpoint is
+    either a fragment or a run with no content, and neither may be admitted
+    as the store's newest activity.
+    """
+    header, _, _ = _sections()
+    lines = header.splitlines(keepends=True)
+    assert "<urn:sparqlwatch:emission>" in lines[-1], (
+        "the cut has to drop the header's terminator and nothing else"
+    )
+    cut = "".join(lines[:-1]).encode()
+    assert list(parse(cut, format=RdfFormat.N_QUADS)), (
+        "a cut at a line boundary parses cleanly: that is the whole hazard"
+    )
+
+    store = Store(str(tmp_path / "s"))
+    with pytest.raises(ValueError, match="no endpoint facts"):
+        load_run(store, cut)
+    assert not list(store.named_graphs()), "a refused load stores nothing"
+
+
+def test_the_refusal_says_the_file_is_a_fragment_or_an_empty_run(tmp_path):
+    """What the message has to carry, because it is the only thing an operator
+    loading a partial file by hand gets: that the file holds activity metadata
+    and no endpoint facts, and that both readings are possible."""
+    header, _, _ = _sections()
+    cut = "".join(header.splitlines(keepends=True)[:-1]).encode()
+
+    with pytest.raises(ValueError) as raised:
+        load_run(Store(str(tmp_path / "s")), cut)
+    message = str(raised.value)
+    assert "activity metadata" in message
+    assert "no endpoint facts" in message
+    assert "fragment" in message and "empty run" in message
+
+
+def test_a_whole_header_with_its_terminator_still_loads(tmp_path):
+    """The discriminator is the terminator, not the endpoint facts.
+
+    A run killed immediately after its header holds no endpoint facts either,
+    and it must still load: its sw:emission is the fact that tells the read
+    tier the run died. So this file and the one above differ by one quad, and
+    that quad is the whole difference between a run that says it stopped and
+    a file that says nothing.
+    """
+    header, _, _ = _sections()
+
+    result = load_run(Store(str(tmp_path / "s")), header.encode())
+
+    assert result.quad_count == 7, "the header's run-level facts"
+    assert result.discarded_bytes == 0
+
+
+def test_a_truncated_header_cannot_silence_the_newest_run_detection(tmp_path):
+    """Why the refusal matters, stated as the consequence it prevents.
+
+    Both read queries pick the newest run in the store by MAX of the
+    activity's prov:generatedAtTime. A truncated header carries that
+    timestamp and nothing else, so admitting it would make the newest
+    activity in the store a run that says nothing about finishing, and the
+    unfinished-run sentence would disappear from every endpoint's page. The
+    store keeps the run it had.
+    """
+    store = Store(str(tmp_path / "s"))
+    load_run(store, FIXTURE.read_bytes())
+    header, _, _ = _sections()
+    later = "".join(header.splitlines(keepends=True)[:-1]).replace(
+        "2026-08-23T02:00:00Z", "2026-08-25T02:00:00Z"
+    )
+
+    with pytest.raises(ValueError, match="no endpoint facts"):
+        load_run(store, later.encode())
+
+    newest = "SELECT (MAX(?t) AS ?newest) WHERE { GRAPH ?g { ?a <http://www.w3.org/ns/prov#generatedAtTime> ?t } }"
+    assert [row["newest"].value for row in store.query(newest)] == [
+        "2026-08-22T16:00:00Z"
+    ], "the refused fragment must not have become the store's newest activity"

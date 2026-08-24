@@ -417,8 +417,14 @@ run that did not finish, so an endpoint with no `completedEndpoint` marker was
 never reached rather than measured and found wanting, and there is no
 `failedEndpoints` count at all, because that count is in the missing footer: a
 summary of chunks is not published until the chunks are. Neither terminator is a
-run emitted before this scheme existed, which promised nothing either way and
-must not be reported as unfinished. `finalised` is a boolean rather than
+run that makes no claim about sections either way: that is what a run emitted
+before this scheme existed looks like, and it promised nothing, so it must not be
+reported as unfinished. It is also what a run of THIS scheme cut inside its
+header looks like, since `emission` is the header's last quad, and no reader can
+tell the two apart from the bytes. `web/load_run.py` separates them on a fact the
+file does carry: a run from before this scheme still measured endpoints, so a file
+with no terminator and no endpoint fact at all is refused rather than admitted as
+the store's newest activity. `finalised` is a boolean rather than
 `prov:endedAtTime` because nothing in the prober can produce that instant
 soundly: `emit` reads no clock by design,
 `std` cannot format a `SystemTime` as `xsd:dateTime`, no date library is in the
