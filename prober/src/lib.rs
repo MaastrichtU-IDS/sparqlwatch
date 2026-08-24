@@ -9,6 +9,7 @@ pub mod politeness;
 pub mod metrics;
 pub mod registry;
 pub mod resolve;
+pub mod write;
 
 use crate::budget::{Budget, Expired};
 use crate::client::Client;
