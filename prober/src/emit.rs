@@ -29,6 +29,21 @@ use oxrdfio::{RdfFormat, RdfSerializer};
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
 
+/// The predicate that closes the header, `emit_header`'s last quad.
+///
+/// This and the two below are the wire format `web/load_run.py` cuts a
+/// truncated run back to. Their canonical spellings are in
+/// `docs/design/section-terminators.md`, which the test at the bottom of this
+/// module asserts these three constants against, and which
+/// `web/tests/test_load_run.py` asserts the loader's set against. Renaming one
+/// here alone reds this crate's suite instead of silently discarding every
+/// endpoint a crash preserved.
+pub const HEADER_TERMINATOR: &str = "urn:sparqlwatch:emission";
+/// The predicate that closes one endpoint's chunk, `emit_endpoint`'s last quad.
+pub const CHUNK_TERMINATOR: &str = "urn:sparqlwatch:completedEndpoint";
+/// The predicate that closes the footer, `emit_footer`'s last quad.
+pub const FOOTER_TERMINATOR: &str = "urn:sparqlwatch:finalised";
+
 const DQV: &str = "http://www.w3.org/ns/dqv#";
 const PROV: &str = "http://www.w3.org/ns/prov#";
 const DCAT: &str = "http://www.w3.org/ns/dcat#";
@@ -440,7 +455,7 @@ pub fn emit_header(header: RunHeader) -> anyhow::Result<String> {
     // before that is published.
     quads.push(Quad::new(
         NamedOrBlankNode::NamedNode(activity),
-        nn("urn:sparqlwatch:emission")?,
+        nn(HEADER_TERMINATOR)?,
         Term::Literal(Literal::new_simple_literal("incremental")),
         graph,
     ));
@@ -1068,7 +1083,7 @@ pub fn emit_endpoint(state: &mut EmitState, facts: EndpointFacts) -> anyhow::Res
     match subject_term {
         Ok(n) => quads.push(Quad::new(
             NamedOrBlankNode::NamedNode(activity),
-            nn("urn:sparqlwatch:completedEndpoint")?,
+            nn(CHUNK_TERMINATOR)?,
             Term::NamedNode(n),
             graph,
         )),
@@ -1138,7 +1153,7 @@ pub fn emit_footer(footer: RunFooter) -> anyhow::Result<String> {
         // concurrency 4 their sum is not even a bound on the run.
         Quad::new(
             NamedOrBlankNode::NamedNode(activity),
-            nn("urn:sparqlwatch:finalised")?,
+            nn(FOOTER_TERMINATOR)?,
             Term::Literal(Literal::new_typed_literal("true", xsd::BOOLEAN)),
             graph,
         ),
@@ -1664,15 +1679,68 @@ mod tests {
         assert_frozen(&split_baseline_emission(), BASELINE_PAIRS, BASELINE_QUADS);
     }
 
-    /// The three section terminators, by their published spelling.
+    /// `docs/design/section-terminators.md`, embedded at compile time so a
+    /// deleted or moved file is a build failure rather than a skipped test.
+    const WIRE_FORMAT: &str = include_str!("../../docs/design/section-terminators.md");
+
+    /// The section-to-predicate table in `WIRE_FORMAT`'s fenced block, in the
+    /// order it lists them.
     ///
-    /// Written out here rather than read from the emitter, because
-    /// `web/load_run.py` recognises exactly these three and a rename on one side
-    /// alone would leave a loader that silently trusts every truncated tail it
-    /// is given. A test that derived them from the code could not catch that.
-    const HEADER_END: &str = "<urn:sparqlwatch:emission>";
-    const CHUNK_END: &str = "<urn:sparqlwatch:completedEndpoint>";
-    const FOOTER_END: &str = "<urn:sparqlwatch:finalised>";
+    /// Parsed rather than restated. A restatement here would be a third copy of
+    /// the table, and the point of that file is that there are two, one per
+    /// language, each checked against it.
+    fn wire_format_table() -> Vec<(String, String)> {
+        let mut parts = WIRE_FORMAT.split("```");
+        parts.next().expect("the prose before the fenced block");
+        let block = parts.next().expect("a fenced block naming the terminators");
+        assert_eq!(parts.count(), 1, "exactly one fenced block in the wire format file");
+        block
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| {
+                let mut fields = line.split_whitespace();
+                let section = fields.next().expect("a section name").to_string();
+                let predicate = fields.next().expect("a predicate IRI").to_string();
+                assert!(fields.next().is_none(), "a section and a predicate: {line}");
+                (section, predicate)
+            })
+            .collect()
+    }
+
+    /// The Rust half of the wire format.
+    ///
+    /// The three spellings are written here and recognised in
+    /// `web/load_run.py`, with nothing in either language connecting them:
+    /// renaming one here alone used to leave both suites green while every
+    /// partial run cut back to its header, discarding every endpoint the crash
+    /// preserved. `docs/design/section-terminators.md` is the one file both
+    /// sides read, and `web/tests/test_load_run.py` checks the loader's set
+    /// against the same table. The whole table is compared, so a fourth
+    /// terminator added on one side alone reds this too.
+    #[test]
+    fn the_emitter_writes_the_terminators_the_shared_wire_format_names() {
+        assert_eq!(
+            wire_format_table(),
+            vec![
+                ("header".to_string(), HEADER_TERMINATOR.to_string()),
+                ("chunk".to_string(), CHUNK_TERMINATOR.to_string()),
+                ("footer".to_string(), FOOTER_TERMINATOR.to_string()),
+            ],
+            "the emitter's terminators and docs/design/section-terminators.md have to agree"
+        );
+    }
+
+    /// The three terminators as a serialized line spells them, in predicate
+    /// position.
+    ///
+    /// Derived from the emitter's own constants, where they used to be written
+    /// out again here. What that restatement bought was catching a rename in
+    /// the emitter; the test above buys the same thing against a file the
+    /// loader is checked against too, which a restatement in this module could
+    /// not do.
+    fn in_predicate_position(predicate: &str) -> String {
+        format!("<{predicate}>")
+    }
 
     #[test]
     fn each_section_ends_with_its_own_terminator() {
@@ -1689,7 +1757,7 @@ mod tests {
         })
         .unwrap();
         assert!(
-            header.trim_end().lines().next_back().unwrap().contains(HEADER_END),
+            header.trim_end().lines().next_back().unwrap().contains(&in_predicate_position(HEADER_TERMINATOR)),
             "the header must end with its terminator: {header}"
         );
 
@@ -1709,13 +1777,13 @@ mod tests {
         )
         .unwrap();
         assert!(
-            chunk.trim_end().lines().next_back().unwrap().contains(CHUNK_END),
+            chunk.trim_end().lines().next_back().unwrap().contains(&in_predicate_position(CHUNK_TERMINATOR)),
             "a chunk must end with its terminator: {chunk}"
         );
 
         let footer = emit_footer(RunFooter { run: &RunId("r1".into()), failed_endpoints: 0 }).unwrap();
         assert!(
-            footer.trim_end().lines().next_back().unwrap().contains(FOOTER_END),
+            footer.trim_end().lines().next_back().unwrap().contains(&in_predicate_position(FOOTER_TERMINATOR)),
             "the footer must end with its terminator: {footer}"
         );
     }
@@ -1963,7 +2031,7 @@ mod tests {
         let whole = split_baseline_emission();
         let cut_at = whole
             .lines()
-            .position(|l| l.contains(CHUNK_END))
+            .position(|l| l.contains(&in_predicate_position(CHUNK_TERMINATOR)))
             .expect("the fixture has at least one chunk");
         let truncated: String =
             whole.lines().take(cut_at + 1).map(|l| format!("{l}\n")).collect();

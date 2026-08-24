@@ -325,10 +325,20 @@ def test_the_prober_failed_fixture_is_the_shape_it_claims(tmp_path):
     was made for.
 
     The three section terminators are asserted here because this is the only
-    committed fixture that claims to be current emitter output, so it is the
-    only place the Python side can notice the emitter growing a run-level fact
-    or renaming one. Every other fixture is a captured historical sweep and
-    carries no terminator on purpose.
+    committed fixture that claims to be current emitter output. What that
+    catches is this file going stale, which it has: it was regenerated
+    mid-branch at 51 quads from a 48-quad version that had been passing. What
+    it does NOT catch is the emitter renaming a terminator, because these bytes
+    are a frozen copy and nothing in prober/ regenerates or diffs them, so a
+    rename would move the emitter and leave this fixture, and both suites,
+    agreeing on the old spelling. That seam is held by
+    docs/design/section-terminators.md, which both sides read: see
+    test_the_loader_recognises_exactly_the_documented_terminators in
+    test_load_run.py and the emitter's own
+    the_emitter_writes_the_terminators_the_shared_wire_format_names.
+
+    Every other fixture is a captured historical sweep and carries no
+    terminator on purpose.
     """
     store = Store(str(tmp_path / "s"))
     store.load(PROBER_FAILED_FIXTURE.read_bytes(), format=RdfFormat.N_QUADS)

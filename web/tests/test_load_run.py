@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 from pyoxigraph import DefaultGraph, NamedNode, RdfFormat, Store, parse
 
-from load_run import LoadResult, load_run, main
+from load_run import _TERMINATOR_PREDICATES, LoadResult, load_run, main
 
 FIXTURE = Path(__file__).parent / "fixtures" / "run-with-samples.nq"
 TWO_SWEEPS_FIXTURE = Path(__file__).parent / "fixtures" / "run-two-sweeps.nq"
@@ -565,3 +565,50 @@ def test_a_truncated_header_cannot_silence_the_newest_run_detection(tmp_path):
     assert [row["newest"].value for row in store.query(newest)] == [
         "2026-08-22T16:00:00Z"
     ], "the refused fragment must not have become the store's newest activity"
+
+
+# ---------------------------------------------------------------------------
+# The wire format, pinned to one checked-in file
+# ---------------------------------------------------------------------------
+# The three terminator predicates are written in Rust and recognised here, and
+# nothing in either language connects the two spellings. docs/design/
+# section-terminators.md is the single source of truth both sides read:
+# prober/src/emit.rs's tests assert the emitter's constants against it, and the
+# test below asserts this loader's against it. Neither suite invokes the other.
+WIRE_FORMAT = (
+    Path(__file__).resolve().parents[2] / "docs" / "design" / "section-terminators.md"
+)
+
+
+def _wire_format_table() -> dict[str, str]:
+    """The section-to-predicate table in WIRE_FORMAT's fenced block.
+
+    Parsed rather than restated, because a restatement here would be a third
+    copy of the table and the point of the file is that there are two.
+    """
+    lines = WIRE_FORMAT.read_text().splitlines()
+    fences = [i for i, line in enumerate(lines) if line.startswith("```")]
+    assert len(fences) == 2, f"one fenced block, found {len(fences) // 2}"
+    table = {}
+    for line in lines[fences[0] + 1 : fences[1]]:
+        section, predicate = line.split()
+        table[section] = predicate
+    return table
+
+
+def test_the_loader_recognises_exactly_the_documented_terminators():
+    """The Python half of the wire format.
+
+    A rename on either side used to leave both suites green while every
+    partial run cut back to its header, discarding every endpoint the crash
+    preserved. Both sets are asserted whole rather than by membership, so a
+    fourth predicate added on one side alone reds this too.
+    """
+    table = _wire_format_table()
+    assert set(table) == {"header", "chunk", "footer"}, (
+        f"the three sections emit.rs writes, found {sorted(table)}"
+    )
+    assert _TERMINATOR_PREDICATES == frozenset(table.values()), (
+        f"the loader recognises {sorted(_TERMINATOR_PREDICATES)}, "
+        f"{WIRE_FORMAT.name} names {sorted(table.values())}"
+    )
