@@ -179,7 +179,15 @@ pub async fn run_sweep<W: std::io::Write>(
     // One shared copy of the definitions for the whole sweep. A `to_vec()` per
     // endpoint would be 548 copies of the definition list at stage 1d.
     let shared_defs = Arc::new(defs.to_vec());
-    let mut tasks: JoinSet<Vec<(usize, EndpointSweep)>> = JoinSet::new();
+    // Finished endpoints on their way to the writer. BOUNDED, and safe to bound
+    // because the loop that drains it does no probing: a `send` that has to wait
+    // holds its group's permit, which delays that host's next endpoint and can
+    // deadlock nothing while the receiver is live. Bounding it is also what keeps
+    // a 548-endpoint sweep from holding every endpoint's facts in memory at once,
+    // which is the thing writing incrementally is supposed to stop.
+    let (arrived, mut arrivals) =
+        tokio::sync::mpsc::channel::<(usize, EndpointSweep)>(ARRIVALS_IN_FLIGHT);
+    let mut tasks: JoinSet<()> = JoinSet::new();
     // Which endpoints each task is probing. `JoinSet::join_next`'s error arm
     // carries only a `JoinError`, whose only identifying information is
     // `JoinError::id()`, so without this map a task that panicked could not
@@ -196,6 +204,7 @@ pub async fn run_sweep<W: std::io::Write>(
         let permits = Arc::clone(&permits);
         let defs = Arc::clone(&shared_defs);
         let client = Arc::clone(client);
+        let arrived = arrived.clone();
         let handle = tasks.spawn(async move {
             // Held for the WHOLE group, not per endpoint: a permit is the
             // right to talk to this host at all, and the loop below takes it
@@ -237,49 +246,90 @@ pub async fn run_sweep<W: std::io::Write>(
                 .acquire()
                 .await
                 .expect("the sweep owns this semaphore and never closes it");
-            let mut done = Vec::with_capacity(group.len());
             for (slot, ep) in group {
-                done.push((slot, probe_one_endpoint(&ep, &defs, &client, budget).await));
+                let swept = probe_one_endpoint(&ep, &defs, &client, budget).await;
+                // A send error means the receiver is gone, which means the sweep
+                // is over: it either stopped on a write failure or was cancelled.
+                // So this task returns quietly rather than reaching for
+                // `.expect()` the way the semaphore above does. Turning a write
+                // failure into a panic per group would re-enter the panic path
+                // and publish `prober-failed` facts about endpoints that were
+                // measured, which is a confident wrong answer.
+                if arrived.send((slot, swept)).await.is_err() {
+                    return;
+                }
             }
-            done
         });
         covering.insert(handle.id(), named);
     }
-    let mut slots: Vec<Option<EndpointSweep>> = endpoints.iter().map(|_| None).collect();
-    while let Some(joined) = tasks.join_next().await {
-        match joined {
-            Ok(done) => {
-                for (slot, swept) in done {
-                    slots[slot] = Some(swept);
-                }
-            }
-            // A panic in one group costs that whole group, since its results
-            // are built inside the task, so the log names every endpoint it
-            // covered rather than one. The slots stay empty and `assemble_endpoint`
-            // publishes a `prober-failed` fact for each of them: an endpoint
-            // that contributed nothing at all would leave the site serving the
-            // previous run's verdicts as current.
-            Err(failure) => {
-                let named = covering.get(&failure.id()).cloned().unwrap_or_default();
-                tracing::error!(
-                    endpoints = ?named, error = %failure,
-                    "the task probing these endpoints failed; every metric on them is \
-                     published as not measured, reason prober-failed"
-                );
-            }
-        }
-    }
-    // The run this file describes, cloned once so the loop below can borrow it
+    // The sweep's own sender, dropped BEFORE the loop below. Every group holds a
+    // clone, so `recv` returns `None` when the last of them finishes; holding
+    // this one across the loop would mean it never returns and the sweep hangs
+    // after the last group. That is the most common way to write this shape
+    // wrong, and it presents as a hang rather than as a failure.
+    drop(arrived);
+
+    // The run this file describes, cloned once so the loops below can borrow it
     // alongside the writer it belongs to.
     let run = RunId(writer.run().0.clone());
-    let mut per_endpoint = Vec::with_capacity(endpoints.len());
-    for (ep, slot) in endpoints.iter().zip(slots) {
-        let facts = assemble_endpoint(ep, slot, defs, declined);
+    let mut slots: Vec<Option<EndpointFactLists>> = endpoints.iter().map(|_| None).collect();
+    while let Some((slot, swept)) = arrivals.recv().await {
+        let facts = assemble_endpoint(&endpoints[slot], Some(swept), defs, declined);
+        // On arrival, which is what makes a chunk the unit of loss: a sweep
+        // killed here has published every endpoint that finished before this one
+        // and nothing about the ones that have not. The slot keeps the same
+        // facts, so the returned `Sweep` is still in input order.
         writer.write_endpoint(facts.chunk(&run))?;
+        slots[slot] = Some(facts);
+    }
+    // Every task has finished by now: that is what closed the channel. So this
+    // waits for nothing and the only thing left to learn from it is which groups
+    // panicked.
+    //
+    // A panic costs the endpoints of that group the task had not yet sent, which
+    // is at most the whole group and at least the one it panicked on: the ones it
+    // already sent are on disk and in their slots. `covering` names the whole
+    // group, so the log can over-report; the slots are what decide the published
+    // facts, below.
+    while let Some(joined) = tasks.join_next().await {
+        if let Err(failure) = joined {
+            let named = covering.get(&failure.id()).cloned().unwrap_or_default();
+            tracing::error!(
+                endpoints = ?named, error = %failure,
+                "the task probing these endpoints failed; every metric on the ones it had not \
+                 finished is published as not measured, reason prober-failed"
+            );
+        }
+    }
+    // Then, and only then, the endpoints nothing arrived for. After every real
+    // chunk because they are the run's failures and a reader meets them in the
+    // order they were learned, and before the footer `main.rs` writes because a
+    // footer certifies a run whose endpoints are all in the file: an endpoint
+    // that contributed nothing at all would leave the site serving the previous
+    // run's verdicts as current.
+    let mut per_endpoint = Vec::with_capacity(endpoints.len());
+    for (slot, ep) in endpoints.iter().enumerate() {
+        let facts = match slots[slot].take() {
+            Some(arrived) => arrived,
+            None => {
+                let failed = assemble_endpoint(ep, None, defs, declined);
+                writer.write_endpoint(failed.chunk(&run))?;
+                failed
+            }
+        };
         per_endpoint.push(facts);
     }
     Ok(collect_sweep(per_endpoint))
 }
+
+/// How many finished endpoints may be waiting to be written.
+///
+/// Small on purpose. The cost of a full channel is that one host's group pauses
+/// before its next endpoint, and the benefit is that a sweep of 548 endpoints
+/// holds at most this many endpoints' facts in memory beyond the one being
+/// written, rather than all of them, which is half of what writing incrementally
+/// is for.
+const ARRIVALS_IN_FLIGHT: usize = 16;
 
 /// One endpoint's four fact families, owned, as they will be published.
 ///
