@@ -412,13 +412,41 @@ def _rows(measurements: EndpointMeasurements) -> list[dict]:
                 "css_class": verdict_encoding.css_class(state.slug),
                 "token": state.token,
                 # Not a verdict, and it does not read like one: no value is
-                # stated, only the fact that we chose not to look and why.
+                # stated, only the fact that nothing was measured and why.
                 "state_text": f"{state.label} ({declined.reason})",
-                "detail": "we declined to look, so this says nothing about the endpoint",
+                "detail": _declined_detail(declined.reason),
                 "elapsed_ms": None,
             }
         )
     return sorted(rows, key=lambda row: row["metric"])
+
+
+# What each decline reason means in words, keyed by the slug the graph
+# carries. The slugs are prober/src/emit.rs's NotMeasuredReason::slug, and the
+# two sentences say opposite things about who is responsible: "cost-ceiling"
+# is a decision this project made about budget, "prober-failed" is our own
+# task panicking or being cancelled before it asked the endpoint anything.
+# Reporting the second as the first would send an operator to --max-cost
+# instead of to the crash.
+_DECLINE_DETAILS = {
+    "cost-ceiling": "we declined to look, so this says nothing about the endpoint",
+    "prober-failed": (
+        "the prober failed on this endpoint, so this run observed nothing "
+        "about it"
+    ),
+}
+
+# The detail for a reason this build has no sentence for, from a prober newer
+# or older than this page. The same shape as _detail's unrecognised-verdict
+# clause, and for the same reason: the row's state text already carries the
+# value verbatim, so this says only that we have no reading of it. A reason
+# has been added to the vocabulary once already, so the branch is reachable.
+_UNRECOGNISED_DECLINE_DETAIL = "unrecognised reason, shown as the store recorded it"
+
+
+def _declined_detail(reason: str) -> str:
+    """The extra clause a declined row carries, read out of its reason."""
+    return _DECLINE_DETAILS.get(reason, _UNRECOGNISED_DECLINE_DETAIL)
 
 
 def _detail(verdict, recognised: bool) -> str | None:

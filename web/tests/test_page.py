@@ -36,12 +36,17 @@ from app import (
     COMPLETE_TEXT,
     ENDPOINT_PATH,
     TRUNCATED_TEXT,
+    _rows,
     _sample,
     app,
     get_store,
 )
 from endpoint_content import EndpointContent
-from endpoint_measurements import EndpointMeasurements, MetricVerdict
+from endpoint_measurements import (
+    DeclinedMetric,
+    EndpointMeasurements,
+    MetricVerdict,
+)
 
 KADASTER = "https://data.kkg.kadaster.nl/query"
 QLEVER = "https://qlever.dev/api/osm-planet"
@@ -835,6 +840,115 @@ def test_a_decline_is_drawn_unlike_every_verdict(client_for, store_declined):
     assert len(declined) == 1
     assert verdicts, "the same page must carry verdicts to be distinguished from"
     assert not (declined & verdicts)
+
+
+def test_each_decline_reason_gets_its_own_detail():
+    """A declined row's detail is derived from the graph's reason.
+
+    Two reasons exist today, and prober/src/emit.rs's
+    NotMeasuredReason::slug is where both come from: "cost-ceiling", where
+    the sweep looked at its budget and chose not to run the metric, and
+    "prober-failed", where the task probing the endpoint's host panicked or
+    was cancelled so nothing was ever asked. They are opposite claims about
+    who is responsible, and reporting a crash as a cost decision points an
+    operator at --max-cost instead of at the crash.
+
+    The third case is the one this project will meet again, because it has
+    added a reason once already: a reason from a prober this page has no
+    sentence for. There the honest answer is to claim nothing and let the
+    state text carry the value verbatim, which is how an unrecognised
+    verdict is already handled.
+
+    Asked of _rows directly rather than through a store, because the third
+    case has no committed fixture and inventing one would pin a reason no
+    prober emits.
+    """
+    rows = {
+        row["metric"]: row
+        for row in _rows(
+            EndpointMeasurements(
+                endpoint="https://example.org/sparql",
+                assessed=True,
+                run="urn:sparqlwatch:run:x",
+                generated_at="2026-08-22T16:00:00Z",
+                declined=[
+                    DeclinedMetric(metric=M + "classes", reason="cost-ceiling"),
+                    DeclinedMetric(metric=M + "cors", reason="prober-failed"),
+                    DeclinedMetric(metric=M + "geo-data", reason="from-the-future"),
+                ],
+            )
+        )
+    }
+
+    assert rows[M + "classes"]["detail"] == (
+        "we declined to look, so this says nothing about the endpoint"
+    )
+    assert rows[M + "cors"]["detail"] == (
+        "the prober failed on this endpoint, so this run observed nothing "
+        "about it"
+    )
+    assert rows[M + "geo-data"]["detail"] == (
+        "unrecognised reason, shown as the store recorded it"
+    )
+
+    # Whichever branch the detail came from, the row still names the reason
+    # the store holds, so a reader is never left with only our sentence.
+    for metric, reason in (
+        (M + "classes", "cost-ceiling"),
+        (M + "cors", "prober-failed"),
+        (M + "geo-data", "from-the-future"),
+    ):
+        assert rows[metric]["state_text"] == f"not measured ({reason})"
+
+
+def test_a_prober_failed_row_and_a_cost_ceiling_row_read_differently(
+    client_for, store_prober_failed
+):
+    """The same page, both reasons, and neither row borrows the other's text.
+
+    run-prober-failed.nq is the emitter's own output for an endpoint whose
+    group failed under the default cost ceiling: seven metrics prober-failed
+    and metric:classes cost-ceiling. An operator reads this page precisely
+    when the prober has crashed, so a prober-failed row that says the metric
+    was priced out of the run sends them to --max-cost instead of to the
+    crash.
+    """
+    text = page(client_for(store_prober_failed), KADASTER)
+
+    reasons = {
+        row["data-metric"]: row["data-declined"]
+        for row in with_attribute(text, "data-declined")
+    }
+    assert reasons[M + "classes"] == "cost-ceiling"
+    assert reasons[M + "availability"] == "prober-failed"
+    assert len(reasons) == 8, "every metric in this run was declined"
+
+    assert row_cells(text, M + "availability")["m-detail"] == (
+        "the prober failed on this endpoint, so this run observed nothing "
+        "about it"
+    )
+    assert row_cells(text, M + "classes")["m-detail"] == (
+        "we declined to look, so this says nothing about the endpoint"
+    )
+
+    # The legend is on this page too, and it explains a state rather than
+    # either of the two reasons the rows carry.
+    assert "cost ceiling" not in text
+
+
+def test_the_not_measured_legend_entry_names_no_reason():
+    """The legend explains a state, and the state is not one reason.
+
+    templates/endpoint.html renders state.meaning into the legend for every
+    page, whatever reasons that page's rows carry, so a meaning naming one
+    of the two reasons tells half the readers of a prober-failed run
+    something untrue. The reason belongs on the row, where it is read out of
+    the graph.
+    """
+    state = verdict_encoding.presentation(verdict_encoding.NOT_MEASURED)
+    assert state.meaning == "no measurement was taken; the row says why"
+    for reason in ("cost", "ceiling", "prober", "failed", "declined"):
+        assert reason not in state.meaning
 
 
 # ---------------------------------------------------------------------------

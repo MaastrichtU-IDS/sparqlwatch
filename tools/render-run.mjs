@@ -175,8 +175,9 @@ function render({ run, rows, declined = [], samples = [] }) {
     const times = mine.filter((r) => r && r.ms !== undefined).map((r) => r.ms);
     const slowest = times.length ? Math.max(...times) : null;
     // Named for what it counts. "not measured" now has a specific published
-    // meaning (a metric declined by the cost ceiling), so it cannot also mean
-    // "measured, but reported no elapsed time".
+    // meaning (a metric this run took no measurement of, whether because the
+    // cost ceiling declined it or because the prober failed on the endpoint),
+    // so it cannot also mean "measured, but reported no elapsed time".
     const untimed = mine.filter((r) => r && r.ms === undefined).length;
     return `<tr>
       <td><div class="name">${esc(ep.replace(/^https?:\/\//, ''))}</div></td>

@@ -1,0 +1,75 @@
+# SYNTHETIC fixture. Not a captured sweep, and it cannot be one: a
+# sw:notMeasuredReason of "prober-failed" is published only when the task
+# probing an endpoint's host panicked or was cancelled, so producing it live
+# would mean shipping a prober that crashes.
+#
+# The quads below were not hand-written either. They are the output of
+# prober/src/emit.rs's emit_nquads, called with hand-built inputs: the eight
+# metrics of prober/metrics.toml against one endpoint, seven of them (every
+# "cheap" one) as NotMeasuredReason::ProberFailed and metric:classes (the one
+# "expensive" one) as NotMeasuredReason::CostCeiling, with max_cost "cheap",
+# concurrency 2 and failed_endpoints 1. That is exactly the shape
+# prober/src/lib.rs's `assemble` produces for an endpoint whose group failed:
+# every metric that would have run as prober-failed, every metric the cost
+# ceiling had already declined as cost-ceiling, and NO
+# sw:declarationsRead, because nothing was ever fetched.
+#
+# Both reasons in one run is the point. The two are opposite claims about who
+# is responsible, so a page that renders one sentence for every decline says
+# something untrue about seven of these eight rows, and a fixture carrying
+# only one reason cannot see that.
+#
+# 48 quads, one run graph (urn:sparqlwatch:run:2026-08-23T02:00:00Z), one
+# endpoint (data.kkg.kadaster.nl/query, so that this run can be loaded beside
+# the real 16:00 sweep of the same endpoint), 8 sw:NotMeasured facts, no
+# dqv:QualityMeasurement, no sw:ContentSample. The subjects are the derived
+# scheme of stage 1c-b3, because this run's emitter is the one that produces
+# it.
+<urn:sparqlwatch:activity:2026-08-23T02:00:00Z> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/prov#Activity> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-23T02:00:00Z> <http://www.w3.org/ns/prov#generatedAtTime> "2026-08-23T02:00:00Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-23T02:00:00Z> <urn:sparqlwatch:proberVersion> "0.1.0" <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-23T02:00:00Z> <urn:sparqlwatch:metricDefinitionRevision> "fnv1a64:5988db00fe7498fd" <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-23T02:00:00Z> <urn:sparqlwatch:maxCost> "cheap" <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-23T02:00:00Z> <urn:sparqlwatch:concurrency> "2"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-23T02:00:00Z> <urn:sparqlwatch:failedEndpoints> "1"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<https://data.kkg.kadaster.nl/query> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dcat#DataService> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:availability> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <urn:sparqlwatch:NotMeasured> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:availability> <urn:sparqlwatch:notMeasuredOn> <https://data.kkg.kadaster.nl/query> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:availability> <urn:sparqlwatch:notMeasuredMetric> <urn:sparqlwatch:metric:availability> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:availability> <urn:sparqlwatch:notMeasuredReason> "prober-failed" <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:availability> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-08-23T02:00:00Z> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:cors> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <urn:sparqlwatch:NotMeasured> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:cors> <urn:sparqlwatch:notMeasuredOn> <https://data.kkg.kadaster.nl/query> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:cors> <urn:sparqlwatch:notMeasuredMetric> <urn:sparqlwatch:metric:cors> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:cors> <urn:sparqlwatch:notMeasuredReason> "prober-failed" <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:cors> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-08-23T02:00:00Z> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:cors-preflight> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <urn:sparqlwatch:NotMeasured> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:cors-preflight> <urn:sparqlwatch:notMeasuredOn> <https://data.kkg.kadaster.nl/query> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:cors-preflight> <urn:sparqlwatch:notMeasuredMetric> <urn:sparqlwatch:metric:cors-preflight> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:cors-preflight> <urn:sparqlwatch:notMeasuredReason> "prober-failed" <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:cors-preflight> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-08-23T02:00:00Z> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:geo-functions> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <urn:sparqlwatch:NotMeasured> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:geo-functions> <urn:sparqlwatch:notMeasuredOn> <https://data.kkg.kadaster.nl/query> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:geo-functions> <urn:sparqlwatch:notMeasuredMetric> <urn:sparqlwatch:metric:geo-functions> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:geo-functions> <urn:sparqlwatch:notMeasuredReason> "prober-failed" <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:geo-functions> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-08-23T02:00:00Z> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:geo-data> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <urn:sparqlwatch:NotMeasured> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:geo-data> <urn:sparqlwatch:notMeasuredOn> <https://data.kkg.kadaster.nl/query> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:geo-data> <urn:sparqlwatch:notMeasuredMetric> <urn:sparqlwatch:metric:geo-data> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:geo-data> <urn:sparqlwatch:notMeasuredReason> "prober-failed" <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:geo-data> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-08-23T02:00:00Z> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:service-description> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <urn:sparqlwatch:NotMeasured> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:service-description> <urn:sparqlwatch:notMeasuredOn> <https://data.kkg.kadaster.nl/query> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:service-description> <urn:sparqlwatch:notMeasuredMetric> <urn:sparqlwatch:metric:service-description> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:service-description> <urn:sparqlwatch:notMeasuredReason> "prober-failed" <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:service-description> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-08-23T02:00:00Z> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:has-classes> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <urn:sparqlwatch:NotMeasured> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:has-classes> <urn:sparqlwatch:notMeasuredOn> <https://data.kkg.kadaster.nl/query> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:has-classes> <urn:sparqlwatch:notMeasuredMetric> <urn:sparqlwatch:metric:has-classes> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:has-classes> <urn:sparqlwatch:notMeasuredReason> "prober-failed" <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:has-classes> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-08-23T02:00:00Z> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:classes> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <urn:sparqlwatch:NotMeasured> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:classes> <urn:sparqlwatch:notMeasuredOn> <https://data.kkg.kadaster.nl/query> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:classes> <urn:sparqlwatch:notMeasuredMetric> <urn:sparqlwatch:metric:classes> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:classes> <urn:sparqlwatch:notMeasuredReason> "cost-ceiling" <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:classes> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-08-23T02:00:00Z> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .

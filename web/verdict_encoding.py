@@ -140,7 +140,7 @@ STATES: tuple[Presentation, ...] = (
     Presentation(
         slug="not-measured",
         label="not measured",
-        meaning="we declined to look (cost ceiling)",
+        meaning="no measurement was taken; the row says why",
         border="dotted",
         fill=False,
         weight=1,
