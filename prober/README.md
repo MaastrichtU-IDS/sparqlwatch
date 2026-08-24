@@ -83,10 +83,11 @@ cargo run -- --at 2026-08-20T12:00:00Z --out run.nq
 `--at` is required and is **not** read from the clock, deliberately. It names
 the run graph, it is published as the activity's `prov:generatedAtTime`, and a
 scheduled `CronJob` passes the scheduled instant, so a retry of a failed sweep
-lands in the same graph rather than inventing a second one. That also makes a
-run reproducible: same `--at`, same output identifiers. It is validated before
-any probing starts, because it is interpolated into IRIs and published as an
-`xsd:dateTime`.
+lands in the same graph rather than inventing a second one. That also makes the
+run's IDENTIFIERS reproducible: same `--at`, same graph and same subjects. Not
+its contents and not its bytes, because a sweep observes a changing world; see
+"Output is not byte-identical" below. It is validated before any probing starts,
+because it is interpolated into IRIs and published as an `xsd:dateTime`.
 
 A retry of a failed sweep therefore meets the partial file the failed attempt
 left, and it **refuses to start** rather than overwriting it, naming the file and
@@ -382,9 +383,13 @@ is the run's wall-clock duration, and the one case where another host's gate can
 sit inside a metric budget: a run at `--concurrency 1` cannot have lost a metric
 to the cross-host redirect described under Known limitations, because no other
 group was running, and a run at 4 can. `failedEndpoints` counts the endpoints
-this run observed nothing at all about. It is published on every run, including
-the ordinary `0`, so that an absent quad means "emitted before this fact
-existed" rather than "nothing failed". A non-zero value means that many
+this run observed nothing at all about. It is published on every run that
+finishes, including the ordinary `0`, so "this run failed on nothing" is a fact
+a consumer can read rather than an absence it has to interpret. Since the count
+moved into the footer, an absent quad has two readings and not one: a run
+emitted before this fact existed, or a run that did not finish and never wrote
+its footer. `sw:finalised` is what tells those apart, and it is the quad to test
+before reading anything into the absence. A non-zero value means that many
 endpoints carry `prober-failed` facts in place of verdicts and carry no
 `declarationsRead` fact either, so a consumer expecting one row per (endpoint,
 metric) has to read this rather than assume it. Such a run also exits non-zero,
@@ -405,15 +410,32 @@ that risk: a reader that holds a section's terminator holds the whole section,
 and a reader that does not may drop the fragment.
 
 A consumer reads three cases off facts that were each true when they were
-written. `emission` with `finalised` is a complete run. `emission` without
-`finalised` is a run that did not finish, and it carries no `failedEndpoints`
-count at all, because that count is in the missing footer: a summary of chunks
-is not published until the chunks are. Neither terminator is a run emitted
-before this scheme existed, which promised nothing either way. `finalised` is a boolean rather than `prov:endedAtTime` because nothing in
-the prober can produce that instant soundly: `emit` reads no clock by design,
+written. `emission` with `finalised` is a complete run: every endpoint the sweep
+was given has a chunk, including the ones a panicked group lost, and
+`failedEndpoints` counts over all of them. `emission` without `finalised` is a
+run that did not finish, so an endpoint with no `completedEndpoint` marker was
+never reached rather than measured and found wanting, and there is no
+`failedEndpoints` count at all, because that count is in the missing footer: a
+summary of chunks is not published until the chunks are. Neither terminator is a
+run emitted before this scheme existed, which promised nothing either way and
+must not be reported as unfinished. `finalised` is a boolean rather than
+`prov:endedAtTime` because nothing in the prober can produce that instant
+soundly: `emit` reads no clock by design,
 `std` cannot format a `SystemTime` as `xsd:dateTime`, no date library is in the
 lock file, and a flag supplied at launch would publish a predicted future into a
 graph that is never rewritten.
+
+Loading a truncated run commits a consumer to nothing, which is the non-obvious
+half of this working in our favour. `web/load_run.py` replaces a run's graphs
+wholesale: it drops the graphs the incoming file names and then inserts that
+file's quads, never merging, so the store holds the most recent file that
+claimed a run IRI and never a blend of two. Load a crash's partial file, then
+later the same run's complete file, and what remains is the complete run with
+none of the partial's quads standing beside it. Load either of them twice and
+the store ends up identical, so a re-load is always safe (the non-atomic window
+`load_run.py` documents is itself closed by re-running that same load). So a
+partial file is worth loading as soon as it appears, and nothing has to be undone
+when that run is later completed.
 
 **A run in progress is written to `<out>.<at>.partial`, and renamed onto `--out`
 when it finishes.** Never to `--out` directly: that file is the source of truth
@@ -434,11 +456,34 @@ directory is refused before any probing, along with any other reason the partial
 file cannot be created.
 
 Each chunk is flushed as it is written, and nothing depends on a destructor
-running: a `SIGKILL` runs none. Measured on the shipped `endpoints.toml`: a run
-killed with `SIGKILL` the instant its second chunk landed left 24,094 bytes and
-108 quads on disk, which the loader took whole, while the previous `--out` was
-byte-identical. There is no `fsync`, so a machine that loses power rather than a
-process that dies can still lose a flushed chunk to the page cache.
+running: a `SIGKILL` runs none. What that protects against is the process
+dying, all of it: a panic, a `SIGKILL`, an OOM kill, a cancelled `CronJob`.
+Measured on the shipped `endpoints.toml`: a run killed with `SIGKILL` the instant
+its second chunk landed left 24,094 bytes and 108 quads on disk, which the loader
+took whole, while the previous `--out` was byte-identical. Killed a little later,
+the same experiment left a 25,634-byte partial that loaded as 114 quads with 0
+bytes discarded, unfinished, one `completedEndpoint` whose 8 verdicts were all
+present, and again a byte-identical `--out`; a retry at that `--at` then exited 1
+and left the partial byte-identical.
+
+What it does not protect against is the machine losing power, and the boundary is
+worth stating exactly. There is no `fsync`, so a flushed chunk can still be lost
+in the page cache, and nothing syncs the directory after the rename either, so
+the rename onto `--out` is not promised to survive a reboot. Power loss is also a
+different SHAPE of damage, and it is where the terminator rule stops: a
+delayed-allocation filesystem can leave the file at its full length with blocks
+that were never written back reading as zeros. A NUL byte is not valid N-Quads,
+and `load_run.py` only ever cuts back to the last terminator LINE, so zeros
+anywhere before that line survive the cut, the parse fails, and the whole file is
+refused, chunks and all. A truncated tail is recoverable; a hole is not. See the
+last of the known limitations for why that is an accepted boundary rather than a
+gap to close.
+
+What writing incrementally buys is crash tolerance and not a smaller heap. The
+returned `Sweep` holds every endpoint's facts by design, so a 548-endpoint sweep
+retains all 548 at its peak; the arrival channel is bounded at 16 to buy
+backpressure, so a fast host cannot run arbitrarily far ahead of the writer. A
+30-endpoint sweep measured `peak_queued=15, retained_at_end=30`.
 
 `completedEndpoint` is per endpoint and not per run, so "did this run reach this
 endpoint" is a fact rather than an inference from absence. It is written even for
@@ -847,9 +892,19 @@ The following are deferred deliberately, not oversights:
   written and flushed as that endpoint finishes. What that buys is bounded
   precisely: a process that dies keeps every chunk already flushed, since the
   bytes are with the kernel and no destructor is needed. A machine that loses
-  power can still lose them, because there is no `fsync` and none is planned:
-  paying a disk sync per endpoint to narrow a window that a re-run closes anyway
-  is the wrong trade for a monitor whose runs are repeatable.
+  power can still lose them, because there is no `fsync` and none is planned.
+  Three reasons, in order of weight. A lost run is a **gap in history rather
+  than a false fact**: a run graph is written once and never corrected, so
+  losing one leaves a missing sweep, not a wrong verdict standing in the store
+  as current. Coverage returns on its own: the next scheduled sweep probes the
+  same registry under its own `--at`, into its own graph. And 548 `fsync` calls
+  per sweep, one per endpoint, cost something on the deployment's volume that
+  nobody here has measured, so paying it would buy an unquantified amount of
+  durability with an unquantified amount of latency. What a re-run does NOT do
+  is recover the lost run: the same `--at` names the same graph, but a sweep
+  observes a changing world, so what it writes is a new observation and not the
+  old file back. The other half of the boundary, the zeroed tail a power loss
+  can leave and no terminator rule can rescue, is under "How a run is written".
 
 ## Tests
 
