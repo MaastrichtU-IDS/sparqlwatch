@@ -1180,20 +1180,57 @@ mod tests {
 
     #[test]
     fn the_encoding_is_exactly_this() {
-        // Pins uppercase hex, the unreserved set, and UTF-8-byte-wise
-        // encoding. Without an exact string this test cannot fail: the
-        // encoder's output is valid IRI syntax by construction.
+        // Pins uppercase hex, UTF-8-byte-wise encoding, and the two halves of
+        // the encoder's contract that have no other seat: the whole unreserved
+        // set is passed through, and nothing is normalised. Without an exact
+        // string this test cannot fail, because the encoder's output is valid
+        // IRI syntax by construction.
+        //
+        // Every part of the input is load-bearing, so read it before changing
+        // it. `HTTP` and `A` fail a lowercasing encoder, which `registry::dedupe`
+        // forbids because it keeps `http://x/sparql` and `http://X/sparql` as
+        // two entries; the trailing `/` fails a normalising one, which the same
+        // module keeps as two entries too; `a-b_c~d` covers all four
+        // non-alphanumeric unreserved characters, so narrowing the set fails
+        // rather than silently renaming every fact about `osm-planet`; the
+        // space and the `\u{00e9}` cover the escaping path and the multi-byte
+        // case.
         let s = subject_iri(
             FactKind::Measurement,
             &RunId("R".into()),
-            "http://a.example/p q\u{00e9}",
+            "HTTP://A.example/a-b_c~d/p q\u{00e9}/",
             "cors",
         )
         .unwrap();
         assert_eq!(
             s.as_str(),
-            "urn:sparqlwatch:measurement:R:http%3A%2F%2Fa.example%2Fp%20q%C3%A9:cors"
+            "urn:sparqlwatch:measurement:R:\
+             HTTP%3A%2F%2FA.example%2Fa-b_c~d%2Fp%20q%C3%A9%2F:cors"
         );
+    }
+
+    #[test]
+    fn two_endpoints_the_registry_keeps_apart_get_different_subjects() {
+        // The invariant the exact string above pins, said as the property it
+        // exists for rather than as bytes. `registry::dedupe` treats a case
+        // difference and a trailing slash as two entries (see
+        // `a_near_duplicate_differing_by_a_trailing_slash_stays_two_entries`
+        // there), so an encoder that folded either one would put two registry
+        // entries on one subject. Their payloads differ by `elapsed_ms` alone,
+        // so `conflicted` would then publish nothing about either of them, and
+        // the `dqv:computedOn` beside the subject would still name them apart.
+        let run = RunId("r1".into());
+        let pairs = [
+            ("http://x.example/sparql", "http://X.example/sparql"),
+            ("http://x.example/sparql", "http://x.example/sparql/"),
+        ];
+        for (one, other) in pairs {
+            assert_ne!(
+                subject_iri(FactKind::Measurement, &run, one, "cors").unwrap(),
+                subject_iri(FactKind::Measurement, &run, other, "cors").unwrap(),
+                "{one} and {other} are two registry entries, so they are two subjects"
+            );
+        }
     }
 
     #[test]
