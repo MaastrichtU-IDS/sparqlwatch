@@ -28,3 +28,10 @@ path = "src/lib.rs"
 [[bin]]
 name = "sparqlwatch-prober"
 path = "src/main.rs"
+
+# The seeder. A separate binary and not a flag on the prober: it reads a dump
+# nobody probes, writes files rather than a run graph, and a plain sweep must
+# not be one flag away from regenerating its own registry.
+[[bin]]
+name = "seed-registry"
+path = "src/bin/seed-registry.rs"
