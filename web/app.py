@@ -458,6 +458,54 @@ def _detail(verdict, recognised: bool) -> str | None:
     return None
 
 
+def _unfinished_run_text(measurements: EndpointMeasurements) -> str | None:
+    """The sentence for a page whose facts come from a run that did not finish.
+
+    Said where the page already names the sweep its facts came from, because
+    that is the claim being qualified: the timestamp beside "Everything below
+    is what one probe sweep observed" is a sweep that stopped, and a reader
+    who takes it for a completed sweep has been told something untrue by
+    omission. What it does NOT say is that anything above is missing: this
+    endpoint's own chunk was written whole, which is what put its facts in the
+    store at all, so the honest limit of the claim is that the sweep stopped
+    and these are the facts it had written for this endpoint.
+    """
+    if not measurements.run_did_not_finish:
+        return None
+    return (
+        f"The sweep at {measurements.generated_at} did not finish: it "
+        f"recorded that it was being written one endpoint at a time and "
+        f"never recorded that it was complete. What is above is what it had "
+        f"written for this endpoint when it stopped."
+    )
+
+
+def _newer_unfinished_run_text(
+    measurements: EndpointMeasurements,
+) -> str | None:
+    """The sentence for an endpoint a newer, unfinished run never reached.
+
+    A different claim from the one above, and it has to be: nothing on this
+    page is stale or partial, every verdict shown is the newest this store
+    holds for this endpoint, and the sweep that recorded them may well have
+    finished. What is true is that a later sweep exists, stopped, and never
+    got here, so this page is not a report on that sweep.
+
+    Both timestamps are named rather than ordered, the same way _provenance
+    names them: which is later is a comparison the store makes, and both are
+    facts it holds.
+    """
+    if not measurements.newer_run_did_not_reach_this_endpoint:
+        return None
+    return (
+        f"A later sweep, at {measurements.newest_generated_at}, did not "
+        f"finish and never recorded finishing this endpoint, so nothing "
+        f"above comes from it. What is above is the newest this store holds "
+        f"for this endpoint, from the sweep at "
+        f"{measurements.generated_at}."
+    )
+
+
 def _legend(rows: list[dict]) -> list[dict]:
     """The seven states, with how many rows on this page are in each.
 
@@ -677,6 +725,14 @@ def _page_context(
         # did not happen.
         "run": measurements.run,
         "generated_at": measurements.generated_at,
+        # The two things that can be wrong with the sweep named just above,
+        # each said in its own sentence because they say different things: the
+        # first that the sweep whose facts these are stopped, the second that
+        # a later sweep stopped before it reached this endpoint. Both can hold
+        # at once, in a store holding two crashed runs, and then both are
+        # true and both are said.
+        "unfinished_text": _unfinished_run_text(measurements),
+        "newer_unfinished_text": _newer_unfinished_run_text(measurements),
         "rows": rows,
         "legend": _legend(rows),
         "sample": _sample(measurements, content),

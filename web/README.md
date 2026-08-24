@@ -328,6 +328,59 @@ Neither the page nor the RDF says which of the two sweeps is the later one. That
 comparison of `xsd:dateTime` values, and both timestamps are printed so a reader or a
 consumer can make it.
 
+### When a run did not finish
+
+The prober writes each endpoint's facts as that endpoint finishes, so the store can
+hold a run that stopped halfway. Three facts on the run's activity are what let a
+reader tell: `sw:emission "incremental"` says the run is written as a header, then one
+chunk per endpoint, then a footer; `sw:completedEndpoint` names each endpoint the run
+finished; `sw:finalised true` is the last line a finished run ever writes.
+
+The page derives two separate statements from them, and they say different things:
+
+- **the run whose facts are shown did not finish**: it carries `sw:emission` and no
+  `sw:finalised`. Said as one sentence beside the timestamp the page already prints,
+  because it is that timestamp being qualified. It does not claim anything above is
+  missing: this endpoint's own chunk was written whole, which is why its facts are in
+  the store at all.
+- **a newer run exists, did not finish, and never recorded finishing this endpoint**.
+  Nothing on such a page is stale: every verdict shown is the newest the store holds
+  for the endpoint. What is true is that a later sweep died before it got here, and at
+  548 endpoints that is every endpoint after the one it died on. Before the incremental
+  write, such an endpoint carried `prober-failed` declines in the newest run and its
+  rows read "not measured"; without this sentence the page would say nothing at all
+  about the failed sweep, which is why one condition is not enough.
+
+The second needs **the newest activity in the whole store**, so it is the one selection
+in `endpoint_measurements.rq` and `endpoint_description.rq` that is not scoped to one
+endpoint. Both queries say so in their headers, and both select it with the same
+aggregate subquery: the "no run is newer" form of the same question cost 1.9 s and
+2.2 s per request at 402 run graphs, against 217 ms and 106 ms for the subquery.
+
+A run carrying **none** of the three facts makes no claim about finishing either way,
+which is what a run from before the incremental write looks like. It promised nothing,
+so its missing `sw:finalised` says nothing, and neither sentence appears: such a page
+reads exactly as it did before this stage. Reading the absence alone as a crash would
+stamp every historical run in the store as unfinished.
+
+The bytes cannot establish that a run with none of the three facts really predates the
+incremental write, because a run of the new format cut inside its header carries none
+of them either. `load_run.py` separates the two on a fact it does hold: a run from
+before this format still measured endpoints, so a file with no terminator and no
+endpoint fact at all is refused rather than loaded. That refusal is what keeps a
+truncated header out of this table: such a graph would carry the store's greatest
+`prov:generatedAtTime`, win the newest-run subquery, and silence the second sentence
+for every endpoint.
+
+The RDF representation carries the **inputs** to both derivations and never their
+result: the shown run's `sw:emission`, its `sw:finalised` where it has one, its
+`sw:completedEndpoint` for this endpoint where it has one, and the same three for the
+newest activity in the store. A derived "unfinished" flag is not emitted, because both
+conditions rest partly on an absence and a CONSTRUCT emits only presence, so such a
+flag could be built for the HTML and not for the RDF and the two would disagree about
+exactly the run this exists for. A consumer draws the same two conclusions from the
+same quads.
+
 ### RDF and HTML agreement
 
 The HTML and RDF are two representations of one resource, derived independently:

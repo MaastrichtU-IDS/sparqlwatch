@@ -28,6 +28,7 @@ RUN_LATER_SAMPLE_ONLY = FIXTURES / "run-later-sample-only.nq"
 RUN_HOSTILE_LITERALS = FIXTURES / "run-hostile-literals.nq"
 RUN_NEW_SUBJECTS = FIXTURES / "run-new-subjects.nq"
 RUN_PROBER_FAILED = FIXTURES / "run-prober-failed.nq"
+RUN_CRASHED_PARTWAY = FIXTURES / "run-crashed-partway.nq"
 
 
 def _loaded_store(tmp_path: Path, name: str, *fixtures: Path) -> Store:
@@ -159,3 +160,28 @@ def store_prober_failed(tmp_path):
     decline reasons are on one page. See the comment in
     web/tests/fixtures/run-prober-failed.nq for how it was produced."""
     return _loaded_store(tmp_path, "store-prober-failed", RUN_PROBER_FAILED)
+
+
+@pytest.fixture
+def store_crashed_partway(tmp_path):
+    """The real 16:00 sweep of three endpoints, and a later run that died
+    partway through: it wrote kadaster's chunk and never reached the other
+    two, so it carries sw:emission and one sw:completedEndpoint and no
+    sw:finalised.
+
+    One store, two different answers, which is why this pairing is a single
+    fixture. For kadaster the newest run that recorded anything is the crashed
+    one, so the facts on the page come from a run that did not finish. For
+    qlever.dev/api/osm-planet the crashed run recorded nothing, so the facts
+    come from the 16:00 sweep and the only trace of tonight's failure is the
+    newest activity in the store: no sw:finalised, and no sw:completedEndpoint
+    naming qlever. A query scoped to one endpoint cannot see the second case
+    at all, and at 548 endpoints it is the case a crash produces for every
+    endpoint after the one it died on.
+
+    See the comment in web/tests/fixtures/run-crashed-partway.nq for how the
+    crashed run was produced.
+    """
+    return _loaded_store(
+        tmp_path, "store-crashed-partway", RUN_WITH_SAMPLES, RUN_CRASHED_PARTWAY
+    )

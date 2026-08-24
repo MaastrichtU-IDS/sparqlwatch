@@ -1,3 +1,26 @@
+//! How one run's graph is written, and what a reader of an unfinished run may
+//! rely on. Stated here because three functions in this module have to agree on
+//! it and `web/load_run.py` has to agree with all three.
+//!
+//! A run is written as a header of run-level facts, one self-contained chunk per
+//! endpoint, and a footer. A crash leaves a prefix of that sequence, ending at a
+//! line boundary in a document that still parses, so the danger is never an
+//! unreadable file: it is a readable file whose lines contradict each other. Two
+//! rules keep that from happening.
+//!
+//! 1. **Every section ends with its terminator.** `sw:emission` closes the
+//!    header, `sw:completedEndpoint` closes a chunk, `sw:finalised` closes the
+//!    footer. A reader holding a terminator holds the whole section; a reader
+//!    that does not holds a fragment and may drop it. Those three spellings are
+//!    a wire format shared with the loader, so neither side is free to change
+//!    them alone.
+//! 2. **No fact family publishes its own summary before the things it
+//!    summarises.** A cut inside a list has to lose the list, never leave a
+//!    count standing beside three of the two hundred values it counted, which a
+//!    consumer would render as a complete answer. This is why `sw:sampleSize`
+//!    and `sw:sampleTruncated` come after the last `sw:sampledValue`, and why
+//!    `sw:failedEndpoints` sits in the footer: it summarises the chunks.
+
 use crate::metrics::Cost;
 use crate::verdict::{Level, Verdict};
 use oxrdf::vocab::{rdf, xsd};
@@ -6,12 +29,28 @@ use oxrdfio::{RdfFormat, RdfSerializer};
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
 
+/// The predicate that closes the header, `emit_header`'s last quad.
+///
+/// This and the two below are the wire format `web/load_run.py` cuts a
+/// truncated run back to. Their canonical spellings are in
+/// `docs/design/section-terminators.md`, which the test at the bottom of this
+/// module asserts these three constants against, and which
+/// `web/tests/test_load_run.py` asserts the loader's set against. Renaming one
+/// here alone reds this crate's suite instead of silently discarding every
+/// endpoint a crash preserved.
+pub const HEADER_TERMINATOR: &str = "urn:sparqlwatch:emission";
+/// The predicate that closes one endpoint's chunk, `emit_endpoint`'s last quad.
+pub const CHUNK_TERMINATOR: &str = "urn:sparqlwatch:completedEndpoint";
+/// The predicate that closes the footer, `emit_footer`'s last quad.
+pub const FOOTER_TERMINATOR: &str = "urn:sparqlwatch:finalised";
+
 const DQV: &str = "http://www.w3.org/ns/dqv#";
 const PROV: &str = "http://www.w3.org/ns/prov#";
 const DCAT: &str = "http://www.w3.org/ns/dcat#";
 
 pub struct RunId(pub String);
 
+#[derive(Clone)]
 pub struct MeasurementRow {
     pub endpoint: String,
     pub metric_id: String,
@@ -34,6 +73,7 @@ pub struct MeasurementRow {
 /// `service-description` row is `Indeterminate`. This is deliberately not a
 /// `MeasurementRow`: it is a fact about the fetch, not a measurement against
 /// a metric definition.
+#[derive(Clone)]
 pub struct DeclarationsRead {
     pub endpoint: String,
     pub read: bool,
@@ -291,32 +331,64 @@ pub struct RunEmission<'a> {
     /// number cannot say a sweep ran zero hosts at once.
     pub concurrency: NonZeroUsize,
     /// How many endpoints the run failed on, from `Sweep::failed_endpoints`.
-    /// Published so a reader can tell a complete run from an incomplete one
-    /// without reading a log: the per-endpoint facts say `prober-failed`, and
-    /// this says how many there were in total.
+    /// It is NOT what tells a reader whether a run finished. `sw:finalised` is,
+    /// and a run that died never reached the footer that carries either one, so
+    /// this count is only meaningful beside it. What it adds is the total, where
+    /// the per-endpoint facts say `prober-failed` one at a time.
     pub failed_endpoints: usize,
 }
 
-/// One named graph per run keeps history immutable and lets a bad run be
-/// dropped wholesale.
-///
-/// Takes a single `RunEmission` rather than its fields positionally; see that
-/// struct's doc comment for why.
-pub fn emit_nquads(input: RunEmission) -> anyhow::Result<String> {
-    let RunEmission {
-        run,
-        generated_at,
-        metric_revision,
-        rows,
-        declarations_read,
-        not_measured,
-        max_cost,
-        content_samples,
-        concurrency,
-        failed_endpoints,
-    } = input;
+/// The two IRIs every fact in one run hangs off: the run's named graph and the
+/// activity that produced it. Derived in one place, so the header, every chunk
+/// and the footer cannot disagree about which graph they are writing into.
+fn graph_and_activity(run: &RunId) -> anyhow::Result<(GraphName, NamedNode)> {
     let graph = GraphName::NamedNode(nn(&format!("urn:sparqlwatch:run:{}", run.0))?);
     let activity = nn(&format!("urn:sparqlwatch:activity:{}", run.0))?;
+    Ok((graph, activity))
+}
+
+/// Serialize one section's quads.
+///
+/// N-Quads has no prologue and no trailer and every line ends in a newline, so
+/// a document is exactly the concatenation of the sections that make it up and
+/// any prefix of it parses. That is what lets a run be written in sections at
+/// all.
+fn serialize(quads: &[Quad]) -> anyhow::Result<String> {
+    let mut out = Vec::new();
+    let mut ser = RdfSerializer::from_format(RdfFormat::NQuads).for_writer(&mut out);
+    for q in quads {
+        ser.serialize_quad(q.as_ref())?;
+    }
+    ser.finish()?;
+    Ok(String::from_utf8(out)?)
+}
+
+/// The run-level facts, written once before any chunk. Everything here is a
+/// parameter of the run, true at t=0, so none of it is a claim about what the
+/// run will find.
+pub struct RunHeader<'a> {
+    pub run: &'a RunId,
+    /// The instant the run was started, published as `prov:generatedAtTime`.
+    /// Not a revision hash: see `RunEmission`'s doc comment for the mistake
+    /// this field name exists to prevent.
+    pub generated_at: &'a str,
+    /// Identifies the metric definitions the run used. Not a timestamp, for the
+    /// same reason.
+    pub metric_revision: &'a str,
+    /// The ceiling the sweep was run with. A parameter rather than something
+    /// this module discovers: `emit` reads no clock, no environment and no
+    /// global, so the same inputs always produce the same document.
+    pub max_cost: Cost,
+    /// How many hosts the sweep talked to at once; see `RunEmission` for what a
+    /// consumer may and may not conclude from it.
+    pub concurrency: NonZeroUsize,
+}
+
+/// Write the header, ending with the terminator that says a reader should
+/// expect chunks after it.
+pub fn emit_header(header: RunHeader) -> anyhow::Result<String> {
+    let RunHeader { run, generated_at, metric_revision, max_cost, concurrency } = header;
+    let (graph, activity) = graph_and_activity(run)?;
     let mut quads: Vec<Quad> = Vec::new();
 
     quads.push(Quad::new(
@@ -345,21 +417,16 @@ pub fn emit_nquads(input: RunEmission) -> anyhow::Result<String> {
     ));
     // Which metrics ran is a property of the run, not of any one measurement:
     // without it a run that declined `classes` is indistinguishable from one
-    // that ran it, and the not-measured facts below say which metrics were
-    // declined but not what policy declined them.
+    // that ran it, and the not-measured facts say which metrics were declined
+    // but not what policy declined them.
     quads.push(Quad::new(
         NamedOrBlankNode::NamedNode(activity.clone()),
         nn("urn:sparqlwatch:maxCost")?,
         Term::Literal(Literal::new_simple_literal(max_cost.slug())),
         graph.clone(),
     ));
-    // How many hosts were in flight, and how many endpoints the sweep never
-    // measured because the prober failed on them. Both are properties of the
-    // run rather than of any measurement, so both hang off the activity beside
-    // the ceiling above.
-    //
-    // The concurrency belongs in the graph as a parameter of the run, not
-    // because it changes what `elapsedMs` means. It does not: `gated_chain`
+    // How many hosts were in flight. A parameter of the run rather than of any
+    // measurement, and it does NOT change what `elapsedMs` means: `gated_chain`
     // sums the hops' own durations and each hop's timer starts after the gate
     // is acquired, so a gate wait is never published as a response time. It is
     // published because it explains the run's wall-clock duration and because
@@ -371,18 +438,134 @@ pub fn emit_nquads(input: RunEmission) -> anyhow::Result<String> {
         Term::Literal(Literal::new_typed_literal(concurrency.to_string(), xsd::INTEGER)),
         graph.clone(),
     ));
-    // Published on every run, including the ordinary `0`, rather than only
-    // when it is non-zero: a consumer has to be able to read "this run failed
-    // on nothing" as a fact, and an absent quad would be indistinguishable
-    // from a run emitted before this fact existed.
+    // The header's terminator, and a fact about how this document is built
+    // rather than about what the run found: it says the file is a header, then
+    // one chunk per endpoint, then a footer, each ending in its terminator. A
+    // reader holding it knows to expect chunks and a `finalised` footer; a
+    // reader holding it without `finalised` knows the run did not finish; a
+    // reader holding neither has a run from before this stage, which promised
+    // nothing. True the moment it is written, which is what a graph that is
+    // never rewritten requires: it is not a promise about the future that a
+    // later chunk would have to retract.
+    //
+    // Its section structure is what `emit_nquads` output has too, so the fact
+    // is true of a whole-run document as well as of one written chunk by chunk.
+    // The stronger reading, that the file reached disk incrementally, becomes
+    // true when `run_sweep` writes the sections as they finish; no run emitted
+    // before that is published.
     quads.push(Quad::new(
-        NamedOrBlankNode::NamedNode(activity.clone()),
-        nn("urn:sparqlwatch:failedEndpoints")?,
-        Term::Literal(Literal::new_typed_literal(failed_endpoints.to_string(), xsd::INTEGER)),
-        graph.clone(),
+        NamedOrBlankNode::NamedNode(activity),
+        nn(HEADER_TERMINATOR)?,
+        Term::Literal(Literal::new_simple_literal("incremental")),
+        graph,
     ));
+    serialize(&quads)
+}
 
+/// One endpoint's slice of all four fact families: everything a chunk needs to
+/// stand on its own.
+///
+/// Per endpoint rather than per family because the chunk is the unit of
+/// truncation: a crash then costs the endpoints not yet written and nothing
+/// else. That only holds if every fact about an endpoint is in one chunk, which
+/// is also what makes the per-chunk duplicate-subject pre-scan complete while
+/// seeing one chunk at a time.
+pub struct EndpointFacts<'a> {
+    pub run: &'a RunId,
+    /// The endpoint this chunk is about, named separately from the facts rather
+    /// than read off the first of them: the terminator needs it even for a
+    /// chunk whose every fact was dropped as unpublishable, and a chunk with no
+    /// facts at all is a shape `run_sweep` can produce.
+    pub endpoint: &'a str,
+    pub rows: &'a [MeasurementRow],
+    pub declarations_read: &'a [DeclarationsRead],
+    pub not_measured: &'a [NotMeasured],
+    pub content_samples: &'a [ContentSample],
+}
+
+/// The one thing that survives between two chunks: which endpoints this writer
+/// has already been asked for.
+///
+/// Nothing else, deliberately. Any other carried state would make a later chunk
+/// depend on an earlier one, and a chunk that cannot be read on its own is not
+/// a unit of truncation.
+#[derive(Debug, Default)]
+pub struct EmitState {
+    /// Attempted, not written: the insert happens before any quad is built and
+    /// is never rolled back, so an endpoint whose IRI is malformed (empty
+    /// chunk, no marker, warnings only) is recorded here too. That is the safe
+    /// direction, because the reason to refuse a retry is that the pre-scan
+    /// cannot see across two chunks, and that is true whether or not the first
+    /// attempt published anything.
+    attempted: BTreeSet<String>,
+}
+
+impl EmitState {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+/// Write one endpoint's chunk, ending with the terminator that says this
+/// activity finished that endpoint.
+pub fn emit_endpoint(state: &mut EmitState, facts: EndpointFacts) -> anyhow::Result<String> {
+    let EndpointFacts {
+        run,
+        endpoint: subject_endpoint,
+        rows,
+        declarations_read,
+        not_measured,
+        content_samples,
+    } = facts;
+    // A second chunk for one endpoint would put its facts either side of the
+    // pre-scan below, so a pair measured twice with differing results would be
+    // published twice instead of dropped, on one subject, in a graph that is
+    // never rewritten. Refusing the second chunk is the direction that cannot
+    // publish a wrong answer.
+    if !state.attempted.insert(subject_endpoint.to_string()) {
+        tracing::warn!(
+            endpoint = %subject_endpoint,
+            "dropping a repeat chunk: every fact about an endpoint must be in one chunk, or the \
+             duplicate-subject pre-scan cannot see both halves of a disagreement"
+        );
+        return Ok(String::new());
+    }
+    let (graph, activity) = graph_and_activity(run)?;
+    let mut quads: Vec<Quad> = Vec::new();
+
+    // The chunk's endpoint as a term, once. An endpoint that is not a
+    // well-formed IRI can be neither typed nor marked, and every fact about it
+    // is skipped below for the same reason; the marker at the end of this
+    // function is where that loss is logged.
+    let subject_term = NamedNode::new(subject_endpoint);
+
+    // Typed per chunk, so every chunk types every endpoint it names. A chunk
+    // carrying facts about an endpoint it never typed is not self-contained,
+    // and a reader of a truncated file may hold this chunk and not the one that
+    // typed the endpoint.
+    //
+    // Per chunk rather than per run changes nothing about what `emit_nquads`
+    // publishes, because that gives each endpoint exactly one chunk and the old
+    // run-scoped set was keyed on the endpoint too. The difference appears only
+    // where a second chunk names an endpoint an earlier chunk already typed: a
+    // run-scoped set would leave it untyped in the chunk that has its facts,
+    // which is `a_chunk_types_every_endpoint_it_publishes_a_fact_about`.
     let mut typed_endpoints: BTreeSet<String> = BTreeSet::new();
+    // The chunk's own endpoint is typed here rather than at its first fact, so
+    // the claim above holds for a chunk with no publishable fact as well. Such
+    // a chunk still carries the completion marker below, and a marker naming a
+    // resource this graph never types is a join a consumer cannot complete. The
+    // quad lands where it did before, because typing at the first fact already
+    // made it the chunk's first quad.
+    if let Ok(n) = &subject_term {
+        typed_endpoints.insert(subject_endpoint.to_string());
+        quads.push(Quad::new(
+            NamedOrBlankNode::NamedNode(n.clone()),
+            rdf::TYPE.into_owned(),
+            Term::NamedNode(nn(&format!("{DCAT}DataService"))?),
+            graph.clone(),
+        ));
+    }
 
     // Two entries of one fact list can name the same (endpoint, metric) pair.
     // Under the running index they replaced, such a pair got two subjects;
@@ -392,6 +575,11 @@ pub fn emit_nquads(input: RunEmission) -> anyhow::Result<String> {
     // published: a subject carrying two different payloads publishes nothing
     // (see `conflicted`), and a byte-identical repeat is skipped because RDF is
     // a set and writing it twice says nothing new.
+    //
+    // Per chunk, which is complete because an endpoint's facts are all in one
+    // chunk: two facts about one pair are in this chunk or nowhere. The check
+    // above is what defends that premise here; `run_sweep` checks it at the
+    // other end.
     //
     // `registry::dedupe` drops a repeated endpoint before a sweep starts, so
     // nothing in the current pipeline is expected to reach this: it is belt and
@@ -464,9 +652,9 @@ pub fn emit_nquads(input: RunEmission) -> anyhow::Result<String> {
             }
         };
         // Same non-fatal handling as the junk endpoint above, and for the same
-        // reason: `main.rs` propagates an `Err` from here before it writes the
-        // run file, so a metric id that cannot be part of a subject must cost
-        // one fact rather than the whole sweep's output.
+        // reason: an `Err` from here costs the caller a written chunk, so a
+        // metric id that cannot be part of a subject must cost one fact rather
+        // than an endpoint's whole output.
         let m = match subject_iri(FactKind::Measurement, run, &r.endpoint, &r.metric_id) {
             Ok(n) => n,
             Err(e) => {
@@ -496,7 +684,7 @@ pub fn emit_nquads(input: RunEmission) -> anyhow::Result<String> {
 
         if typed_endpoints.insert(r.endpoint.clone()) {
             // The endpoint is the same resource across every metric, so it is
-            // typed once per run rather than once per measurement.
+            // typed once per chunk rather than once per measurement.
             quads.push(Quad::new(
                 NamedOrBlankNode::NamedNode(endpoint.clone()),
                 rdf::TYPE.into_owned(),
@@ -797,10 +985,24 @@ pub fn emit_nquads(input: RunEmission) -> anyhow::Result<String> {
             Term::NamedNode(nn(&format!("urn:sparqlwatch:metric:{}", sample.metric_id))?),
             graph.clone(),
         ));
-        // Published, never left to be inferred from the count: a consumer
-        // cannot recompute this without knowing the metric's `sample_limit`,
-        // and a list silently believed complete is the failure this fact
-        // exists to prevent.
+        for value in &writable {
+            quads.push(Quad::new(
+                subj.clone(),
+                nn("urn:sparqlwatch:sampledValue")?,
+                Term::NamedNode(value.clone()),
+                graph.clone(),
+            ));
+        }
+        // After the values, not before them, which is rule 2 of the section
+        // protocol at the top of this file. A chunk cut inside the value list
+        // used to leave `sampleSize 200, sampleTruncated false` standing beside
+        // three values, which `endpoint_content.rq` matches and the page renders
+        // as two hundred classes sampled, complete. With the summary last, the
+        // same cut loses the sample instead of misstating it, and a lost sample
+        // is a shape every consumer already handles.
+        //
+        // `writable.len()` still, at its new site, because the published size
+        // has to count what is actually published rather than what was bound.
         quads.push(Quad::new(
             subj.clone(),
             nn("urn:sparqlwatch:sampleTruncated")?,
@@ -819,14 +1021,6 @@ pub fn emit_nquads(input: RunEmission) -> anyhow::Result<String> {
             )),
             graph.clone(),
         ));
-        for value in writable {
-            quads.push(Quad::new(
-                subj.clone(),
-                nn("urn:sparqlwatch:sampledValue")?,
-                Term::NamedNode(value),
-                graph.clone(),
-            ));
-        }
         // The same link every other fact carries, and safe for the same
         // reason: PROV-O gives `prov:wasGeneratedBy` the domain `prov:Entity`,
         // and a sample genuinely is a thing this run produced. Without it, a
@@ -873,13 +1067,200 @@ pub fn emit_nquads(input: RunEmission) -> anyhow::Result<String> {
         ));
     }
 
-    let mut out = Vec::new();
-    let mut ser = RdfSerializer::from_format(RdfFormat::NQuads).for_writer(&mut out);
-    for q in &quads {
-        ser.serialize_quad(q.as_ref())?;
+    // The chunk's terminator, and its last line. Says that this activity
+    // finished this endpoint: true when written, and what makes the chunk the
+    // unit of truncation. A reader holding it holds every fact this run has
+    // about the endpoint; a reader that does not may drop the lines above
+    // rather than read a fragment of a sample as a whole one. Per endpoint and
+    // not per run, because at 548 endpoints a run-level marker would say
+    // nothing about which ones were reached, and Task 4's read tier needs
+    // exactly that.
+    //
+    // What "completed" includes: an endpoint the prober FAILED on. `run_sweep`
+    // writes a chunk for every endpoint it was given, including the ones a
+    // panicked group lost, so a chunk of `prober-failed` declines carries this
+    // marker too. The fact is about the chunk being whole, not about the probe
+    // succeeding. Withholding it there would leave that endpoint looking, on a
+    // run that later crashed, exactly like one the run never reached, and the
+    // read tier would report a later sweep as never having got to an endpoint
+    // whose failure that sweep published.
+    //
+    // An endpoint that is not a valid IRI has had every fact above skipped for
+    // that reason, and there is no term to name it with here either, so the
+    // chunk is empty and carries no marker. The warnings above are where that
+    // loss is recorded.
+    match subject_term {
+        Ok(n) => quads.push(Quad::new(
+            NamedOrBlankNode::NamedNode(activity),
+            nn(CHUNK_TERMINATOR)?,
+            Term::NamedNode(n),
+            graph,
+        )),
+        Err(e) => tracing::warn!(
+            endpoint = %subject_endpoint,
+            error = %e,
+            "chunk carries no completion marker: the endpoint is not a valid IRI, so nothing in \
+             the graph can name it"
+        ),
     }
-    ser.finish()?;
-    Ok(String::from_utf8(out)?)
+    serialize(&quads)
+}
+
+/// The run-level facts that are only true once every chunk has been written.
+pub struct RunFooter<'a> {
+    pub run: &'a RunId,
+    /// How many endpoints the run failed on, from `Sweep::failed_endpoints`.
+    /// It is NOT what tells a reader whether a run finished. `sw:finalised` is,
+    /// and a run that died never reached the footer that carries either one, so
+    /// this count is only meaningful beside it. What it adds is the total, where
+    /// the per-endpoint facts say `prober-failed` one at a time.
+    ///
+    /// In the footer rather than the header because it summarises the chunks,
+    /// and rule 2 of the section protocol forbids publishing a summary before
+    /// the things it summarises. It is only trustworthy in the presence of
+    /// `sw:finalised` below, which is the quad that says the summary is over a
+    /// complete run.
+    pub failed_endpoints: usize,
+}
+
+/// Write the footer, ending with the terminator that says the run finished.
+pub fn emit_footer(footer: RunFooter) -> anyhow::Result<String> {
+    let RunFooter { run, failed_endpoints } = footer;
+    let (graph, activity) = graph_and_activity(run)?;
+    let quads: Vec<Quad> = vec![
+        // Published on every run, including the ordinary `0`, rather than only
+        // when it is non-zero: a consumer has to be able to read "this run failed
+        // on nothing" as a fact, and an absent quad would be indistinguishable
+        // from a run emitted before this fact existed.
+        Quad::new(
+            NamedOrBlankNode::NamedNode(activity.clone()),
+            nn("urn:sparqlwatch:failedEndpoints")?,
+            Term::Literal(Literal::new_typed_literal(failed_endpoints.to_string(), xsd::INTEGER)),
+            graph.clone(),
+        ),
+        // The footer's terminator, and the last line the writer ever writes. It
+        // says THAT the run finished, and it is the single quad a consumer tests
+        // for, so "footer present" does not depend on which of these two a
+        // consumer happened to look for.
+        //
+        // A boolean, and not `prov:endedAtTime`, which would be the better fact.
+        // Nothing here can produce that instant soundly: this module reads no clock
+        // by design (see `RunHeader::max_cost`), `std` cannot format a `SystemTime`
+        // as `xsd:dateTime`, and no date library is in the lock file under this
+        // stage's no-new-dependencies rule. Hand-rolling civil-time arithmetic from
+        // Unix seconds would write a typed `xsd:dateTime` into a graph that is
+        // never rewritten, where `nn` validates IRIs and not literal lexical
+        // spaces, so a month-length mistake would be permanent. An `--ended-at`
+        // flag cannot work either, though it is what `--at` does one field over: a
+        // process cannot know at launch when it will finish, so the flag would
+        // publish a predicted future, which is the thing this fact exists to avoid.
+        //
+        // If a duration is ever wanted, a monotonic `Instant` delta published as
+        // integer seconds needs no formatting and asserts nothing about the future.
+        // Do NOT derive one by summing `elapsedMs`: each of those starts after the
+        // per-host gate is acquired and excludes politeness by design, and at
+        // concurrency 4 their sum is not even a bound on the run.
+        Quad::new(
+            NamedOrBlankNode::NamedNode(activity),
+            nn(FOOTER_TERMINATOR)?,
+            Term::Literal(Literal::new_typed_literal("true", xsd::BOOLEAN)),
+            graph,
+        ),
+    ];
+    serialize(&quads)
+}
+
+/// The endpoints one run publishes a chunk for, in first-appearance order over
+/// the union of all four fact lists.
+///
+/// The union and not `rows`, because an endpoint can appear in one list only: a
+/// prober-failed endpoint is in `not_measured` alone, and an endpoint whose
+/// description was fetched but whose metrics all failed to grade is in
+/// `declarations_read` alone (see
+/// `declarations_read_emits_a_boolean_quad_shaped_for_the_run`, which passes
+/// `rows: &[]`). Deriving the sequence from `rows` would silently publish no
+/// chunk for either.
+///
+/// First appearance and not sorted, because for a run whose lists are already
+/// grouped by endpoint, which is what `assemble` produces, it reproduces the
+/// order the whole-run emitter used, so the order-sensitive tests and anyone
+/// diffing two files by eye see no movement. The four lists are visited in the
+/// order a chunk writes them, for the same reason.
+fn endpoint_order(
+    rows: &[MeasurementRow],
+    not_measured: &[NotMeasured],
+    content_samples: &[ContentSample],
+    declarations_read: &[DeclarationsRead],
+) -> Vec<String> {
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    let mut order: Vec<String> = Vec::new();
+    let all = rows
+        .iter()
+        .map(|r| r.endpoint.as_str())
+        .chain(not_measured.iter().map(|f| f.endpoint.as_str()))
+        .chain(content_samples.iter().map(|s| s.endpoint.as_str()))
+        .chain(declarations_read.iter().map(|d| d.endpoint.as_str()));
+    for endpoint in all {
+        if seen.insert(endpoint) {
+            order.push(endpoint.to_string());
+        }
+    }
+    order
+}
+
+/// One named graph per run keeps history immutable and lets a bad run be
+/// dropped wholesale.
+///
+/// The composition of `emit_header`, one `emit_endpoint` per endpoint of the
+/// run, and `emit_footer`. Keeping this function is what lets a caller that
+/// holds a whole run in memory keep working unchanged while `run_sweep` writes
+/// the very same sections one at a time as they finish.
+///
+/// Takes a single `RunEmission` rather than its fields positionally; see that
+/// struct's doc comment for why.
+pub fn emit_nquads(input: RunEmission) -> anyhow::Result<String> {
+    let RunEmission {
+        run,
+        generated_at,
+        metric_revision,
+        rows,
+        declarations_read,
+        not_measured,
+        max_cost,
+        content_samples,
+        concurrency,
+        failed_endpoints,
+    } = input;
+    let mut out =
+        emit_header(RunHeader { run, generated_at, metric_revision, max_cost, concurrency })?;
+    let mut state = EmitState::new();
+    for endpoint in endpoint_order(rows, not_measured, content_samples, declarations_read) {
+        // The four flat lists carry no endpoint grouping this function can rely
+        // on, so each is sliced by endpoint here. Cloned rather than borrowed
+        // because an endpoint's entries need not be contiguous, and a run's
+        // four lists are a few thousand small structs at registry scale.
+        let rows: Vec<MeasurementRow> =
+            rows.iter().filter(|r| r.endpoint == endpoint).cloned().collect();
+        let not_measured: Vec<NotMeasured> =
+            not_measured.iter().filter(|f| f.endpoint == endpoint).cloned().collect();
+        let content_samples: Vec<ContentSample> =
+            content_samples.iter().filter(|s| s.endpoint == endpoint).cloned().collect();
+        let declarations_read: Vec<DeclarationsRead> =
+            declarations_read.iter().filter(|d| d.endpoint == endpoint).cloned().collect();
+        out.push_str(&emit_endpoint(
+            &mut state,
+            EndpointFacts {
+                run,
+                endpoint: &endpoint,
+                rows: &rows,
+                declarations_read: &declarations_read,
+                not_measured: &not_measured,
+                content_samples: &content_samples,
+            },
+        )?);
+    }
+    out.push_str(&emit_footer(RunFooter { run, failed_endpoints })?);
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -1029,6 +1410,17 @@ mod tests {
         // baseline is not weakened to tolerate additions, because its whole
         // value is that an unintended predicate cannot slip in; an intended one
         // costs this paragraph.
+        //
+        // Moved again, on 2026-08-24, by stage 1c-b4: a run is now written as a
+        // header, one chunk per endpoint and a footer, and each of those three
+        // sections ends with a terminator a reader of a truncated file can test
+        // for. So the multiset gained `urn:sparqlwatch:emission` once,
+        // `urn:sparqlwatch:completedEndpoint` once per endpoint (two here) and
+        // `urn:sparqlwatch:finalised` once, and the count went from 43 to 47.
+        // Nothing else moved. The sample's `sampleSize` and `sampleTruncated`
+        // did move to after its values, which this baseline cannot see because
+        // it compares an order-insensitive multiset, and that is the point:
+        // rearranging what is published is not changing what is published.
         const BASELINE_PAIRS: &[(&str, &str)] = &[
         ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<http://www.w3.org/ns/dcat#DataService>"),
         ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<http://www.w3.org/ns/dcat#DataService>"),
@@ -1053,12 +1445,16 @@ mod tests {
         ("http://www.w3.org/ns/prov#wasGeneratedBy", "<urn:sparqlwatch:activity:r1>"),
         ("http://www.w3.org/ns/prov#wasGeneratedBy", "<urn:sparqlwatch:activity:r1>"),
         ("http://www.w3.org/ns/prov#wasGeneratedBy", "<urn:sparqlwatch:activity:r1>"),
+        ("urn:sparqlwatch:completedEndpoint", "<https://a.example/sparql>"),
+        ("urn:sparqlwatch:completedEndpoint", "<https://b.example/sparql>"),
         ("urn:sparqlwatch:concurrency", "\"1\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
         ("urn:sparqlwatch:declarationsRead", "\"false\"^^<http://www.w3.org/2001/XMLSchema#boolean>"),
         ("urn:sparqlwatch:declarationsRead", "\"true\"^^<http://www.w3.org/2001/XMLSchema#boolean>"),
         ("urn:sparqlwatch:elapsedMs", "\"12\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
         ("urn:sparqlwatch:elapsedMs", "\"34\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
+        ("urn:sparqlwatch:emission", "\"incremental\""),
         ("urn:sparqlwatch:failedEndpoints", "\"0\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
+        ("urn:sparqlwatch:finalised", "\"true\"^^<http://www.w3.org/2001/XMLSchema#boolean>"),
         ("urn:sparqlwatch:level", "\"1\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
         ("urn:sparqlwatch:level", "\"2\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
         ("urn:sparqlwatch:maxCost", "\"cheap\""),
@@ -1080,19 +1476,615 @@ mod tests {
         ("urn:sparqlwatch:sampledValue", "<https://a.example/vocab#Apple>"),
         ("urn:sparqlwatch:sampledValue", "<https://a.example/vocab#Zebra>"),
         ];
-        const BASELINE_QUADS: usize = 43;
-        let qs = quads_of(&baseline_emission());
+        const BASELINE_QUADS: usize = 47;
+        assert_frozen(&baseline_emission(), BASELINE_PAIRS, BASELINE_QUADS);
+    }
+
+    /// Compare an emission against a frozen (predicate, object) multiset and a
+    /// frozen quad count.
+    ///
+    /// Shared by the two frozen baselines rather than written twice, so the two
+    /// cannot drift into comparing different things and then disagree about
+    /// what "unchanged" means.
+    fn assert_frozen(out: &str, expected_pairs: &[(&str, &str)], expected_quads: usize) {
+        let qs = quads_of(out);
         let mut pairs: Vec<(String, String)> = qs
             .iter()
             .map(|q| (q.predicate.as_str().to_string(), q.object.to_string()))
             .collect();
         pairs.sort();
-        let expected: Vec<(String, String)> = BASELINE_PAIRS
+        let expected: Vec<(String, String)> = expected_pairs
             .iter()
             .map(|(p, o)| ((*p).to_string(), (*o).to_string()))
             .collect();
         assert_eq!(pairs, expected, "a predicate or an object changed");
-        assert_eq!(qs.len(), BASELINE_QUADS, "the quad count changed");
+        assert_eq!(qs.len(), expected_quads, "the quad count changed");
+    }
+
+    /// One emission covering every fact family, built for the frozen baseline
+    /// that stage 1c-b4's split into header, per-endpoint chunks and footer is
+    /// measured against.
+    ///
+    /// Deliberately richer than `baseline_emission`: four endpoints, a
+    /// measurement with a level and one without, a measurement with an elapsed
+    /// time and one without, both `NotMeasuredReason` variants, a sample with
+    /// the truncation flag each way, a `declarationsRead` both true and false,
+    /// one endpoint that appears ONLY in `declarations_read` and one that
+    /// appears ONLY in `not_measured`. The last two are what force the split's
+    /// endpoint sequence to come from the union of all four lists: an endpoint
+    /// derived from `rows` alone would lose both of them and publish no chunk
+    /// for either.
+    fn split_baseline_emission() -> String {
+        let rows = vec![
+            MeasurementRow {
+                endpoint: "https://a.example/sparql".into(),
+                metric_id: "availability".into(),
+                verdict: Verdict::Verified,
+                level: None,
+                elapsed_ms: Some(12),
+            },
+            MeasurementRow {
+                endpoint: "https://a.example/sparql".into(),
+                metric_id: "cors".into(),
+                verdict: Verdict::Absent,
+                level: Some(Level(2)),
+                elapsed_ms: None,
+            },
+            MeasurementRow {
+                endpoint: "https://b.example/sparql".into(),
+                metric_id: "service-description".into(),
+                verdict: Verdict::DeclaredOnly,
+                level: Some(Level(1)),
+                elapsed_ms: Some(340),
+            },
+        ];
+        let declarations_read = vec![
+            DeclarationsRead { endpoint: "https://a.example/sparql".into(), read: true },
+            DeclarationsRead { endpoint: "https://b.example/sparql".into(), read: false },
+            DeclarationsRead { endpoint: "https://c.example/sparql".into(), read: true },
+        ];
+        let not_measured = vec![
+            NotMeasured {
+                endpoint: "https://a.example/sparql".into(),
+                metric_id: "properties".into(),
+                reason: NotMeasuredReason::CostCeiling,
+            },
+            // A prober-failed endpoint carries no measurement and no
+            // `declarationsRead` fact, which is why this one appears in no
+            // other list.
+            NotMeasured {
+                endpoint: "https://d.example/sparql".into(),
+                metric_id: "availability".into(),
+                reason: NotMeasuredReason::ProberFailed,
+            },
+        ];
+        let content_samples = vec![
+            ContentSample {
+                endpoint: "https://a.example/sparql".into(),
+                metric_id: "classes".into(),
+                values: vec![
+                    "https://a.example/vocab#Zebra".into(),
+                    "https://a.example/vocab#Apple".into(),
+                ],
+                truncated: true,
+            },
+            ContentSample {
+                endpoint: "https://b.example/sparql".into(),
+                metric_id: "classes".into(),
+                values: vec!["https://b.example/vocab#Mango".into()],
+                truncated: false,
+            },
+        ];
+        emit_nquads(RunEmission {
+            run: &RunId("r1".into()),
+            generated_at: AT,
+            metric_revision: REV,
+            rows: &rows,
+            declarations_read: &declarations_read,
+            not_measured: &not_measured,
+            max_cost: Cost::Cheap,
+            concurrency: NonZeroUsize::new(4).unwrap(),
+            failed_endpoints: 1,
+            content_samples: &content_samples,
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn the_split_emission_publishes_what_the_whole_one_did() {
+        // Baseline frozen from the pre-1c-b4 emitter on 2026-08-24 over the
+        // synthesized run `split_baseline_emission` builds: the sorted
+        // (predicate, object) multiset and the quad count. Subjects are not
+        // part of it, because stage 1c-b3 froze those separately in
+        // `only_the_subjects_changed` and this stage does not touch them.
+        //
+        // Frozen as a constant here rather than compared against `emit_nquads`:
+        // once `emit_nquads` IS the composition of header, chunks and footer,
+        // comparing the two is a tautology that can never fail again, so the
+        // only proof that the split changed nothing has to be an artefact
+        // captured before the split happened.
+        //
+        // Moved once, on 2026-08-24, by the split itself: the three section
+        // terminators are new facts, so the multiset gained
+        // `urn:sparqlwatch:emission` once, `urn:sparqlwatch:completedEndpoint`
+        // once per endpoint (four here) and `urn:sparqlwatch:finalised` once,
+        // and the count went from 58 to 64. Nothing else moved, which is what
+        // this test exists to say. The baseline is not weakened to tolerate
+        // additions, because its whole value is that an unintended predicate
+        // cannot slip in; an intended one costs this paragraph.
+        const BASELINE_PAIRS: &[(&str, &str)] = &[
+        ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<http://www.w3.org/ns/dcat#DataService>"),
+        ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<http://www.w3.org/ns/dcat#DataService>"),
+        ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<http://www.w3.org/ns/dcat#DataService>"),
+        ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<http://www.w3.org/ns/dcat#DataService>"),
+        ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<http://www.w3.org/ns/dqv#QualityMeasurement>"),
+        ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<http://www.w3.org/ns/dqv#QualityMeasurement>"),
+        ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<http://www.w3.org/ns/dqv#QualityMeasurement>"),
+        ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<http://www.w3.org/ns/prov#Activity>"),
+        ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<urn:sparqlwatch:ContentSample>"),
+        ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<urn:sparqlwatch:ContentSample>"),
+        ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<urn:sparqlwatch:NotMeasured>"),
+        ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<urn:sparqlwatch:NotMeasured>"),
+        ("http://www.w3.org/ns/dqv#computedOn", "<https://a.example/sparql>"),
+        ("http://www.w3.org/ns/dqv#computedOn", "<https://a.example/sparql>"),
+        ("http://www.w3.org/ns/dqv#computedOn", "<https://b.example/sparql>"),
+        ("http://www.w3.org/ns/dqv#isMeasurementOf", "<urn:sparqlwatch:metric:availability>"),
+        ("http://www.w3.org/ns/dqv#isMeasurementOf", "<urn:sparqlwatch:metric:cors>"),
+        ("http://www.w3.org/ns/dqv#isMeasurementOf", "<urn:sparqlwatch:metric:service-description>"),
+        ("http://www.w3.org/ns/dqv#value", "\"absent\""),
+        ("http://www.w3.org/ns/dqv#value", "\"declared-only\""),
+        ("http://www.w3.org/ns/dqv#value", "\"verified\""),
+        ("http://www.w3.org/ns/prov#generatedAtTime", "\"2026-08-20T08:00:00Z\"^^<http://www.w3.org/2001/XMLSchema#dateTime>"),
+        ("http://www.w3.org/ns/prov#wasGeneratedBy", "<urn:sparqlwatch:activity:r1>"),
+        ("http://www.w3.org/ns/prov#wasGeneratedBy", "<urn:sparqlwatch:activity:r1>"),
+        ("http://www.w3.org/ns/prov#wasGeneratedBy", "<urn:sparqlwatch:activity:r1>"),
+        ("http://www.w3.org/ns/prov#wasGeneratedBy", "<urn:sparqlwatch:activity:r1>"),
+        ("http://www.w3.org/ns/prov#wasGeneratedBy", "<urn:sparqlwatch:activity:r1>"),
+        ("http://www.w3.org/ns/prov#wasGeneratedBy", "<urn:sparqlwatch:activity:r1>"),
+        ("http://www.w3.org/ns/prov#wasGeneratedBy", "<urn:sparqlwatch:activity:r1>"),
+        ("urn:sparqlwatch:completedEndpoint", "<https://a.example/sparql>"),
+        ("urn:sparqlwatch:completedEndpoint", "<https://b.example/sparql>"),
+        ("urn:sparqlwatch:completedEndpoint", "<https://c.example/sparql>"),
+        ("urn:sparqlwatch:completedEndpoint", "<https://d.example/sparql>"),
+        ("urn:sparqlwatch:concurrency", "\"4\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
+        ("urn:sparqlwatch:declarationsRead", "\"false\"^^<http://www.w3.org/2001/XMLSchema#boolean>"),
+        ("urn:sparqlwatch:declarationsRead", "\"true\"^^<http://www.w3.org/2001/XMLSchema#boolean>"),
+        ("urn:sparqlwatch:declarationsRead", "\"true\"^^<http://www.w3.org/2001/XMLSchema#boolean>"),
+        ("urn:sparqlwatch:elapsedMs", "\"12\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
+        ("urn:sparqlwatch:elapsedMs", "\"340\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
+        ("urn:sparqlwatch:emission", "\"incremental\""),
+        ("urn:sparqlwatch:failedEndpoints", "\"1\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
+        ("urn:sparqlwatch:finalised", "\"true\"^^<http://www.w3.org/2001/XMLSchema#boolean>"),
+        ("urn:sparqlwatch:level", "\"1\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
+        ("urn:sparqlwatch:level", "\"2\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
+        ("urn:sparqlwatch:maxCost", "\"cheap\""),
+        ("urn:sparqlwatch:metricDefinitionRevision", "\"abc123\""),
+        ("urn:sparqlwatch:notMeasuredMetric", "<urn:sparqlwatch:metric:availability>"),
+        ("urn:sparqlwatch:notMeasuredMetric", "<urn:sparqlwatch:metric:properties>"),
+        ("urn:sparqlwatch:notMeasuredOn", "<https://a.example/sparql>"),
+        ("urn:sparqlwatch:notMeasuredOn", "<https://d.example/sparql>"),
+        ("urn:sparqlwatch:notMeasuredReason", "\"cost-ceiling\""),
+        ("urn:sparqlwatch:notMeasuredReason", "\"prober-failed\""),
+        (
+            "urn:sparqlwatch:proberVersion",
+            // Not a frozen literal: the emitter writes `env!("CARGO_PKG_VERSION")`,
+            // so a version bump would otherwise red this test with "a predicate or
+            // an object changed", which is not what changed.
+            concat!("\"", env!("CARGO_PKG_VERSION"), "\""),
+        ),
+        ("urn:sparqlwatch:sampleSize", "\"1\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
+        ("urn:sparqlwatch:sampleSize", "\"2\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
+        ("urn:sparqlwatch:sampleTruncated", "\"false\"^^<http://www.w3.org/2001/XMLSchema#boolean>"),
+        ("urn:sparqlwatch:sampleTruncated", "\"true\"^^<http://www.w3.org/2001/XMLSchema#boolean>"),
+        ("urn:sparqlwatch:sampledBy", "<urn:sparqlwatch:metric:classes>"),
+        ("urn:sparqlwatch:sampledBy", "<urn:sparqlwatch:metric:classes>"),
+        ("urn:sparqlwatch:sampledFrom", "<https://a.example/sparql>"),
+        ("urn:sparqlwatch:sampledFrom", "<https://b.example/sparql>"),
+        ("urn:sparqlwatch:sampledValue", "<https://a.example/vocab#Apple>"),
+        ("urn:sparqlwatch:sampledValue", "<https://a.example/vocab#Zebra>"),
+        ("urn:sparqlwatch:sampledValue", "<https://b.example/vocab#Mango>"),
+        ];
+        const BASELINE_QUADS: usize = 64;
+        assert_frozen(&split_baseline_emission(), BASELINE_PAIRS, BASELINE_QUADS);
+    }
+
+    /// `docs/design/section-terminators.md`, embedded at compile time so a
+    /// deleted or moved file is a build failure rather than a skipped test.
+    const WIRE_FORMAT: &str = include_str!("../../docs/design/section-terminators.md");
+
+    /// The section-to-predicate table in `WIRE_FORMAT`'s fenced block, in the
+    /// order it lists them.
+    ///
+    /// Parsed rather than restated. A restatement here would be a third copy of
+    /// the table, and the point of that file is that there are two, one per
+    /// language, each checked against it.
+    fn wire_format_table() -> Vec<(String, String)> {
+        let mut parts = WIRE_FORMAT.split("```");
+        parts.next().expect("the prose before the fenced block");
+        let block = parts.next().expect("a fenced block naming the terminators");
+        assert_eq!(parts.count(), 1, "exactly one fenced block in the wire format file");
+        block
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| {
+                let mut fields = line.split_whitespace();
+                let section = fields.next().expect("a section name").to_string();
+                let predicate = fields.next().expect("a predicate IRI").to_string();
+                assert!(fields.next().is_none(), "a section and a predicate: {line}");
+                (section, predicate)
+            })
+            .collect()
+    }
+
+    /// The Rust half of the wire format.
+    ///
+    /// The three spellings are written here and recognised in
+    /// `web/load_run.py`, with nothing in either language connecting them:
+    /// renaming one here alone used to leave both suites green while every
+    /// partial run cut back to its header, discarding every endpoint the crash
+    /// preserved. `docs/design/section-terminators.md` is the one file both
+    /// sides read, and `web/tests/test_load_run.py` checks the loader's set
+    /// against the same table. The whole table is compared, so a fourth
+    /// terminator added on one side alone reds this too.
+    #[test]
+    fn the_emitter_writes_the_terminators_the_shared_wire_format_names() {
+        assert_eq!(
+            wire_format_table(),
+            vec![
+                ("header".to_string(), HEADER_TERMINATOR.to_string()),
+                ("chunk".to_string(), CHUNK_TERMINATOR.to_string()),
+                ("footer".to_string(), FOOTER_TERMINATOR.to_string()),
+            ],
+            "the emitter's terminators and docs/design/section-terminators.md have to agree"
+        );
+    }
+
+    /// The three terminators as a serialized line spells them, in predicate
+    /// position.
+    ///
+    /// Derived from the emitter's own constants, where they used to be written
+    /// out again here. What that restatement bought was catching a rename in
+    /// the emitter; the test above buys the same thing against a file the
+    /// loader is checked against too, which a restatement in this module could
+    /// not do.
+    fn in_predicate_position(predicate: &str) -> String {
+        format!("<{predicate}>")
+    }
+
+    #[test]
+    fn each_section_ends_with_its_own_terminator() {
+        // A reader of a truncated file decides what to keep by looking for
+        // these, so a terminator that is not the last line of its section makes
+        // the whole scheme unsound: a crash between the terminator and the rest
+        // of the section would leave a fragment the loader calls complete.
+        let header = emit_header(RunHeader {
+            run: &RunId("r1".into()),
+            generated_at: AT,
+            metric_revision: REV,
+            max_cost: Cost::Cheap,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+        })
+        .unwrap();
+        assert!(
+            header.trim_end().lines().next_back().unwrap().contains(&in_predicate_position(HEADER_TERMINATOR)),
+            "the header must end with its terminator: {header}"
+        );
+
+        let chunk = emit_endpoint(
+            &mut EmitState::new(),
+            EndpointFacts {
+                run: &RunId("r1".into()),
+                endpoint: "https://a.example/sparql",
+                rows: &[row("https://a.example/sparql", "cors", Verdict::Verified)],
+                declarations_read: &[DeclarationsRead {
+                    endpoint: "https://a.example/sparql".into(),
+                    read: true,
+                }],
+                not_measured: &[],
+                content_samples: &[],
+            },
+        )
+        .unwrap();
+        assert!(
+            chunk.trim_end().lines().next_back().unwrap().contains(&in_predicate_position(CHUNK_TERMINATOR)),
+            "a chunk must end with its terminator: {chunk}"
+        );
+
+        let footer = emit_footer(RunFooter { run: &RunId("r1".into()), failed_endpoints: 0 }).unwrap();
+        assert!(
+            footer.trim_end().lines().next_back().unwrap().contains(&in_predicate_position(FOOTER_TERMINATOR)),
+            "the footer must end with its terminator: {footer}"
+        );
+    }
+
+    #[test]
+    fn a_chunk_marks_the_endpoint_it_finished_and_types_it_itself() {
+        // Two things a chunk needs to stand alone. The marker is what makes it
+        // the unit of truncation, and it is per endpoint rather than per run
+        // because Task 4's read tier asks "did this run reach THIS endpoint",
+        // which a run-level marker cannot answer. The `dcat:DataService` type
+        // has to be in the same chunk, because a chunk carrying facts about an
+        // endpoint the reader has no type for is not self-contained.
+        let url = "https://a.example/sparql";
+        let chunk = emit_endpoint(
+            &mut EmitState::new(),
+            EndpointFacts {
+                run: &RunId("r1".into()),
+                endpoint: url,
+                rows: &[row(url, "cors", Verdict::Verified)],
+                declarations_read: &[],
+                not_measured: &[],
+                content_samples: &[],
+            },
+        )
+        .unwrap();
+        let qs = quads_of(&chunk);
+        assert_eq!(
+            objects(&qs, "urn:sparqlwatch:completedEndpoint"),
+            vec![&Term::NamedNode(NamedNode::new(url).unwrap())],
+            "the chunk names the endpoint it finished, once"
+        );
+        assert_eq!(
+            typed_in(&qs),
+            BTreeSet::from([url.to_string()]),
+            "the chunk types its own endpoint, once: {chunk}"
+        );
+    }
+
+    /// Every endpoint a chunk publishes a fact about, as a set, read off the
+    /// `dcat:DataService` quads.
+    fn typed_in(qs: &[Quad]) -> BTreeSet<String> {
+        let service = Term::NamedNode(NamedNode::new(format!("{DCAT}DataService")).unwrap());
+        qs.iter()
+            .filter(|q| q.predicate == rdf::TYPE && q.object == service)
+            .map(|q| q.subject.to_string().trim_matches(['<', '>']).to_string())
+            .collect()
+    }
+
+    #[test]
+    fn a_chunk_types_every_endpoint_it_publishes_a_fact_about() {
+        // The property `typed_endpoints` being per chunk actually buys, and the
+        // only way it can be made to bite: two chunks, one `EmitState`, where
+        // the second names an endpoint the first already typed. Per chunk, the
+        // second chunk types it again; run-scoped, the second chunk would carry
+        // the endpoint's facts and no type for it, and a reader holding only
+        // that chunk could not tell what the subject is.
+        //
+        // The mixed chunk below is a caller error rather than a shape
+        // `emit_nquads` produces, and Task 3 will refuse it at the writer. This
+        // is the emitter's contract underneath that refusal: the chunk is what
+        // a truncated file preserves, so it has to be complete on its own terms
+        // even when the caller was wrong. The same reasoning covers a repeat
+        // chunk for one endpoint, which `EmitState` refuses here rather than
+        // letting it reach this code.
+        let run = RunId("r1".into());
+        let a = "https://a.example/sparql";
+        let b = "https://b.example/sparql";
+        let mut state = EmitState::new();
+
+        let first = emit_endpoint(
+            &mut state,
+            EndpointFacts {
+                run: &run,
+                endpoint: a,
+                rows: &[row(a, "cors", Verdict::Verified)],
+                declarations_read: &[],
+                not_measured: &[],
+                content_samples: &[],
+            },
+        )
+        .unwrap();
+        assert_eq!(typed_in(&quads_of(&first)), BTreeSet::from([a.to_string()]));
+
+        let second = emit_endpoint(
+            &mut state,
+            EndpointFacts {
+                run: &run,
+                endpoint: b,
+                rows: &[row(b, "cors", Verdict::Verified), row(a, "availability", Verdict::Absent)],
+                declarations_read: &[],
+                not_measured: &[],
+                content_samples: &[],
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            typed_in(&quads_of(&second)),
+            BTreeSet::from([a.to_string(), b.to_string()]),
+            "the second chunk types both endpoints it names, including the one an earlier \
+             chunk already typed: {second}"
+        );
+    }
+
+    #[test]
+    fn a_chunk_with_no_publishable_fact_still_types_the_endpoint_it_marks() {
+        // What an empty chunk means, and why it is emitted rather than skipped:
+        // the marker is the run's only statement that it reached this endpoint,
+        // which is the fact Task 4's read tier reads instead of inferring
+        // "never attempted" from absence. So the chunk is worth writing even
+        // when every fact about the endpoint was dropped as unpublishable, or
+        // when the caller had none to give.
+        //
+        // It has to type the endpoint too. A marker naming a resource the graph
+        // never types is a join a consumer cannot complete, and this is the one
+        // shape where typing at the first fact would have typed nothing.
+        // `emit_nquads` cannot reach it, because `endpoint_order` only yields
+        // endpoints that appear in some list; a direct caller can.
+        let url = "https://e.example/sparql";
+        let chunk = emit_endpoint(
+            &mut EmitState::new(),
+            EndpointFacts {
+                run: &RunId("r1".into()),
+                endpoint: url,
+                rows: &[],
+                declarations_read: &[],
+                not_measured: &[],
+                content_samples: &[],
+            },
+        )
+        .unwrap();
+        let qs = quads_of(&chunk);
+        assert_eq!(
+            typed_in(&qs),
+            BTreeSet::from([url.to_string()]),
+            "an empty chunk types the endpoint it marks: {chunk}"
+        );
+        assert_eq!(
+            objects(&qs, "urn:sparqlwatch:completedEndpoint"),
+            vec![&Term::NamedNode(NamedNode::new(url).unwrap())],
+            "and it still says the run reached it: {chunk}"
+        );
+        assert_eq!(qs.len(), 2, "and says nothing else: {chunk}");
+    }
+
+    #[test]
+    fn a_repeat_chunk_for_one_endpoint_publishes_nothing() {
+        // An endpoint's facts must all be in one chunk, because that is what
+        // makes the per-chunk duplicate-subject pre-scan complete. Split across
+        // two chunks, a pair measured twice with differing results would be
+        // published twice on one subject instead of dropped, in a graph that is
+        // never rewritten. So the second chunk is refused, which is the only
+        // direction that cannot publish a confident wrong answer.
+        let run = RunId("r1".into());
+        let url = "https://a.example/sparql";
+        let mut state = EmitState::new();
+        let verified = [row(url, "cors", Verdict::Verified)];
+        let absent = [row(url, "cors", Verdict::Absent)];
+        let chunk = |state: &mut EmitState, rows: &[MeasurementRow]| {
+            emit_endpoint(
+                state,
+                EndpointFacts {
+                    run: &run,
+                    endpoint: url,
+                    rows,
+                    declarations_read: &[],
+                    not_measured: &[],
+                    content_samples: &[],
+                },
+            )
+            .unwrap()
+        };
+        assert!(!chunk(&mut state, &verified).is_empty(), "the first chunk is written");
+        assert_eq!(
+            chunk(&mut state, &absent),
+            "",
+            "the repeat chunk publishes nothing, not a second verdict"
+        );
+    }
+
+    #[test]
+    fn a_sample_publishes_its_size_after_the_values_it_counts() {
+        // The failure this ordering exists to prevent: a chunk cut inside the
+        // value list used to leave `sampleSize 200, sampleTruncated false`
+        // standing beside three values, which `endpoint_content.rq` matches and
+        // the page renders as two hundred classes sampled, complete. With the
+        // summary last, the same cut loses the sample instead of misstating it.
+        let url = "https://a.example/sparql";
+        let out = emit_endpoint(
+            &mut EmitState::new(),
+            EndpointFacts {
+                run: &RunId("r1".into()),
+                endpoint: url,
+                rows: &[],
+                declarations_read: &[],
+                not_measured: &[],
+                content_samples: &[ContentSample {
+                    endpoint: url.into(),
+                    metric_id: "classes".into(),
+                    values: vec![
+                        "https://a.example/vocab#Zebra".into(),
+                        "https://a.example/vocab#Apple".into(),
+                    ],
+                    truncated: false,
+                }],
+            },
+        )
+        .unwrap();
+        let lines: Vec<&str> = out.lines().collect();
+        let line_of = |needle: &str| {
+            lines
+                .iter()
+                .position(|l| l.contains(needle))
+                .unwrap_or_else(|| panic!("no {needle} in {out}"))
+        };
+        let last_value = lines
+            .iter()
+            .rposition(|l| l.contains("<urn:sparqlwatch:sampledValue>"))
+            .expect("the fixture publishes values");
+        assert!(
+            last_value < line_of("<urn:sparqlwatch:sampleSize>"),
+            "sampleSize must come after the last value it counts: {out}"
+        );
+        assert!(
+            last_value < line_of("<urn:sparqlwatch:sampleTruncated>"),
+            "sampleTruncated must come after the values it describes: {out}"
+        );
+
+        // And the size still counts what is published rather than what was
+        // bound, which is the property the move must not cost.
+        let qs = quads_of(&out);
+        assert_eq!(
+            objects(&qs, "urn:sparqlwatch:sampleSize"),
+            vec![&Term::Literal(Literal::new_typed_literal("2", xsd::INTEGER))]
+        );
+    }
+
+    #[test]
+    fn a_run_cut_after_a_chunk_carries_no_finalised_and_loses_only_the_rest() {
+        // The shape a crash actually leaves, asserted on the document rather
+        // than on the writer: everything up to a chunk terminator is a complete
+        // header plus complete chunks, it parses, and it does not claim the run
+        // finished. `failedEndpoints` goes with `finalised` because it
+        // summarises the chunks, so a truncated run cannot publish a count that
+        // was only true of a whole one.
+        let whole = split_baseline_emission();
+        let cut_at = whole
+            .lines()
+            .position(|l| l.contains(&in_predicate_position(CHUNK_TERMINATOR)))
+            .expect("the fixture has at least one chunk");
+        let truncated: String =
+            whole.lines().take(cut_at + 1).map(|l| format!("{l}\n")).collect();
+
+        let qs = quads_of(&truncated);
+        assert!(
+            qs.iter().any(|q| q.predicate.as_str() == "urn:sparqlwatch:emission"),
+            "the header survives, so a reader knows to expect chunks"
+        );
+        assert_eq!(
+            objects(&qs, "urn:sparqlwatch:completedEndpoint").len(),
+            1,
+            "exactly the one endpoint that finished is marked"
+        );
+        for absent in ["urn:sparqlwatch:finalised", "urn:sparqlwatch:failedEndpoints"] {
+            assert!(
+                objects(&qs, absent).is_empty(),
+                "{absent} must not appear in a run that did not finish: {truncated}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_endpoint_named_only_by_one_fact_list_still_gets_a_chunk() {
+        // The endpoint sequence comes from the union of all four lists, because
+        // an endpoint can appear in one of them only: a prober-failed endpoint
+        // is in `not_measured` alone, and an endpoint whose description was read
+        // but whose metrics produced no row is in `declarations_read` alone.
+        // Deriving the sequence from `rows` would publish no chunk for either,
+        // so neither would be marked as reached and Task 4 would read both as
+        // never attempted.
+        let qs = quads_of(&split_baseline_emission());
+        let marked: BTreeSet<String> = objects(&qs, "urn:sparqlwatch:completedEndpoint")
+            .iter()
+            .map(|t| t.to_string())
+            .collect();
+        assert!(
+            marked.contains("<https://c.example/sparql>"),
+            "the declarations-only endpoint is marked: {marked:?}"
+        );
+        assert!(
+            marked.contains("<https://d.example/sparql>"),
+            "the not-measured-only endpoint is marked: {marked:?}"
+        );
     }
 
     /// Every subject in `qs`, as a set, so a test can compare two emissions

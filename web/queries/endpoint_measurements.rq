@@ -50,12 +50,54 @@
 # metric:classes from last week's, two different sweeps' opinions presented as
 # one, which is exactly the blended answer endpoint_content.rq's header warns
 # against for content samples.
+#
+# Two more things are returned, per row and constant within a run, and they
+# are not about any metric: whether the run these facts come from finished,
+# and what the newest run in the store says. Stage 1c-b4 writes each
+# endpoint's facts as that endpoint finishes, so a store can hold a run that
+# stopped halfway, and a reader shown that run's facts is entitled to know it
+# stopped. The three facts that stage writes are sw:emission "incremental" on
+# the activity (the header, so a reader knows to expect chunks and a footer),
+# sw:completedEndpoint per endpoint the run finished, and sw:finalised true as
+# the last line a finished run ever writes. A run carrying NONE of them is a
+# run from before that stage: it promised nothing, so its missing sw:finalised
+# says nothing either, and this query returns the absence rather than a
+# verdict about it.
+#
+# THE NEWEST-RUN BRANCH IS NOT PER-ENDPOINT, and it is the only thing in this
+# query that is not. Everything else here has been scoped to one endpoint
+# since stage 2-1, including the selection of the run whose facts are
+# returned, which is unchanged: ?run is still the newest run that recorded a
+# measurement or a decline FOR THIS ENDPOINT, chosen by the FILTER NOT EXISTS
+# below, and nothing in the newest-run branch touches it.
+#
+# The widening is deliberate, and it buys the case the per-endpoint selection
+# cannot see. A run that dies partway records nothing at all for every
+# endpoint it never reached, so those endpoints are invisible to a
+# per-endpoint question: their newest recorded facts are an older, complete
+# run's, and a page built from those facts alone shows them with no hint that
+# tonight's sweep died before getting here. At 548 endpoints that is most of
+# them, and it is a regression on what this page said before stage 1c-b4, when
+# a failed endpoint carried prober-failed declines in the newest run and the
+# rows read "not measured". So the newest activity in the store is selected on
+# its own, with its sw:emission, its sw:finalised where it has one, and its
+# sw:completedEndpoint for THIS endpoint where it has one. Those are the
+# inputs; a caller derives "a newer run died before reaching this endpoint"
+# from them.
+#
+# The branch is OPTIONAL so that an endpoint's verdicts still come back from a
+# store where no activity can be found. What it costs is measured rather than
+# reasoned about: see the note on its subquery below for the numbers and for
+# why the shape of that subquery is the load-bearing part.
 
 PREFIX dqv: <http://www.w3.org/ns/dqv#>
 PREFIX prov: <http://www.w3.org/ns/prov#>
 PREFIX sw: <urn:sparqlwatch:>
 
 SELECT ?endpoint ?run ?generatedAt ?metric ?verdict ?level ?elapsedMs ?reason
+       ?emission ?finalised
+       ?newestRun ?newestGeneratedAt ?newestEmission ?newestFinalised
+       ?newestCompleted
 WHERE {
   GRAPH ?run {
     ?activity a prov:Activity ;
@@ -77,6 +119,11 @@ WHERE {
                    sw:notMeasuredReason ?reason ;
                    prov:wasGeneratedBy ?activity .
     }
+    # This run's own account of how it was written and whether it finished.
+    # Both OPTIONAL, because a run from before stage 1c-b4 carries neither and
+    # its verdicts are still the answer to the question that was asked.
+    OPTIONAL { ?activity sw:emission ?emission }
+    OPTIONAL { ?activity sw:finalised ?finalised }
   }
   FILTER NOT EXISTS {
     GRAPH ?newerRun {
@@ -91,5 +138,59 @@ WHERE {
                      prov:generatedAtTime ?newerGeneratedAt .
     }
     FILTER (?newerGeneratedAt > ?generatedAt)
+  }
+
+  # The newest run in the store. See this query's header: this is the one
+  # selection here that is not scoped to ?endpoint, and the per-endpoint
+  # selection above is untouched by it.
+  OPTIONAL {
+    # "Newest" as an aggregate subquery, which is the one place in this file
+    # where a subquery is the right shape rather than the wrong one. The
+    # objection recorded in endpoint_content.rq's header is that the value
+    # substituted for ?endpoint does not reach inside a subquery's projection,
+    # so a subquery that has to be per-endpoint silently stops being one. This
+    # one is per-STORE by design: it mentions no endpoint, projects one
+    # variable, and the ?endpoint-scoped lookup stays outside it.
+    #
+    # Measured on this machine, one endpoint's eight rows, over a store built
+    # from the committed fixtures plus N activity-only run graphs:
+    #
+    #                               402 runs    1002 runs
+    #   without this branch           163 ms       976 ms
+    #   with it, this form            217 ms      1288 ms
+    #   with it, FILTER NOT EXISTS   1898 ms      not run
+    #
+    # The aggregate on its own is 0.4 ms at 402 runs and 1.0 ms at 1002, so
+    # finding the maximum is not what either form costs. What the FILTER NOT
+    # EXISTS form costs is comparing every run against every other run once
+    # per row, and 1.9 s is a page that times out on a store holding a year of
+    # nightly sweeps. So the shape here is load-bearing rather than a matter of
+    # taste. The growth in the first row belongs to the per-endpoint selection
+    # above and predates this branch.
+    {
+      SELECT (MAX(?anyGeneratedAt) AS ?newestGeneratedAt) WHERE {
+        GRAPH ?anyRun {
+          ?anyActivity a prov:Activity ;
+                       prov:generatedAtTime ?anyGeneratedAt .
+        }
+      }
+    }
+    GRAPH ?newestRun {
+      ?newestActivity a prov:Activity ;
+                      prov:generatedAtTime ?newestGeneratedAt .
+      OPTIONAL { ?newestActivity sw:emission ?newestEmission }
+      OPTIONAL { ?newestActivity sw:finalised ?newestFinalised }
+      # Scoped to ?endpoint even inside the branch that is not, because what
+      # is wanted is whether THIS endpoint was finished. ?endpoint is
+      # substituted before execution, so this is an index lookup rather than a
+      # scan of the run's several hundred completion markers.
+      # ?newestCompleted exists only so the match is visible in the result: an
+      # OPTIONAL that binds no new variable leaves a caller unable to tell
+      # whether it matched.
+      OPTIONAL {
+        ?newestActivity sw:completedEndpoint ?endpoint .
+        BIND (?endpoint AS ?newestCompleted)
+      }
+    }
   }
 }

@@ -1316,3 +1316,151 @@ def test_an_absent_classes_verdict_is_reported_as_an_established_negative(
         "is not a report that the endpoint holds no classes"
         in nothing_established[0]
     )
+
+
+# ---------------------------------------------------------------------------
+# Saying, in the place the run is named, when that run did not finish
+# ---------------------------------------------------------------------------
+# The four states the page has to distinguish. Three of them are new and the
+# fourth is the guarantee that nothing else moved: a run from before stage
+# 1c-b4 promised nothing about finishing, so its page must read exactly as it
+# did before this stage existed.
+CRASHED_SWEEP = "2026-08-23T04:00:00Z"
+FINISHED_SWEEP = "2026-08-23T02:00:00Z"
+
+UNFINISHED = "data-run-unfinished"
+NEWER_UNFINISHED = "data-newer-run-unfinished"
+
+
+def test_a_finished_run_says_nothing_about_not_finishing(
+    client_for, store_prober_failed
+):
+    """State one of four: run-prober-failed.nq is a whole run.
+
+    It carries sw:emission, one sw:completedEndpoint and sw:finalised, so
+    both sentences would be false and neither may appear. This is also the
+    only page state where the newest run in the store is the run being shown,
+    which is what stops the second sentence from firing on every finished
+    run.
+    """
+    text = page(client_for(store_prober_failed), KADASTER)
+    assert with_attribute(text, UNFINISHED) == []
+    assert with_attribute(text, NEWER_UNFINISHED) == []
+    assert "did not finish" not in text
+
+
+def test_an_unfinished_run_says_so_where_it_names_the_run(
+    client_for, store_crashed_partway
+):
+    """State two of four: the facts shown come from a run that did not finish.
+
+    The crashed run wrote kadaster's chunk, so kadaster's page is that run's
+    page, and the sentence goes where the page already names the run its
+    facts came from. Both halves are asserted: the sentence, verbatim, and
+    that the page really is showing the crashed run's facts (availability
+    reads "indeterminate" here and "verified" in the 16:00 sweep, and this
+    run's own two-class sample replaces that sweep's 59).
+    """
+    text = page(client_for(store_crashed_partway), KADASTER)
+
+    assert [row["data-run"] for row in with_attribute(text, "data-run")] == [
+        RUN + CRASHED_SWEEP
+    ]
+    assert row_for(text, M + "availability")["data-verdict"] == "indeterminate"
+    assert "2 classes sampled" in text
+
+    said = texts_with(text, UNFINISHED)
+    assert len(said) == 1, "one sentence, where the run is named"
+    assert said[0] == (
+        f"The sweep at {CRASHED_SWEEP} did not finish: it recorded that it "
+        f"was being written one endpoint at a time and never recorded that "
+        f"it was complete. What is above is what it had written for this "
+        f"endpoint when it stopped."
+    )
+    # The other condition is about a sweep this page is NOT showing, and
+    # there is no such sweep here: the crashed run is the newest in the store.
+    assert with_attribute(text, NEWER_UNFINISHED) == []
+
+
+def test_an_endpoint_a_crashed_newer_run_never_reached_says_so(
+    client_for, store_crashed_partway
+):
+    """State three of four, and the whole reason the derivation has two
+    conditions.
+
+    The crashed run never reached qlever, so it recorded nothing for it and
+    the page falls back to the 16:00 sweep. Every verdict shown is that
+    sweep's and every one of them is the newest this store has for qlever, so
+    the first sentence would be false. What is true, and what a reader
+    checking on tonight's sweep needs, is that a later sweep exists, died,
+    and never got here.
+
+    Before this stage the prober published prober-failed declines for an
+    endpoint its sweep failed on, so this page said "not measured" about
+    tonight's run. Nothing says it now unless this sentence does.
+    """
+    text = page(client_for(store_crashed_partway), QLEVER)
+
+    assert [row["data-run"] for row in with_attribute(text, "data-run")] == [
+        RUN + SAMPLING_SWEEP
+    ]
+    assert row_for(text, M + "availability")["data-verdict"] == "verified"
+
+    said = texts_with(text, NEWER_UNFINISHED)
+    assert len(said) == 1, "one sentence, where the run is named"
+    assert said[0] == (
+        f"A later sweep, at {CRASHED_SWEEP}, did not finish and never "
+        f"recorded finishing this endpoint, so nothing above comes from it. "
+        f"What is above is the newest this store holds for this endpoint, "
+        f"from the sweep at {SAMPLING_SWEEP}."
+    )
+    # The run being shown is a pre-1c-b4 sweep, which promised nothing about
+    # finishing, so the first sentence has no basis and must not appear.
+    assert with_attribute(text, UNFINISHED) == []
+
+
+def test_a_run_from_before_this_stage_reads_exactly_as_it_did(client_for, store):
+    """State four of four, and the one that is a guarantee rather than a
+    feature.
+
+    run-with-samples.nq carries none of the three facts stage 1c-b4 writes,
+    because it was captured before they existed. Absence of sw:finalised is
+    therefore not evidence of a crash, and a page that read it as one would
+    stamp every historical run in the store as unfinished. The existing
+    header sentence is asserted verbatim beside the two absences, so this
+    test fails if either new sentence appears OR if the old one changed
+    shape.
+    """
+    text = page(client_for(store), KADASTER)
+
+    assert with_attribute(text, UNFINISHED) == []
+    assert with_attribute(text, NEWER_UNFINISHED) == []
+    assert "did not finish" not in text
+    assert (
+        f"Everything below is what one probe sweep observed, at "
+        f"{SAMPLING_SWEEP}." in text
+    )
+
+
+def test_two_finished_historical_runs_say_nothing_about_not_finishing(
+    client_for, store_later_sample
+):
+    """The fifth state, which is the fourth one on a store of more than one
+    run, and the shape a production store is in most of the time.
+
+    Both sweeps here predate stage 1c-b4 and both finished. The 22:00 one only
+    sampled kadaster, so the page falls back to the 16:00 sweep's verdicts and
+    the newest run in the store is neither the run being shown, nor finalised,
+    nor a run that marked this endpoint. Three of the second sentence's five
+    conditions are therefore met, and the page must still say nothing: a
+    sentence here would assert a crash on every endpoint whose newest facts
+    predate the store's newest run, which is most endpoints most nights.
+    """
+    text = page(client_for(store_later_sample), KADASTER)
+
+    assert [row["data-run"] for row in with_attribute(text, "data-run")] == [
+        RUN + SAMPLING_SWEEP
+    ], "the 22:00 sweep measured nothing here, so the verdicts are 16:00's"
+    assert with_attribute(text, UNFINISHED) == []
+    assert with_attribute(text, NEWER_UNFINISHED) == []
+    assert "did not finish" not in text

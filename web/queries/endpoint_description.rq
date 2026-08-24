@@ -41,6 +41,35 @@
 # sample hanging off nothing would invite a consumer to date the sample to
 # the sweep that declined to take it.
 #
+# A FOURTH branch, and the one that is not scoped to this endpoint: the
+# newest activity in the whole store, with the three run-level facts stage
+# 1c-b4 writes. A store can now hold a run that did not finish, and the two
+# things a reader has to be able to conclude are "the run whose facts these
+# are stopped before writing its footer" and "a newer run stopped before it
+# reached this endpoint". The second needs the newest activity in the store,
+# because a run that never reached an endpoint records nothing about it and is
+# invisible to every per-endpoint pattern above. The reasoning for the
+# widening is written out once, in endpoint_measurements.rq's header, and the
+# two queries must widen together or the HTML would draw a conclusion the RDF
+# cannot.
+#
+# What this branch emits is the INPUTS to those two conclusions and never the
+# conclusions themselves: sw:emission, sw:finalised where the run has one, and
+# sw:completedEndpoint for THIS endpoint where the run has one, for the newest
+# run and for the run being shown. Both conclusions rest partly on an absence,
+# and a CONSTRUCT emits only presence, so a derived "unfinished" flag could be
+# built for the HTML representation and not for this one, and the two would
+# then disagree about exactly the run this branch exists for. Emitting the
+# facts instead means a consumer draws the same conclusions from the same
+# quads, which is a stronger agreement than copying a flag across. It also
+# keeps this document's own rule: every triple below appears verbatim in some
+# run graph in the store.
+#
+# The newest run's sw:completedEndpoint is emitted only where it names THIS
+# endpoint, matching the SELECT beside it. A run's other several hundred
+# completion markers are facts about other resources and have no place in this
+# one's description.
+#
 # Each branch's "most recent" is the run whose activity has the greatest
 # prov:generatedAtTime, expressed as "no newer run recorded this for this
 # endpoint" rather than as an ORDER BY ... LIMIT 1 subquery. Both the choice
@@ -70,6 +99,25 @@ CONSTRUCT {
             prov:generatedAtTime ?generatedAt .
   ?declineActivity a prov:Activity ;
                    prov:generatedAtTime ?generatedAt .
+  # Whether the run these facts came from said how it was written, and whether
+  # it said it finished. Written against both activity variables because
+  # exactly one of them is bound per solution, the same way ?generatedAt is
+  # already shared above, and an unbound subject drops its triple.
+  ?activity sw:emission ?emission ;
+            sw:finalised ?finalised ;
+            sw:completedEndpoint ?completedEndpoint .
+  ?declineActivity sw:emission ?emission ;
+                   sw:finalised ?finalised ;
+                   sw:completedEndpoint ?completedEndpoint .
+  # The newest activity in the store, which is routinely not the one above.
+  # Its prov:generatedAtTime is what lets a consumer tell it apart from the
+  # activity the measurements hang off, so it is emitted even when the two are
+  # the same run and the triples collapse.
+  ?newestActivity a prov:Activity ;
+                  prov:generatedAtTime ?newestGeneratedAt ;
+                  sw:emission ?newestEmission ;
+                  sw:finalised ?newestFinalised ;
+                  sw:completedEndpoint ?newestCompleted .
   # No rdf:type triple for the sample, even though every committed run
   # carries one: this branch's WHERE clause matches exactly what
   # endpoint_content.rq matches, so that a sample the HTML representation
@@ -107,6 +155,14 @@ WHERE {
       # template simply drops its triple rather than failing the solution.
       OPTIONAL { ?measurement sw:level ?level }
       OPTIONAL { ?measurement sw:elapsedMs ?elapsedMs }
+      # OPTIONAL because a run captured before stage 1c-b4 carries none of the
+      # three, and its measurements are still this endpoint's answer.
+      OPTIONAL { ?activity sw:emission ?emission }
+      OPTIONAL { ?activity sw:finalised ?finalised }
+      OPTIONAL {
+        ?activity sw:completedEndpoint ?endpoint .
+        BIND (?endpoint AS ?completedEndpoint)
+      }
     }
     FILTER NOT EXISTS {
       GRAPH ?newerRun {
@@ -129,6 +185,15 @@ WHERE {
                    prov:wasGeneratedBy ?declineActivity .
       ?declineActivity a prov:Activity ;
                        prov:generatedAtTime ?generatedAt .
+      # The same three facts as the measurement branch, on this branch's own
+      # activity: a run that declined every metric it applied to an endpoint
+      # can equally have stopped before finishing.
+      OPTIONAL { ?declineActivity sw:emission ?emission }
+      OPTIONAL { ?declineActivity sw:finalised ?finalised }
+      OPTIONAL {
+        ?declineActivity sw:completedEndpoint ?endpoint .
+        BIND (?endpoint AS ?completedEndpoint)
+      }
     }
     FILTER NOT EXISTS {
       GRAPH ?newerRun {
@@ -172,6 +237,48 @@ WHERE {
                              prov:generatedAtTime ?newerSampleGeneratedAt .
       }
       FILTER (?newerSampleGeneratedAt > ?sampleGeneratedAt)
+    }
+  }
+  UNION
+  {
+    # The newest activity in the store. The one pattern in this query that is
+    # not scoped to ?endpoint; see the header for what it buys.
+    #
+    # An aggregate subquery, and it is the same shape, for the same measured
+    # reason, as the one in endpoint_measurements.rq: the two queries have to
+    # select the same run or the two representations disagree about which run
+    # is the newest. Measured on this machine, over the committed fixtures
+    # plus N activity-only run graphs:
+    #
+    #                               402 runs    1002 runs
+    #   without this branch            83 ms       507 ms
+    #   with it, this form            106 ms       682 ms
+    #   with it, FILTER NOT EXISTS   2183 ms     32606 ms
+    #
+    # The subquery mentions no endpoint and projects one variable, so the
+    # objection endpoint_content.rq's header raises against subqueries here,
+    # that a substituted ?endpoint does not reach inside one, does not apply
+    # to it; the ?endpoint-scoped lookup stays outside.
+    {
+      SELECT (MAX(?anyGeneratedAt) AS ?newestGeneratedAt) WHERE {
+        GRAPH ?anyRun {
+          ?anyActivity a prov:Activity ;
+                       prov:generatedAtTime ?anyGeneratedAt .
+        }
+      }
+    }
+    GRAPH ?newestRun {
+      ?newestActivity a prov:Activity ;
+                      prov:generatedAtTime ?newestGeneratedAt .
+      OPTIONAL { ?newestActivity sw:emission ?newestEmission }
+      OPTIONAL { ?newestActivity sw:finalised ?newestFinalised }
+      # Scoped to ?endpoint even inside the branch that is not: this document
+      # describes one endpoint, and a completion marker naming another one is
+      # a fact about that other resource.
+      OPTIONAL {
+        ?newestActivity sw:completedEndpoint ?endpoint .
+        BIND (?endpoint AS ?newestCompleted)
+      }
     }
   }
 }

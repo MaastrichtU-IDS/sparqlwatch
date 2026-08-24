@@ -1,0 +1,110 @@
+# SYNTHETIC fixture, and it is the emitter's own output rather than a
+# hand-written file: prober/src/emit.rs's emit_header was called once, then
+# emit_endpoint once for data.kkg.kadaster.nl/query, and emit_footer was NOT
+# called. That absence is the whole fixture. It cannot be a captured sweep,
+# because producing one live would mean shipping a prober that dies halfway
+# through a run.
+#
+# This is exactly the file a crashed prober leaves on disk, and exactly what
+# web/load_run.py loads from it: the last statement here is a chunk's
+# sw:completedEndpoint terminator, so the loader's cut-back to the last
+# terminator takes nothing off. A run that died mid-chunk instead would have
+# its unterminated tail dropped by that cut, so every chunk that reaches the
+# store is a whole one and the run still carries no sw:finalised. Either way
+# the store holds what is below.
+#
+# The inputs handed to the emitter: the eight metrics of prober/metrics.toml
+# against one endpoint, all measured (max_cost "expensive", so nothing is
+# declined), sw:metric:availability as Verdict::Indeterminate and the rest as
+# the real 16:00 sweep in run-with-samples.nq graded them, one
+# sw:declarationsRead of true, and a two-value class sample whose values are
+# two of that sweep's own 59. concurrency 4, metric revision
+# fnv1a64:5988db00fe7498fd, run 2026-08-23T04:00:00Z.
+#
+# Two of those inputs are chosen so that "whose facts is the page showing" is
+# answerable by value rather than by trust, the same way run-two-sweeps.nq's
+# one hand edit is: availability reads "indeterminate" here and "verified" in
+# the 16:00 sweep, and this sample holds 2 classes where that sweep's holds
+# 59.
+#
+# 67 quads, one run graph (urn:sparqlwatch:run:2026-08-23T04:00:00Z), one
+# endpoint. It carries sw:emission and one sw:completedEndpoint and NO
+# sw:finalised, which is the shape the read tier has to be able to talk
+# about: a run in the store that did not finish.
+#
+# Loaded beside run-with-samples.nq (the real 2026-08-22T16:00:00Z sweep of
+# three endpoints) it produces both of the two conditions at once, on two
+# different endpoints of one store. For kadaster, whose chunk this run did
+# write, the facts shown come from a run that did not finish. For
+# qlever.dev/api/osm-planet, which this run never reached, the facts shown
+# come from the finished-looking 16:00 sweep and the newest run in the store
+# is one that did not finish and carries no sw:completedEndpoint naming it.
+# The second is the case a per-endpoint query cannot see on its own, and it
+# is the one a crash produces for every endpoint after the one it died on.
+<urn:sparqlwatch:activity:2026-08-23T04:00:00Z> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/prov#Activity> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-23T04:00:00Z> <http://www.w3.org/ns/prov#generatedAtTime> "2026-08-23T04:00:00Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-23T04:00:00Z> <urn:sparqlwatch:proberVersion> "0.1.0" <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-23T04:00:00Z> <urn:sparqlwatch:metricDefinitionRevision> "fnv1a64:5988db00fe7498fd" <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-23T04:00:00Z> <urn:sparqlwatch:maxCost> "expensive" <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-23T04:00:00Z> <urn:sparqlwatch:concurrency> "4"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-23T04:00:00Z> <urn:sparqlwatch:emission> "incremental" <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<https://data.kkg.kadaster.nl/query> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dcat#DataService> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:availability> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:availability> <http://www.w3.org/ns/dqv#computedOn> <https://data.kkg.kadaster.nl/query> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:availability> <http://www.w3.org/ns/dqv#isMeasurementOf> <urn:sparqlwatch:metric:availability> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:availability> <http://www.w3.org/ns/dqv#value> "indeterminate" <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:availability> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-08-23T04:00:00Z> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:availability> <urn:sparqlwatch:elapsedMs> "30003"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:cors> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:cors> <http://www.w3.org/ns/dqv#computedOn> <https://data.kkg.kadaster.nl/query> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:cors> <http://www.w3.org/ns/dqv#isMeasurementOf> <urn:sparqlwatch:metric:cors> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:cors> <http://www.w3.org/ns/dqv#value> "verified" <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:cors> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-08-23T04:00:00Z> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:cors> <urn:sparqlwatch:elapsedMs> "44"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:cors-preflight> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:cors-preflight> <http://www.w3.org/ns/dqv#computedOn> <https://data.kkg.kadaster.nl/query> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:cors-preflight> <http://www.w3.org/ns/dqv#isMeasurementOf> <urn:sparqlwatch:metric:cors-preflight> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:cors-preflight> <http://www.w3.org/ns/dqv#value> "verified" <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:cors-preflight> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-08-23T04:00:00Z> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:cors-preflight> <urn:sparqlwatch:elapsedMs> "27"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:geo-functions> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:geo-functions> <http://www.w3.org/ns/dqv#computedOn> <https://data.kkg.kadaster.nl/query> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:geo-functions> <http://www.w3.org/ns/dqv#isMeasurementOf> <urn:sparqlwatch:metric:geo-functions> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:geo-functions> <http://www.w3.org/ns/dqv#value> "undeclared-but-verified" <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:geo-functions> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-08-23T04:00:00Z> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:geo-functions> <urn:sparqlwatch:elapsedMs> "61"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:geo-data> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:geo-data> <http://www.w3.org/ns/dqv#computedOn> <https://data.kkg.kadaster.nl/query> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:geo-data> <http://www.w3.org/ns/dqv#isMeasurementOf> <urn:sparqlwatch:metric:geo-data> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:geo-data> <http://www.w3.org/ns/dqv#value> "verified" <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:geo-data> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-08-23T04:00:00Z> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:geo-data> <urn:sparqlwatch:elapsedMs> "48"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:service-description> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:service-description> <http://www.w3.org/ns/dqv#computedOn> <https://data.kkg.kadaster.nl/query> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:service-description> <http://www.w3.org/ns/dqv#isMeasurementOf> <urn:sparqlwatch:metric:service-description> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:service-description> <http://www.w3.org/ns/dqv#value> "verified" <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:service-description> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-08-23T04:00:00Z> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:service-description> <urn:sparqlwatch:elapsedMs> "155"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:service-description> <urn:sparqlwatch:level> "1"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:has-classes> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:has-classes> <http://www.w3.org/ns/dqv#computedOn> <https://data.kkg.kadaster.nl/query> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:has-classes> <http://www.w3.org/ns/dqv#isMeasurementOf> <urn:sparqlwatch:metric:has-classes> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:has-classes> <http://www.w3.org/ns/dqv#value> "verified" <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:has-classes> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-08-23T04:00:00Z> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:has-classes> <urn:sparqlwatch:elapsedMs> "120"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:classes> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:classes> <http://www.w3.org/ns/dqv#computedOn> <https://data.kkg.kadaster.nl/query> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:classes> <http://www.w3.org/ns/dqv#isMeasurementOf> <urn:sparqlwatch:metric:classes> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:classes> <http://www.w3.org/ns/dqv#value> "verified" <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:classes> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-08-23T04:00:00Z> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:classes> <urn:sparqlwatch:elapsedMs> "80"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:content-sample:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:classes> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <urn:sparqlwatch:ContentSample> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:content-sample:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:classes> <urn:sparqlwatch:sampledFrom> <https://data.kkg.kadaster.nl/query> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:content-sample:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:classes> <urn:sparqlwatch:sampledBy> <urn:sparqlwatch:metric:classes> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:content-sample:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:classes> <urn:sparqlwatch:sampledValue> <http://www.w3.org/2002/07/owl#Class> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:content-sample:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:classes> <urn:sparqlwatch:sampledValue> <http://www.w3.org/2000/01/rdf-schema#Class> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:content-sample:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:classes> <urn:sparqlwatch:sampleTruncated> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:content-sample:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:classes> <urn:sparqlwatch:sampleSize> "2"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:content-sample:2026-08-23T04:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:classes> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-08-23T04:00:00Z> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<https://data.kkg.kadaster.nl/query> <urn:sparqlwatch:declarationsRead> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-23T04:00:00Z> <urn:sparqlwatch:completedEndpoint> <https://data.kkg.kadaster.nl/query> <urn:sparqlwatch:run:2026-08-23T04:00:00Z> .

@@ -74,7 +74,7 @@ cargo run -- --at 2026-08-20T12:00:00Z --out run.nq
 | `--at` | *required* | The run instant, ISO-8601 with an explicit timezone |
 | `--endpoints` | `endpoints.toml` | Endpoint list to sweep |
 | `--metrics` | `metrics.toml` | Metric definitions to apply |
-| `--out` | `run.nq` | Where to write the N-Quads |
+| `--out` | `run.nq` | Where the finished N-Quads land. The run itself is written to `<out>.<at>.partial` and renamed onto this at the end |
 | `--max-cost` | `cheap` | Only run metrics with cost at or below this value (`cheap` or `expensive`) |
 | `--min-gap-ms` | `2000` | Minimum pause between two consecutive requests to one host |
 | `--retry-after-cap-s` | `20` | Longest `Retry-After` waited out before one retry of a throttled request |
@@ -83,10 +83,20 @@ cargo run -- --at 2026-08-20T12:00:00Z --out run.nq
 `--at` is required and is **not** read from the clock, deliberately. It names
 the run graph, it is published as the activity's `prov:generatedAtTime`, and a
 scheduled `CronJob` passes the scheduled instant, so a retry of a failed sweep
-lands in the same graph rather than inventing a second one. That also makes a
-run reproducible: same `--at`, same output identifiers. It is validated before
-any probing starts, because it is interpolated into IRIs and published as an
-`xsd:dateTime`.
+lands in the same graph rather than inventing a second one. That also makes the
+run's IDENTIFIERS reproducible: same `--at`, same graph and same subjects. Not
+its contents and not its bytes, because a sweep observes a changing world; see
+"Output is not byte-identical" below. It is validated before any probing starts,
+because it is interpolated into IRIs and published as an `xsd:dateTime`.
+
+A retry of a failed sweep therefore meets the partial file the failed attempt
+left, and it **refuses to start** rather than overwriting it, naming the file and
+saying what can be done with it. That is the point of writing to a sibling in the
+first place: an attempt that died at endpoint 500 of 548 has 500 endpoints on
+disk, a retry has no prior on getting further, and this process is not the one to
+decide those 500 are worth less than a fresh start. Load the partial file, or move
+it aside, then run again. The same refusal means two invocations sharing an `--at`
+cannot interleave into one file.
 
 Every outbound request passes a per-host gate that gives three guarantees: never
 two requests in flight to one host, at least `--min-gap-ms` between one request
@@ -373,14 +383,144 @@ is the run's wall-clock duration, and the one case where another host's gate can
 sit inside a metric budget: a run at `--concurrency 1` cannot have lost a metric
 to the cross-host redirect described under Known limitations, because no other
 group was running, and a run at 4 can. `failedEndpoints` counts the endpoints
-this run observed nothing at all about. It is published on every run, including
-the ordinary `0`, so that an absent quad means "emitted before this fact
-existed" rather than "nothing failed". A non-zero value means that many
+this run observed nothing at all about. It is published on every run that
+finishes, including the ordinary `0`, so "this run failed on nothing" is a fact
+a consumer can read rather than an absence it has to interpret. Since the count
+moved into the footer, an absent quad has two readings and not one: a run
+emitted before this fact existed, or a run that did not finish and never wrote
+its footer. `sw:finalised` is what tells those apart, and it is the quad to test
+before reading anything into the absence. A non-zero value means that many
 endpoints carry `prober-failed` facts in place of verdicts and carry no
 `declarationsRead` fact either, so a consumer expecting one row per (endpoint,
 metric) has to read this rather than assume it. Such a run also exits non-zero,
 after writing its output, so the run is preserved and the scheduler still learns
 it was incomplete.
+
+### How a run is written, and what a truncated one says
+
+A run is emitted as three kinds of section: a header of run-level facts, one
+self-contained chunk per endpoint, and a footer. Each section ends with its own
+terminator, `urn:sparqlwatch:emission "incremental"` for the header,
+`urn:sparqlwatch:completedEndpoint <endpoint>` for a chunk and
+`urn:sparqlwatch:finalised "true"^^xsd:boolean` for the footer, all three on the
+run's activity. N-Quads has no prologue and every line ends in a newline, so any
+prefix of the file parses, which means a crash leaves a readable file whose only
+risk is that its lines contradict each other. The terminators are what remove
+that risk: a reader that holds a section's terminator holds the whole section,
+and a reader that does not may drop the fragment.
+
+A consumer reads three cases off facts that were each true when they were
+written. `emission` with `finalised` is a complete run: every endpoint the sweep
+was given has a chunk, including the ones a panicked group lost, and
+`failedEndpoints` counts over all of them. `emission` without `finalised` is a
+run that did not finish, so an endpoint with no `completedEndpoint` marker was
+never reached rather than measured and found wanting, and there is no
+`failedEndpoints` count at all, because that count is in the missing footer: a
+summary of chunks is not published until the chunks are. Neither terminator is a
+run that makes no claim about sections either way: that is what a run emitted
+before this scheme existed looks like, and it promised nothing, so it must not be
+reported as unfinished. It is also what a run of THIS scheme cut inside its
+header looks like, since `emission` is the header's last quad, and no reader can
+tell the two apart from the bytes. `web/load_run.py` separates them on a fact the
+file does carry: a run from before this scheme still measured endpoints, so a file
+with no terminator and no endpoint fact at all is refused rather than admitted as
+the store's newest activity. `finalised` is a boolean rather than
+`prov:endedAtTime` because nothing in the prober can produce that instant
+soundly: `emit` reads no clock by design,
+`std` cannot format a `SystemTime` as `xsd:dateTime`, no date library is in the
+lock file, and a flag supplied at launch would publish a predicted future into a
+graph that is never rewritten.
+
+Loading a truncated run commits a consumer to nothing, which is the non-obvious
+half of this working in our favour. `web/load_run.py` replaces a run's graphs
+wholesale: it drops the graphs the incoming file names and then inserts that
+file's quads, never merging, so the store holds the most recent file that
+claimed a run IRI and never a blend of two. Load a crash's partial file, then
+later the same run's complete file, and what remains is the complete run with
+none of the partial's quads standing beside it. Load either of them twice and
+the store ends up identical, so a re-load is always safe (the non-atomic window
+`load_run.py` documents is itself closed by re-running that same load). So a
+partial file is worth loading as soon as it appears, and nothing has to be undone
+when that run is later completed.
+
+**A run in progress is written to `<out>.<at>.partial`, and renamed onto `--out`
+when it finishes.** Never to `--out` directly: that file is the source of truth
+for the loaded store, nothing re-creates it, so truncating it at t=0 would mean a
+sweep that died at endpoint 500 of 548 had destroyed the previous complete run.
+Never to a fixed `<out>.partial` either, because the next scheduled sweep would
+truncate the previous crash's file on its first write, which is the same loss one
+run later. `--at` is required and validated before anything is opened, so it
+names the file uniquely per run, and a partial file that is already there is
+refused rather than truncated (see the `--at` paragraph above). `rename` within a
+directory is atomic on macOS and Linux, so `--out` is always either the previous
+complete run or this one, and a crash leaves the partial file under its own name,
+where `web/load_run.py` will load it as far as its last whole section. Renamed
+onto is not written through: a `--out` that is a **symlink** is replaced by the
+finished file rather than followed, which the `std::fs::write` this replaced did
+follow, so a deployment has to point `--out` at a real path. A `--out` that is a
+directory is refused before any probing, along with any other reason the partial
+file cannot be created.
+
+Each chunk is flushed as it is written, and nothing depends on a destructor
+running: a `SIGKILL` runs none. What that protects against is the process
+dying, all of it: a panic, a `SIGKILL`, an OOM kill, a cancelled `CronJob`.
+Measured on the shipped `endpoints.toml`: a run killed with `SIGKILL` the instant
+its second chunk landed left 24,094 bytes and 108 quads on disk, which the loader
+took whole, while the previous `--out` was byte-identical. Killed a little later,
+the same experiment left a 25,634-byte partial that loaded as 114 quads with 0
+bytes discarded, unfinished, one `completedEndpoint` whose 8 verdicts were all
+present, and again a byte-identical `--out`; a retry at that `--at` then exited 1
+and left the partial byte-identical.
+
+What it does not protect against is the machine losing power, and the boundary is
+worth stating exactly. There is no `fsync`, so a flushed chunk can still be lost
+in the page cache, and nothing syncs the directory after the rename either, so
+the rename onto `--out` is not promised to survive a reboot. Power loss is also a
+different SHAPE of damage, and it is where the terminator rule stops: a
+delayed-allocation filesystem can leave the file at its full length with blocks
+that were never written back reading as zeros. A NUL byte is not valid N-Quads,
+and `load_run.py` only ever cuts back to the last terminator LINE, so zeros
+anywhere before that line survive the cut, the parse fails, and the whole file is
+refused, chunks and all. A truncated tail is recoverable; a hole is not. See the
+last of the known limitations for why that is an accepted boundary rather than a
+gap to close.
+
+What writing incrementally buys is crash tolerance and not a smaller heap. The
+returned `Sweep` holds every endpoint's facts by design, so a 548-endpoint sweep
+retains all 548 at its peak; the arrival channel is bounded at 16 to buy
+backpressure, so a fast host cannot run arbitrarily far ahead of the writer. A
+30-endpoint sweep measured `peak_queued=15, retained_at_end=30`.
+
+`completedEndpoint` is per endpoint and not per run, so "did this run reach this
+endpoint" is a fact rather than an inference from absence. Read "completed" as
+"this endpoint's chunk is complete": the run wrote everything it will ever say
+about the endpoint, which is NOT the same as the prober having succeeded there.
+An endpoint whose probing task panicked carries `prober-failed` declines and a
+`completedEndpoint` marker together, and `run-prober-failed.nq` shows that
+shape, `failedEndpoints "1"` beside a marker naming that very endpoint. Both
+readings would be defensible names; this is the one the file means, and it is
+the one the read tier needs. Dropping the marker for a failed endpoint would
+make it indistinguishable, on a run that later crashed, from an endpoint the run
+never got to, so a page would say a later sweep never reached an endpoint whose
+failure that sweep had published.
+
+It is written even for an endpoint the run published no other fact about,
+because that is the only way "reached but learned nothing" and "never attempted"
+can be told apart, and such a chunk still types its endpoint `dcat:DataService`
+so the marker names a resource the graph describes.
+
+Two ordering rules hold inside the file because the chunk is what a truncated
+one preserves. **A chunk types every endpoint it publishes a fact about**,
+rather than a run typing each endpoint once. For a run this emitter writes the
+two are the same thing, since each endpoint gets exactly one chunk; they differ
+only where one chunk names an endpoint another already typed, and then the
+run-scoped version leaves the chunk that holds the facts with no type for their
+subject. **And no fact family publishes its own summary before the things it
+summarises**, which is why `sampleSize` and `sampleTruncated` come after the
+last `sampledValue`, and why `failedEndpoints` sits in the footer. A cut inside
+a sample's values then loses the sample, which every consumer already handles,
+instead of leaving `sampleSize 200, sampleTruncated false` standing beside three
+values, which a page would render as two hundred classes sampled, complete.
 
 The labels in that file state only what was actually measured. `geo-data` and
 `has-classes` and `classes` query the default graph AND every named graph, via a `UNION` with a
@@ -462,11 +602,15 @@ Per sample, the run graph carries only sparqlwatch's own predicates plus
 - `rdf:type urn:sparqlwatch:ContentSample`
 - `urn:sparqlwatch:sampledFrom` the endpoint
 - `urn:sparqlwatch:sampledBy` the metric definition
-- `urn:sparqlwatch:sampleSize` the count of values published, an `xsd:integer`
-- `urn:sparqlwatch:sampleTruncated` an `xsd:boolean`
 - `urn:sparqlwatch:sampledValue`, one per IRI published, repeated
+- `urn:sparqlwatch:sampleTruncated` an `xsd:boolean`
+- `urn:sparqlwatch:sampleSize` the count of values published, an `xsd:integer`
 - `prov:wasGeneratedBy` the run's activity, the same link every other fact in
   this graph carries
+
+Written in that order, with the two summarising quads after the values they
+describe, so that a file cut inside the value list loses the sample rather than
+misstating its size. See How a run is written above.
 
 Values are published in the order the endpoint returned them: not sorted, not
 deduplicated beyond what `SELECT DISTINCT` already did, because reordering
@@ -587,27 +731,41 @@ sufficient.
   on `:` reads one of them wrong. It would also read the new one wrong, since the
   run segment is an unencoded `xsd:dateTime` and carries colons of its own.
 
-**Order.** Within one emitted file the order is input order, never completion
-order: each endpoint keeps its input index as a slot, `assemble` walks the slots
-afterwards, and `emit_nquads` writes the activity's own quads, then the
-measurements, then the not-measured facts, then the content samples, then the
-`declarationsRead` facts, each list in the order it was assembled, which is
-endpoint input order first. Within one endpoint it is the order of the
-definition list the facts came from, which is not `metrics.toml` order in
-general: `within_cost` partitions that file into the metrics that run and the
-metrics the ceiling declines, and `assemble` writes an endpoint's not-measured
-facts as the metrics that would have run and then the metrics the ceiling
-declined, so a cheap metric listed after an expensive one comes out first.
-That is worth having for diffing two files by eye, and it is all it is worth.
-It is **not** a property of the data:
+**Order.** A file is the header, then one chunk per endpoint, then the footer.
+A sweep writes those chunks in COMPLETION order, one as each endpoint finishes,
+which is the whole point of writing incrementally; the `Sweep` it returns is in
+INPUT order, built from the slots after the last chunk was written. Those are two
+different properties and both hold. The chunks a panicked group never delivered
+come after every real chunk and before the footer, because a footer certifies a
+run whose endpoints are all in the file. `emit_nquads` is the same three sections
+composed in one call for a caller that holds a whole run in memory; the prober is
+no longer such a caller, so its only callers today are the emitter's own tests. It
+derives its endpoint sequence from the union of all four fact lists in
+first-appearance order, because
+an endpoint can appear in one list only: a prober-failed endpoint is in the
+not-measured list alone, and an endpoint whose description was read but whose
+metrics produced no row is in the `declarationsRead` list alone. For lists
+already grouped by endpoint that reproduces input order. Within one chunk the
+order is measurements, then not-measured
+facts, then content samples, then the `declarationsRead` fact, then the chunk's
+terminator. Within one family it is the order of the definition list the facts
+came from, which is not `metrics.toml` order in general: `within_cost`
+partitions that file into the metrics that run and the metrics the ceiling
+declines, and `assemble_endpoint` writes an endpoint's not-measured facts as the
+metrics that would have run and then the metrics the ceiling declined, so a cheap
+metric
+listed after an expensive one comes out first. That is worth having for diffing
+two files by eye, and it is all it is worth. Beyond the section terminators and
+the two rules above, it is **not** a property of the data:
 
 - N-Quads serialises a set. No consumer may read meaning from the order of lines
   in one.
 - `web/load_run.py` parses the file and inserts the quads into Oxigraph, which is
   order-blind, so the order is gone before any query sees it.
-- Stage 1c-b4 is expected to break it. Writing each endpoint's chunk as it
-  completes is writing in completion order, which is the whole point of writing
-  incrementally, and nothing downstream loses anything when it happens.
+- Writing each endpoint's chunk as it completes is what makes the chunk sequence
+  completion order rather than input order, and nothing downstream lost anything
+  when that changed. What a consumer may read from the order is only what the
+  terminators say, and those say it as facts rather than as position.
 
 **Output is not byte-identical between two runs of one `--at`.** `emit_nquads`
 reads no clock, no environment and no global, so it is a pure function of its
@@ -744,19 +902,37 @@ The following are deferred deliberately, not oversights:
   list does not exercise this, and 1d's 548-endpoint registry is where it would
   first be measurable.
 
-- **The run's output is still written once, at the end.** The design's
-  per-endpoint isolation rule has two halves and this branch delivers the first
-  only. No endpoint's slowness delays another endpoint's PROBING any more, since
-  hosts are grouped and probed in separate tasks. "Results are written per
-  endpoint as they complete" is **not** met: `run_sweep` joins every task before
-  it returns, `assemble` builds the four fact lists from all the slots at once,
-  and `main` calls `emit_nquads` and `std::fs::write` once, afterwards. So one
-  endpoint burning its whole 600-second budget still delays the run's output by
-  up to 600 seconds, and a crash at endpoint 500 of 548 leaves no file at all.
-  Concurrency divided the constant; it did not change the shape. Crash-safe
-  incremental writing is stage 1c-b4's, and the derived subjects above are what
-  it rests on: an endpoint's facts can be written alone only because no
-  identifier in them depends on how many endpoints came before.
+- **Two sweeps with different `--at` values and the same `--out` lose one of
+  them, silently.** The partial file is named for the run, so each gets its own
+  and neither refuses the other, and the second `rename` replaces the first's
+  `--out`. Rule 1's promise is technically kept, `--out` holds *a* complete run,
+  but a run that finished and reported success is gone from the only place that
+  holds it, with nothing said. This is not new to the incremental write:
+  `fs::write` behaved the same way. It is worth naming because overlapping
+  `CronJob`s are exactly how it happens, and because the `O_EXCL` refusal that
+  protects a retry does not protect this case: the refusal only fires for
+  invocations that SHARE an `--at`.
+
+- **A flushed chunk is not a synced chunk.** Both halves of the design's
+  per-endpoint isolation rule are now met: no endpoint's slowness delays another
+  endpoint's probing, because hosts are grouped into separate tasks, and no
+  endpoint's slowness delays another endpoint's OUTPUT, because each chunk is
+  written and flushed as that endpoint finishes. What that buys is bounded
+  precisely: a process that dies keeps every chunk already flushed, since the
+  bytes are with the kernel and no destructor is needed. A machine that loses
+  power can still lose them, because there is no `fsync` and none is planned.
+  Three reasons, in order of weight. A lost run is a **gap in history rather
+  than a false fact**: a run graph is written once and never corrected, so
+  losing one leaves a missing sweep, not a wrong verdict standing in the store
+  as current. Coverage returns on its own: the next scheduled sweep probes the
+  same registry under its own `--at`, into its own graph. And 548 `fsync` calls
+  per sweep, one per endpoint, cost something on the deployment's volume that
+  nobody here has measured, so paying it would buy an unquantified amount of
+  durability with an unquantified amount of latency. What a re-run does NOT do
+  is recover the lost run: the same `--at` names the same graph, but a sweep
+  observes a changing world, so what it writes is a new observation and not the
+  old file back. The other half of the boundary, the zeroed tail a power loss
+  can leave and no terminator rule can rescue, is under "How a run is written".
 
 ## Tests
 
