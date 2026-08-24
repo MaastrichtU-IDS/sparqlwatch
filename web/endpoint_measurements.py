@@ -48,9 +48,11 @@ class MetricVerdict:
 class DeclinedMetric:
     """A metric the run recorded as sw:NotMeasured rather than measuring.
 
-    This is not a missing metric: the run looked at its cost budget and chose
-    not to run it, and said so. ``reason`` is what the graph gives for the
-    decline (today always "cost-ceiling"). A declined metric never appears in
+    This is not a missing metric: the run said so rather than staying silent.
+    ``reason`` is what the graph gives for the decline: "cost-ceiling" when the
+    run looked at its cost budget and chose not to run the metric, or
+    "prober-failed" when the prober itself never got to ask, so there was no
+    observation at all rather than an inconclusive one. A declined metric never appears in
     ``EndpointMeasurements.verdicts`` too: the two lists are a partition of
     what the run recorded for this endpoint, not overlapping views of it.
     """

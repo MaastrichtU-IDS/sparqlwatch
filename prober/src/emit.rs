@@ -3,7 +3,8 @@ use crate::verdict::{Level, Verdict};
 use oxrdf::vocab::{rdf, xsd};
 use oxrdf::{GraphName, Literal, NamedNode, NamedOrBlankNode, Quad, Term};
 use oxrdfio::{RdfFormat, RdfSerializer};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::num::NonZeroUsize;
 
 const DQV: &str = "http://www.w3.org/ns/dqv#";
 const PROV: &str = "http://www.w3.org/ns/prov#";
@@ -44,6 +45,16 @@ pub struct DeclarationsRead {
 pub enum NotMeasuredReason {
     /// The metric's cost exceeded the ceiling the sweep was run with.
     CostCeiling,
+    /// The prober itself failed on this endpoint: the task probing its host
+    /// panicked or was cancelled, so no request was ever answered and no
+    /// observation exists to grade.
+    ///
+    /// Deliberately not an `Indeterminate` measurement row. An `Indeterminate`
+    /// verdict asserts that a measurement happened and was inconclusive, which
+    /// is what an expired budget produces, and a reader could not tell the two
+    /// apart. This says the weaker, true thing: nothing was measured, and the
+    /// reason is on our side rather than the endpoint's.
+    ProberFailed,
 }
 
 impl NotMeasuredReason {
@@ -51,6 +62,7 @@ impl NotMeasuredReason {
     pub fn slug(&self) -> &'static str {
         match self {
             NotMeasuredReason::CostCeiling => "cost-ceiling",
+            NotMeasuredReason::ProberFailed => "prober-failed",
         }
     }
 }
@@ -116,6 +128,112 @@ fn nn(s: &str) -> anyhow::Result<NamedNode> {
     Ok(NamedNode::new(s)?)
 }
 
+/// Which kind of fact a subject names. The three kinds share a key, so they
+/// must not share an IRI: a measurement and a not-measured fact about one pair
+/// would otherwise land on a node that both has and has not a verdict, which
+/// is what `the_three_kinds_never_share_a_subject` pins.
+enum FactKind {
+    Measurement,
+    NotMeasured,
+    ContentSample,
+}
+
+impl FactKind {
+    /// The published segment for this kind. Stable: it goes into the graph.
+    fn prefix(&self) -> &'static str {
+        match self {
+            FactKind::Measurement => "measurement",
+            FactKind::NotMeasured => "not-measured",
+            FactKind::ContentSample => "content-sample",
+        }
+    }
+}
+
+/// Percent-encode keeping RFC 3986's unreserved set (`ALPHA / DIGIT / "-" /
+/// "." / "_" / "~"`), over UTF-8 bytes, with uppercase hex.
+///
+/// The output holds no `:`, which is half of what makes `subject_iri`
+/// injective; a validated metric id holding none is the other half. No
+/// normalisation of any kind happens here: `registry::dedupe` treats two
+/// endpoint strings differing only in case as two registry entries, so they
+/// are two subjects here too, and the endpoint IRI a subject encodes is the
+/// one the registry actually contains.
+fn encode_unreserved(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.as_bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(*b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// The subject of one published run-scoped fact, derived from what the fact is
+/// about rather than from where its row sat.
+///
+/// Derived so that an endpoint's facts can be written on their own (stage
+/// 1c-b4) and so two runs can be diffed. No consumer needs to parse it: a
+/// measurement carries `dqv:computedOn` and `dqv:isMeasurementOf`, a sample
+/// carries `sw:sampledFrom` and `sw:sampledBy`, and a not-measured fact
+/// carries `sw:notMeasuredOn` and `sw:notMeasuredMetric`.
+///
+/// Rejects a metric id outside `[a-z0-9][a-z0-9-]*`. `load_metrics` refuses one
+/// too, and the duplication is deliberate: this function's injectivity depends
+/// on the invariant, so it checks it rather than trusting a check two modules
+/// away. A validated `MetricId` newtype would make the check unnecessary and is
+/// the better long-term shape; it is deferred because it touches every module
+/// that names a metric.
+///
+/// The cost of embedding the endpoint reversibly: a URL carrying a credential
+/// would be published forever, in a graph this project never rewrites.
+/// `registry::load_endpoints` drops a URL with userinfo for that reason; an API
+/// key in a query string is a known, unmitigated exposure, recorded under
+/// Known limitations in `prober/README.md`.
+fn subject_iri(
+    kind: FactKind,
+    run: &RunId,
+    endpoint: &str,
+    metric_id: &str,
+) -> anyhow::Result<NamedNode> {
+    let mut chars = metric_id.chars();
+    let well_formed = match chars.next() {
+        Some(c) if c.is_ascii_lowercase() || c.is_ascii_digit() => {
+            chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        }
+        _ => false,
+    };
+    if !well_formed {
+        anyhow::bail!(
+            "metric id '{metric_id}' cannot be part of a subject IRI: allowed is [a-z0-9][a-z0-9-]*, \
+             because the subject is split on ':' and any other character would make the endpoint \
+             field and the metric field ambiguous"
+        );
+    }
+    nn(&format!(
+        "urn:sparqlwatch:{}:{}:{}:{}",
+        kind.prefix(),
+        run.0,
+        encode_unreserved(endpoint),
+        metric_id
+    ))
+}
+
+/// Whether `subject` carries more than one distinguishable fact in this
+/// emission.
+///
+/// A subject that does is dropped whole rather than resolved: keeping the first
+/// of a `verified` and an `absent` observation would have the graph assert
+/// `verified`, with full confidence, about a pair we also measured as `absent`.
+/// A run graph is never rewritten, so there is no later chance to correct it,
+/// and an endpoint with no measurement for a metric is a shape the site's
+/// queries already handle.
+fn conflicted(payloads: &BTreeMap<String, BTreeSet<String>>, subject: &str) -> bool {
+    payloads.get(subject).is_some_and(|p| p.len() > 1)
+}
+
 /// Everything `emit_nquads` needs to publish one run's graph, gathered into
 /// named fields rather than positional parameters.
 ///
@@ -157,6 +275,26 @@ pub struct RunEmission<'a> {
     /// What the enumerating probes saw, published verbatim and in the
     /// endpoint's own order.
     pub content_samples: &'a [ContentSample],
+    /// How many hosts the sweep talked to at once, recorded on the activity
+    /// beside `max_cost` and for the same reason: it is a parameter of the run,
+    /// not of any one measurement.
+    ///
+    /// It does NOT change what `elapsedMs` measures. `client::gated_chain`
+    /// publishes the sum of the hops' own durations and each hop's timer starts
+    /// after the gate is acquired, precisely so our politeness is never
+    /// published as somebody's response time. What it does explain is the run's
+    /// wall-clock duration, and whether the cross-host redirect contention in
+    /// `run_sweep`'s doc could have cost a metric here at all: at a concurrency
+    /// of one no other group was running, so it could not.
+    ///
+    /// `NonZeroUsize` because that is what `run_sweep` takes, so the published
+    /// number cannot say a sweep ran zero hosts at once.
+    pub concurrency: NonZeroUsize,
+    /// How many endpoints the run failed on, from `Sweep::failed_endpoints`.
+    /// Published so a reader can tell a complete run from an incomplete one
+    /// without reading a log: the per-endpoint facts say `prober-failed`, and
+    /// this says how many there were in total.
+    pub failed_endpoints: usize,
 }
 
 /// One named graph per run keeps history immutable and lets a bad run be
@@ -174,6 +312,8 @@ pub fn emit_nquads(input: RunEmission) -> anyhow::Result<String> {
         not_measured,
         max_cost,
         content_samples,
+        concurrency,
+        failed_endpoints,
     } = input;
     let graph = GraphName::NamedNode(nn(&format!("urn:sparqlwatch:run:{}", run.0))?);
     let activity = nn(&format!("urn:sparqlwatch:activity:{}", run.0))?;
@@ -213,10 +353,100 @@ pub fn emit_nquads(input: RunEmission) -> anyhow::Result<String> {
         Term::Literal(Literal::new_simple_literal(max_cost.slug())),
         graph.clone(),
     ));
+    // How many hosts were in flight, and how many endpoints the sweep never
+    // measured because the prober failed on them. Both are properties of the
+    // run rather than of any measurement, so both hang off the activity beside
+    // the ceiling above.
+    //
+    // The concurrency belongs in the graph as a parameter of the run, not
+    // because it changes what `elapsedMs` means. It does not: `gated_chain`
+    // sums the hops' own durations and each hop's timer starts after the gate
+    // is acquired, so a gate wait is never published as a response time. It is
+    // published because it explains the run's wall-clock duration and because
+    // it is what tells a consumer whether the cross-host redirect contention
+    // documented on `run_sweep` could have reached this run's metric budgets.
+    quads.push(Quad::new(
+        NamedOrBlankNode::NamedNode(activity.clone()),
+        nn("urn:sparqlwatch:concurrency")?,
+        Term::Literal(Literal::new_typed_literal(concurrency.to_string(), xsd::INTEGER)),
+        graph.clone(),
+    ));
+    // Published on every run, including the ordinary `0`, rather than only
+    // when it is non-zero: a consumer has to be able to read "this run failed
+    // on nothing" as a fact, and an absent quad would be indistinguishable
+    // from a run emitted before this fact existed.
+    quads.push(Quad::new(
+        NamedOrBlankNode::NamedNode(activity.clone()),
+        nn("urn:sparqlwatch:failedEndpoints")?,
+        Term::Literal(Literal::new_typed_literal(failed_endpoints.to_string(), xsd::INTEGER)),
+        graph.clone(),
+    ));
 
     let mut typed_endpoints: BTreeSet<String> = BTreeSet::new();
 
-    for (i, r) in rows.iter().enumerate() {
+    // Two entries of one fact list can name the same (endpoint, metric) pair.
+    // Under the running index they replaced, such a pair got two subjects;
+    // a subject derived from the pair puts them on one node, and if they
+    // disagree that node carries two `dqv:value` literals in a graph that is
+    // never rewritten. So the subjects are counted before anything is
+    // published: a subject carrying two different payloads publishes nothing
+    // (see `conflicted`), and a byte-identical repeat is skipped because RDF is
+    // a set and writing it twice says nothing new.
+    //
+    // `registry::dedupe` drops a repeated endpoint before a sweep starts, so
+    // nothing in the current pipeline is expected to reach this: it is belt and
+    // braces, kept because the cost of being wrong is permanent. `dedupe`'s own
+    // doc comment records the reciprocal half of that arrangement. `dedupe` is
+    // also the only guard the `declarations_read` loop below has, because that
+    // fact's subject is the bare endpoint IRI rather than one of these derived
+    // ones, so there is no run-scoped subject here to count.
+    //
+    // Keyed on the subject, so it catches a pair repeated WITHIN one kind. It
+    // says nothing across kinds: a pair that is both measured and declared
+    // not-measured lands on two nodes by design (`FactKind::prefix`) and both
+    // are published. Keeping those two consistent is `run_sweep`'s job, not
+    // this function's.
+    //
+    // The payload is what would distinguish two facts about one pair: a verdict
+    // with its level and elapsed time, a reason, or a value list with its
+    // truncation flag. The sample payload is deliberately the raw value list
+    // and not the `writable` subset the loop actually publishes, so two samples
+    // differing only in a value that cannot be written are treated as
+    // conflicting and neither is published. That is the conservative direction,
+    // and computing `writable` twice to sharpen it would double the
+    // unwritable-value warnings for no gain a consumer can see.
+    let mut payloads: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for r in rows {
+        if let Ok(s) = subject_iri(FactKind::Measurement, run, &r.endpoint, &r.metric_id) {
+            payloads
+                .entry(s.into_string())
+                .or_default()
+                .insert(format!("{}|{:?}|{:?}", r.verdict.slug(), r.level, r.elapsed_ms));
+        }
+    }
+    for fact in not_measured {
+        if let Ok(s) = subject_iri(FactKind::NotMeasured, run, &fact.endpoint, &fact.metric_id) {
+            payloads
+                .entry(s.into_string())
+                .or_default()
+                .insert(fact.reason.slug().to_string());
+        }
+    }
+    for sample in content_samples {
+        if let Ok(s) =
+            subject_iri(FactKind::ContentSample, run, &sample.endpoint, &sample.metric_id)
+        {
+            payloads
+                .entry(s.into_string())
+                .or_default()
+                .insert(format!("{:?}|{}", sample.values, sample.truncated));
+        }
+    }
+    // Which subjects have already been written, so a byte-identical repeat is
+    // written once.
+    let mut emitted: BTreeSet<String> = BTreeSet::new();
+
+    for r in rows {
         // A malformed endpoint IRI is one bad row, not a reason to discard a
         // whole sweep: this runs after all the probing, so aborting here would
         // turn hours of work into no output at all. The registry is seeded from
@@ -233,7 +463,35 @@ pub fn emit_nquads(input: RunEmission) -> anyhow::Result<String> {
                 continue;
             }
         };
-        let m = nn(&format!("urn:sparqlwatch:measurement:{}:{}", run.0, i))?;
+        // Same non-fatal handling as the junk endpoint above, and for the same
+        // reason: `main.rs` propagates an `Err` from here before it writes the
+        // run file, so a metric id that cannot be part of a subject must cost
+        // one fact rather than the whole sweep's output.
+        let m = match subject_iri(FactKind::Measurement, run, &r.endpoint, &r.metric_id) {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!(
+                    endpoint = %r.endpoint,
+                    metric = %r.metric_id,
+                    error = %e,
+                    "skipping measurement: no subject can be derived for it"
+                );
+                continue;
+            }
+        };
+        if conflicted(&payloads, m.as_str()) {
+            tracing::warn!(
+                endpoint = %r.endpoint,
+                metric = %r.metric_id,
+                verdict = %r.verdict.slug(),
+                "dropping measurement: this (endpoint, metric) pair was measured more than once \
+                 with differing results, so nothing is published about it"
+            );
+            continue;
+        }
+        if !emitted.insert(m.as_str().to_string()) {
+            continue;
+        }
         let subj = NamedOrBlankNode::NamedNode(m.clone());
 
         if typed_endpoints.insert(r.endpoint.clone()) {
@@ -297,10 +555,11 @@ pub fn emit_nquads(input: RunEmission) -> anyhow::Result<String> {
 
     // A separate IRI space from a measurement's, deliberately: these two must
     // never share a subject, or a consumer joining on the measurement IRI
-    // lands on a node that both has and has not a verdict. It also does not
-    // reuse the row counter above, so the two cannot collide by arithmetic
-    // accident when one of the lists is empty.
-    for (i, fact) in not_measured.iter().enumerate() {
+    // lands on a node that both has and has not a verdict. The two spaces stay
+    // apart because `FactKind::prefix` puts a different segment in each, so a
+    // measurement and a not-measured fact about the very same (endpoint,
+    // metric) pair are still two nodes.
+    for fact in not_measured {
         // Same non-fatal handling as a measurement row: one junk endpoint
         // string must not cost the whole sweep its output.
         let endpoint = match NamedNode::new(&fact.endpoint) {
@@ -315,10 +574,32 @@ pub fn emit_nquads(input: RunEmission) -> anyhow::Result<String> {
                 continue;
             }
         };
-        let subj = NamedOrBlankNode::NamedNode(nn(&format!(
-            "urn:sparqlwatch:not-measured:{}:{}",
-            run.0, i
-        ))?);
+        let node = match subject_iri(FactKind::NotMeasured, run, &fact.endpoint, &fact.metric_id) {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!(
+                    endpoint = %fact.endpoint,
+                    metric = %fact.metric_id,
+                    error = %e,
+                    "skipping not-measured fact: no subject can be derived for it"
+                );
+                continue;
+            }
+        };
+        if conflicted(&payloads, node.as_str()) {
+            tracing::warn!(
+                endpoint = %fact.endpoint,
+                metric = %fact.metric_id,
+                reason = %fact.reason.slug(),
+                "dropping not-measured fact: this (endpoint, metric) pair was declined more than \
+                 once for differing reasons, so nothing is published about it"
+            );
+            continue;
+        }
+        if !emitted.insert(node.as_str().to_string()) {
+            continue;
+        }
+        let subj = NamedOrBlankNode::NamedNode(node);
         if typed_endpoints.insert(fact.endpoint.clone()) {
             quads.push(Quad::new(
                 NamedOrBlankNode::NamedNode(endpoint.clone()),
@@ -389,13 +670,12 @@ pub fn emit_nquads(input: RunEmission) -> anyhow::Result<String> {
         ));
     }
 
-    // A third IRI space, sharing neither the measurement counter nor the
-    // not-measured one, for the same reason those two are separate: three fact
-    // types live in one graph, and a consumer joining on any of their subjects
-    // must never land on a node that is several things at once. Distinct
-    // counters also mean the shapes cannot collide by arithmetic accident when
-    // one of the lists is empty.
-    for (i, sample) in content_samples.iter().enumerate() {
+    // A third IRI space, for the same reason the first two are separate: three
+    // fact types live in one graph, and a consumer joining on any of their
+    // subjects must never land on a node that is several things at once. Its
+    // own `FactKind` variant, so a sample of a pair is a different node from
+    // that pair's measurement even though both derive from the same key.
+    for sample in content_samples {
         // Same non-fatal handling as every other fact: one junk endpoint out of
         // 548 must not cost the sweep its whole output after the probing is
         // already paid for.
@@ -458,10 +738,33 @@ pub fn emit_nquads(input: RunEmission) -> anyhow::Result<String> {
         if writable.is_empty() {
             continue;
         }
-        let subj = NamedOrBlankNode::NamedNode(nn(&format!(
-            "urn:sparqlwatch:content-sample:{}:{}",
-            run.0, i
-        ))?);
+        let node =
+            match subject_iri(FactKind::ContentSample, run, &sample.endpoint, &sample.metric_id) {
+                Ok(n) => n,
+                Err(e) => {
+                    tracing::warn!(
+                        endpoint = %sample.endpoint,
+                        metric = %sample.metric_id,
+                        error = %e,
+                        "skipping content sample: no subject can be derived for it"
+                    );
+                    continue;
+                }
+            };
+        if conflicted(&payloads, node.as_str()) {
+            tracing::warn!(
+                endpoint = %sample.endpoint,
+                metric = %sample.metric_id,
+                bound = sample.values.len(),
+                "dropping content sample: this (endpoint, metric) pair was sampled more than once \
+                 with differing results, so nothing is published about it"
+            );
+            continue;
+        }
+        if !emitted.insert(node.as_str().to_string()) {
+            continue;
+        }
+        let subj = NamedOrBlankNode::NamedNode(node);
         if typed_endpoints.insert(sample.endpoint.clone()) {
             quads.push(Quad::new(
                 NamedOrBlankNode::NamedNode(endpoint.clone()),
@@ -637,6 +940,8 @@ mod tests {
             declarations_read: &[],
             not_measured: &[],
             max_cost: Cost::Cheap,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
             content_samples: &[],
         }).unwrap();
         quads_of(&out)
@@ -644,6 +949,380 @@ mod tests {
 
     fn objects<'a>(qs: &'a [Quad], predicate: &str) -> Vec<&'a Term> {
         qs.iter().filter(|q| q.predicate.as_str() == predicate).map(|q| &q.object).collect()
+    }
+
+    /// One emission exercising every fact list `emit_nquads` writes, so the
+    /// frozen baseline in `only_the_subjects_changed` covers every predicate
+    /// the emitter can produce. No two entries of any list share an
+    /// (endpoint, metric) pair, so the baseline says nothing about the
+    /// duplicate case, which has its own test.
+    fn baseline_emission() -> String {
+        let rows = vec![
+            MeasurementRow {
+                endpoint: "https://a.example/sparql".into(),
+                metric_id: "availability".into(),
+                verdict: Verdict::Verified,
+                level: None,
+                elapsed_ms: Some(12),
+            },
+            MeasurementRow {
+                endpoint: "https://a.example/sparql".into(),
+                metric_id: "cors".into(),
+                verdict: Verdict::Absent,
+                level: Some(Level(2)),
+                elapsed_ms: Some(34),
+            },
+            MeasurementRow {
+                endpoint: "https://b.example/sparql".into(),
+                metric_id: "service-description".into(),
+                verdict: Verdict::DeclaredOnly,
+                level: Some(Level(1)),
+                elapsed_ms: None,
+            },
+        ];
+        let declarations_read = vec![
+            DeclarationsRead { endpoint: "https://a.example/sparql".into(), read: true },
+            DeclarationsRead { endpoint: "https://b.example/sparql".into(), read: false },
+        ];
+        let not_measured = vec![NotMeasured {
+            endpoint: "https://b.example/sparql".into(),
+            metric_id: "classes".into(),
+            reason: NotMeasuredReason::CostCeiling,
+        }];
+        let content_samples = vec![ContentSample {
+            endpoint: "https://a.example/sparql".into(),
+            metric_id: "classes".into(),
+            values: vec![
+                "https://a.example/vocab#Zebra".into(),
+                "https://a.example/vocab#Apple".into(),
+            ],
+            truncated: true,
+        }];
+        emit_nquads(RunEmission {
+            run: &RunId("r1".into()),
+            generated_at: AT,
+            metric_revision: REV,
+            rows: &rows,
+            declarations_read: &declarations_read,
+            not_measured: &not_measured,
+            max_cost: Cost::Cheap,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
+            content_samples: &content_samples,
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn only_the_subjects_changed() {
+        // Baseline frozen from the pre-1c-b3 emitter on 2026-08-23: the sorted
+        // (predicate, object) multiset and the quad count for the fixture
+        // `baseline_emission` builds. Subjects are deliberately not part of it,
+        // because subjects are the one thing this stage changes. Everything
+        // else is what a published consumer reads, so a change here is a change
+        // to the data model and has to be deliberate.
+        //
+        // Moved once, on 2026-08-23, by stage 1c-b3: the emitter now publishes
+        // two more run-level facts on the activity, `urn:sparqlwatch:concurrency`
+        // and `urn:sparqlwatch:failedEndpoints`, so the multiset gained those two
+        // pairs and the count went from 41 to 43. Nothing else moved. The
+        // baseline is not weakened to tolerate additions, because its whole
+        // value is that an unintended predicate cannot slip in; an intended one
+        // costs this paragraph.
+        const BASELINE_PAIRS: &[(&str, &str)] = &[
+        ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<http://www.w3.org/ns/dcat#DataService>"),
+        ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<http://www.w3.org/ns/dcat#DataService>"),
+        ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<http://www.w3.org/ns/dqv#QualityMeasurement>"),
+        ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<http://www.w3.org/ns/dqv#QualityMeasurement>"),
+        ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<http://www.w3.org/ns/dqv#QualityMeasurement>"),
+        ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<http://www.w3.org/ns/prov#Activity>"),
+        ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<urn:sparqlwatch:ContentSample>"),
+        ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<urn:sparqlwatch:NotMeasured>"),
+        ("http://www.w3.org/ns/dqv#computedOn", "<https://a.example/sparql>"),
+        ("http://www.w3.org/ns/dqv#computedOn", "<https://a.example/sparql>"),
+        ("http://www.w3.org/ns/dqv#computedOn", "<https://b.example/sparql>"),
+        ("http://www.w3.org/ns/dqv#isMeasurementOf", "<urn:sparqlwatch:metric:availability>"),
+        ("http://www.w3.org/ns/dqv#isMeasurementOf", "<urn:sparqlwatch:metric:cors>"),
+        ("http://www.w3.org/ns/dqv#isMeasurementOf", "<urn:sparqlwatch:metric:service-description>"),
+        ("http://www.w3.org/ns/dqv#value", "\"absent\""),
+        ("http://www.w3.org/ns/dqv#value", "\"declared-only\""),
+        ("http://www.w3.org/ns/dqv#value", "\"verified\""),
+        ("http://www.w3.org/ns/prov#generatedAtTime", "\"2026-08-20T08:00:00Z\"^^<http://www.w3.org/2001/XMLSchema#dateTime>"),
+        ("http://www.w3.org/ns/prov#wasGeneratedBy", "<urn:sparqlwatch:activity:r1>"),
+        ("http://www.w3.org/ns/prov#wasGeneratedBy", "<urn:sparqlwatch:activity:r1>"),
+        ("http://www.w3.org/ns/prov#wasGeneratedBy", "<urn:sparqlwatch:activity:r1>"),
+        ("http://www.w3.org/ns/prov#wasGeneratedBy", "<urn:sparqlwatch:activity:r1>"),
+        ("http://www.w3.org/ns/prov#wasGeneratedBy", "<urn:sparqlwatch:activity:r1>"),
+        ("urn:sparqlwatch:concurrency", "\"1\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
+        ("urn:sparqlwatch:declarationsRead", "\"false\"^^<http://www.w3.org/2001/XMLSchema#boolean>"),
+        ("urn:sparqlwatch:declarationsRead", "\"true\"^^<http://www.w3.org/2001/XMLSchema#boolean>"),
+        ("urn:sparqlwatch:elapsedMs", "\"12\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
+        ("urn:sparqlwatch:elapsedMs", "\"34\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
+        ("urn:sparqlwatch:failedEndpoints", "\"0\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
+        ("urn:sparqlwatch:level", "\"1\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
+        ("urn:sparqlwatch:level", "\"2\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
+        ("urn:sparqlwatch:maxCost", "\"cheap\""),
+        ("urn:sparqlwatch:metricDefinitionRevision", "\"abc123\""),
+        ("urn:sparqlwatch:notMeasuredMetric", "<urn:sparqlwatch:metric:classes>"),
+        ("urn:sparqlwatch:notMeasuredOn", "<https://b.example/sparql>"),
+        ("urn:sparqlwatch:notMeasuredReason", "\"cost-ceiling\""),
+        (
+            "urn:sparqlwatch:proberVersion",
+            // Not a frozen literal: the emitter writes `env!("CARGO_PKG_VERSION")`
+            // at `:303`, so a version bump would otherwise red this test with
+            // "a predicate or an object changed", which is not what changed.
+            concat!("\"", env!("CARGO_PKG_VERSION"), "\""),
+        ),
+        ("urn:sparqlwatch:sampleSize", "\"2\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
+        ("urn:sparqlwatch:sampleTruncated", "\"true\"^^<http://www.w3.org/2001/XMLSchema#boolean>"),
+        ("urn:sparqlwatch:sampledBy", "<urn:sparqlwatch:metric:classes>"),
+        ("urn:sparqlwatch:sampledFrom", "<https://a.example/sparql>"),
+        ("urn:sparqlwatch:sampledValue", "<https://a.example/vocab#Apple>"),
+        ("urn:sparqlwatch:sampledValue", "<https://a.example/vocab#Zebra>"),
+        ];
+        const BASELINE_QUADS: usize = 43;
+        let qs = quads_of(&baseline_emission());
+        let mut pairs: Vec<(String, String)> = qs
+            .iter()
+            .map(|q| (q.predicate.as_str().to_string(), q.object.to_string()))
+            .collect();
+        pairs.sort();
+        let expected: Vec<(String, String)> = BASELINE_PAIRS
+            .iter()
+            .map(|(p, o)| ((*p).to_string(), (*o).to_string()))
+            .collect();
+        assert_eq!(pairs, expected, "a predicate or an object changed");
+        assert_eq!(qs.len(), BASELINE_QUADS, "the quad count changed");
+    }
+
+    /// Every subject in `qs`, as a set, so a test can compare two emissions
+    /// without depending on the order the quads came out in.
+    fn subjects_of(qs: &[Quad]) -> BTreeSet<String> {
+        qs.iter().map(|q| q.subject.to_string()).collect()
+    }
+
+    #[test]
+    fn an_emitted_subject_is_the_one_the_helper_builds() {
+        // Ties emit's output to the helper, so a parameter-order mistake in a
+        // four-argument function cannot pass. Two rows, two endpoints, two
+        // metrics, so endpoint and metric cannot be swapped without the
+        // assertion moving.
+        let rows = vec![
+            row("https://a.example/sparql", "cors", Verdict::Verified),
+            row("https://b.example/sparql", "classes", Verdict::Absent),
+        ];
+        let qs = emit(&rows);
+        let expected = subject_iri(
+            FactKind::Measurement,
+            &RunId("r1".into()),
+            "https://a.example/sparql",
+            "cors",
+        )
+        .unwrap();
+        assert!(
+            subjects_of(&qs).contains(&format!("<{}>", expected.as_str())),
+            "emit did not use subject_iri: {:?}",
+            subjects_of(&qs)
+        );
+    }
+
+    #[test]
+    fn a_subject_does_not_depend_on_where_its_row_sat() {
+        // The property 1c-b4 needs: an endpoint's chunk can be emitted alone
+        // and still name the node the full run would.
+        //
+        // Compared against the subjects the helper builds, not against the
+        // other emission. Comparing the two emissions to each other passes
+        // under the running index this stage replaced as well, because
+        // reversing two rows leaves the subject SET `{...:0, ...:1}` unchanged.
+        let run = RunId("r1".into());
+        let expected: BTreeSet<String> = [
+            ("https://a.example/sparql", "cors"),
+            ("https://b.example/sparql", "classes"),
+        ]
+        .iter()
+        .map(|(endpoint, metric)| {
+            subject_iri(FactKind::Measurement, &run, endpoint, metric)
+                .unwrap()
+                .to_string()
+        })
+        .collect();
+        let measured = |rows: &[MeasurementRow]| -> BTreeSet<String> {
+            emit(rows)
+                .iter()
+                .filter(|q| {
+                    q.predicate.as_ref() == rdf::TYPE
+                        && q.object
+                            == Term::NamedNode(
+                                NamedNode::new("http://www.w3.org/ns/dqv#QualityMeasurement")
+                                    .unwrap(),
+                            )
+                })
+                .map(|q| q.subject.to_string())
+                .collect()
+        };
+        assert_eq!(
+            measured(&[
+                row("https://a.example/sparql", "cors", Verdict::Verified),
+                row("https://b.example/sparql", "classes", Verdict::Absent),
+            ]),
+            expected
+        );
+        assert_eq!(
+            measured(&[
+                row("https://b.example/sparql", "classes", Verdict::Absent),
+                row("https://a.example/sparql", "cors", Verdict::Verified),
+            ]),
+            expected,
+            "the same two rows in the other order must name the same two nodes"
+        );
+    }
+
+    #[test]
+    fn the_encoding_is_exactly_this() {
+        // Pins uppercase hex, UTF-8-byte-wise encoding, and the two halves of
+        // the encoder's contract that have no other seat: the whole unreserved
+        // set is passed through, and nothing is normalised. Without an exact
+        // string this test cannot fail, because the encoder's output is valid
+        // IRI syntax by construction.
+        //
+        // Every part of the input is load-bearing, so read it before changing
+        // it. `HTTP` and `A` fail a lowercasing encoder, which `registry::dedupe`
+        // forbids because it keeps `http://x/sparql` and `http://X/sparql` as
+        // two entries; the trailing `/` fails a normalising one, which the same
+        // module keeps as two entries too; `a-b_c~d` covers all four
+        // non-alphanumeric unreserved characters, so narrowing the set fails
+        // rather than silently renaming every fact about `osm-planet`; the
+        // space and the `\u{00e9}` cover the escaping path and the multi-byte
+        // case.
+        let s = subject_iri(
+            FactKind::Measurement,
+            &RunId("R".into()),
+            "HTTP://A.example/a-b_c~d/p q\u{00e9}/",
+            "cors",
+        )
+        .unwrap();
+        assert_eq!(
+            s.as_str(),
+            "urn:sparqlwatch:measurement:R:\
+             HTTP%3A%2F%2FA.example%2Fa-b_c~d%2Fp%20q%C3%A9%2F:cors"
+        );
+    }
+
+    #[test]
+    fn two_endpoints_the_registry_keeps_apart_get_different_subjects() {
+        // The invariant the exact string above pins, said as the property it
+        // exists for rather than as bytes. `registry::dedupe` treats a case
+        // difference and a trailing slash as two entries (see
+        // `a_near_duplicate_differing_by_a_trailing_slash_stays_two_entries`
+        // there), so an encoder that folded either one would put two registry
+        // entries on one subject. Their payloads differ by `elapsed_ms` alone,
+        // so `conflicted` would then publish nothing about either of them, and
+        // the `dqv:computedOn` beside the subject would still name them apart.
+        let run = RunId("r1".into());
+        let pairs = [
+            ("http://x.example/sparql", "http://X.example/sparql"),
+            ("http://x.example/sparql", "http://x.example/sparql/"),
+        ];
+        for (one, other) in pairs {
+            assert_ne!(
+                subject_iri(FactKind::Measurement, &run, one, "cors").unwrap(),
+                subject_iri(FactKind::Measurement, &run, other, "cors").unwrap(),
+                "{one} and {other} are two registry entries, so they are two subjects"
+            );
+        }
+    }
+
+    #[test]
+    fn two_endpoints_differing_only_in_an_escape_get_different_subjects() {
+        let run = RunId("r1".into());
+        let one =
+            subject_iri(FactKind::Measurement, &run, "http://a.example/x:y", "cors").unwrap();
+        let two =
+            subject_iri(FactKind::Measurement, &run, "http://a.example/x%3Ay", "cors").unwrap();
+        assert_ne!(one, two);
+    }
+
+    #[test]
+    fn an_endpoint_cannot_shift_the_metric_field() {
+        let run = RunId("r1".into());
+        let a = subject_iri(FactKind::Measurement, &run, "http://a.example/x", "cors").unwrap();
+        let b =
+            subject_iri(FactKind::Measurement, &run, "http://a.example/x:cors", "cors").unwrap();
+        assert_ne!(a, b);
+        assert!(a.as_str().ends_with(":cors"));
+    }
+
+    #[test]
+    fn the_three_kinds_never_share_a_subject() {
+        // A measurement and a not-measured fact about one pair must not land
+        // on one node: it would both have and not have a verdict.
+        let run = RunId("r1".into());
+        let m =
+            subject_iri(FactKind::Measurement, &run, "http://a.example/x", "classes").unwrap();
+        let n =
+            subject_iri(FactKind::NotMeasured, &run, "http://a.example/x", "classes").unwrap();
+        let s =
+            subject_iri(FactKind::ContentSample, &run, "http://a.example/x", "classes").unwrap();
+        assert_ne!(m, n);
+        assert_ne!(m, s);
+        assert_ne!(n, s);
+    }
+
+    #[test]
+    fn a_metric_id_that_would_make_a_subject_ambiguous_is_refused_by_the_helper() {
+        // Enforced where it is relied on, not only where it is convenient.
+        assert!(subject_iri(
+            FactKind::Measurement,
+            &RunId("r1".into()),
+            "http://a.example/x",
+            "has:classes"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn a_conflicting_repeated_pair_publishes_nothing_about_that_pair() {
+        // The collision the derived scheme makes possible and the old index
+        // hid. ZERO values, not one: publishing the first of two
+        // contradictory observations would assert `verified` about a pair also
+        // measured `absent`.
+        let rows = vec![
+            row("https://a.example/sparql", "cors", Verdict::Verified),
+            row("https://a.example/sparql", "cors", Verdict::Absent),
+        ];
+        let qs = emit(&rows);
+        let values: Vec<&Term> = objects(&qs, "http://www.w3.org/ns/dqv#value");
+        assert!(values.is_empty(), "published a verdict for a contradicted pair: {values:?}");
+    }
+
+    #[test]
+    fn a_metric_id_that_cannot_be_a_subject_costs_one_fact_not_the_run() {
+        // The same policy as a junk endpoint: skip, warn, keep the run. A `?`
+        // here would discard the whole sweep's output at main.rs:192-202.
+        let rows = vec![
+            row("https://a.example/sparql", "has:classes", Verdict::Verified),
+            row("https://b.example/sparql", "cors", Verdict::Absent),
+        ];
+        let out = emit_nquads(RunEmission {
+            run: &RunId("r1".into()),
+            generated_at: AT,
+            metric_revision: REV,
+            rows: &rows,
+            declarations_read: &[],
+            not_measured: &[],
+            max_cost: Cost::Cheap,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
+            content_samples: &[],
+        });
+        assert!(out.is_ok(), "a bad metric id must not cost the sweep its output");
+        let qs = quads_of(&out.unwrap());
+        assert_eq!(
+            objects(&qs, "http://www.w3.org/ns/dqv#value"),
+            vec![&Term::Literal(Literal::new_simple_literal("absent"))],
+            "b.example's measurement survives and a.example's is the only one lost"
+        );
     }
 
     #[test]
@@ -656,6 +1335,8 @@ mod tests {
             declarations_read: &[],
             not_measured: &[],
             max_cost: Cost::Cheap,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
             content_samples: &[],
         }).unwrap();
         let expected = GraphName::NamedNode(
@@ -761,6 +1442,8 @@ mod tests {
             declarations_read: &[],
             not_measured: &[],
             max_cost: Cost::Cheap,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
             content_samples: &[],
         })
             .expect("one junk endpoint must not discard the sweep");
@@ -838,6 +1521,8 @@ mod tests {
             declarations_read: &facts,
             not_measured: &[],
             max_cost: Cost::Cheap,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
             content_samples: &[],
         }).unwrap();
         let qs = quads_of(&out);
@@ -876,6 +1561,8 @@ mod tests {
             declarations_read: &facts,
             not_measured: &[],
             max_cost: Cost::Cheap,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
             content_samples: &[],
         }).unwrap();
         let qs = quads_of(&out);
@@ -898,6 +1585,8 @@ mod tests {
                 reason: NotMeasuredReason::CostCeiling,
             }],
             max_cost: Cost::Cheap,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
             content_samples: &[],
         })
         .unwrap();
@@ -928,6 +1617,8 @@ mod tests {
             declarations_read: &[],
             not_measured: &nm,
             max_cost: Cost::Cheap,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
             content_samples: &[],
         }).unwrap();
 
@@ -975,11 +1666,19 @@ mod tests {
             declarations_read: &[],
             not_measured: &nm,
             max_cost: Cost::Cheap,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
             content_samples: &[],
         }).unwrap();
         let qs = quads_of(&out);
         let subj = NamedOrBlankNode::NamedNode(
-            NamedNode::new("urn:sparqlwatch:not-measured:r1:0").unwrap(),
+            subject_iri(
+                FactKind::NotMeasured,
+                &RunId("r1".into()),
+                "http://example.org/sparql",
+                "classes",
+            )
+            .unwrap(),
         );
         let of = |p: &str| -> Vec<&Term> {
             qs.iter()
@@ -1034,11 +1733,19 @@ mod tests {
             declarations_read: &[],
             not_measured: &nm,
             max_cost: Cost::Expensive,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
             content_samples: &[],
         }).unwrap();
         let qs = quads_of(&out);
         let subj = NamedOrBlankNode::NamedNode(
-            NamedNode::new("urn:sparqlwatch:not-measured:r1:0").unwrap(),
+            subject_iri(
+                FactKind::NotMeasured,
+                &RunId("r1".into()),
+                "http://example.org/sparql",
+                "classes",
+            )
+            .unwrap(),
         );
         let activity = NamedNode::new("urn:sparqlwatch:activity:r1").unwrap();
         assert_eq!(
@@ -1097,6 +1804,8 @@ mod tests {
             declarations_read: &[],
             not_measured: &nm,
             max_cost: Cost::Cheap,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
             content_samples: &[],
         }).unwrap();
         let qs = quads_of(&out);
@@ -1148,6 +1857,8 @@ mod tests {
             declarations_read: &[],
             not_measured: &nm,
             max_cost: Cost::Cheap,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
             content_samples: &[],
         }).unwrap();
         let qs = quads_of(&out);
@@ -1175,6 +1886,8 @@ mod tests {
             declarations_read: &[],
             not_measured: &nm,
             max_cost: Cost::Cheap,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
             content_samples: &[],
         })
             .expect("one junk endpoint must not discard the sweep");
@@ -1198,6 +1911,8 @@ mod tests {
                 declarations_read: &[],
                 not_measured: &[],
                 max_cost: ceiling,
+                concurrency: NonZeroUsize::new(1).unwrap(),
+                failed_endpoints: 0,
                 content_samples: &[],
             }).unwrap();
             let qs = quads_of(&out);
@@ -1214,6 +1929,98 @@ mod tests {
             assert_eq!(activity, "<urn:sparqlwatch:activity:r1>",
                        "the ceiling is a property of the run's activity, not of a measurement");
         }
+    }
+
+    /// Two more facts about the run itself, beside the ceiling above: how many
+    /// hosts the sweep talked to at once, and how many endpoints it failed on.
+    ///
+    /// The first is what lets a consumer comparing `elapsedMs` across two runs
+    /// tell a slower endpoint from a busier sweep. The second lets one tell a
+    /// complete run from an incomplete one without reading a log, which is
+    /// otherwise the only place the count appears.
+    #[test]
+    fn the_run_records_the_concurrency_it_ran_at_and_the_endpoints_it_failed() {
+        let out = emit_nquads(RunEmission {
+            run: &RunId("r1".into()),
+            generated_at: AT,
+            metric_revision: REV,
+            rows: &rows(),
+            declarations_read: &[],
+            not_measured: &[],
+            max_cost: Cost::Cheap,
+            content_samples: &[],
+            concurrency: NonZeroUsize::new(4).unwrap(),
+            failed_endpoints: 2,
+        })
+        .unwrap();
+        let qs = quads_of(&out);
+        let four = Term::Literal(Literal::new_typed_literal("4", xsd::INTEGER));
+        let two = Term::Literal(Literal::new_typed_literal("2", xsd::INTEGER));
+        assert_eq!(
+            objects(&qs, "urn:sparqlwatch:concurrency"),
+            vec![&four],
+            "the run states how many hosts it probed at once"
+        );
+        assert_eq!(
+            objects(&qs, "urn:sparqlwatch:failedEndpoints"),
+            vec![&two],
+            "the run states how many endpoints it failed on"
+        );
+        for p in ["urn:sparqlwatch:concurrency", "urn:sparqlwatch:failedEndpoints"] {
+            let subject = qs
+                .iter()
+                .find(|q| q.predicate.as_str() == p)
+                .map(|q| q.subject.to_string())
+                .unwrap_or_else(|| panic!("no {p} quad was published at all"));
+            assert_eq!(
+                subject, "<urn:sparqlwatch:activity:r1>",
+                "{p} is a property of the run's activity, not of a measurement"
+            );
+        }
+    }
+
+    /// A metric nobody measured because the prober failed on its endpoint is
+    /// not a metric nobody measured because it costs too much. The two reasons
+    /// are published as different slugs, so a consumer reading one run can tell
+    /// an incomplete sweep from a deliberate decline.
+    #[test]
+    fn a_prober_failure_is_a_different_reason_from_a_cost_ceiling() {
+        let nm = vec![
+            NotMeasured {
+                endpoint: "https://a.example/sparql".into(),
+                metric_id: "availability".into(),
+                reason: NotMeasuredReason::ProberFailed,
+            },
+            NotMeasured {
+                endpoint: "https://a.example/sparql".into(),
+                metric_id: "classes".into(),
+                reason: NotMeasuredReason::CostCeiling,
+            },
+        ];
+        let out = emit_nquads(RunEmission {
+            run: &RunId("r1".into()),
+            generated_at: AT,
+            metric_revision: REV,
+            rows: &[],
+            declarations_read: &[],
+            not_measured: &nm,
+            max_cost: Cost::Cheap,
+            content_samples: &[],
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 1,
+        })
+        .unwrap();
+        let qs = quads_of(&out);
+        let mut reasons: Vec<String> = objects(&qs, "urn:sparqlwatch:notMeasuredReason")
+            .iter()
+            .map(|t| t.to_string())
+            .collect();
+        reasons.sort();
+        assert_eq!(
+            reasons,
+            vec!["\"cost-ceiling\"".to_string(), "\"prober-failed\"".to_string()],
+            "the two reasons must be distinguishable in the graph"
+        );
     }
 
     fn sample(values: &[&str], truncated: bool) -> ContentSample {
@@ -1242,6 +2049,8 @@ mod tests {
                 declarations_read: &[],
                 not_measured: &[],
                 max_cost: Cost::Cheap,
+                concurrency: NonZeroUsize::new(1).unwrap(),
+                failed_endpoints: 0,
                 content_samples: &[s],
             }).unwrap();
         assert!(nq.contains("urn:sparqlwatch:ContentSample"));
@@ -1266,6 +2075,8 @@ mod tests {
                 declarations_read: &[],
                 not_measured: &[],
                 max_cost: Cost::Expensive,
+                concurrency: NonZeroUsize::new(1).unwrap(),
+                failed_endpoints: 0,
                 content_samples: &[sample(&["http://example.org/A"], true)],
             }).unwrap();
         let qs = quads_of(&out);
@@ -1302,6 +2113,8 @@ mod tests {
                 reason: NotMeasuredReason::CostCeiling,
             }],
             max_cost: Cost::Cheap,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
             content_samples: &[sample(&["http://example.org/A", "http://example.org/B"], false)],
         })
         .unwrap();
@@ -1355,6 +2168,8 @@ mod tests {
             declarations_read: &[],
             not_measured: &nm,
             max_cost: Cost::Cheap,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
             content_samples: &[sample(&["http://example.org/A"], false)],
         })
         .unwrap();
@@ -1392,6 +2207,8 @@ mod tests {
             declarations_read: &[],
             not_measured: &[],
             max_cost: Cost::Expensive,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
             content_samples: &[sample(
                 &["http://example.org/Zebra", "http://example.org/Apple", "http://example.org/Mango"],
                 false,
@@ -1400,7 +2217,13 @@ mod tests {
         .unwrap();
         let qs = quads_of(&out);
         let subj = NamedOrBlankNode::NamedNode(
-            NamedNode::new("urn:sparqlwatch:content-sample:r1:0").unwrap(),
+            subject_iri(
+                FactKind::ContentSample,
+                &RunId("r1".into()),
+                "http://example.org/sparql",
+                "classes",
+            )
+            .unwrap(),
         );
         let of = |p: &str| -> Vec<&Term> {
             qs.iter()
@@ -1447,6 +2270,8 @@ mod tests {
             declarations_read: &[],
             not_measured: &[],
             max_cost: Cost::Expensive,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
             content_samples: &[
                 sample(&["http://example.org/A"], false),
                 ContentSample {
@@ -1468,6 +2293,47 @@ mod tests {
     }
 
     #[test]
+    fn a_conflicting_repeated_sample_publishes_nothing_about_that_pair() {
+        // The same policy as a contradicted measurement, on the fact type
+        // whose loop has the most control flow around the guard (the
+        // `writable` pre-pass and its early `continue`), so a later edit to
+        // that loop cannot quietly drop the guard. Publishing the first of two
+        // disagreeing samples would assert that this endpoint's classes are
+        // {A}, permanently, having discarded an observation that said {B}.
+        let out = emit_nquads(RunEmission {
+            run: &RunId("r1".into()),
+            generated_at: AT,
+            metric_revision: REV,
+            rows: &[],
+            declarations_read: &[],
+            not_measured: &[],
+            max_cost: Cost::Expensive,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
+            content_samples: &[
+                sample(&["https://a.example/A"], false),
+                sample(&["https://a.example/B"], false),
+            ],
+        })
+        .expect("a contradicted sample must not cost the sweep its output");
+        let qs = quads_of(&out);
+        assert!(
+            objects(&qs, "urn:sparqlwatch:sampledValue").is_empty(),
+            "published a sampled value for a contradicted pair: {out}"
+        );
+        assert!(
+            objects(&qs, "urn:sparqlwatch:sampleSize").is_empty(),
+            "published a sample size for a contradicted pair: {out}"
+        );
+        assert!(
+            !qs.iter().any(|q| q.predicate.as_ref() == rdf::TYPE
+                && q.object
+                    == Term::NamedNode(NamedNode::new("urn:sparqlwatch:ContentSample").unwrap())),
+            "published a sample node for a contradicted pair: {out}"
+        );
+    }
+
+    #[test]
     fn a_sample_with_an_invalid_endpoint_or_value_iri_is_skipped_not_fatal() {
         // Same doctrine as a measurement row and a not-measured fact: this runs
         // after all the probing, so one junk string must not turn a whole sweep
@@ -1480,6 +2346,8 @@ mod tests {
             declarations_read: &[],
             not_measured: &[],
             max_cost: Cost::Expensive,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
             content_samples: &[
                 ContentSample {
                     endpoint: "not an iri at all".into(),
@@ -1524,6 +2392,8 @@ mod tests {
             declarations_read: &[],
             not_measured: &[],
             max_cost: Cost::Expensive,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
             content_samples: &[sample(&["not an iri", "nor this one"], false)],
         })
         .unwrap();
@@ -1546,6 +2416,8 @@ mod tests {
             declarations_read: &[],
             not_measured: &[],
             max_cost: Cost::Expensive,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
             content_samples: &[sample(
                 &["http://example.org/A", "not an iri", "http://example.org/B", "no space allowed"],
                 false,

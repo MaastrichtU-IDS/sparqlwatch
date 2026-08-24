@@ -4,7 +4,8 @@
 # sw:metric:service-description does today), and how long the probe took.
 # Also returned, in the SAME result set but distinguishably: any metric that
 # run recorded as sw:NotMeasured rather than measured, with the reason it was
-# declined (today always "cost-ceiling").
+# declined: "cost-ceiling" for a metric priced out of the run, or
+# "prober-failed" for an endpoint the prober never got to ask at all.
 #
 # ?endpoint is the input. It is substituted with a NamedNode before execution
 # (SEP-0007 substitution, which is why it appears in the SELECT projection:

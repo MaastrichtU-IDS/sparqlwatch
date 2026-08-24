@@ -209,6 +209,12 @@ struct MetricFile {
 /// `Absent`. That is a broken definition, so it fails here rather than
 /// publishing one worthless measurement per endpoint.
 ///
+/// An `id` outside `[a-z0-9][a-z0-9-]*` fails here as well, for a reason one
+/// module over: the id is a field of every subject `emit::subject_iri` builds,
+/// and that subject is split on `:`, so an id carrying one would leave the
+/// endpoint field and the metric field indistinguishable in a published,
+/// never-rewritten identifier.
+///
 /// A repeated `id` fails here too. It is not a situation to resolve at runtime:
 /// the id is the metric's published identity, so two definitions sharing one can
 /// land on opposite sides of the cost ceiling and give the same (endpoint,
@@ -228,6 +234,27 @@ pub fn load_metrics(toml_src: &str) -> anyhow::Result<Vec<MetricDef>> {
     let f: MetricFile = toml::from_str(toml_src)?;
     let mut seen: BTreeSet<&str> = BTreeSet::new();
     for m in &f.metric {
+        // The id is a field of every published subject, and `emit::subject_iri`
+        // splits a subject on `:`, so an id holding one would make the endpoint
+        // field and the metric field ambiguous. Refused here, where a definition
+        // is judged, rather than one fact at a time at emission after the
+        // probing is already paid for. `subject_iri` checks it again because its
+        // injectivity depends on the invariant; see its doc comment.
+        let mut chars = m.id.chars();
+        let well_formed = match chars.next() {
+            Some(c) if c.is_ascii_lowercase() || c.is_ascii_digit() => {
+                chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+            }
+            _ => false,
+        };
+        if !well_formed {
+            anyhow::bail!(
+                "metric id '{}' is not usable as a published identifier; allowed is \
+                 [a-z0-9][a-z0-9-]*, because the id is a field of every subject \
+                 `emit::subject_iri` builds and that subject is split on ':'",
+                m.id
+            );
+        }
         if !seen.insert(m.id.as_str()) {
             anyhow::bail!(
                 "metric id '{}' is defined more than once; an id is a metric's published identity, \
@@ -670,6 +697,21 @@ query = "SELECT ?thing WHERE {{ ?s ?p ?thing }} LIMIT 1"
 
         // And the shipped file is not accidentally in breach.
         assert!(load_metrics(include_str!("../metrics.toml")).is_ok());
+    }
+
+    #[test]
+    fn a_metric_id_with_a_colon_is_a_load_error() {
+        // `emit::subject_iri` right-splits a subject on `:`, so a colon in an
+        // id would make the endpoint field and the metric field ambiguous. The
+        // control below is the same definition with a legal id, so a
+        // missing-field rejection cannot satisfy this test.
+        let ok = "[[metric]]\nid=\"has-classes\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"Liveness\"\nquery=\"ASK{}\"\n";
+        assert!(load_metrics(ok).is_ok(), "the control definition must load");
+        let bad = ok.replace("has-classes", "has:classes");
+        let err = load_metrics(&bad).expect_err("a colon in an id must be refused");
+        let msg = err.to_string();
+        assert!(msg.contains("has:classes"), "did not name the offending id: {msg}");
+        assert!(msg.contains("a-z"), "did not say what is allowed: {msg}");
     }
 
     #[test]

@@ -14,6 +14,111 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+/// The parse `host_key` performs, exposed because `registry` needs the same
+/// answer to a different question.
+pub struct Authority {
+    /// `Some` only for the two schemes whose default port `host_key` folds
+    /// away, which is the only decision this field feeds. A URL with any other
+    /// scheme, or none, is `None` here and still gets its authority parsed:
+    /// which scheme was written and where the authority starts are two
+    /// different questions, and answering only the first was how
+    /// `ftp://alice:s3cret@a.example/x` reached `registry` with no userinfo.
+    pub scheme: Option<&'static str>,
+    /// The userinfo component, without its trailing `@`, or `None` when the
+    /// authority has none. `Some("")` for a legal empty component, which is
+    /// why `registry::without_credentials` tests for a NON-EMPTY one.
+    ///
+    /// Userinfo is credentials, not identity: `host_key` drops it so two
+    /// requests to one host carrying different credentials still serialise
+    /// behind each other, and `registry::without_credentials` drops such an
+    /// endpoint, because the endpoint string is published verbatim inside
+    /// every subject `emit::subject_iri` builds.
+    pub userinfo: Option<String>,
+    /// The authority with any userinfo removed, port still attached.
+    pub host_port: String,
+}
+
+/// Whether `s` is a scheme name: `ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )`,
+/// RFC 3986 section 3.1. Checked rather than assumed, so `://` inside a path is
+/// not read as a scheme delimiter. `s` is already lowercased by the only
+/// caller, so the ALPHA test does not have to consider case.
+fn is_scheme(s: &str) -> bool {
+    let mut chars = s.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_alphabetic())
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.')
+}
+
+/// Split a URL into the scheme, userinfo and host of its authority.
+///
+/// No URL crate is a dependency, so this is hand-rolled: lowercase, strip a
+/// leading `<scheme>://` for ANY scheme, take everything up to the first `/`,
+/// `?` or `#` as the authority, then split off anything up to and including
+/// the last `@` (userinfo). A string with no scheme delimiter and no `@` falls
+/// straight through this same pipeline and comes out as its own trimmed,
+/// lowercased self in `host_port`: the registry is seeded from a real-world
+/// dump that certainly contains junk, and collapsing every unparseable string
+/// into one constant bucket would serialise unrelated hosts behind each other.
+///
+/// The scheme stripped here is any scheme, not only the two `scheme` reports,
+/// because what delimits an authority is the `//` and nothing about the scheme
+/// name. Recognising only `http` and `https` cut `ftp://u:p@a.example/x` at
+/// the `/` inside its own `://`, yielding an authority of `ftp:` with no `@`
+/// in it, so `registry::without_credentials` saw no userinfo and published the
+/// password inside every subject about that endpoint. It also gave every
+/// non-http URL in the registry one shared politeness bucket.
+///
+/// The lowercasing happens BEFORE the scheme is matched, not after, because
+/// schemes are case-insensitive (RFC 3986 section 3.1) and a real-world dump
+/// of 548 URLs is exactly where `HTTP://` turns up. Matching case-sensitively
+/// stripped nothing from such a URL, and the first `/` of its `//` then made
+/// the authority `"http:"`: one shared bucket for every mixed-case URL in the
+/// registry, serialising unrelated hosts behind each other, and a second
+/// bucket for a host that already had one, which is the direction that lets
+/// two requests to one host overlap.
+///
+/// The authority ends at the first `/`, `?` or `#`, whichever comes first, and
+/// not at the `/` alone: `http://example.org?query=x` has no path at all, so
+/// cutting on `/` only carried the query into the key and gave one host as
+/// many buckets as it had query strings. It is also what keeps
+/// `http://a.example/sparql?contact=x@y.example` free of userinfo: the `@`
+/// there sits in the query, past where the authority ended.
+pub fn authority(url: &str) -> Authority {
+    let lowered = url.trim().to_ascii_lowercase();
+    let s = lowered.as_str();
+    let (scheme_text, rest) = match s.find("://") {
+        Some(i) if is_scheme(&s[..i]) => (&s[..i], &s[i + 3..]),
+        // Not a scheme delimiter: `/path://weird` has `://` in it and no
+        // scheme, so carving an authority out of the middle of it would give
+        // one junk string a bucket belonging to a host name it never named.
+        _ => ("", s),
+    };
+    // Only these two feed a decision. `host_key` folds `:80` for `http` and
+    // `:443` for `https` and knows no other scheme's default port, so
+    // reporting one it cannot act on would be reporting something nothing
+    // reads.
+    let scheme = match scheme_text {
+        "https" => Some("https"),
+        "http" => Some("http"),
+        _ => None,
+    };
+    let authority = match rest.find(['/', '?', '#']) {
+        Some(i) => &rest[..i],
+        None => rest,
+    };
+    // Userinfo is credentials, not identity: everything up to and including
+    // the last `@`. A raw `@` cannot appear in a host, so the last one
+    // delimits it.
+    let (userinfo, host_port) = match authority.rfind('@') {
+        Some(i) => (Some(authority[..i].to_string()), &authority[i + 1..]),
+        None => (None, authority),
+    };
+    Authority {
+        scheme,
+        userinfo,
+        host_port: host_port.to_string(),
+    }
+}
+
 /// The politeness identity of a URL: lowercased host plus port, ignoring
 /// scheme, path, query and userinfo. Two URLs with the same key are one
 /// server and must never be probed concurrently.
@@ -30,58 +135,16 @@ use std::time::{Duration, Instant};
 /// to prevent. Because the default port depends on the scheme, the scheme is
 /// not thrown away before that decision is made, even though it plays no
 /// part in the final key.
-///
-/// No URL crate is a dependency, so this is hand-rolled: lowercase, strip a
-/// scheme if present, take everything up to the first `/`, `?` or `#` as the
-/// authority, drop anything up to and including the last `@` (userinfo), and
-/// strip a port that is the default for whichever scheme was seen. A string
-/// with no recognisable scheme, delimiter or `@` falls straight through this
-/// same pipeline and comes out as its own trimmed, lowercased self: the
-/// registry is seeded from a real-world dump that certainly contains junk,
-/// and collapsing every unparseable string into one constant bucket would
-/// serialise unrelated hosts behind each other.
-///
-/// The lowercasing happens BEFORE the scheme is matched, not after, because
-/// schemes are case-insensitive (RFC 3986 section 3.1) and a real-world dump
-/// of 548 URLs is exactly where `HTTP://` turns up. Matching case-sensitively
-/// stripped nothing from such a URL, and the first `/` of its `//` then made
-/// the authority `"http:"`: one shared bucket for every mixed-case URL in the
-/// registry, serialising unrelated hosts behind each other, and a second
-/// bucket for a host that already had one, which is the direction that lets
-/// two requests to one host overlap.
-///
-/// The authority ends at the first `/`, `?` or `#`, whichever comes first, and
-/// not at the `/` alone: `http://example.org?query=x` has no path at all, so
-/// cutting on `/` only carried the query into the key and gave one host as
-/// many buckets as it had query strings.
 pub fn host_key(url: &str) -> String {
-    let s = url.trim().to_ascii_lowercase();
-    let s = s.as_str();
-    let (scheme, rest) = if let Some(r) = s.strip_prefix("https://") {
-        (Some("https"), r)
-    } else if let Some(r) = s.strip_prefix("http://") {
-        (Some("http"), r)
-    } else {
-        (None, s)
-    };
-    let authority = match rest.find(['/', '?', '#']) {
-        Some(i) => &rest[..i],
-        None => rest,
-    };
-    // Userinfo is credentials, not identity: everything up to and including
-    // the last `@`. A raw `@` cannot appear in a host, so the last one
-    // delimits it.
-    let authority = match authority.rfind('@') {
-        Some(i) => &authority[i + 1..],
-        None => authority,
-    };
-    let host = match scheme {
-        Some("https") => authority.strip_suffix(":443").unwrap_or(authority),
-        Some("http") => authority.strip_suffix(":80").unwrap_or(authority),
-        _ => authority,
+    let parsed = authority(url);
+    let host_port = parsed.host_port.as_str();
+    let host = match parsed.scheme {
+        Some("https") => host_port.strip_suffix(":443").unwrap_or(host_port),
+        Some("http") => host_port.strip_suffix(":80").unwrap_or(host_port),
+        _ => host_port,
     };
     if host.is_empty() {
-        return s.to_string();
+        return url.trim().to_ascii_lowercase();
     }
     host.to_string()
 }
@@ -504,6 +567,61 @@ mod tests {
         let b = host_key("also not a url");
         assert!(!a.is_empty());
         assert_ne!(a, b, "distinct junk must not share a bucket");
+    }
+
+    #[test]
+    fn a_non_http_url_is_keyed_on_its_real_host() {
+        // The authority is delimited by `//`, whatever the scheme, so a URL
+        // whose scheme is not one of the two whose default port matters still
+        // gets its real host. This changed with the credential fix: before it,
+        // `authority` stripped only `http://` and `https://`, so cutting at the
+        // first `/` gave `ftp:` as the authority, and every `ftp://` URL in the
+        // registry shared one bucket with every other. Two URLs on one host
+        // now serialise behind each other, which is what the key is for.
+        assert_eq!(host_key("ftp://u:p@a.example/x"), "a.example");
+        assert_eq!(host_key("FTP://A.Example/x"), "a.example");
+        assert_eq!(
+            host_key("ftp://a.example/x"),
+            host_key("ftp://a.example/y"),
+            "one host, one bucket"
+        );
+        assert_ne!(host_key("ftp://a.example/x"), host_key("ftp://b.example/x"));
+        // The port folding stays scheme-specific, because 21 is not a default
+        // this code knows: only `http`'s 80 and `https`'s 443 are folded.
+        assert_ne!(host_key("ftp://a.example:21/x"), host_key("ftp://a.example/x"));
+    }
+
+    #[test]
+    fn a_string_with_no_scheme_before_its_slashes_is_its_own_key() {
+        // Two properties of the fallback, both of them lines this diff
+        // rewrote. First: `://` is only a scheme delimiter when what precedes
+        // it is a scheme (RFC 3986 section 3.1), so junk with `://` somewhere
+        // in a path is not read as one and does not get an authority carved
+        // out of the middle of it.
+        assert_eq!(host_key("/path://weird"), "/path://weird");
+        // Second: a URL with no host at all falls back to its own trimmed,
+        // lowercased self, so distinct junk keeps distinct buckets.
+        assert_eq!(host_key("  HTTP://  "), "http://");
+        assert_eq!(host_key("http:///sparql"), "http:///sparql");
+    }
+
+    #[test]
+    fn userinfo_is_read_out_of_the_authority_whatever_the_scheme() {
+        // What `registry::without_credentials` relies on. An empty userinfo
+        // component is legal (RFC 3986) and carries no credential, so it is
+        // reported as present-but-empty rather than conflated with either
+        // case.
+        assert_eq!(
+            authority("ftp://alice:s3cret@a.example/sparql").userinfo.as_deref(),
+            Some("alice:s3cret")
+        );
+        assert_eq!(
+            authority("https://alice@a.example/sparql").userinfo.as_deref(),
+            Some("alice")
+        );
+        assert_eq!(authority("http://@a.example/sparql").userinfo.as_deref(), Some(""));
+        assert_eq!(authority("http://a.example/sparql?c=x@y").userinfo, None);
+        assert_eq!(authority("http://a.example/sparql").userinfo, None);
     }
 
     #[test]

@@ -16,14 +16,14 @@ Six verdicts, plus one fact that is deliberately not a verdict.
 | `declared-but-wrong` | solid | filled | **2px** | answered, and answered incorrectly |
 | `indeterminate` | dashed | empty | 1px | we never got to find out |
 | `absent` | none | empty | 1px | neither claimed nor observed |
-| `not measured` | dotted | empty | 1px | we declined to look (cost ceiling) |
+| `not measured` | dotted | empty | 1px | no measurement was taken; the row says why |
 
 The channels carry meaning rather than being arbitrary:
 
 - **filled** means we have positive evidence the capability works
 - **dashed** means no declaration was seen for it
 - **2px** means something is actively wrong rather than merely missing
-- **dotted** means we did not look
+- **dotted** means no measurement was taken
 - **no border** means nothing was there
 
 ## Why three channels and not one

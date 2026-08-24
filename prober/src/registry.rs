@@ -1,9 +1,12 @@
 //! Loading `endpoints.toml`: the list of endpoints one sweep probes.
 //!
-//! The only rule here beyond parsing is that the list holds each entry once.
-//! `run_sweep` emits exactly one `declarationsRead` fact per LIST ENTRY, so a
-//! URL listed twice put two of those facts on one endpoint IRI in one run
-//! graph, and if the two fetches differed they disagreed: `ASK { ?ep
+//! There are two rules here beyond parsing. The list holds each entry once,
+//! and no entry's authority carries a non-empty userinfo component, whatever
+//! its scheme.
+//!
+//! The first, because `run_sweep` emits exactly one `declarationsRead` fact per
+//! LIST ENTRY, so a URL listed twice put two of those facts on one endpoint IRI
+//! in one run graph, and if the two fetches differed they disagreed: `ASK { ?ep
 //! :declarationsRead false }` and its negation both succeeded, with nothing in
 //! the graph to tell a consumer which fetch each came from. `emit.rs` cannot
 //! repair that after the fact, because the fact is a bare triple on the
@@ -13,6 +16,11 @@
 //! one stranger's server twice in the same run, and stage 1d seeds this list
 //! from LOD Cloud plus YummyData, two overlapping real-world dumps: duplicates
 //! are the expected case, not the exotic one.
+//!
+//! The second, because the endpoint string is published verbatim inside every
+//! subject `emit::subject_iri` builds, in a run graph this project never
+//! rewrites: a URL carrying userinfo would put a credential in the permanent
+//! record. See `without_credentials`.
 
 use serde::Deserialize;
 
@@ -21,11 +29,71 @@ struct EndpointFile {
     endpoint: Vec<String>,
 }
 
-/// Parse `endpoints.toml` and return its endpoint list, each entry once, in
-/// first-seen order.
+/// Parse `endpoints.toml` and return its endpoint list, each entry once, with
+/// no entry carrying credentials, in first-seen order.
+///
+/// Deduplicating before dropping credentials, not after, so a URL listed twice
+/// produces one warning of each kind rather than two of the second. That
+/// ordering is also why the two warnings name their positions differently:
+/// `dedupe` reports `position` in the file's list, `without_credentials`
+/// reports `deduped_position` in the list it was handed, and the second is not
+/// a line in `endpoints.toml` whenever a duplicate came before it.
 pub fn load_endpoints(toml_text: &str) -> anyhow::Result<Vec<String>> {
     let file: EndpointFile = toml::from_str(toml_text)?;
-    Ok(dedupe(&file.endpoint))
+    Ok(without_credentials(&dedupe(&file.endpoint)))
+}
+
+/// `endpoints` with every entry whose authority carries a non-empty userinfo
+/// component dropped, whatever its scheme, and one warning per entry dropped.
+///
+/// The endpoint string goes verbatim into every subject `emit::subject_iri`
+/// builds, reversibly, in a run graph this project never rewrites. So admitting
+/// `http://user:secret@host/sparql` would publish that credential permanently,
+/// with no later chance to correct it. Dropped rather than made a load error
+/// for the same reason `dedupe` drops: the list is seeded from real-world
+/// dumps, and refusing the file would mean monitoring nothing.
+///
+/// The test is on the AUTHORITY, through `politeness::authority`, and not on a
+/// bare `@`: `http://a.example/sparql?contact=x@y.example` is a legitimate
+/// endpoint, and a `contains('@')` check would silently remove it from every
+/// sweep. Sharing that parse rather than writing a second one is what keeps the
+/// two answers from diverging.
+///
+/// The warning names the host, not the URL, because repeating the URL would
+/// copy the credential into the log this function exists to keep it out of.
+///
+/// It names the position `deduped_position` rather than `position`, because
+/// `load_endpoints` calls this on the output of `dedupe` and not on the file's
+/// own list. The two differ as soon as a duplicate precedes a credentialed
+/// entry, and `dedupe`'s warning reports the file's index under the plain
+/// name, so an operator reading both in one log would otherwise have no way to
+/// know that only one of the two numbers is a position in `endpoints.toml`.
+///
+/// What this does NOT catch is an API key in a query string, which stays a
+/// known exposure recorded under Known limitations in `prober/README.md`. The
+/// userinfo half is scheme-agnostic: `politeness::authority` delimits an
+/// authority on `//`, so `ftp://alice:s3cret@a.example/sparql` is dropped like
+/// any `http` one. Whether a non-http endpoint belongs in the registry at all
+/// is a separate question, and a scheme allowlist here would change what gets
+/// swept, so it is left to stage 1d's triage of the seeding dumps.
+pub fn without_credentials(endpoints: &[String]) -> Vec<String> {
+    let mut kept: Vec<String> = Vec::with_capacity(endpoints.len());
+    for (deduped_position, ep) in endpoints.iter().enumerate() {
+        let authority = crate::politeness::authority(ep);
+        // Non-empty, not merely present: RFC 3986 permits an empty userinfo
+        // component, and `http://@a.example/sparql` carries nothing to leak.
+        if authority.userinfo.is_some_and(|u| !u.is_empty()) {
+            tracing::warn!(
+                host = %authority.host_port,
+                deduped_position,
+                "registry entry dropped: its URL carries userinfo, and an endpoint string is \
+                 published verbatim inside the subject of every fact about it"
+            );
+        } else {
+            kept.push(ep.clone());
+        }
+    }
+    kept
 }
 
 /// `endpoints` with later repeats of an entry dropped, first-seen order
@@ -47,6 +115,13 @@ pub fn load_endpoints(toml_text: &str) -> anyhow::Result<Vec<String>> {
 /// The warning is the point of doing this here rather than quietly: dropping
 /// entries from a registry without saying so is how a seeding bug becomes
 /// invisible.
+///
+/// Because this runs before any probing, `emit::emit_nquads`'s duplicate-subject
+/// guard is belt and braces rather than a routine path: a subject there is
+/// derived from (run, endpoint, metric), so two entries of one list naming one
+/// pair would land on a single node. If this function is ever relaxed or
+/// bypassed, that guard is what stops the pair carrying two contradictory
+/// verdicts.
 pub fn dedupe(endpoints: &[String]) -> Vec<String> {
     let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
     let mut kept: Vec<String> = Vec::with_capacity(endpoints.len());
@@ -166,6 +241,77 @@ mod tests {
             assert_eq!(dedupe(&list).len(), 2);
         });
         assert!(logs.is_empty(), "a clean registry must be quiet, logged: {logs}");
+    }
+
+    #[test]
+    fn an_endpoint_carrying_credentials_is_dropped_with_a_warning() {
+        // `emit::subject_iri` puts the endpoint string into every subject of
+        // every fact about it, reversibly, in a run graph this project never
+        // rewrites. So a URL carrying userinfo would publish credentials
+        // permanently. Dropped with a warning, matching how `dedupe` handles a
+        // duplicate rather than failing the whole load: this list is seeded
+        // from real-world dumps, and refusing the file would mean monitoring
+        // nothing.
+        let logs = logs_of(|| {
+            let loaded = load_endpoints(
+                r#"endpoint = ["http://alice:s3cret@a.example/sparql", "https://b.example/sparql"]"#,
+            )
+            .unwrap();
+            assert_eq!(loaded, v(&["https://b.example/sparql"]));
+        });
+        assert_eq!(logs.matches("WARN").count(), 1, "the level has to be WARN: {logs}");
+        assert!(logs.contains("a.example"), "the warning must name the host: {logs}");
+        assert!(
+            !logs.contains("s3cret"),
+            "the warning must not repeat the credentials it dropped: {logs}"
+        );
+    }
+
+    #[test]
+    fn an_at_sign_outside_the_authority_is_not_credentials() {
+        // `http://a.example/sparql?contact=x@y.example` is a legitimate
+        // endpoint. A `contains('@')` check would silently remove it from every
+        // sweep. Userinfo is a property of the AUTHORITY, which is what
+        // `politeness::authority` parses.
+        let kept = "http://a.example/sparql?contact=x@y.example";
+        let logs = logs_of(|| {
+            let loaded = load_endpoints(&format!(r#"endpoint = ["{kept}"]"#)).unwrap();
+            assert_eq!(loaded, v(&[kept]));
+        });
+        assert!(logs.is_empty(), "a legitimate endpoint must be quiet, logged: {logs}");
+    }
+
+    #[test]
+    fn credentials_are_dropped_whatever_the_scheme() {
+        // `NamedNode::new` accepts any absolute IRI, and `run_sweep` builds
+        // rows for every registry entry, so a non-http URL reaches emission
+        // and its password lands reversibly in every subject about it. The
+        // authority is delimited by `//` whatever the scheme, so the check
+        // does not depend on recognising the scheme.
+        let logs = logs_of(|| {
+            let loaded = load_endpoints(
+                r#"endpoint = ["ftp://alice:s3cret@a.example/sparql", "sparql://bob:hunter2@c.example/x", "https://b.example/sparql"]"#,
+            )
+            .unwrap();
+            assert_eq!(loaded, v(&["https://b.example/sparql"]));
+        });
+        assert_eq!(logs.matches("WARN").count(), 2, "one warning each: {logs}");
+        assert!(!logs.contains("s3cret"), "the credential must not reach the log: {logs}");
+        assert!(!logs.contains("hunter2"), "the credential must not reach the log: {logs}");
+    }
+
+    #[test]
+    fn an_empty_userinfo_is_not_a_credential() {
+        // RFC 3986 permits an empty userinfo component, and such a URL carries
+        // nothing to leak. Dropping it would remove a legal endpoint from
+        // every sweep for no gain, which is the same mistake as testing for a
+        // bare `@`.
+        let kept = "http://@a.example/sparql";
+        let logs = logs_of(|| {
+            let loaded = load_endpoints(&format!(r#"endpoint = ["{kept}"]"#)).unwrap();
+            assert_eq!(loaded, v(&[kept]));
+        });
+        assert!(logs.is_empty(), "nothing was dropped, so nothing to warn about: {logs}");
     }
 
     #[test]

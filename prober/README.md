@@ -78,6 +78,7 @@ cargo run -- --at 2026-08-20T12:00:00Z --out run.nq
 | `--max-cost` | `cheap` | Only run metrics with cost at or below this value (`cheap` or `expensive`) |
 | `--min-gap-ms` | `2000` | Minimum pause between two consecutive requests to one host |
 | `--retry-after-cap-s` | `20` | Longest `Retry-After` waited out before one retry of a throttled request |
+| `--concurrency` | `4` | How many HOSTS to probe at once; one host is never asked two things at once |
 
 `--at` is required and is **not** read from the clock, deliberately. It names
 the run graph, it is published as the activity's `prov:generatedAtTime`, and a
@@ -98,6 +99,47 @@ necessarily the host the probe was pointed at. A three-hop chain therefore costs
 two gaps, and that is the honest price of a promise with no exceptions in it. A
 chain longer than five hops, a cycle, or a `Location` we cannot resolve is
 `indeterminate`: we never reached an answer.
+
+`--concurrency` does not weaken any of the three guarantees, and it generalises
+the first one only as far as the host an endpoint NAMES. Endpoints are grouped
+by that host and each group is probed by one task, so two endpoints of one host
+are never in flight together and never contend for its gate: raising the flag
+adds hosts in flight, never requests to a host it was pointed at. The hop case
+just described is the exception, because a redirect is gated on the host the hop
+actually touches: an endpoint redirecting into another host of the same sweep
+queues at that host's gate, which a sequential sweep never did because nothing
+else was running. The gate itself still holds, one request in flight and one
+gap; what it costs is that the wait is charged to the redirecting endpoint's
+metric budget. See Known limitations.
+
+The default of 4 is politeness rather than throughput. Four hosts in flight,
+each of them spacing its own requests by 2 seconds, is roughly two requests per
+second in aggregate, which is a defensible load for a service that probes
+strangers uninvited. Zero is refused by the parser rather than repaired
+downstream, because `Semaphore::new(0)` does not fail, it hangs, and a sweep
+that probes nothing and reports nothing is the worst failure this crate has.
+
+One endpoint per host in flight is not only politeness: it is what keeps
+`--min-gap-ms`'s startup check the only budget relation a sweep needs. The
+per-host guard is held until the request returns, so a second endpoint of the
+same host would wait for the guard rather than for the gap alone. That wait is
+gap plus the whole first request, and against a throttled host gap plus request
+plus the honoured `Retry-After` plus the retry, the same 2 + 30 + 20 + 30 = 82
+seconds the retry arithmetic below arrives at, inside a 60 second metric budget.
+Grouping on the same `host_key` the gate acquires removes that hold term for the
+host an endpoint names, which is why the check compares the gap against the
+metric budget and nothing else. Relaxing per-host serialisation would mean
+rewriting that check around the 82 second hold instead of around the gap, and
+nobody has taken that decision. The one place the hold term survives is the
+cross-host redirect priced under Known limitations.
+
+The unit of all three guarantees is `host_key`'s answer, not the server itself.
+Two spellings it keys apart (`a.example.` and `a.example`, or `http://x:443/`
+and `https://x/`) are two groups, so with concurrency they can carry two request
+streams to one server, and a `Retry-After` stand-down recorded under one key
+does not defer the other. There is no budget consequence, because the grouping
+key and the gate key are the same function and so nothing waits on anything; the
+cost is politeness, and the fix is a registry that spells one server one way.
 
 `--min-gap-ms` is validated at startup, before any probing: the gap plus the
 30s request budget has to stay under the 60s metric budget, or the pause alone
@@ -154,11 +196,10 @@ Seven metrics are `cheap` at the default cost ceiling: availability, cors,
 cors-preflight, geo-functions, geo-data, service-description, has-classes.
 
 Per endpoint, the prober makes 7 requests. Between consecutive requests to one
-host, there is a gap. The sweep is sequential: stage 1c-b3 adds bounded
-concurrency **across endpoints**, never within a host. Per-host concurrency stays
-at one request, which is the guarantee this stage exists to provide, so 1c-b3
-shortens a sweep by overlapping different hosts and changes nothing about how any
-single host is treated. So:
+host, there is a gap. Endpoints are grouped by host and `--concurrency` bounds
+how many of those groups run at once, so concurrency buys parallelism **across
+different hosts** and never within one: per-host concurrency stays at one
+request, whatever the flag says. So, per host group:
 
 - Per endpoint: 7 requests with some latency (call it L per request) plus 6 gaps.
   An endpoint that redirects costs one more gated request and one more gap per
@@ -168,16 +209,28 @@ single host is treated. So:
 - With an average request latency of 300 ms (a rough middle ground for
   network round-trip), the per-endpoint floor is roughly (7 × 0.3) + 12 = 14.1
   seconds.
-- For 548 endpoints at 14.1 seconds each: 548 × 14.1 = 7,726.8 seconds, or about
-  2 hours 9 minutes.
+- For 548 endpoints at 14.1 seconds each: 548 × 14.1 = 7,726.8 seconds
+  sequentially, or about 2 hours 9 minutes; at the default `--concurrency 4`,
+  roughly a quarter of that, about 32 minutes.
 
-This assumes all endpoints are distinct hosts. Since some registry URLs share a
-host, requests to those shared hosts are serialised further by the per-host gate,
-adding time on top of this floor. Request latencies also vary widely; the above
-assumes 300 ms average, which is a middle estimate.
+Every number above is a **floor**, and the failure path is what actually prices
+a sweep. A black-holed endpoint costs its whole 600-second endpoint budget
+rather than 14.1 seconds, so the real bound is `sum(per-endpoint cost) /
+concurrency`: 548 dead endpoints would be `548 × 600 / 4` = 22.8 hours, and at
+a plausible 10% dead it is `(493 × 14.1 + 55 × 600) / 4` = 9,988 seconds, or
+about 2 hours 46 minutes. That is the number to plan a scheduled job around,
+not the healthy-endpoint floor.
 
-The figure is why stage 1c-b3 (bounded concurrency across endpoints) exists. A sequential
-sweep at this scale would time out on a scheduled job.
+It also assumes all endpoints are distinct hosts. Registry URLs that share a
+host are one group and are probed one after another, so a host carrying several
+endpoints costs the sum of them however high `--concurrency` is set. Request
+latencies vary widely too; the 300 ms above is a middle estimate.
+
+Measured, not estimated, on this repository's three-endpoint `endpoints.toml`
+on 2026-08-24: 14.4 seconds at the default `--concurrency 4` and 38.7 seconds
+at `--concurrency 1`. Three endpoints on three hosts is not a registry sweep,
+so it says nothing about the 548-endpoint figures above; it is here because it
+is the only concurrency measurement this project has actually taken.
 
 ## Configuration files
 
@@ -197,6 +250,23 @@ exact string: `http://x/sparql` and `http://x/sparql/` stay two entries, even
 though the declaration scoper treats them as one service, because two spellings
 in a registry are a registry problem to see rather than one to collapse
 silently.
+
+A URL whose authority carries a **non-empty userinfo** component is then
+dropped, with a warning naming the host it was pointed at and never the URL,
+because repeating the URL would copy the credential into the log the drop
+exists to keep it out of. This happens after the deduplication and before
+anything is swept. `http://alice:s3cret@a.example/sparql` is refused and so is
+`ftp://alice:s3cret@a.example/sparql`: the authority is delimited on `//`, so
+the check does not care about the scheme. An empty userinfo
+(`http://@a.example/sparql`) carries no credential and is kept. A bare `@`
+anywhere else in the URL is not touched at all, because
+`http://a.example/sparql?contact=x@y.example` is a legitimate endpoint and a
+`contains('@')` check would silently remove it from every sweep. This lives in
+the registry rather than in the emitter because it changes what gets swept: the
+endpoint string ends up inside the subject of every fact about it, in a per-run
+graph that is never rewritten, so a credential admitted here would be published
+permanently. What it does not cover is a credential in a query string; see
+Known limitations.
 
 **`metrics.toml`** is the metric definitions, as *data*. Each names a probe
 kind from a closed set (`Liveness`, `Cors`, `CorsPreflight`, `AskFilter`,
@@ -282,8 +352,35 @@ This is not a seventh verdict. The verdict vocabulary stays at six: this fact sa
 measurement did not happen, while a verdict says what was learned about a capability.
 Someone querying for verdicts will never encounter a value that is not one of the six.
 Someone asking why a verdict is missing gets an answer: either it was declined, or the
-budget was exhausted. The run's PROV activity also records `urn:sparqlwatch:maxCost`
-naming the ceiling used.
+budget was exhausted. A second reason, `prober-failed`, says the prober itself
+never got to ask: the task probing that endpoint's host did not return, so
+there was no observation at all rather than an inconclusive one, and every
+metric on that endpoint carries the fact rather than a verdict.
+
+The run's PROV activity records three things about the run itself:
+`urn:sparqlwatch:maxCost` naming the ceiling used,
+`urn:sparqlwatch:concurrency` naming how many hosts were probed at once, and
+`urn:sparqlwatch:failedEndpoints` counting the endpoints the prober failed on.
+The last two are `xsd:integer`.
+
+What a consumer may conclude from those two is narrow, and worth stating,
+because both invite more. `concurrency` does **not** change what `elapsedMs`
+measures: each hop's timer starts after the per-host gate has been acquired and
+stops when the response returns, and a redirect chain publishes the sum of its
+hops' own durations rather than the wall clock of the walk, precisely so our own
+politeness is never published as somebody's response time. What it does explain
+is the run's wall-clock duration, and the one case where another host's gate can
+sit inside a metric budget: a run at `--concurrency 1` cannot have lost a metric
+to the cross-host redirect described under Known limitations, because no other
+group was running, and a run at 4 can. `failedEndpoints` counts the endpoints
+this run observed nothing at all about. It is published on every run, including
+the ordinary `0`, so that an absent quad means "emitted before this fact
+existed" rather than "nothing failed". A non-zero value means that many
+endpoints carry `prober-failed` facts in place of verdicts and carry no
+`declarationsRead` fact either, so a consumer expecting one row per (endpoint,
+metric) has to read this rather than assume it. Such a run also exits non-zero,
+after writing its output, so the run is preserved and the scheduler still learns
+it was incomplete.
 
 The labels in that file state only what was actually measured. `geo-data` and
 `has-classes` and `classes` query the default graph AND every named graph, via a `UNION` with a
@@ -436,6 +533,89 @@ fact already published for `classes` under the default ceiling (see [Cost
 ceilings and not measured](#cost-ceilings-and-not-measured) above) is what
 tells a reader "we did not look" rather than "there is nothing there".
 
+## Fact identity, and why order is not part of it
+
+Two properties are easy to confuse here, and they do not have the same
+standing. Identity is a property of the graph. Order is a property of one
+emitted file.
+
+**Identity.** Every run-scoped fact's subject is a pure function of (run,
+endpoint, metric):
+
+```
+urn:sparqlwatch:<kind>:<run>:<percent-encoded endpoint>:<metric id>
+```
+
+`<kind>` is `measurement`, `not-measured` or `content-sample`, the three fact
+families scoped to a run, and it is in the IRI so that a measurement and a
+not-measured fact about one pair can never land on one node that both has and
+has not a verdict. `<run>` is the `--at` instant verbatim. The endpoint is
+percent-encoded keeping RFC 3986's unreserved set (`ALPHA / DIGIT / "-" / "." /
+"_" / "~"`) over UTF-8 bytes with uppercase hex, so it carries no `:` of its
+own, and the metric id is checked against `[a-z0-9][a-z0-9-]*` both by the
+metrics loader and again by the subject builder, so it carries none either.
+Those two facts together are what make the mapping injective. One real subject,
+from this repository's own fixtures:
+
+```
+urn:sparqlwatch:measurement:2026-08-22T20:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:availability
+```
+
+Nothing positional is left in it. Reordering `endpoints.toml` renames no
+subject, two runs at the same `--at` name the same nodes, and one endpoint's
+facts can be written on their own, which is what stage 1c-b4 needs. No
+normalisation happens on the way in: `registry::dedupe` treats two spellings of
+one endpoint as two entries, so they are two subjects here too, and the endpoint
+a subject encodes is the string the registry actually contains. The fourth
+published fact, `declarationsRead`, is deliberately outside this scheme: its
+subject is the endpoint IRI itself, because it says something about the endpoint
+rather than about an (endpoint, metric) pair.
+
+**A subject must never be parsed.** Two reasons, and the first alone is
+sufficient.
+
+- Every fact already carries what it is about, as triples. A measurement has
+  `dqv:computedOn` and `dqv:isMeasurementOf`; a content sample has
+  `sw:sampledFrom` and `sw:sampledBy`; a not-measured fact has
+  `sw:notMeasuredOn` and `sw:notMeasuredMetric`. Joining on those is always
+  available, and it is the only access path this project supports.
+- A store holds every run ever loaded, and this scheme has already changed once.
+  Before this branch the tail of a subject was the row's index in the emitted
+  file (`urn:sparqlwatch:measurement:<run>:0`). Those runs are still valid
+  history, a run graph is never rewritten, and history is kept, so a store holds
+  **two subject shapes** for as long as it holds history. A consumer that splits
+  on `:` reads one of them wrong. It would also read the new one wrong, since the
+  run segment is an unencoded `xsd:dateTime` and carries colons of its own.
+
+**Order.** Within one emitted file the order is input order, never completion
+order: each endpoint keeps its input index as a slot, `assemble` walks the slots
+afterwards, and `emit_nquads` writes the activity's own quads, then the
+measurements, then the not-measured facts, then the content samples, then the
+`declarationsRead` facts, each list in the order it was assembled, which is
+endpoint input order first. Within one endpoint it is the order of the
+definition list the facts came from, which is not `metrics.toml` order in
+general: `within_cost` partitions that file into the metrics that run and the
+metrics the ceiling declines, and `assemble` writes an endpoint's not-measured
+facts as the metrics that would have run and then the metrics the ceiling
+declined, so a cheap metric listed after an expensive one comes out first.
+That is worth having for diffing two files by eye, and it is all it is worth.
+It is **not** a property of the data:
+
+- N-Quads serialises a set. No consumer may read meaning from the order of lines
+  in one.
+- `web/load_run.py` parses the file and inserts the quads into Oxigraph, which is
+  order-blind, so the order is gone before any query sees it.
+- Stage 1c-b4 is expected to break it. Writing each endpoint's chunk as it
+  completes is writing in completion order, which is the whole point of writing
+  incrementally, and nothing downstream loses anything when it happens.
+
+**Output is not byte-identical between two runs of one `--at`.** `emit_nquads`
+reads no clock, no environment and no global, so it is a pure function of its
+inputs. Its inputs are not: `elapsedMs` comes from an `Instant::now()` taken
+around each request, so two runs of one endpoint differ in it, and a verdict can
+differ too because the endpoint can. Do not write a test that diffs two runs'
+bytes. Compare subjects, verdicts and levels.
+
 ## Proxy environment
 
 The deployment target has no direct egress, so a proxy is mandatory there:
@@ -522,6 +702,61 @@ The following are deferred deliberately, not oversights:
   that holds its data that way. It becomes testable at stage 1d, where the
   registry is seeded from 548 real endpoints, some of which are certainly
   partitioned.
+
+- **An API key in an endpoint's query string is published, permanently.** Every
+  run-scoped fact's subject is `urn:sparqlwatch:<kind>:<run>:<percent-encoded
+  endpoint>:<metric>`, so the endpoint URL is a reversible part of the identifier
+  of everything we say about it, and the `declarationsRead` fact names the
+  endpoint IRI itself. All of it sits in a per-run named graph that is immutable
+  and append-only: a published identifier can never be corrected. `registry.rs`
+  refuses a URL whose authority carries a non-empty userinfo component, whatever
+  the scheme, so both `http://user:secret@host/sparql` and
+  `ftp://user:secret@host/sparql` are dropped at load. It does nothing about
+  `https://host/sparql?apikey=...`, because a query parameter's meaning is the
+  operator's, not ours, and a name-based blocklist (`key`, `token`, `apikey`, ...)
+  would be a confident wrong answer in both directions: it would drop legitimate
+  endpoints whose query carries a dataset selector, and admit a credential under
+  a name nobody guessed. Closing it properly needs the registry to distinguish a
+  public URL from a credentialed one, which is a stage 1d question about how the
+  list is seeded. Until then: do not put a secret in `endpoints.toml`.
+
+- **A cross-host redirect can wait at another endpoint's gate, and that wait is
+  charged to the metric budget.** `--concurrency` groups endpoints by the host
+  they name, but a redirect is gated on the host each hop actually touches (see
+  `gated_hop`, and the test `a_probe_redirected_to_another_host_gates_the_new_host`),
+  so an endpoint that redirects into another host being swept at the same moment
+  queues at that host's gate. The review of stage 1c-b3 verified it with mocks:
+  two endpoints at `--concurrency 2`, the first redirecting to the second's
+  host, produced arrivals `a, b, b, a, b, b` with consecutive arrivals at the
+  shared host 456 ms apart against a `delay + gap` of 450 ms, so one guard was
+  serving two groups. At production values that wait is up to
+  `gap + request` = 32 s, or `2 + 30 + 20 + 30` = 82 s if the shared host is
+  throttled, inside the 60 s metric budget; a cancelled metric budget is silent,
+  so the endpoint would read `indeterminate` with nothing saying why. Grouping
+  cannot close it, because the redirect target is only knowable by following the
+  redirect, and following one without the gate is exactly what the per-hop gate
+  exists to prevent. The common case is unaffected: `host_key` ignores the
+  scheme, so an `http` to `https` redirect on one host stays inside one group and
+  costs another gap and nothing else. How often the cross-host case arises in a
+  real registry is **unquantified**. Of the three endpoints in the shipped
+  `endpoints.toml`, measured on 2026-08-24, none redirects at all: a queryless
+  GET returns 404, 200 and 500 respectively, with no `Location`. So the shipped
+  list does not exercise this, and 1d's 548-endpoint registry is where it would
+  first be measurable.
+
+- **The run's output is still written once, at the end.** The design's
+  per-endpoint isolation rule has two halves and this branch delivers the first
+  only. No endpoint's slowness delays another endpoint's PROBING any more, since
+  hosts are grouped and probed in separate tasks. "Results are written per
+  endpoint as they complete" is **not** met: `run_sweep` joins every task before
+  it returns, `assemble` builds the four fact lists from all the slots at once,
+  and `main` calls `emit_nquads` and `std::fs::write` once, afterwards. So one
+  endpoint burning its whole 600-second budget still delays the run's output by
+  up to 600 seconds, and a crash at endpoint 500 of 548 leaves no file at all.
+  Concurrency divided the constant; it did not change the shape. Crash-safe
+  incremental writing is stage 1c-b4's, and the derived subjects above are what
+  it rests on: an endpoint's facts can be written alone only because no
+  identifier in them depends on how many endpoints came before.
 
 ## Tests
 

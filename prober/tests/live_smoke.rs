@@ -1,4 +1,5 @@
 use sparqlwatch_prober::{budget::Budget, client::Client, metrics::load_metrics, politeness::Politeness, run_sweep, Sweep};
+use std::num::NonZeroUsize;
 use std::time::{Duration, Instant};
 
 /// These two tests probe real third-party endpoints, so they get real
@@ -14,12 +15,12 @@ fn polite() -> Politeness {
 #[ignore]
 async fn probes_three_real_endpoints() {
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
-    let client = Client::new(Budget::default(), polite()).unwrap();
+    let client = std::sync::Arc::new(Client::new(Budget::default(), polite()).unwrap());
     let eps = vec![
         "https://data.kkg.kadaster.nl/query".to_string(),
         "https://ontop.certain.ai.ustp.at/sparql".to_string(),
     ];
-    let Sweep { rows, declarations_read, .. } = run_sweep(&eps, &defs, &[], &client, Budget::default()).await;
+    let Sweep { rows, declarations_read, .. } = run_sweep(&eps, &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap()).await;
     for r in &rows {
         println!("{} {} -> {}", r.endpoint, r.metric_id, r.verdict.slug());
     }
