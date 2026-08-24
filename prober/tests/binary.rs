@@ -13,15 +13,71 @@
 //! which cargo sets for integration targets, so this needs no dependency
 //! beyond what the suite already has.
 //!
-//! Blocking on the child from inside `#[tokio::test]` is safe here: a
+//! Waiting on the child from inside `#[tokio::test]` is safe here: a
 //! `wiremock::MockServer` serves from a thread and runtime of its own
-//! (`bare_server.rs` spawns both), so it keeps answering while this thread
-//! waits.
+//! (`bare_server.rs` spawns both), so it keeps answering while this test waits.
+//!
+//! The wait is bounded, and that is not decoration. This is the only file that
+//! runs the prober as a process, and the branch's most dangerous shape is a
+//! sweep that HANGS: `run_sweep` drops the sweep's own sender before its drain
+//! loop, and a version that does not never sees the channel close. `Child::wait`
+//! and `Child::output` would then block this test forever, and
+//! `std::process::Child::drop` does not kill, so a review of this branch found
+//! two `sparqlwatch-prober` processes still alive minutes after `cargo test`
+//! was killed. So the child is waited on under `common::NO_DEADLOCK`, the same
+//! bound every in-process test uses, and killed on the way out either way.
+
+mod common;
 
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Output, Stdio};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
+
+/// A spawned child that is killed when it goes out of scope.
+///
+/// `std::process::Child::drop` deliberately does not kill, so without this a
+/// test that panics or times out while the prober is hung leaves the process
+/// running after the suite has gone.
+struct Reaped(std::process::Child);
+
+impl Drop for Reaped {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// Run `command` to completion under `common::NO_DEADLOCK`, or fail by name.
+///
+/// `try_wait` in a poll loop rather than `output()`, because `output()` blocks
+/// the thread and no timeout can interrupt it. Only stderr is piped, and it is
+/// read after the child has exited: the assertions here quote stderr, and a
+/// piped stdout would be one more pipe to keep from filling.
+async fn ran_without_hanging(command: &mut Command) -> Output {
+    let mut child = Reaped(
+        command
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("the built binary must be runnable"),
+    );
+    let status = common::without_deadlocking(async {
+        loop {
+            if let Some(status) = child.0.try_wait().expect("the child must be waitable") {
+                return status;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    let mut stderr = Vec::new();
+    if let Some(mut pipe) = child.0.stderr.take() {
+        use std::io::Read;
+        pipe.read_to_end(&mut stderr).expect("the child's stderr must be readable");
+    }
+    Output { status, stdout: Vec::new(), stderr }
+}
 
 /// A mock that records that a request reached this host and then answers after
 /// a fixed server-side delay.
@@ -130,15 +186,15 @@ async fn sweep(dir: &Path, concurrency: u32) -> (String, Vec<&'static str>) {
     std::fs::write(&list, endpoints).unwrap();
     std::fs::write(&defs, METRICS).unwrap();
 
-    let status = Command::new(env!("CARGO_BIN_EXE_sparqlwatch-prober"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_sparqlwatch-prober"));
+    command
         .args(["--endpoints", list.to_str().unwrap()])
         .args(["--metrics", defs.to_str().unwrap()])
         .args(["--out", out.to_str().unwrap()])
         .args(["--at", "2026-08-23T12:00:00Z"])
         .args(["--min-gap-ms", "0"])
-        .args(["--concurrency", &concurrency.to_string()])
-        .output()
-        .expect("the built binary must be runnable");
+        .args(["--concurrency", &concurrency.to_string()]);
+    let status = ran_without_hanging(&mut command).await;
     assert!(
         status.status.success(),
         "the sweep must exit zero when it failed on no endpoint, got {:?}: {}",

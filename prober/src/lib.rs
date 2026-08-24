@@ -299,15 +299,9 @@ pub async fn run_sweep<W: std::io::Write>(
     // the loop below publishes as `prober-failed`.
     while let Some(joined) = tasks.join_next().await {
         if let Err(failure) = joined {
-            let lost: Vec<&str> = covering
+            let lost = covering
                 .get(&failure.id())
-                .map(|group| {
-                    group
-                        .iter()
-                        .filter(|(slot, _)| slots[*slot].is_none())
-                        .map(|(_, ep)| ep.as_str())
-                        .collect()
-                })
+                .map(|group| endpoints_without_facts(group, &slots))
                 .unwrap_or_default();
             tracing::error!(
                 endpoints = ?lost, error = %failure,
@@ -335,6 +329,28 @@ pub async fn run_sweep<W: std::io::Write>(
         per_endpoint.push(facts);
     }
     Ok(collect_sweep(per_endpoint))
+}
+
+/// The endpoints of one group that have no facts in `slots`.
+///
+/// The set a panicked group really lost, which is what the log above names and
+/// what the loop below it publishes as `prober-failed`. The filter is the whole
+/// function: a group's task sends each endpoint as it finishes, so a panic
+/// costs only the endpoints it had not sent yet, and naming the whole group
+/// would name endpoints whose chunks are already on disk under a message saying
+/// they were published as not measured.
+///
+/// Generic over the slot's contents so a test can build slots without building
+/// facts: the question is only which of them are empty.
+fn endpoints_without_facts<'a, T>(
+    group: &'a [(usize, String)],
+    slots: &[Option<T>],
+) -> Vec<&'a str> {
+    group
+        .iter()
+        .filter(|(slot, _)| slots[*slot].is_none())
+        .map(|(_, endpoint)| endpoint.as_str())
+        .collect()
 }
 
 /// How many finished endpoints may be waiting to be written.
@@ -739,6 +755,50 @@ async fn probe_endpoint(
 mod tests {
     use super::*;
     use crate::metrics::{Cost, ProbeKind};
+
+    /// What the panic log may name, and what it may not.
+    ///
+    /// A group's task sends each endpoint as it finishes, so a panic costs only
+    /// the endpoints it had not sent yet. Naming the whole group instead would
+    /// name endpoints whose chunks are already on disk, under a message saying
+    /// every metric on them was published as not measured, which is a confident
+    /// wrong answer in the log an operator reads after a failed sweep. This is
+    /// the behaviour commit ec0f369 added and nothing held it.
+    #[test]
+    fn a_panicked_group_loses_only_the_endpoints_it_had_not_sent() {
+        let group = vec![
+            (0, "https://a.example/sparql".to_string()),
+            (1, "https://b.example/sparql".to_string()),
+            (2, "https://c.example/sparql".to_string()),
+        ];
+        // The task sent a and c before it panicked, so their facts are in their
+        // slots and only b is lost.
+        let slots = vec![Some(()), None, Some(())];
+
+        assert_eq!(
+            endpoints_without_facts(&group, &slots),
+            vec!["https://b.example/sparql"],
+            "an endpoint whose chunk is already written must not be named as lost"
+        );
+    }
+
+    /// The other end of the same rule: a task that panicked before sending
+    /// anything really did lose its whole group, and every one of them has to
+    /// be named, because the loop after the log publishes exactly this set as
+    /// `prober-failed`.
+    #[test]
+    fn a_group_that_sent_nothing_loses_all_of_it() {
+        let group = vec![
+            (0, "https://a.example/sparql".to_string()),
+            (1, "https://b.example/sparql".to_string()),
+        ];
+        let slots: Vec<Option<()>> = vec![None, None];
+
+        assert_eq!(
+            endpoints_without_facts(&group, &slots),
+            vec!["https://a.example/sparql", "https://b.example/sparql"]
+        );
+    }
 
     fn def(id: &str) -> MetricDef {
         MetricDef {

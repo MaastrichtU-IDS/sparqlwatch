@@ -30,11 +30,17 @@ use std::time::Duration;
 /// coming back, never by a slow one.
 pub const NO_DEADLOCK: Duration = Duration::from_secs(20);
 
-/// Run a gated probe under `NO_DEADLOCK`, so a reentrancy mistake surfaces as
-/// a named failure in a bounded time instead of a hung suite.
+/// Run something that can hang under `NO_DEADLOCK`, so it surfaces as a named
+/// failure in a bounded time instead of a hung suite.
+///
+/// Two callers, two hangs. In-process it wraps a gated probe, where the hang is
+/// the reentrancy mistake above. `tests/binary.rs` wraps its wait on the
+/// spawned prober, where the hang is a sweep whose arrival channel never
+/// closes, which is what `run_sweep` dropping the sweep's own sender prevents.
 pub async fn without_deadlocking<T>(f: impl Future<Output = T>) -> T {
     tokio::time::timeout(NO_DEADLOCK, f).await.expect(
-        "timed out: a probe that acquires the per-host gate it already holds deadlocks here",
+        "timed out: something here is never coming back. A probe acquiring the per-host gate \
+         it already holds, or a sweep whose arrival channel never closes",
     )
 }
 

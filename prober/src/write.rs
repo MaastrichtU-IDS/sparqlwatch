@@ -66,10 +66,14 @@ pub fn partial_path(out: &Path, at: &str) -> PathBuf {
 /// disk filling up after 300 endpoints, and only an injected sink reaches it.
 pub struct RunWriter<W: Write> {
     sink: W,
-    /// The run every chunk hangs off. Owned here rather than passed to each
-    /// `write_endpoint` call, because the header already fixed it and a chunk in
-    /// a different run's graph would be a fact about a run this file does not
-    /// describe.
+    /// The run every chunk hangs off, as the header fixed it.
+    ///
+    /// `EndpointFacts` carries a `RunId` of its own and `emit_endpoint` derives
+    /// the graph name from that one, so this field does not decide where a
+    /// chunk lands. What it does is let `write_endpoint` refuse a chunk built
+    /// for a different run, which would otherwise be a fact about a run this
+    /// file does not describe, in a second named graph in the same file. It is
+    /// also what `run()` hands a caller so it can build facts that match.
     run: RunId,
     /// `emit`'s cross-chunk state: which endpoints it has been asked for.
     state: EmitState,
@@ -183,7 +187,21 @@ impl<W: Write> RunWriter<W> {
     /// per-chunk duplicate pre-scan rests on it: two facts about one (endpoint,
     /// metric) pair either land in this chunk, where the pre-scan sees both, or
     /// nowhere.
+    ///
+    /// Refuses a chunk built for another run too, before recording the endpoint
+    /// as written: `emit_endpoint` takes the graph name from `facts.run`, so
+    /// such a chunk would open a second named graph in a file whose header
+    /// describes one run, and `load_run.py` replaces every graph a file names,
+    /// leaving an orphan chunk in a run graph with no header.
     pub fn write_endpoint(&mut self, facts: EndpointFacts) -> anyhow::Result<()> {
+        if facts.run.0 != self.run.0 {
+            anyhow::bail!(
+                "refusing a chunk for run {} in a file whose header describes run {}: one file \
+                 is one run",
+                facts.run.0,
+                self.run.0
+            );
+        }
         if !self.written.insert(facts.endpoint.to_string()) {
             anyhow::bail!(
                 "refusing a second chunk for {}: every fact about an endpoint has to be in one \
@@ -626,6 +644,101 @@ mod tests {
             "and nothing was created beside it"
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A sink whose writes all succeed and whose nth flush, and every flush
+    /// after it, fails.
+    ///
+    /// Separate from `FailsOnChunk` because the line under test is the flush in
+    /// `finish` and not the `write_all` before it: a sink that failed the write
+    /// too would report an error whether or not `finish` flushes at all, and
+    /// the mutation would survive.
+    #[derive(Clone)]
+    struct FailsOnFlush {
+        wrote: Arc<Mutex<Vec<u8>>>,
+        flushes: Arc<Mutex<usize>>,
+        fail_at: usize,
+    }
+
+    impl Write for FailsOnFlush {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.wrote.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            let mut flushes = self.flushes.lock().unwrap();
+            *flushes += 1;
+            if *flushes >= self.fail_at {
+                return Err(std::io::Error::other("the disk filled up"));
+            }
+            Ok(())
+        }
+    }
+
+    /// `finish` flushes the footer itself and reports the failure, rather than
+    /// leaving the footer to the `Drop` that runs after the rename.
+    ///
+    /// `BufWriter::drop` flushes and DISCARDS the error, and it runs after the
+    /// rename, so without the flush in `finish` an `ENOSPC` at that moment
+    /// would return `Ok`, `main` would log the sweep complete and exit zero,
+    /// and `--out` would hold a run with no `sw:finalised` in it. Every visitor
+    /// would then be told that sweep did not finish.
+    ///
+    /// The header's flush is the first and the one chunk's is the second, so a
+    /// sink that fails at the third fails on the footer's, with the footer's
+    /// bytes already accepted by the sink.
+    #[test]
+    fn a_footer_that_cannot_be_flushed_is_reported_rather_than_left_to_drop() {
+        let run = RunId("r1".into());
+        let all = families(EP);
+        let sink = FailsOnFlush {
+            wrote: Arc::new(Mutex::new(Vec::new())),
+            flushes: Arc::new(Mutex::new(0)),
+            fail_at: 3,
+        };
+        let bytes = Arc::clone(&sink.wrote);
+        let mut w = RunWriter::with_writer(sink, header(&run)).unwrap();
+        w.write_endpoint(facts_for(&run, EP, &all)).expect("the chunk's flush is the second");
+
+        let err = w
+            .finish(RunFooter { run: &run, failed_endpoints: 0 })
+            .expect_err("a footer that cannot be flushed must not report success");
+        assert!(err.to_string().contains("disk filled up"), "the cause survives: {err}");
+        assert!(
+            quads_of(&bytes.lock().unwrap().clone())
+                .iter()
+                .any(|q| q.predicate.as_str() == "urn:sparqlwatch:finalised"),
+            "the sink accepted the footer, so what failed is the flush and not the write"
+        );
+    }
+
+    /// The invariant `RunWriter`'s owned `run` is there for, made structural.
+    ///
+    /// A chunk built with another `RunId` lands in a second named graph in the
+    /// same file, and `load_run.py` drops and replaces every graph a file
+    /// names, so the store would end up with an orphan chunk in a run graph
+    /// that has no header. `run_sweep` clones from `writer.run()` so it cannot
+    /// happen there; this is what stops a second caller from doing it.
+    #[test]
+    fn a_chunk_for_another_run_is_refused_naming_both_runs() {
+        let run = RunId("r1".into());
+        let other = RunId("r2".into());
+        let all = families(EP);
+        let mut w = RunWriter::with_writer(Shared(Arc::new(Mutex::new(Vec::new()))), header(&run))
+            .unwrap();
+
+        let err = w
+            .write_endpoint(facts_for(&other, EP, &all))
+            .expect_err("a chunk in another run's graph must be refused");
+        let message = err.to_string();
+        assert!(
+            message.contains("r1") && message.contains("r2"),
+            "the refusal names the file's run and the chunk's: {message}"
+        );
+
+        w.write_endpoint(facts_for(&run, EP, &all))
+            .expect("the refusal must not have consumed this endpoint's one chunk");
     }
 
     /// The name and the rename, together, because they are one guarantee: while
