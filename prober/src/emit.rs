@@ -1081,18 +1081,200 @@ mod tests {
         ("urn:sparqlwatch:sampledValue", "<https://a.example/vocab#Zebra>"),
         ];
         const BASELINE_QUADS: usize = 43;
-        let qs = quads_of(&baseline_emission());
+        assert_frozen(&baseline_emission(), BASELINE_PAIRS, BASELINE_QUADS);
+    }
+
+    /// Compare an emission against a frozen (predicate, object) multiset and a
+    /// frozen quad count.
+    ///
+    /// Shared by the two frozen baselines rather than written twice, so the two
+    /// cannot drift into comparing different things and then disagree about
+    /// what "unchanged" means.
+    fn assert_frozen(out: &str, expected_pairs: &[(&str, &str)], expected_quads: usize) {
+        let qs = quads_of(out);
         let mut pairs: Vec<(String, String)> = qs
             .iter()
             .map(|q| (q.predicate.as_str().to_string(), q.object.to_string()))
             .collect();
         pairs.sort();
-        let expected: Vec<(String, String)> = BASELINE_PAIRS
+        let expected: Vec<(String, String)> = expected_pairs
             .iter()
             .map(|(p, o)| ((*p).to_string(), (*o).to_string()))
             .collect();
         assert_eq!(pairs, expected, "a predicate or an object changed");
-        assert_eq!(qs.len(), BASELINE_QUADS, "the quad count changed");
+        assert_eq!(qs.len(), expected_quads, "the quad count changed");
+    }
+
+    /// One emission covering every fact family, built for the frozen baseline
+    /// that stage 1c-b4's split into header, per-endpoint chunks and footer is
+    /// measured against.
+    ///
+    /// Deliberately richer than `baseline_emission`: four endpoints, a
+    /// measurement with a level and one without, a measurement with an elapsed
+    /// time and one without, both `NotMeasuredReason` variants, a sample with
+    /// the truncation flag each way, a `declarationsRead` both true and false,
+    /// one endpoint that appears ONLY in `declarations_read` and one that
+    /// appears ONLY in `not_measured`. The last two are what force the split's
+    /// endpoint sequence to come from the union of all four lists: an endpoint
+    /// derived from `rows` alone would lose both of them and publish no chunk
+    /// for either.
+    fn split_baseline_emission() -> String {
+        let rows = vec![
+            MeasurementRow {
+                endpoint: "https://a.example/sparql".into(),
+                metric_id: "availability".into(),
+                verdict: Verdict::Verified,
+                level: None,
+                elapsed_ms: Some(12),
+            },
+            MeasurementRow {
+                endpoint: "https://a.example/sparql".into(),
+                metric_id: "cors".into(),
+                verdict: Verdict::Absent,
+                level: Some(Level(2)),
+                elapsed_ms: None,
+            },
+            MeasurementRow {
+                endpoint: "https://b.example/sparql".into(),
+                metric_id: "service-description".into(),
+                verdict: Verdict::DeclaredOnly,
+                level: Some(Level(1)),
+                elapsed_ms: Some(340),
+            },
+        ];
+        let declarations_read = vec![
+            DeclarationsRead { endpoint: "https://a.example/sparql".into(), read: true },
+            DeclarationsRead { endpoint: "https://b.example/sparql".into(), read: false },
+            DeclarationsRead { endpoint: "https://c.example/sparql".into(), read: true },
+        ];
+        let not_measured = vec![
+            NotMeasured {
+                endpoint: "https://a.example/sparql".into(),
+                metric_id: "properties".into(),
+                reason: NotMeasuredReason::CostCeiling,
+            },
+            // A prober-failed endpoint carries no measurement and no
+            // `declarationsRead` fact, which is why this one appears in no
+            // other list.
+            NotMeasured {
+                endpoint: "https://d.example/sparql".into(),
+                metric_id: "availability".into(),
+                reason: NotMeasuredReason::ProberFailed,
+            },
+        ];
+        let content_samples = vec![
+            ContentSample {
+                endpoint: "https://a.example/sparql".into(),
+                metric_id: "classes".into(),
+                values: vec![
+                    "https://a.example/vocab#Zebra".into(),
+                    "https://a.example/vocab#Apple".into(),
+                ],
+                truncated: true,
+            },
+            ContentSample {
+                endpoint: "https://b.example/sparql".into(),
+                metric_id: "classes".into(),
+                values: vec!["https://b.example/vocab#Mango".into()],
+                truncated: false,
+            },
+        ];
+        emit_nquads(RunEmission {
+            run: &RunId("r1".into()),
+            generated_at: AT,
+            metric_revision: REV,
+            rows: &rows,
+            declarations_read: &declarations_read,
+            not_measured: &not_measured,
+            max_cost: Cost::Cheap,
+            concurrency: NonZeroUsize::new(4).unwrap(),
+            failed_endpoints: 1,
+            content_samples: &content_samples,
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn the_split_emission_publishes_what_the_whole_one_did() {
+        // Baseline frozen from the pre-1c-b4 emitter on 2026-08-24 over the
+        // synthesized run `split_baseline_emission` builds: the sorted
+        // (predicate, object) multiset and the quad count. Subjects are not
+        // part of it, because stage 1c-b3 froze those separately in
+        // `only_the_subjects_changed` and this stage does not touch them.
+        //
+        // Frozen as a constant here rather than compared against `emit_nquads`:
+        // once `emit_nquads` IS the composition of header, chunks and footer,
+        // comparing the two is a tautology that can never fail again, so the
+        // only proof that the split changed nothing has to be an artefact
+        // captured before the split happened.
+        const BASELINE_PAIRS: &[(&str, &str)] = &[
+       ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<http://www.w3.org/ns/dcat#DataService>"),
+       ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<http://www.w3.org/ns/dcat#DataService>"),
+       ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<http://www.w3.org/ns/dcat#DataService>"),
+       ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<http://www.w3.org/ns/dcat#DataService>"),
+       ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<http://www.w3.org/ns/dqv#QualityMeasurement>"),
+       ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<http://www.w3.org/ns/dqv#QualityMeasurement>"),
+       ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<http://www.w3.org/ns/dqv#QualityMeasurement>"),
+       ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<http://www.w3.org/ns/prov#Activity>"),
+       ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<urn:sparqlwatch:ContentSample>"),
+       ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<urn:sparqlwatch:ContentSample>"),
+       ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<urn:sparqlwatch:NotMeasured>"),
+       ("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "<urn:sparqlwatch:NotMeasured>"),
+       ("http://www.w3.org/ns/dqv#computedOn", "<https://a.example/sparql>"),
+       ("http://www.w3.org/ns/dqv#computedOn", "<https://a.example/sparql>"),
+       ("http://www.w3.org/ns/dqv#computedOn", "<https://b.example/sparql>"),
+       ("http://www.w3.org/ns/dqv#isMeasurementOf", "<urn:sparqlwatch:metric:availability>"),
+       ("http://www.w3.org/ns/dqv#isMeasurementOf", "<urn:sparqlwatch:metric:cors>"),
+       ("http://www.w3.org/ns/dqv#isMeasurementOf", "<urn:sparqlwatch:metric:service-description>"),
+       ("http://www.w3.org/ns/dqv#value", "\"absent\""),
+       ("http://www.w3.org/ns/dqv#value", "\"declared-only\""),
+       ("http://www.w3.org/ns/dqv#value", "\"verified\""),
+       ("http://www.w3.org/ns/prov#generatedAtTime", "\"2026-08-20T08:00:00Z\"^^<http://www.w3.org/2001/XMLSchema#dateTime>"),
+       ("http://www.w3.org/ns/prov#wasGeneratedBy", "<urn:sparqlwatch:activity:r1>"),
+       ("http://www.w3.org/ns/prov#wasGeneratedBy", "<urn:sparqlwatch:activity:r1>"),
+       ("http://www.w3.org/ns/prov#wasGeneratedBy", "<urn:sparqlwatch:activity:r1>"),
+       ("http://www.w3.org/ns/prov#wasGeneratedBy", "<urn:sparqlwatch:activity:r1>"),
+       ("http://www.w3.org/ns/prov#wasGeneratedBy", "<urn:sparqlwatch:activity:r1>"),
+       ("http://www.w3.org/ns/prov#wasGeneratedBy", "<urn:sparqlwatch:activity:r1>"),
+       ("http://www.w3.org/ns/prov#wasGeneratedBy", "<urn:sparqlwatch:activity:r1>"),
+       ("urn:sparqlwatch:concurrency", "\"4\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
+       ("urn:sparqlwatch:declarationsRead", "\"false\"^^<http://www.w3.org/2001/XMLSchema#boolean>"),
+       ("urn:sparqlwatch:declarationsRead", "\"true\"^^<http://www.w3.org/2001/XMLSchema#boolean>"),
+       ("urn:sparqlwatch:declarationsRead", "\"true\"^^<http://www.w3.org/2001/XMLSchema#boolean>"),
+       ("urn:sparqlwatch:elapsedMs", "\"12\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
+       ("urn:sparqlwatch:elapsedMs", "\"340\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
+       ("urn:sparqlwatch:failedEndpoints", "\"1\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
+       ("urn:sparqlwatch:level", "\"1\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
+       ("urn:sparqlwatch:level", "\"2\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
+       ("urn:sparqlwatch:maxCost", "\"cheap\""),
+       ("urn:sparqlwatch:metricDefinitionRevision", "\"abc123\""),
+       ("urn:sparqlwatch:notMeasuredMetric", "<urn:sparqlwatch:metric:availability>"),
+       ("urn:sparqlwatch:notMeasuredMetric", "<urn:sparqlwatch:metric:properties>"),
+       ("urn:sparqlwatch:notMeasuredOn", "<https://a.example/sparql>"),
+       ("urn:sparqlwatch:notMeasuredOn", "<https://d.example/sparql>"),
+       ("urn:sparqlwatch:notMeasuredReason", "\"cost-ceiling\""),
+       ("urn:sparqlwatch:notMeasuredReason", "\"prober-failed\""),
+        (
+            "urn:sparqlwatch:proberVersion",
+            // Not a frozen literal: the emitter writes `env!("CARGO_PKG_VERSION")`,
+            // so a version bump would otherwise red this test with "a predicate or
+            // an object changed", which is not what changed.
+            concat!("\"", env!("CARGO_PKG_VERSION"), "\""),
+        ),
+       ("urn:sparqlwatch:sampleSize", "\"1\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
+       ("urn:sparqlwatch:sampleSize", "\"2\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
+       ("urn:sparqlwatch:sampleTruncated", "\"false\"^^<http://www.w3.org/2001/XMLSchema#boolean>"),
+       ("urn:sparqlwatch:sampleTruncated", "\"true\"^^<http://www.w3.org/2001/XMLSchema#boolean>"),
+       ("urn:sparqlwatch:sampledBy", "<urn:sparqlwatch:metric:classes>"),
+       ("urn:sparqlwatch:sampledBy", "<urn:sparqlwatch:metric:classes>"),
+       ("urn:sparqlwatch:sampledFrom", "<https://a.example/sparql>"),
+       ("urn:sparqlwatch:sampledFrom", "<https://b.example/sparql>"),
+       ("urn:sparqlwatch:sampledValue", "<https://a.example/vocab#Apple>"),
+       ("urn:sparqlwatch:sampledValue", "<https://a.example/vocab#Zebra>"),
+       ("urn:sparqlwatch:sampledValue", "<https://b.example/vocab#Mango>"),
+        ];
+        const BASELINE_QUADS: usize = 58;
+        assert_frozen(&split_baseline_emission(), BASELINE_PAIRS, BASELINE_QUADS);
     }
 
     /// Every subject in `qs`, as a set, so a test can compare two emissions
