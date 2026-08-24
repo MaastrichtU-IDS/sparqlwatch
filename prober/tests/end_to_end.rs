@@ -2965,8 +2965,8 @@ async fn a_panicked_group_still_gets_its_prober_failed_chunks_written() {
     writer.finish(RunFooter { run: &run_id, failed_endpoints: sweep.failed_endpoints }).unwrap();
 
     let written = std::fs::read(&out).unwrap();
-    // Every endpoint has a chunk, the two the panicked group held come after the
-    // survivor's, and the footer comes after all three.
+    // Every endpoint has a chunk, and the two the panicked group held come after
+    // the survivor's.
     let marks = markers(&written);
     assert_eq!(marks.len(), 3, "one marker per endpoint: {marks:?}");
     assert_eq!(marks[0], eps[0], "the endpoint that was measured is written first");
@@ -2975,20 +2975,15 @@ async fn a_panicked_group_still_gets_its_prober_failed_chunks_written() {
         BTreeSet::from([eps[1].clone(), eps[2].clone()]),
         "then the two the panicked group never delivered"
     );
+    // "And the footer comes after all three" is NOT asserted here, because no
+    // defect in `run_sweep` can make it false: `finish` consumes the writer and
+    // `run_sweep` holds only a `&mut`, so a chunk written after the footer is
+    // unrepresentable through this API. Task 3's review found the assertion this
+    // replaces could not fail, and an assertion that cannot fail reads as
+    // coverage while providing none. The structural guarantee is where it belongs,
+    // in `RunWriter::finish`'s signature, and the footer's own contents are pinned
+    // by `write.rs`'s rename test.
     let quads = quads_in_order(&written);
-    let last_marker = quads
-        .iter()
-        .rposition(|q| q.predicate.as_str() == "urn:sparqlwatch:completedEndpoint")
-        .unwrap();
-    let finalised = quads
-        .iter()
-        .position(|q| q.predicate.as_str() == "urn:sparqlwatch:finalised")
-        .expect("the run finished, so the footer is there");
-    assert!(
-        last_marker < finalised,
-        "the footer must come after every chunk, or it certifies a run whose failed \
-         endpoints are not in the file yet"
-    );
     // And the facts themselves, since a marker alone says only "reached".
     assert_eq!(
         quads

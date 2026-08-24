@@ -182,22 +182,28 @@ pub async fn run_sweep<W: std::io::Write>(
     // Finished endpoints on their way to the writer. BOUNDED, and safe to bound
     // because the loop that drains it does no probing: a `send` that has to wait
     // holds its group's permit, which delays that host's next endpoint and can
-    // deadlock nothing while the receiver is live. Bounding it is also what keeps
-    // a 548-endpoint sweep from holding every endpoint's facts in memory at once,
-    // which is the thing writing incrementally is supposed to stop.
+    // deadlock nothing while the receiver is live. What the bound buys is
+    // backpressure and nothing else: see `ARRIVALS_IN_FLIGHT` for what it does
+    // NOT buy, which is a bound on the sweep's memory.
     let (arrived, mut arrivals) =
         tokio::sync::mpsc::channel::<(usize, EndpointSweep)>(ARRIVALS_IN_FLIGHT);
     let mut tasks: JoinSet<()> = JoinSet::new();
-    // Which endpoints each task is probing. `JoinSet::join_next`'s error arm
-    // carries only a `JoinError`, whose only identifying information is
-    // `JoinError::id()`, so without this map a task that panicked could not
-    // even be logged with the endpoints it was probing. It is for the log
-    // alone: the slots it covered are filled by `assemble_endpoint` from their own
-    // emptiness, so a missing entry here costs a name in one log line and
-    // nothing in the published graph.
-    let mut covering: HashMap<tokio::task::Id, Vec<String>> = HashMap::new();
+    // Which endpoints each task is probing, with their slots. `JoinSet::join_next`'s
+    // error arm carries only a `JoinError`, whose only identifying information is
+    // `JoinError::id()`, so without this map a task that panicked could not even
+    // be logged with the endpoints it was probing. It is for the log alone: the
+    // slots it covered are filled by `assemble_endpoint` from their own emptiness,
+    // so a missing entry here costs a name in one log line and nothing in the
+    // published graph.
+    //
+    // The slots are carried alongside the names because a group can panic having
+    // already delivered some of its endpoints, and those endpoints' real chunks
+    // are on disk. Logging the whole group would name endpoints that were
+    // measured under a message saying they were not, so the log filters on the
+    // slots that are still empty.
+    let mut covering: HashMap<tokio::task::Id, Vec<(usize, String)>> = HashMap::new();
     for group in groups {
-        let named: Vec<String> = group.iter().map(|(_, ep)| ep.clone()).collect();
+        let named: Vec<(usize, String)> = group.clone();
         // Everything the task touches is owned by it: `probe_one_endpoint`
         // borrows the endpoint, the definitions and the client, and a spawned
         // future must be `'static`.
@@ -288,16 +294,25 @@ pub async fn run_sweep<W: std::io::Write>(
     //
     // A panic costs the endpoints of that group the task had not yet sent, which
     // is at most the whole group and at least the one it panicked on: the ones it
-    // already sent are on disk and in their slots. `covering` names the whole
-    // group, so the log can over-report; the slots are what decide the published
-    // facts, below.
+    // already sent are on disk and in their slots. So the log names the group's
+    // endpoints whose slot is still empty, which is exactly the set whose facts
+    // the loop below publishes as `prober-failed`.
     while let Some(joined) = tasks.join_next().await {
         if let Err(failure) = joined {
-            let named = covering.get(&failure.id()).cloned().unwrap_or_default();
+            let lost: Vec<&str> = covering
+                .get(&failure.id())
+                .map(|group| {
+                    group
+                        .iter()
+                        .filter(|(slot, _)| slots[*slot].is_none())
+                        .map(|(_, ep)| ep.as_str())
+                        .collect()
+                })
+                .unwrap_or_default();
             tracing::error!(
-                endpoints = ?named, error = %failure,
-                "the task probing these endpoints failed; every metric on the ones it had not \
-                 finished is published as not measured, reason prober-failed"
+                endpoints = ?lost, error = %failure,
+                "the task probing these endpoints failed; every metric on them is published as \
+                 not measured, reason prober-failed"
             );
         }
     }
@@ -324,11 +339,18 @@ pub async fn run_sweep<W: std::io::Write>(
 
 /// How many finished endpoints may be waiting to be written.
 ///
-/// Small on purpose. The cost of a full channel is that one host's group pauses
-/// before its next endpoint, and the benefit is that a sweep of 548 endpoints
-/// holds at most this many endpoints' facts in memory beyond the one being
-/// written, rather than all of them, which is half of what writing incrementally
-/// is for.
+/// Small on purpose, and what it buys is backpressure: a host that answers fast
+/// cannot run arbitrarily far ahead of the writer, so the queue of
+/// finished-but-unwritten endpoints stays at 16 instead of growing toward one
+/// entry per finished endpoint when the writer is the slower of the two.
+///
+/// It does NOT bound the sweep's memory, and an earlier version of this comment
+/// claimed it did. It cannot: the returned `Sweep` holds every endpoint's facts
+/// by design, so a 548-endpoint sweep retains all 548 at its peak whatever this
+/// number is. Task 3's review measured a 30-endpoint sweep at this capacity as
+/// `peak_queued=15, retained_at_end=30`. Keeping `Sweep` whole is the deliberate
+/// trade: 39 call sites and roughly 220 assertions read its input order, and
+/// what writing incrementally buys here is crash tolerance, not a smaller heap.
 const ARRIVALS_IN_FLIGHT: usize = 16;
 
 /// One endpoint's four fact families, owned, as they will be published.
