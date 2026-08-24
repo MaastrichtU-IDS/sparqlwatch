@@ -154,7 +154,9 @@ then refused whole. That is the edge of the guarantee and it belongs in the READ
 - Produces: `pub fn emit_header(RunHeader) -> anyhow::Result<String>`, `pub fn emit_endpoint(&mut EmitState, EndpointFacts) -> anyhow::Result<String>`, `pub fn emit_footer(RunFooter) -> anyhow::Result<String>`.
 - `EndpointFacts` is one endpoint's slice of **all four** fact families: its `MeasurementRow`s, its `DeclarationsRead`, its `NotMeasured` facts (**both** the `CostCeiling` and the `ProberFailed` families), and its `ContentSample`s.
 - `EmitState` carries **exactly one thing across chunks**: the set of endpoints already written. Nothing else, because anything else makes a later chunk depend on an earlier one and a chunk must stand alone.
-- `RunFooter` carries `failed_endpoints` and the finalisation instant, supplied by the caller.
+- `RunFooter` carries `failed_endpoints` only. It carried a finalisation instant in an
+  earlier draft; the boolean replaced it, and this bullet was the last place still saying
+  otherwise.
 - `emit_nquads` becomes the composition and **keeps its signature**. Dropping the
   finalisation instant is what buys this: the footer is a constant, so `RunEmission` gains
   no field and the 41 struct literals across the crate and its tests are untouched. That is
