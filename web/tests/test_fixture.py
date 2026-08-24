@@ -72,6 +72,21 @@ Fixture provenance:
   fixture carrying one reason cannot tell a page that renders one sentence for
   every decline from a page that reads the reason.
 
+- ``fixtures/run-crashed-partway.nq`` is SYNTHETIC, and like
+  run-prober-failed.nq it is the emitter's own output rather than a
+  hand-written file: ``prober/src/emit.rs``'s ``emit_header`` was called once,
+  then ``emit_endpoint`` once for data.kkg.kadaster.nl/query, and
+  ``emit_footer`` was NOT called. That last absence is the whole fixture, and
+  it cannot be a captured sweep, because producing one live would mean
+  shipping a prober that dies halfway through a run. It is the file a crash
+  leaves on disk and, because its last statement is a chunk's
+  sw:completedEndpoint terminator, it is also exactly what web/load_run.py
+  loads from that file. Loaded beside run-with-samples.nq it produces both of
+  the read tier's two unfinished-run conditions in one store: kadaster's facts
+  come from a run that did not finish, and qlever.dev/api/osm-planet's come
+  from the 16:00 sweep with a newer, unfinished run in the store that never
+  named it. See the comment at the top of that file for the exact inputs.
+
 - ``fixtures/run-new-subjects.nq`` is SYNTHETIC and DERIVED from the real run,
   the same way ``run-two-sweeps.nq`` is: the full real run from
   run-with-samples.nq, with its run IRI and prov:generatedAtTime advanced
@@ -113,6 +128,9 @@ LATER_SAMPLE_FIXTURE = (
 NEW_SUBJECTS_FIXTURE = Path(__file__).parent / "fixtures" / "run-new-subjects.nq"
 PROBER_FAILED_FIXTURE = (
     Path(__file__).parent / "fixtures" / "run-prober-failed.nq"
+)
+CRASHED_PARTWAY_FIXTURE = (
+    Path(__file__).parent / "fixtures" / "run-crashed-partway.nq"
 )
 
 
@@ -203,6 +221,7 @@ def test_the_classes_absent_fixture_measures_absent_and_samples_nothing(tmp_path
 
 NEW_SUBJECTS_RUN = "2026-08-22T20:00:00Z"
 PROBER_FAILED_RUN = "2026-08-23T02:00:00Z"
+CRASHED_PARTWAY_RUN = "2026-08-23T04:00:00Z"
 
 # The two facts each kind of subject is derived from, as (kind segment, the
 # predicate naming the endpoint, the predicate naming the metric). Both pairs
@@ -401,3 +420,71 @@ def test_the_later_sample_fixture_samples_without_measuring(tmp_path):
         assert not bool(store.query(
             f"ASK {{ GRAPH ?g {{ ?s {predicate} ?e }} }}"
         )), f"this run must record no {predicate}"
+
+
+def test_the_crashed_partway_fixture_stops_before_its_footer(tmp_path):
+    """run-crashed-partway.nq is emit_header plus one emit_endpoint and no
+    emit_footer (see its header).
+
+    Every assertion here is about what the file does NOT hold, because that
+    is what it exists for: no sw:finalised, and so no sw:failedEndpoints
+    either, since both are footer facts. A fixture that gained a footer would
+    still render a page and still pass every test that only asks for a
+    verdict, while silently becoming a finished run.
+
+    The two facts it does hold are asserted beside them, because "no
+    sw:finalised" only means "this run did not finish" for a run that
+    promised one: sw:emission is the promise, and the chunk terminator is
+    what makes "the run got as far as this endpoint" a fact rather than an
+    inference from the presence of its measurements.
+    """
+    store = Store(str(tmp_path / "s"))
+    store.load(CRASHED_PARTWAY_FIXTURE.read_bytes(), format=RdfFormat.N_QUADS)
+    assert len(store) == 67, f"this fixture is 67 quads, got {len(store)}"
+    assert len(list(store.named_graphs())) == 1, "one run, one named graph"
+
+    for ask, why in (
+        ('?a <urn:sparqlwatch:emission> "incremental"',
+         "the header says how the run is written"),
+        ("?a <urn:sparqlwatch:completedEndpoint> "
+         "<https://data.kkg.kadaster.nl/query>",
+         "the one chunk says the run finished that endpoint"),
+    ):
+        assert bool(store.query(f"ASK {{ GRAPH ?g {{ {ask} }} }}")), why
+
+    for predicate in (
+        "<urn:sparqlwatch:finalised>",
+        "<urn:sparqlwatch:failedEndpoints>",
+    ):
+        assert not bool(store.query(
+            f"ASK {{ GRAPH ?g {{ ?a {predicate} ?o }} }}"
+        )), f"no footer was written, so there is no {predicate}"
+
+    markers = list(store.query(
+        "SELECT ?e WHERE { GRAPH ?g { ?a "
+        "<urn:sparqlwatch:completedEndpoint> ?e } }"
+    ))
+    assert len(markers) == 1, (
+        f"one chunk was written, so one terminator, got {len(markers)}"
+    )
+
+    # The file must be loadable as it stands, which is the claim that it is
+    # what load_run.py would put in the store rather than merely what the
+    # prober would have written: the last statement is a terminator, so the
+    # loader's cut-back to the last terminator removes nothing.
+    assert CRASHED_PARTWAY_FIXTURE.read_text().rstrip().endswith(
+        "<urn:sparqlwatch:completedEndpoint> "
+        "<https://data.kkg.kadaster.nl/query> "
+        "<urn:sparqlwatch:run:2026-08-23T04:00:00Z> ."
+    ), "a crashed run's file ends at its last whole section"
+
+    # The subjects are the derived scheme, because this run's emitter is the
+    # one that produces it. Same check as the two fixtures above, and it is
+    # the only one that can notice a committed static file drifting away from
+    # the scheme its header claims.
+    expected = _derived_subjects(store, CRASHED_PARTWAY_RUN)
+    assert len(expected) == 9, (
+        f"eight measurements and one sample to check, derived {len(expected)}"
+    )
+    wrong = {s: want for s, want in expected.items() if s != want}
+    assert not wrong, f"these subjects are not what the scheme derives: {wrong}"
