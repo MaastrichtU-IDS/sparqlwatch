@@ -17,7 +17,13 @@
 //!    the previous crash's partial file on its first write, which is the same
 //!    loss displaced by one run. `--at` is required and validated by `main.rs`
 //!    before anything is opened, so it is a name-safe label that is unique per
-//!    run. Two invocations sharing an `--at` are the same run and may overwrite.
+//!    run. A run whose partial file is already there is **refused**, not
+//!    overwritten: a retry shares the `--at`, so overwriting would move that same
+//!    loss onto the retry, which is the documented recovery path.
+//!    `renamed onto --out` is not the same as `written through --out`: a `--out`
+//!    that is a symlink is REPLACED by the finished file, where the `fs::write`
+//!    this module took over from followed it. A deployment that points `--out` at
+//!    a symlink into a mounted volume has to point it at the real path instead.
 //! 3. **Every chunk is flushed as it is written, and `Drop` is not relied on for
 //!    any of it.** A `SIGKILL` runs no destructors, and the crash this module
 //!    exists for is the one where nothing gets to run. The buffer is sized for a
@@ -83,13 +89,50 @@ pub struct RunWriter<W: Write> {
 impl RunWriter<BufWriter<File>> {
     /// Open `<out>.<at>.partial` and write the header into it.
     ///
-    /// Fails here, before any probing, if the path cannot be written: an
-    /// operator learns about a bad `--out` at t=0 rather than after a
-    /// ten-minute sweep.
+    /// Three refusals happen here, before any probing, so an operator learns
+    /// about an unusable destination at t=0 rather than after a ten-minute sweep:
+    /// a partial file for this `--at` that already exists, a `--out` that is a
+    /// directory, and any other reason the partial cannot be created.
     pub fn create(out: &Path, at: &str, header: RunHeader) -> anyhow::Result<Self> {
         let partial = partial_path(out, at);
-        let file = File::create(&partial)
-            .map_err(|e| anyhow::anyhow!("cannot write {}: {e}", partial.display()))?;
+        // A directory `--out` would take the partial file happily, since that is
+        // a sibling NAME, and then fail in `finish` where the rename lands on the
+        // directory. Checked here instead, because the whole point of failing in
+        // the constructor is that it costs no probing.
+        if out.is_dir() {
+            anyhow::bail!(
+                "cannot write {}: it is a directory, and a finished run is renamed onto it",
+                out.display()
+            );
+        }
+        // `create_new`, so a partial file that is already there is REFUSED rather
+        // than truncated. The `<at>` label stops the next scheduled sweep
+        // destroying a crashed run's work; without this it would be destroyed by
+        // the retry instead, which shares the `--at` by design (see the `--at`
+        // paragraph in README.md) and is the documented recovery path. A retry
+        // has no prior on getting further than the attempt that crashed, so the
+        // 500 endpoints already on disk are not this process's to discard: the
+        // refusal is loud, costs nothing but a rerun, and leaves the decision
+        // where it belongs.
+        //
+        // It is also `O_EXCL`, so two invocations that share an `--at` cannot
+        // interleave into one file: the second is refused rather than writing a
+        // second header into the middle of the first one's run.
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&partial)
+            .map_err(|e| match e.kind() {
+                std::io::ErrorKind::AlreadyExists => anyhow::anyhow!(
+                    "{} already exists, so an earlier run of {at} did not finish. This run \
+                     would overwrite it, and it may hold every endpoint that run reached. \
+                     Load it (python web/load_run.py STORE {}), or move it aside, then run \
+                     again.",
+                    partial.display(),
+                    partial.display(),
+                ),
+                _ => anyhow::anyhow!("cannot write {}: {e}", partial.display()),
+            })?;
         let sink = BufWriter::with_capacity(CHUNK_BUFFER_BYTES, file);
         Self::start(sink, header, Some((partial, out.to_path_buf())))
     }
@@ -501,6 +544,88 @@ mod tests {
             .write_endpoint(facts_for(&run, EP, &all))
             .expect_err("a second chunk for one endpoint must be refused");
         assert!(err.to_string().contains(EP), "the refusal names the endpoint: {err}");
+    }
+
+    /// The error a constructor refused with. A helper because `RunWriter` does
+    /// not implement `Debug` and `expect_err` needs it, and a writer printed on
+    /// failure would say nothing a reader wants.
+    fn refused(
+        result: anyhow::Result<RunWriter<BufWriter<File>>>,
+        why: &str,
+    ) -> anyhow::Error {
+        match result {
+            Ok(_) => panic!("{why}"),
+            Err(e) => e,
+        }
+    }
+
+    /// Major 2 of Task 3's review, measured there at 500,000 bytes of a crashed
+    /// attempt truncated down to 1,090 by the retry: the `<at>` label exists so
+    /// the next run cannot destroy a crashed run's data, and a retry shares the
+    /// `--at` by design, so the same loss arrives through the retry unless the
+    /// second attempt refuses to open a partial that is already there.
+    #[test]
+    fn a_retry_sharing_an_at_refuses_rather_than_truncating_the_first_attempt() {
+        let dir = std::env::temp_dir().join(format!("sparqlwatch-retry-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let out = dir.join("run.nq");
+        let partial = partial_path(&out, AT);
+        let run = RunId(AT.into());
+        let all = families(EP);
+
+        // The first attempt, which crashes: its writer is dropped without
+        // `finish`, so the partial file stays under its own name.
+        let mut first = RunWriter::create(&out, AT, header(&run)).unwrap();
+        first.write_endpoint(facts_for(&run, EP, &all)).unwrap();
+        drop(first);
+        let crashed = std::fs::read(&partial).unwrap();
+        assert!(!crashed.is_empty(), "the first attempt left work on disk");
+
+        let err = refused(
+            RunWriter::create(&out, AT, header(&run)),
+            "a retry must not open the crashed attempt's partial file",
+        );
+        let message = err.to_string();
+        assert!(
+            message.contains(partial.to_str().unwrap()),
+            "the refusal names the file the operator has to deal with: {message}"
+        );
+        assert!(
+            message.contains("load_run.py") && message.contains("move"),
+            "and says what can be done with it, load it or move it aside: {message}"
+        );
+        assert_eq!(
+            std::fs::read(&partial).unwrap(),
+            crashed,
+            "the crashed attempt's bytes are untouched, which is the whole point"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Minor 1 of the same review: the constructor promises an operator learns
+    /// about an unusable `--out` at t=0, and a `--out` that is a DIRECTORY used
+    /// to pass that promise and fail in `finish` instead, after the whole sweep.
+    #[test]
+    fn an_out_that_is_a_directory_is_refused_before_any_probing() {
+        let dir = std::env::temp_dir().join(format!("sparqlwatch-outdir-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let out = dir.join("run.nq");
+        std::fs::create_dir_all(&out).unwrap();
+        let run = RunId(AT.into());
+
+        let err = refused(
+            RunWriter::create(&out, AT, header(&run)),
+            "a directory cannot be renamed onto, so the sweep must not start",
+        );
+        assert!(
+            err.to_string().contains(out.to_str().unwrap()),
+            "the refusal names --out: {err}"
+        );
+        assert!(
+            !partial_path(&out, AT).exists(),
+            "and nothing was created beside it"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// The name and the rename, together, because they are one guarantee: while

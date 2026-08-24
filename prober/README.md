@@ -88,6 +88,15 @@ run reproducible: same `--at`, same output identifiers. It is validated before
 any probing starts, because it is interpolated into IRIs and published as an
 `xsd:dateTime`.
 
+A retry of a failed sweep therefore meets the partial file the failed attempt
+left, and it **refuses to start** rather than overwriting it, naming the file and
+saying what can be done with it. That is the point of writing to a sibling in the
+first place: an attempt that died at endpoint 500 of 548 has 500 endpoints on
+disk, a retry has no prior on getting further, and this process is not the one to
+decide those 500 are worth less than a fresh start. Load the partial file, or move
+it aside, then run again. The same refusal means two invocations sharing an `--at`
+cannot interleave into one file.
+
 Every outbound request passes a per-host gate that gives three guarantees: never
 two requests in flight to one host, at least `--min-gap-ms` between one request
 finishing and the next one to that host starting, and nothing at all to a host
@@ -413,11 +422,16 @@ sweep that died at endpoint 500 of 548 had destroyed the previous complete run.
 Never to a fixed `<out>.partial` either, because the next scheduled sweep would
 truncate the previous crash's file on its first write, which is the same loss one
 run later. `--at` is required and validated before anything is opened, so it
-names the file uniquely per run; two invocations sharing an `--at` are the same
-run and may overwrite. `rename` within a directory is atomic on macOS and Linux,
-so `--out` is always either the previous complete run or this one, and a crash
-leaves the partial file under its own name, where `web/load_run.py` will load it
-as far as its last whole section.
+names the file uniquely per run, and a partial file that is already there is
+refused rather than truncated (see the `--at` paragraph above). `rename` within a
+directory is atomic on macOS and Linux, so `--out` is always either the previous
+complete run or this one, and a crash leaves the partial file under its own name,
+where `web/load_run.py` will load it as far as its last whole section. Renamed
+onto is not written through: a `--out` that is a **symlink** is replaced by the
+finished file rather than followed, which the `std::fs::write` this replaced did
+follow, so a deployment has to point `--out` at a real path. A `--out` that is a
+directory is refused before any probing, along with any other reason the partial
+file cannot be created.
 
 Each chunk is flushed as it is written, and nothing depends on a destructor
 running: a `SIGKILL` runs none. Measured on the shipped `endpoints.toml`: a run
@@ -661,9 +675,11 @@ which is the whole point of writing incrementally; the `Sweep` it returns is in
 INPUT order, built from the slots after the last chunk was written. Those are two
 different properties and both hold. The chunks a panicked group never delivered
 come after every real chunk and before the footer, because a footer certifies a
-run whose endpoints are all in the file. `emit_nquads`, which is still the
-composition a caller holding a whole run in memory uses, derives its endpoint
-sequence from the union of all four fact lists in first-appearance order, because
+run whose endpoints are all in the file. `emit_nquads` is the same three sections
+composed in one call for a caller that holds a whole run in memory; the prober is
+no longer such a caller, so its only callers today are the emitter's own tests. It
+derives its endpoint sequence from the union of all four fact lists in
+first-appearance order, because
 an endpoint can appear in one list only: a prober-failed endpoint is in the
 not-measured list alone, and an endpoint whose description was read but whose
 metrics produced no row is in the `declarationsRead` list alone. For lists
