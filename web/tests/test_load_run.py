@@ -9,7 +9,7 @@ destroying an existing run before the parse failure is noticed.
 from pathlib import Path
 
 import pytest
-from pyoxigraph import DefaultGraph, NamedNode, Store
+from pyoxigraph import DefaultGraph, NamedNode, RdfFormat, Store, parse
 
 from load_run import LoadResult, load_run, main
 
@@ -240,3 +240,236 @@ def test_a_bad_run_path_leaves_no_store_directory_behind(tmp_path):
         main([str(store_path), str(bad_run)])
 
     assert not store_path.exists(), "a rejected run file must not create the store"
+
+
+# The one committed fixture that is current emitter output: emit_nquads' own
+# 51 quads, so its section boundaries and terminator spellings are the wire
+# format itself rather than a restatement of it.
+TERMINATED_FIXTURE = Path(__file__).parent / "fixtures" / "run-prober-failed.nq"
+
+
+def _sections() -> tuple[str, str, str]:
+    """TERMINATED_FIXTURE split into the three sections emit_nquads writes:
+    the header, one endpoint's chunk, and the footer.
+
+    Boundaries are found by the terminator predicates rather than by line
+    number, so a regenerated fixture that gains or loses a quad moves them
+    with it instead of handing these tests bytes that cut somewhere else.
+    """
+    lines = TERMINATED_FIXTURE.read_text().splitlines(keepends=True)
+    ends: dict[str, int] = {}
+    for index, line in enumerate(lines):
+        for predicate in ("emission", "completedEndpoint", "finalised"):
+            if f"> <urn:sparqlwatch:{predicate}> " in line:
+                ends[predicate] = index
+    assert set(ends) == {"emission", "completedEndpoint", "finalised"}, (
+        f"the fixture must carry all three terminators, found {sorted(ends)}"
+    )
+    header = "".join(lines[: ends["emission"] + 1])
+    chunk = "".join(lines[ends["emission"] + 1 : ends["completedEndpoint"] + 1])
+    footer = "".join(lines[ends["completedEndpoint"] + 1 : ends["finalised"] + 1])
+    return header, chunk, footer
+
+
+def _second_chunk() -> bytes:
+    """The fixture's chunk rewritten for a second endpoint, so a run can be
+    built with one whole chunk followed by a partial one."""
+    _, chunk, _ = _sections()
+    return chunk.replace("data.kkg.kadaster.nl", "second.example").encode()
+
+
+FINALISED = (
+    'ASK { GRAPH ?g { ?a <urn:sparqlwatch:finalised> '
+    '"true"^^<http://www.w3.org/2001/XMLSchema#boolean> } }'
+)
+FAILED_ENDPOINTS = "ASK { GRAPH ?g { ?a <urn:sparqlwatch:failedEndpoints> ?n } }"
+SECOND_ENDPOINT = "ASK { GRAPH ?g { ?s ?p <https://second.example/query> } }"
+A_DATA_SERVICE = "ASK { GRAPH ?g { ?s ?p <http://www.w3.org/ns/dcat#DataService> } }"
+MARKER_IN_OBJECT = "ASK { GRAPH ?g { ?s ?p <urn:sparqlwatch:completedEndpoint> } }"
+
+
+def test_a_complete_run_loads_with_its_footer_and_the_same_quad_count(tmp_path):
+    """First on the list because getting the terminator set wrong breaks every
+    complete run and no other test here catches it. A complete file's last line
+    is the footer's sw:finalised, not a chunk marker, and sw:failedEndpoints
+    sits between the last marker and it. A tolerance that truncated back to the
+    last chunk marker would strip both footer quads from every finished sweep,
+    and Task 4's read tier would then tell every visitor that every sweep did
+    not finish."""
+    store = Store(str(tmp_path / "s"))
+    header, chunk, footer = _sections()
+    assert header + chunk + footer == TERMINATED_FIXTURE.read_text(), (
+        "the three sections must account for the whole file, or every test "
+        "below is cutting the wrong bytes"
+    )
+
+    result = load_run(store, TERMINATED_FIXTURE.read_bytes())
+
+    assert result.quad_count == 51, "the fixture's own count, footer included"
+    assert result.discarded_bytes == 0, "nothing may be dropped from a complete run"
+    assert bool(store.query(FINALISED)), "the footer's terminator must be in the store"
+    assert bool(store.query(FAILED_ENDPOINTS)), (
+        "and the quad between the last marker and it, which a truncate-to-the-"
+        "last-marker rule would also lose"
+    )
+
+
+def test_a_chunk_truncated_mid_line_loads_the_whole_chunks_before_it(tmp_path):
+    """What a crash mid-write leaves. The partial chunk cannot be parsed at all,
+    so today the whole file is refused and the finished endpoints are lost with
+    it."""
+    store = Store(str(tmp_path / "s"))
+    header, chunk, _ = _sections()
+    second = _second_chunk().splitlines(keepends=True)
+    partial = second[0] + second[1][:20]
+    assert not partial.endswith(b"\n"), "this cut must land mid-line"
+
+    result = load_run(store, header.encode() + chunk.encode() + partial)
+
+    assert result.quad_count == 49, "the header's 7 quads and the whole first chunk's 42"
+    assert result.discarded_bytes == len(partial)
+    assert not bool(store.query(SECOND_ENDPOINT)), (
+        "an unfinished chunk's facts must not reach the store"
+    )
+    assert not bool(store.query(FINALISED)), "this run did not finish and must not say so"
+
+
+def test_a_chunk_truncated_at_a_line_boundary_is_still_dropped(tmp_path):
+    """The case a line-level rule cannot even see. These bytes are complete,
+    parseable, mutually inconsistent lines: an endpoint with some of its facts
+    and no completion marker. Loading them would publish a partial answer as a
+    whole one."""
+    store = Store(str(tmp_path / "s"))
+    header, chunk, _ = _sections()
+    partial = b"".join(_second_chunk().splitlines(keepends=True)[:-1])
+    data = header.encode() + chunk.encode() + partial
+    assert len(list(parse(data, format=RdfFormat.N_QUADS))) == 90, (
+        "these bytes parse, which is exactly why the rule cannot be about "
+        "whether they parse"
+    )
+
+    result = load_run(store, data)
+
+    assert result.quad_count == 49, "the chunk with no marker is dropped whole"
+    assert result.discarded_bytes == len(partial)
+    assert not bool(store.query(SECOND_ENDPOINT))
+
+
+def test_a_run_that_died_before_its_first_endpoint_loads_just_the_header(tmp_path):
+    """The third terminator, and why the set has three members: with no chunk
+    written and no footer, the header's sw:emission is the only terminator in
+    the file. A two-member set would refuse this file whole."""
+    store = Store(str(tmp_path / "s"))
+    header, chunk, _ = _sections()
+    first = chunk.encode().splitlines(keepends=True)
+    partial = first[0] + first[1][:30]
+
+    result = load_run(store, header.encode() + partial)
+
+    assert result.quad_count == 7, "the header's run-level facts and nothing else"
+    assert result.discarded_bytes == len(partial)
+    assert not bool(store.query(A_DATA_SERVICE)), "no endpoint was reached"
+    assert bool(store.query("ASK { GRAPH ?g { ?a <urn:sparqlwatch:emission> ?e } }"))
+
+
+def test_a_sampled_value_spelled_like_a_chunk_marker_is_not_a_boundary(tmp_path):
+    """Sampled class IRIs come from strangers' endpoints, so a sample may
+    legitimately contain a value IRI spelled urn:sparqlwatch:completedEndpoint.
+    A byte scan for that spelling would treat this sw:sampledValue line as a
+    chunk boundary and cut in the middle of a chunk, loading a fragment of a
+    sample. The marker must be recognised in predicate position, where a class
+    IRI can never appear."""
+    store = Store(str(tmp_path / "s"))
+    header, _, _ = _sections()
+    sample = (
+        "<urn:sparqlwatch:content-sample:2026-08-23T02:00:00Z:0> "
+        "<urn:sparqlwatch:sampledValue> <urn:sparqlwatch:completedEndpoint> "
+        "<urn:sparqlwatch:run:2026-08-23T02:00:00Z> .\n"
+    ).encode()
+    tail = b"<urn:sparqlwatch:content-sample:2026-08-23T02:00:00Z:0> <urn:sparqlwa"
+
+    result = load_run(store, header.encode() + sample + tail)
+
+    assert result.quad_count == 7, "the header only: the sample's chunk has no marker"
+    assert result.discarded_bytes == len(sample) + len(tail)
+    assert not bool(store.query(MARKER_IN_OBJECT)), (
+        "the spoofing value must not have been read as a boundary and kept"
+    )
+
+
+def test_a_syntax_error_in_the_middle_still_refuses_the_whole_file(tmp_path):
+    """A corrupt file is not a crashed writer and the two must not be
+    conflated. The corruption is before the last terminator, so truncating to
+    that terminator still contains it: the file is refused exactly as today,
+    and the run already in the store survives."""
+    store = Store(str(tmp_path / "s"))
+    load_run(store, TERMINATED_FIXTURE.read_bytes())
+    before = len(store)
+    header, chunk, footer = _sections()
+    lines = chunk.splitlines(keepends=True)
+    corrupt = "".join(lines[:3]) + "<urn:sparqlwatch:broken> not-a-term .\n" + "".join(lines[3:])
+
+    with pytest.raises(ValueError, match="not valid N-Quads"):
+        load_run(store, (header + corrupt + footer).encode())
+
+    assert len(store) == before, "a refused load must not touch the store"
+    assert bool(store.query(FINALISED)), "the complete run already loaded must survive"
+
+
+def test_a_file_with_no_terminator_at_all_is_refused_with_the_parse_error(tmp_path):
+    """Never a zero-quad success path. A file that is entirely one truncated
+    line has no terminator to fall back to, so it must fail with the parse
+    error, not with 'discarded 68 bytes, loaded 0 quads' followed by 'input
+    names no graphs', which is a true sentence that misdiagnoses the file and
+    buries the real error."""
+    store = Store(str(tmp_path / "s"))
+    one_truncated_line = (
+        b"<urn:sparqlwatch:activity:2026-08-23T02:00:00Z> <urn:sparqlwatch:emis"
+    )
+
+    with pytest.raises(ValueError, match="not valid N-Quads") as raised:
+        load_run(store, one_truncated_line)
+
+    assert "names no graphs" not in str(raised.value), (
+        "the parse error is the diagnosis, not the empty-input guard"
+    )
+
+
+def test_the_result_reports_the_discarded_byte_count(tmp_path):
+    """load_run.py has no logging and reports through print in main, so the
+    count an operator needs is a field on LoadResult rather than a log line."""
+    header, chunk, _ = _sections()
+    tail = chunk.encode()[:57]
+    assert b"\n" not in tail, "this cut must land in the chunk's first line"
+
+    dropped = load_run(Store(str(tmp_path / "a")), header.encode() + tail)
+    assert dropped.discarded_bytes == 57
+
+    whole = load_run(Store(str(tmp_path / "b")), TERMINATED_FIXTURE.read_bytes())
+    assert whole.discarded_bytes == 0
+
+
+def test_a_run_from_before_terminators_existed_loads_whole(tmp_path):
+    """The captured sweeps carry no terminator at all, which the emitter's own
+    docstring calls the third case: a run from before the scheme existed, which
+    promised nothing about sections. There is no terminator to truncate to and
+    the bytes parse, so the file loads whole. A rule that refused a file for
+    carrying no terminator would reject every historical run in the store."""
+    data = FIXTURE.read_bytes()
+    assert b"urn:sparqlwatch:finalised" not in data, "this fixture predates the footer"
+
+    result = load_run(Store(str(tmp_path / "s")), data)
+
+    assert result.quad_count == 278
+    assert result.discarded_bytes == 0
+
+
+def test_an_empty_or_comment_only_file_is_still_refused_as_naming_no_graphs(tmp_path):
+    """Both parse cleanly and carry no terminator, so the tolerance must leave
+    them to the existing guard rather than turn them into a parse error or into
+    a successful load of nothing."""
+    store = Store(str(tmp_path / "s"))
+    for name, payload in (("empty", b""), ("comments only", b"# nothing here\n")):
+        with pytest.raises(ValueError, match="names no graphs"):
+            load_run(store, payload)
+        assert not list(store.named_graphs()), f"a refused load ({name}) stores nothing"
