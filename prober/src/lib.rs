@@ -189,20 +189,37 @@ pub async fn run_sweep(
         let client = Arc::clone(client);
         let handle = tasks.spawn(async move {
             // Held for the WHOLE group, not per endpoint: a permit is the
-            // right to talk to this host at all, and releasing it between two
-            // of its endpoints would let another group's endpoint start while
-            // this host still has work queued behind the same guard.
+            // right to talk to this host at all, and the loop below takes it
+            // once so a host's endpoints are probed as one stretch instead of
+            // requeuing behind whatever else is waiting between them.
             //
-            // It is held across a `Retry-After` stand-down too, because the
-            // wait happens inside `politeness::acquire` under this permit: a
-            // host that asked for an hour keeps its permit until the endpoint
-            // budget cancels the wait, then does it again for the next
-            // endpoint in the group. Bounded by that budget, 600s per
-            // endpoint, and it is the same cost `README.md` already states as
-            // a shared host costing the sum of its endpoints however high
-            // `--concurrency` is set. Releasing the permit while a host is
-            // stood down would need a task per endpoint, which is the
-            // arrangement whose guard waits do not fit a metric budget.
+            // That is a fairness choice, not an invariant, and it is worth
+            // being clear which: per-host serialisation comes from
+            // `politeness::acquire`, not from this permit, and the group is one
+            // sequential task whichever way round it goes, so acquiring inside
+            // the loop instead would still put exactly one of this host's
+            // endpoints in flight. No group can be queued behind this host's
+            // guard either, which is what the grouping above is for.
+            //
+            // The permit is held across a `Retry-After` stand-down too, because
+            // the wait happens inside `politeness::acquire` under it: a host
+            // that asked for an hour keeps its permit until the METRIC budget
+            // cancels the wait, then does it again for the next endpoint in the
+            // group. The metric budget is what cancels it and not the endpoint
+            // budget, because every acquire happens inside one:
+            // `probe_endpoint` wraps the description fetch and each per-metric
+            // future in `budget.with_metric_budget`, so a stood-down host's
+            // wait ends after 60s rather than 600s. Nine of those is the most
+            // an endpoint can spend, the description fetch plus the eight
+            // metrics of the shipped `metrics.toml`, which is 540s against a
+            // 600s endpoint budget; the endpoint budget only becomes the
+            // canceller for a definition file where the metric budget times the
+            // number of metrics exceeds it. The cost per group is the one
+            // `README.md` already states, a shared host costing the sum of its
+            // endpoints however high `--concurrency` is set. Releasing the
+            // permit while a host is stood down would need a task per endpoint,
+            // which is the arrangement whose guard waits do not fit a metric
+            // budget.
             let _permit = permits
                 .acquire()
                 .await
