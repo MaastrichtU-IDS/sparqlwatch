@@ -33,7 +33,11 @@ struct EndpointFile {
 /// no entry carrying credentials, in first-seen order.
 ///
 /// Deduplicating before dropping credentials, not after, so a URL listed twice
-/// produces one warning of each kind rather than two of the second.
+/// produces one warning of each kind rather than two of the second. That
+/// ordering is also why the two warnings name their positions differently:
+/// `dedupe` reports `position` in the file's list, `without_credentials`
+/// reports `deduped_position` in the list it was handed, and the second is not
+/// a line in `endpoints.toml` whenever a duplicate came before it.
 pub fn load_endpoints(toml_text: &str) -> anyhow::Result<Vec<String>> {
     let file: EndpointFile = toml::from_str(toml_text)?;
     Ok(without_credentials(&dedupe(&file.endpoint)))
@@ -58,6 +62,13 @@ pub fn load_endpoints(toml_text: &str) -> anyhow::Result<Vec<String>> {
 /// The warning names the host, not the URL, because repeating the URL would
 /// copy the credential into the log this function exists to keep it out of.
 ///
+/// It names the position `deduped_position` rather than `position`, because
+/// `load_endpoints` calls this on the output of `dedupe` and not on the file's
+/// own list. The two differ as soon as a duplicate precedes a credentialed
+/// entry, and `dedupe`'s warning reports the file's index under the plain
+/// name, so an operator reading both in one log would otherwise have no way to
+/// know that only one of the two numbers is a position in `endpoints.toml`.
+///
 /// What this does NOT catch is an API key in a query string, which stays a
 /// known exposure recorded under Known limitations in `prober/README.md`. The
 /// userinfo half is scheme-agnostic: `politeness::authority` delimits an
@@ -67,14 +78,14 @@ pub fn load_endpoints(toml_text: &str) -> anyhow::Result<Vec<String>> {
 /// swept, so it is left to stage 1d's triage of the seeding dumps.
 pub fn without_credentials(endpoints: &[String]) -> Vec<String> {
     let mut kept: Vec<String> = Vec::with_capacity(endpoints.len());
-    for (position, ep) in endpoints.iter().enumerate() {
+    for (deduped_position, ep) in endpoints.iter().enumerate() {
         let authority = crate::politeness::authority(ep);
         // Non-empty, not merely present: RFC 3986 permits an empty userinfo
         // component, and `http://@a.example/sparql` carries nothing to leak.
         if authority.userinfo.is_some_and(|u| !u.is_empty()) {
             tracing::warn!(
                 host = %authority.host_port,
-                position,
+                deduped_position,
                 "registry entry dropped: its URL carries userinfo, and an endpoint string is \
                  published verbatim inside the subject of every fact about it"
             );
