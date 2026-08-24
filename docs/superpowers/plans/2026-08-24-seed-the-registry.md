@@ -229,9 +229,21 @@ Expected, from the table above: 1683 datasets, 713 with a non-empty array, 725 e
 **`prober/endpoints.toml` is not touched.** It is the three-endpoint development list, it is asserted in `registry.rs:317-322`, it is the default `--endpoints`, and none of its three endpoints appears in the dump. Conflating the two would red CI and turn every hand-run into a multi-hour sweep.
 
 **Provenance is a parseable file, not a comment.** The first draft put it in a TOML comment and then specified a test that the comment survives, which no loader can observe. A separate file can be read, tested, and diffed. It carries: the dump's source URL, the date taken, its SHA-256, the extraction rule's version, and every count from Task 1 including the refusals by reason. The hash identifies **which dump produced this list**, so a re-seed that differs can be
-attributed to a new dump rather than to a changed rule. It does not make the dump retrievable:
-LOD Cloud publishes no archive of past versions, so if the source moves on, the hash records
-what was used and nothing recovers it.
+attributed to a new dump rather than to a changed rule. And the dump **is** retrievable, which
+I had wrongly denied in an earlier draft of this plan: `SURVEY.md:3` records the source as
+`https://lod-cloud.net/versions/2026-06-15/lod-data.json`, a versioned path, so the exact bytes
+can be fetched again and checked against the hash. Record that URL, not an unversioned one,
+because an unversioned URL is the case where the hash records what was used and nothing
+recovers it.
+
+The values, so Task 2 does not have to rediscover them:
+
+- source `https://lod-cloud.net/versions/2026-06-15/lod-data.json`
+- version dated 2026-06-15, downloaded 2026-08-19 (`SURVEY.md:3`)
+- 4172695 bytes
+- SHA-256 `d94fdb394ed423e305f8dc51040ff01a155023f60dbfcc4b62ff87f9b6a2cc35`
+
+Verify the hash rather than copying it.
 
 - [ ] **Step 1: Write the failing tests**
 
