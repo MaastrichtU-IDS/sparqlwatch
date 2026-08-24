@@ -316,9 +316,10 @@ pub struct RunEmission<'a> {
     /// number cannot say a sweep ran zero hosts at once.
     pub concurrency: NonZeroUsize,
     /// How many endpoints the run failed on, from `Sweep::failed_endpoints`.
-    /// Published so a reader can tell a complete run from an incomplete one
-    /// without reading a log: the per-endpoint facts say `prober-failed`, and
-    /// this says how many there were in total.
+    /// It is NOT what tells a reader whether a run finished. `sw:finalised` is,
+    /// and a run that died never reached the footer that carries either one, so
+    /// this count is only meaningful beside it. What it adds is the total, where
+    /// the per-endpoint facts say `prober-failed` one at a time.
     pub failed_endpoints: usize,
 }
 
@@ -1085,9 +1086,10 @@ pub fn emit_endpoint(state: &mut EmitState, facts: EndpointFacts) -> anyhow::Res
 pub struct RunFooter<'a> {
     pub run: &'a RunId,
     /// How many endpoints the run failed on, from `Sweep::failed_endpoints`.
-    /// Published so a reader can tell a complete run from an incomplete one
-    /// without reading a log: the per-endpoint facts say `prober-failed`, and
-    /// this says how many there were in total.
+    /// It is NOT what tells a reader whether a run finished. `sw:finalised` is,
+    /// and a run that died never reached the footer that carries either one, so
+    /// this count is only meaningful beside it. What it adds is the total, where
+    /// the per-endpoint facts say `prober-failed` one at a time.
     ///
     /// In the footer rather than the header because it summarises the chunks,
     /// and rule 2 of the section protocol forbids publishing a summary before
