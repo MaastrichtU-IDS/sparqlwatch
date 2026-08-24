@@ -2,13 +2,16 @@ use clap::Parser;
 use sparqlwatch_prober::{
     budget::Budget,
     client::Client,
-    emit::{emit_nquads, RunEmission, RunId},
+    emit::{RunFooter, RunHeader, RunId},
     metrics::{definitions_revision, load_metrics, within_cost, Cost},
     politeness::{Politeness, DEFAULT_MIN_GAP, DEFAULT_RETRY_AFTER_CAP},
     registry::load_endpoints,
-    run_sweep, Sweep,
+    run_sweep,
+    write::{partial_path, RunWriter},
+    Sweep,
 };
 use std::num::NonZeroUsize;
+use std::path::Path;
 use std::time::Duration;
 
 #[derive(Parser)]
@@ -235,22 +238,36 @@ async fn main() -> anyhow::Result<()> {
     // The policy lives here, in one place. `run_sweep` receives both halves as
     // data and never learns what a ceiling is.
     let (run, declined) = within_cost(&defs, args.max_cost);
+    let run_id = RunId(args.at.clone());
+    // The file is opened and its header written BEFORE any probing, so a bad
+    // `--out` is reported now rather than after a ten-minute sweep, and a sweep
+    // killed before its first endpoint finished still leaves a loadable header.
+    // It is a sibling of `--out`, not `--out` itself: see `write::RunWriter`.
+    let partial = partial_path(Path::new(&args.out), &args.at);
+    let mut writer = RunWriter::create(
+        Path::new(&args.out),
+        &args.at,
+        RunHeader {
+            run: &run_id,
+            generated_at: &args.at,
+            metric_revision: &revision,
+            max_cost: args.max_cost,
+            concurrency: args.concurrency,
+        },
+    )?;
+    tracing::info!(partial = %partial.display(), "writing this run as its endpoints finish");
+    // Each endpoint's chunk reaches the file as that endpoint finishes, inside
+    // this call. What comes back is the same four fact lists as before, in
+    // input order, built from the slots after the last chunk was written.
     let Sweep { rows, declarations_read, not_measured, content_samples, failed_endpoints } =
-        run_sweep(&endpoints, &run, &declined, &client, budget, args.concurrency).await;
-    let nq = emit_nquads(RunEmission {
-        run: &RunId(args.at.clone()),
-        generated_at: &args.at,
-        metric_revision: &revision,
-        rows: &rows,
-        declarations_read: &declarations_read,
-        not_measured: &not_measured,
-        max_cost: args.max_cost,
-        concurrency: args.concurrency,
-        failed_endpoints,
-        content_samples: &content_samples,
-    })?;
-    std::fs::write(&args.out, nq)?;
+        run_sweep(&endpoints, &run, &declined, &client, budget, args.concurrency, &mut writer)
+            .await?;
+    // The footer, and then the rename onto `--out`. Last, because it publishes
+    // `failedEndpoints`, which summarises the chunks, and because the rename is
+    // what promises `--out` is a run that finished.
+    writer.finish(RunFooter { run: &run_id, failed_endpoints })?;
     tracing::info!(endpoints = endpoints.len(), measurements = rows.len(),
+                   declarations_read = declarations_read.len(),
                    not_measured = not_measured.len(), content_samples = content_samples.len(),
                    max_cost = args.max_cost.slug(), concurrency = args.concurrency,
                    failed_endpoints, revision = %revision, out = %args.out, "sweep complete");

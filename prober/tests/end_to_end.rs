@@ -50,7 +50,7 @@ async fn a_sweep_over_one_mock_endpoint_produces_nquads() {
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
     let client = std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
     let url = format!("{}/sparql", server.uri());
-    let Sweep { rows, declarations_read: _declarations_read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap())).await;
+    let Sweep { rows, declarations_read: _declarations_read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
 
     assert_eq!(rows.len(), defs.len(), "one measurement per metric per endpoint");
 
@@ -155,7 +155,7 @@ async fn the_two_cors_metrics_are_not_the_same_probe() {
     let defs = load_shipped_metrics();
     let client = std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
     let url = format!("{}/sparql", server.uri());
-    let Sweep { rows, declarations_read: _read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap())).await;
+    let Sweep { rows, declarations_read: _read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
     let verdict = |id: &str| rows.iter().find(|r| r.metric_id == id).unwrap().verdict;
 
     assert_eq!(
@@ -180,7 +180,7 @@ async fn the_two_cors_metrics_are_not_the_same_probe() {
 async fn an_unreachable_endpoint_yields_indeterminate_not_a_panic() {
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
     let client = std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
-    let Sweep { rows, declarations_read: _declarations_read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(&["http://127.0.0.1:1/sparql".to_string()], &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap())).await;
+    let Sweep { rows, declarations_read: _declarations_read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(&["http://127.0.0.1:1/sparql".to_string()], &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
     assert_eq!(rows.len(), defs.len());
     assert!(rows.iter().all(|r| r.verdict == Verdict::Indeterminate));
 }
@@ -214,7 +214,7 @@ async fn a_metric_binding_a_nonstandard_variable_is_extracted_via_its_declared_v
 
     let client = std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
     let url = format!("{}/sparql", server.uri());
-    let Sweep { rows, declarations_read: _declarations_read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(&[url], &[def], &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap())).await;
+    let Sweep { rows, declarations_read: _declarations_read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(&[url], &[def], &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
 
     assert_eq!(rows.len(), 1);
     assert_eq!(
@@ -246,7 +246,7 @@ async fn the_sweep_fetches_the_description_once_per_endpoint() {
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
     let client = std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
     let url = format!("{}/sparql", server.uri());
-    let Sweep { rows, declarations_read: _declarations_read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap())).await;
+    let Sweep { rows, declarations_read: _declarations_read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
 
     let queryless = server.received_requests().await.unwrap().iter()
         .filter(|r| r.method == Method::GET && r.url.query().is_none()).count();
@@ -273,7 +273,7 @@ async fn a_fetched_description_puts_a_level_on_its_row() {
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
     let client = std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
     let url = format!("{}/sparql", server.uri());
-    let Sweep { rows, declarations_read: _declarations_read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap())).await;
+    let Sweep { rows, declarations_read: _declarations_read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
 
     let row = rows.iter().find(|r| r.metric_id == "service-description").unwrap();
     assert_eq!(row.verdict, Verdict::Verified);
@@ -311,7 +311,7 @@ async fn a_non_graded_fetch_metric_carries_no_level() {
 
     let client = std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
     let url = format!("{}/sparql", server.uri());
-    let Sweep { rows, declarations_read: _declarations_read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &[def], &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap())).await;
+    let Sweep { rows, declarations_read: _declarations_read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &[def], &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
 
     let row = &rows[0];
     assert_eq!(row.verdict, Verdict::Verified, "the fetch itself still succeeds");
@@ -343,7 +343,7 @@ async fn a_declared_and_working_capability_resolves_to_verified_through_the_swee
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
     let client = std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
     let url = format!("{}/sparql", server.uri());
-    let Sweep { rows, declarations_read: _declarations_read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap())).await;
+    let Sweep { rows, declarations_read: _declarations_read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
 
     let row = rows.iter().find(|r| r.metric_id == "geo-functions").unwrap();
     assert_eq!(
@@ -390,7 +390,7 @@ async fn a_description_served_as_rdf_xml_is_parsed_not_silently_dropped() {
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
     let client = std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
     let url = format!("{}/sparql", server.uri());
-    let Sweep { rows, declarations_read: _declarations_read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap())).await;
+    let Sweep { rows, declarations_read: _declarations_read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
 
     let description = rows.iter().find(|r| r.metric_id == "service-description").unwrap();
     assert_eq!(description.verdict, Verdict::Verified, "the body did parse, as RDF/XML");
@@ -441,7 +441,7 @@ async fn sweep_description_served_as(
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
     let client = std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
     let url = format!("{}/sparql", server.uri());
-    let Sweep { rows, declarations_read: read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap())).await;
+    let Sweep { rows, declarations_read: read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
     let row = |id: &str| rows.iter().find(|r| r.metric_id == id).unwrap();
     assert_eq!(read.len(), 1);
     let description = row("service-description");
@@ -546,7 +546,7 @@ async fn an_endpoint_budget_expiry_still_yields_one_row_per_metric() {
     let client = std::sync::Arc::new(Client::new(budget, Politeness::unlimited()).unwrap());
     let url = format!("{}/sparql", server.uri());
     let started = std::time::Instant::now();
-    let Sweep { rows, declarations_read: _declarations_read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, budget, NonZeroUsize::new(1).unwrap())).await;
+    let Sweep { rows, declarations_read: _declarations_read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, budget, NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
     let took = started.elapsed();
 
     assert_eq!(rows.len(), defs.len(), "one row per (endpoint, metric) regardless of timing");
@@ -611,7 +611,7 @@ async fn a_budget_expiry_after_the_fetch_still_publishes_declarations_read() {
     };
     let client = std::sync::Arc::new(Client::new(budget, Politeness::unlimited()).unwrap());
     let url = format!("{}/sparql", server.uri());
-    let Sweep { rows, declarations_read: read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, budget, NonZeroUsize::new(1).unwrap())).await;
+    let Sweep { rows, declarations_read: read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, budget, NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
 
     // The budget really did cut the loop short, or this proves nothing about
     // the write position.
@@ -699,7 +699,7 @@ async fn a_partial_endpoint_keeps_the_verdicts_it_already_earned() {
     };
     let client = std::sync::Arc::new(Client::new(budget, Politeness::unlimited()).unwrap());
     let url = format!("{}/sparql", server.uri());
-    let Sweep { rows, declarations_read: read, not_measured: _not_measured, content_samples: samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, budget, NonZeroUsize::new(1).unwrap())).await;
+    let Sweep { rows, declarations_read: read, not_measured: _not_measured, content_samples: samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, budget, NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
 
     assert_eq!(rows.len(), defs.len(), "one row per (endpoint, metric) regardless of timing");
     for (row, def) in rows.iter().zip(&defs) {
@@ -791,7 +791,7 @@ async fn each_endpoints_row_carries_the_level_computed_for_that_endpoint() {
 
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
     let client = std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
-    let Sweep { rows, declarations_read: _declarations_read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(&[bare_url.clone(), rich_url.clone()], &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap())).await;
+    let Sweep { rows, declarations_read: _declarations_read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(&[bare_url.clone(), rich_url.clone()], &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
 
     let level_at = |url: &str| {
         let row = rows.iter()
@@ -845,7 +845,7 @@ async fn a_description_reached_through_a_redirect_is_still_scoped_to_us() {
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
     let client = std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
     let url = format!("{}/a", server.uri());
-    let Sweep { rows, declarations_read: _declarations_read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap())).await;
+    let Sweep { rows, declarations_read: _declarations_read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
 
     let geo = rows.iter().find(|r| r.metric_id == "geo-functions").unwrap();
     assert_eq!(
@@ -885,7 +885,7 @@ async fn a_neighbouring_datasets_declaration_is_not_credited_to_this_endpoint() 
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
     let client = std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
     let url = format!("{}/plain/sparql", server.uri());
-    let Sweep { rows, declarations_read: _declarations_read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap())).await;
+    let Sweep { rows, declarations_read: _declarations_read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
 
     let geo = rows.iter().find(|r| r.metric_id == "geo-functions").unwrap();
     assert_eq!(
@@ -929,7 +929,7 @@ async fn sweep_with_description(body: &str, content_type: &str) -> String {
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
     let client = std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
     let url = format!("{}/sparql", server.uri());
-    let Sweep { rows, declarations_read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap())).await;
+    let Sweep { rows, declarations_read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
     emit_nquads(RunEmission {
         run: &RunId("test".into()),
         generated_at: "2026-08-20T08:00:00Z",
@@ -955,7 +955,7 @@ async fn sweep_with_status(status: u16) -> String {
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
     let client = std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
     let url = format!("{}/sparql", server.uri());
-    let Sweep { rows, declarations_read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap())).await;
+    let Sweep { rows, declarations_read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
     emit_nquads(RunEmission {
         run: &RunId("test".into()),
         generated_at: "2026-08-20T08:00:00Z",
@@ -986,7 +986,7 @@ async fn sweep_with_status_and_working_queries(status: u16) -> String {
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
     let client = std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
     let url = format!("{}/sparql", server.uri());
-    let Sweep { rows, declarations_read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap())).await;
+    let Sweep { rows, declarations_read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
     emit_nquads(RunEmission {
         run: &RunId("test".into()),
         generated_at: "2026-08-20T08:00:00Z",
@@ -1014,7 +1014,7 @@ async fn sweep_two_endpoints_one_broken() -> String {
     let client = std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
     let good = format!("{}/sparql", server.uri());
     let broken = "http://127.0.0.1:1/sparql".to_string();
-    let Sweep { rows, declarations_read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(&[good, broken], &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap())).await;
+    let Sweep { rows, declarations_read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(&[good, broken], &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
     emit_nquads(RunEmission {
         run: &RunId("test".into()),
         generated_at: "2026-08-20T08:00:00Z",
@@ -1142,7 +1142,7 @@ async fn a_registry_that_lists_one_url_twice_probes_it_once() {
 
     let defs = load_shipped_metrics();
     let client = std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
-    let Sweep { rows, declarations_read: read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(&endpoints, &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap())).await;
+    let Sweep { rows, declarations_read: read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(&endpoints, &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
     let run = emit_nquads(RunEmission {
         run: &RunId("test".into()),
         generated_at: "2026-08-20T08:00:00Z",
@@ -1183,7 +1183,7 @@ async fn a_near_duplicate_differing_by_a_trailing_slash_stays_two_entries() {
 
     let defs = load_shipped_metrics();
     let client = std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
-    let Sweep { rows, declarations_read: read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(&endpoints, &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap())).await;
+    let Sweep { rows, declarations_read: read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(&endpoints, &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
     let run = emit_nquads(RunEmission {
         run: &RunId("test".into()),
         generated_at: "2026-08-20T08:00:00Z",
@@ -1357,7 +1357,7 @@ async fn has_classes_reads_the_iri_c_binds_through_select_iris_not_ask_data() {
     let defs = load_shipped_metrics();
     let client = std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
     let url = format!("{}/sparql", server.uri());
-    let Sweep { rows, declarations_read: read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap())).await;
+    let Sweep { rows, declarations_read: read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
     let run = emit_nquads(RunEmission {
         run: &RunId("test".into()),
         generated_at: "2026-08-20T08:00:00Z",
@@ -1393,7 +1393,7 @@ async fn sweep_against(server: &MockServer, run: &[MetricDef], declined: &[Metri
     let client = std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
     let url = format!("{}/sparql", server.uri());
     let Sweep { rows, declarations_read: _read, not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } =
-        without_deadlocking(run_sweep(std::slice::from_ref(&url), run, declined, &client, Budget::default(), NonZeroUsize::new(1).unwrap())).await;
+        without_deadlocking(run_sweep(std::slice::from_ref(&url), run, declined, &client, Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
     Swept { rows, not_measured }
 }
 
@@ -1462,7 +1462,7 @@ async fn a_declined_metric_reaches_the_published_graph_with_no_verdict() {
     let client = std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
     let url = format!("{}/sparql", server.uri());
     let Sweep { rows, declarations_read: read, not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } =
-        without_deadlocking(run_sweep(std::slice::from_ref(&url), &run, &declined, &client, Budget::default(), NonZeroUsize::new(1).unwrap())).await;
+        without_deadlocking(run_sweep(std::slice::from_ref(&url), &run, &declined, &client, Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
     let nq = emit_nquads(RunEmission {
         run: &RunId("test".into()),
         generated_at: "2026-08-20T08:00:00Z",
@@ -1524,7 +1524,7 @@ async fn a_declined_metric_is_recorded_once_per_endpoint() {
     let client = std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
     let urls = vec![format!("{}/sparql", a.uri()), format!("{}/sparql", b.uri())];
     let Sweep { rows: _rows, declarations_read: _read, not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } =
-        without_deadlocking(run_sweep(&urls, &run, &declined, &client, Budget::default(), NonZeroUsize::new(1).unwrap())).await;
+        without_deadlocking(run_sweep(&urls, &run, &declined, &client, Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
 
     assert_eq!(
         not_measured.len(),
@@ -1561,7 +1561,7 @@ async fn a_throttled_endpoint_is_not_reported_available_even_with_a_parseable_bo
         let client = std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
         let url = format!("{}/sparql", server.uri());
         let Sweep { rows, declarations_read: _read, not_measured: _nm, content_samples: _content_samples, failed_endpoints: _failed_endpoints } =
-            without_deadlocking(run_sweep(std::slice::from_ref(&url), &[def], &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap())).await;
+            without_deadlocking(run_sweep(std::slice::from_ref(&url), &[def], &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
 
         assert_eq!(
             rows[0].verdict,
@@ -1615,7 +1615,7 @@ async fn a_host_that_asked_for_an_hour_indeterminates_the_rest_of_its_sweep() {
     let client = std::sync::Arc::new(Client::new(budget, Politeness::new(std::time::Duration::ZERO)).unwrap());
     let url = format!("{}/sparql", server.uri());
     let Sweep { rows, declarations_read: _declarations_read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } =
-        without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, budget, NonZeroUsize::new(1).unwrap())).await;
+        without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, budget, NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
 
     assert_eq!(server.received_requests().await.unwrap().len(), 1,
                "one request, and the hour it asked for held every later probe back");
@@ -1692,9 +1692,9 @@ async fn sample_from(server: &MockServer, def: &MetricDef) -> Vec<sparqlwatch_pr
         &[],
         &client,
         Budget::default(),
-        NonZeroUsize::new(1).unwrap(),
+        NonZeroUsize::new(1).unwrap(), &mut common::discarding(),
     ))
-    .await;
+    .await.unwrap();
     content_samples
 }
 
@@ -1713,7 +1713,7 @@ async fn the_classes_metric_publishes_the_iris_it_bound() {
     let client = std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
     let url = format!("{}/sparql", server.uri());
     let Sweep { rows, declarations_read: read, not_measured, content_samples, failed_endpoints: _failed_endpoints } =
-        without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap())).await;
+        without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
 
     // Only the metric that declared a `sample_limit` publishes one:
     // `has-classes` binds the very same `?c` in this sweep and must publish
@@ -1836,7 +1836,7 @@ async fn a_declined_metric_publishes_no_sample_and_still_says_why() {
     let client = std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
     let url = format!("{}/sparql", server.uri());
     let Sweep { rows, declarations_read: read, not_measured, content_samples, failed_endpoints: _failed_endpoints } =
-        without_deadlocking(run_sweep(std::slice::from_ref(&url), &run, &declined, &client, Budget::default(), NonZeroUsize::new(1).unwrap())).await;
+        without_deadlocking(run_sweep(std::slice::from_ref(&url), &run, &declined, &client, Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
 
     assert!(content_samples.is_empty(),
             "a metric that was never run cannot have sampled anything: {content_samples:?}");
@@ -1910,9 +1910,9 @@ async fn a_status_the_resolver_distrusts_publishes_no_sample_at_all() {
                 &[],
                 &client,
                 Budget::default(),
-                NonZeroUsize::new(1).unwrap(),
+                NonZeroUsize::new(1).unwrap(), &mut common::discarding(),
             ))
-            .await;
+            .await.unwrap();
 
         assert_eq!(
             rows.iter().map(|r| r.verdict).collect::<Vec<_>>(),
@@ -1982,9 +1982,9 @@ async fn each_sample_names_its_own_endpoint_its_own_values_and_its_own_metric() 
             &[],
             &client,
             Budget::default(),
-            NonZeroUsize::new(1).unwrap(),
+            NonZeroUsize::new(1).unwrap(), &mut common::discarding(),
         ))
-        .await;
+        .await.unwrap();
 
     assert_eq!(content_samples.len(), 2, "two endpoints that both sampled are two samples");
     let of = |ep: &str| {
@@ -2235,9 +2235,9 @@ async fn output_order_is_input_order_not_completion_order() {
             &declined,
             &client,
             Budget::default(),
-            NonZeroUsize::new(2).unwrap(),
+            NonZeroUsize::new(2).unwrap(), &mut common::discarding(),
         ))
-        .await;
+        .await.unwrap();
 
     assert_eq!(failed_endpoints, 0, "both endpoints answered, so nothing failed");
 
@@ -2301,9 +2301,9 @@ async fn two_endpoints_on_different_hosts_interleave() {
         &declined,
         &client,
         Budget::default(),
-        NonZeroUsize::new(2).unwrap(),
+        NonZeroUsize::new(2).unwrap(), &mut common::discarding(),
     ))
-    .await;
+    .await.unwrap();
     assert_eq!(failed_endpoints, 0);
     assert_eq!(rows.len(), eps.len() * run.len(), "both endpoints were measured in full");
 
@@ -2348,9 +2348,9 @@ async fn two_endpoints_on_one_host_never_overlap() {
         &declined,
         &client,
         Budget::default(),
-        NonZeroUsize::new(2).unwrap(),
+        NonZeroUsize::new(2).unwrap(), &mut common::discarding(),
     ))
-    .await;
+    .await.unwrap();
 
     // Assert both endpoints earned a full row set, or a sweep that silently
     // dropped one of them passes everything below.
@@ -2419,9 +2419,9 @@ async fn concurrency_counts_hosts_not_endpoints() {
         &declined,
         &client,
         Budget::default(),
-        NonZeroUsize::new(4).unwrap(),
+        NonZeroUsize::new(4).unwrap(), &mut common::discarding(),
     ))
-    .await;
+    .await.unwrap();
     assert_eq!(failed_endpoints, 0);
     assert_eq!(rows.len(), eps.len() * run.len(), "all four endpoints were measured in full");
 
@@ -2520,9 +2520,9 @@ async fn a_panicked_group_publishes_prober_failed_for_every_endpoint_it_held() {
             &declined,
             &client,
             budget,
-            NonZeroUsize::new(2).unwrap(),
+            NonZeroUsize::new(2).unwrap(), &mut common::discarding(),
         ))
-        .await;
+        .await.unwrap();
 
     // Endpoints, not groups: one task panicked and it was holding two.
     assert_eq!(failed_endpoints, 2, "the count is of endpoints the sweep failed on");

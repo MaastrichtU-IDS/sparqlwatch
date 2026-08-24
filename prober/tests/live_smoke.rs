@@ -1,3 +1,6 @@
+use sparqlwatch_prober::emit::{RunHeader, RunId};
+use sparqlwatch_prober::metrics::Cost;
+use sparqlwatch_prober::write::RunWriter;
 use sparqlwatch_prober::{budget::Budget, client::Client, metrics::load_metrics, politeness::Politeness, run_sweep, Sweep};
 use std::num::NonZeroUsize;
 use std::time::{Duration, Instant};
@@ -20,7 +23,21 @@ async fn probes_three_real_endpoints() {
         "https://data.kkg.kadaster.nl/query".to_string(),
         "https://ontop.certain.ai.ustp.at/sparql".to_string(),
     ];
-    let Sweep { rows, declarations_read, .. } = run_sweep(&eps, &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap()).await;
+    // A live sweep writes its chunks like any other, and this test is about the
+    // verdicts rather than the file, so the bytes go to a sink.
+    let run = RunId("live-smoke".into());
+    let mut writer = RunWriter::with_writer(
+        std::io::sink(),
+        RunHeader {
+            run: &run,
+            generated_at: "2026-08-20T08:00:00Z",
+            metric_revision: "live-smoke",
+            max_cost: Cost::Cheap,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+        },
+    )
+    .unwrap();
+    let Sweep { rows, declarations_read, .. } = run_sweep(&eps, &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap(), &mut writer).await.unwrap();
     for r in &rows {
         println!("{} {} -> {}", r.endpoint, r.metric_id, r.verdict.slug());
     }
