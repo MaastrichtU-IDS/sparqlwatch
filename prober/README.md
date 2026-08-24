@@ -382,6 +382,41 @@ metric) has to read this rather than assume it. Such a run also exits non-zero,
 after writing its output, so the run is preserved and the scheduler still learns
 it was incomplete.
 
+### How a run is written, and what a truncated one says
+
+A run is emitted as three kinds of section: a header of run-level facts, one
+self-contained chunk per endpoint, and a footer. Each section ends with its own
+terminator, `urn:sparqlwatch:emission "incremental"` for the header,
+`urn:sparqlwatch:completedEndpoint <endpoint>` for a chunk and
+`urn:sparqlwatch:finalised "true"^^xsd:boolean` for the footer, all three on the
+run's activity. N-Quads has no prologue and every line ends in a newline, so any
+prefix of the file parses, which means a crash leaves a readable file whose only
+risk is that its lines contradict each other. The terminators are what remove
+that risk: a reader that holds a section's terminator holds the whole section,
+and a reader that does not may drop the fragment.
+
+A consumer reads three cases off facts that were each true when they were
+written. `emission` with `finalised` is a complete run. `emission` without
+`finalised` is a run that did not finish, and its `failedEndpoints` count says
+nothing, because that count summarises chunks that were never written. Neither
+one is a run emitted before this scheme existed, which promised nothing either
+way. `finalised` is a boolean rather than `prov:endedAtTime` because nothing in
+the prober can produce that instant soundly: `emit` reads no clock by design,
+`std` cannot format a `SystemTime` as `xsd:dateTime`, no date library is in the
+lock file, and a flag supplied at launch would publish a predicted future into a
+graph that is never rewritten.
+
+`completedEndpoint` is per endpoint and not per run, so "did this run reach this
+endpoint" is a fact rather than an inference from absence. It is also the reason
+two ordering rules hold inside the file: every chunk types its own endpoint
+with `dcat:DataService` rather than relying on an earlier chunk having done it,
+and no fact family publishes its own summary before the things it summarises.
+The second is why `sampleSize` and `sampleTruncated` come after the last
+`sampledValue`, and why `failedEndpoints` sits in the footer. A cut inside a
+sample's values then loses the sample, which every consumer already handles,
+instead of leaving `sampleSize 200, sampleTruncated false` standing beside three
+values, which a page would render as two hundred classes sampled, complete.
+
 The labels in that file state only what was actually measured. `geo-data` and
 `has-classes` and `classes` query the default graph AND every named graph, via a `UNION` with a
 `GRAPH ?anyg { ... }` branch, so an endpoint holding everything in named
@@ -462,11 +497,15 @@ Per sample, the run graph carries only sparqlwatch's own predicates plus
 - `rdf:type urn:sparqlwatch:ContentSample`
 - `urn:sparqlwatch:sampledFrom` the endpoint
 - `urn:sparqlwatch:sampledBy` the metric definition
-- `urn:sparqlwatch:sampleSize` the count of values published, an `xsd:integer`
-- `urn:sparqlwatch:sampleTruncated` an `xsd:boolean`
 - `urn:sparqlwatch:sampledValue`, one per IRI published, repeated
+- `urn:sparqlwatch:sampleTruncated` an `xsd:boolean`
+- `urn:sparqlwatch:sampleSize` the count of values published, an `xsd:integer`
 - `prov:wasGeneratedBy` the run's activity, the same link every other fact in
   this graph carries
+
+Written in that order, with the two summarising quads after the values they
+describe, so that a file cut inside the value list loses the sample rather than
+misstating its size. See How a run is written above.
 
 Values are published in the order the endpoint returned them: not sorted, not
 deduplicated beyond what `SELECT DISTINCT` already did, because reordering
@@ -587,27 +626,34 @@ sufficient.
   on `:` reads one of them wrong. It would also read the new one wrong, since the
   run segment is an unencoded `xsd:dateTime` and carries colons of its own.
 
-**Order.** Within one emitted file the order is input order, never completion
-order: each endpoint keeps its input index as a slot, `assemble` walks the slots
-afterwards, and `emit_nquads` writes the activity's own quads, then the
-measurements, then the not-measured facts, then the content samples, then the
-`declarationsRead` facts, each list in the order it was assembled, which is
-endpoint input order first. Within one endpoint it is the order of the
-definition list the facts came from, which is not `metrics.toml` order in
-general: `within_cost` partitions that file into the metrics that run and the
-metrics the ceiling declines, and `assemble` writes an endpoint's not-measured
-facts as the metrics that would have run and then the metrics the ceiling
-declined, so a cheap metric listed after an expensive one comes out first.
-That is worth having for diffing two files by eye, and it is all it is worth.
-It is **not** a property of the data:
+**Order.** A file is the header, then one chunk per endpoint, then the footer.
+`emit_nquads` derives the endpoint sequence from the union of all four fact
+lists in first-appearance order, because an endpoint can appear in one list
+only: a prober-failed endpoint is in the not-measured list alone, and an
+endpoint whose description was read but whose metrics produced no row is in the
+`declarationsRead` list alone. For a run assembled by `assemble`, whose lists
+are already grouped by endpoint, that reproduces input order, never completion
+order: each endpoint keeps its input index as a slot and `assemble` walks the
+slots afterwards. Within one chunk the order is measurements, then not-measured
+facts, then content samples, then the `declarationsRead` fact, then the chunk's
+terminator. Within one family it is the order of the definition list the facts
+came from, which is not `metrics.toml` order in general: `within_cost`
+partitions that file into the metrics that run and the metrics the ceiling
+declines, and `assemble` writes an endpoint's not-measured facts as the metrics
+that would have run and then the metrics the ceiling declined, so a cheap metric
+listed after an expensive one comes out first. That is worth having for diffing
+two files by eye, and it is all it is worth. Beyond the section terminators and
+the two rules above, it is **not** a property of the data:
 
 - N-Quads serialises a set. No consumer may read meaning from the order of lines
   in one.
 - `web/load_run.py` parses the file and inserts the quads into Oxigraph, which is
   order-blind, so the order is gone before any query sees it.
-- Stage 1c-b4 is expected to break it. Writing each endpoint's chunk as it
-  completes is writing in completion order, which is the whole point of writing
-  incrementally, and nothing downstream loses anything when it happens.
+- Writing each endpoint's chunk as it completes will make the chunk sequence
+  completion order rather than input order, which is the whole point of writing
+  incrementally, and nothing downstream loses anything when it happens. What a
+  consumer may read from the order is only what the terminators say, and those
+  say it as facts rather than as position.
 
 **Output is not byte-identical between two runs of one `--at`.** `emit_nquads`
 reads no clock, no environment and no global, so it is a pure function of its
