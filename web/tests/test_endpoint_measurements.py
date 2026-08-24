@@ -6,8 +6,10 @@ web/tests/fixtures/. See each fixture's header comment (or, for
 run-with-samples.nq, web/tests/test_fixture.py) for its provenance.
 """
 
-from pyoxigraph import NamedNode
+import pytest
+from pyoxigraph import NamedNode, RdfFormat, Store
 
+from conftest import RUN_WITH_SAMPLES
 from endpoint_content import endpoint_content
 from endpoint_measurements import EndpointMeasurements, endpoint_measurements
 
@@ -453,3 +455,50 @@ def test_a_newest_run_that_marked_this_endpoint_reports_nothing():
     """
     r = _newest_is_a_crashed_later_run(newest_completed_this_endpoint=True)
     assert r.newer_run_did_not_reach_this_endpoint is False
+
+
+def _two_activities_tied_as_newest() -> bytes:
+    """Two run graphs holding nothing but an activity, with distinct IRIs, no
+    endpoint facts, and the SAME prov:generatedAtTime, later than any fixture's.
+
+    Hand-built rather than a fixture pair, because --at is both the run IRI and
+    the timestamp, so no two run files the prober writes can tie. Inserted
+    straight into the store rather than through load_run, which refuses a file
+    of this shape on its own account: see
+    test_a_header_cut_short_of_its_terminator_is_refused.
+    """
+    lines = []
+    for run in ("a", "b"):
+        graph = f"<urn:sparqlwatch:test:run:{run}>"
+        activity = f"<urn:sparqlwatch:test:activity:{run}>"
+        lines += [
+            f"{activity} <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> "
+            f"<http://www.w3.org/ns/prov#Activity> {graph} .",
+            f"{activity} <http://www.w3.org/ns/prov#generatedAtTime> "
+            f'"2026-08-25T00:00:00Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> {graph} .',
+        ]
+    return ("\n".join(lines) + "\n").encode()
+
+
+def test_two_runs_tied_as_the_newest_in_the_store_are_refused(tmp_path):
+    """The second tie check, on the one selection in the query that is not
+    per-endpoint.
+
+    A different store from the tie above: neither of these two runs touched
+    kadaster at all, so the per-endpoint selection is unambiguous and returns
+    the 16:00 sweep's rows, while the newest-run subquery's MAX matches two
+    graphs and multiplies every row. Resolving that silently would attribute
+    one run's sw:emission and sw:finalised to a page that names the other, and
+    the sentence the read tier derives from them would be about a run the
+    reader cannot find. Refusing needs its own test: replacing the check with
+    `if False` leaves the rest of this suite green.
+    """
+    store = Store(str(tmp_path / "s"))
+    store.load(RUN_WITH_SAMPLES.read_bytes(), format=RdfFormat.N_QUADS)
+    store.load(_two_activities_tied_as_newest(), format=RdfFormat.N_QUADS)
+
+    with pytest.raises(ValueError, match="2 runs tie as the newest") as raised:
+        endpoint_measurements(store, KADASTER)
+    message = str(raised.value)
+    assert "urn:sparqlwatch:test:run:a" in message, "name both runs, so the store is fixable"
+    assert "urn:sparqlwatch:test:run:b" in message

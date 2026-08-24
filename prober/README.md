@@ -492,11 +492,22 @@ backpressure, so a fast host cannot run arbitrarily far ahead of the writer. A
 30-endpoint sweep measured `peak_queued=15, retained_at_end=30`.
 
 `completedEndpoint` is per endpoint and not per run, so "did this run reach this
-endpoint" is a fact rather than an inference from absence. It is written even for
-an endpoint the run published no other fact about, because that is the only way
-"reached but learned nothing" and "never attempted" can be told apart, and such
-a chunk still types its endpoint `dcat:DataService` so the marker names a
-resource the graph describes.
+endpoint" is a fact rather than an inference from absence. Read "completed" as
+"this endpoint's chunk is complete": the run wrote everything it will ever say
+about the endpoint, which is NOT the same as the prober having succeeded there.
+An endpoint whose probing task panicked carries `prober-failed` declines and a
+`completedEndpoint` marker together, and `run-prober-failed.nq` shows that
+shape, `failedEndpoints "1"` beside a marker naming that very endpoint. Both
+readings would be defensible names; this is the one the file means, and it is
+the one the read tier needs. Dropping the marker for a failed endpoint would
+make it indistinguishable, on a run that later crashed, from an endpoint the run
+never got to, so a page would say a later sweep never reached an endpoint whose
+failure that sweep had published.
+
+It is written even for an endpoint the run published no other fact about,
+because that is the only way "reached but learned nothing" and "never attempted"
+can be told apart, and such a chunk still types its endpoint `dcat:DataService`
+so the marker names a resource the graph describes.
 
 Two ordering rules hold inside the file because the chunk is what a truncated
 one preserves. **A chunk types every endpoint it publishes a fact about**,
@@ -890,6 +901,17 @@ The following are deferred deliberately, not oversights:
   GET returns 404, 200 and 500 respectively, with no `Location`. So the shipped
   list does not exercise this, and 1d's 548-endpoint registry is where it would
   first be measurable.
+
+- **Two sweeps with different `--at` values and the same `--out` lose one of
+  them, silently.** The partial file is named for the run, so each gets its own
+  and neither refuses the other, and the second `rename` replaces the first's
+  `--out`. Rule 1's promise is technically kept, `--out` holds *a* complete run,
+  but a run that finished and reported success is gone from the only place that
+  holds it, with nothing said. This is not new to the incremental write:
+  `fs::write` behaved the same way. It is worth naming because overlapping
+  `CronJob`s are exactly how it happens, and because the `O_EXCL` refusal that
+  protects a retry does not protect this case: the refusal only fires for
+  invocations that SHARE an `--at`.
 
 - **A flushed chunk is not a synced chunk.** Both halves of the design's
   per-endpoint isolation rule are now met: no endpoint's slowness delays another

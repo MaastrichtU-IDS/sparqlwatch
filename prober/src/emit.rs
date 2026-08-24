@@ -1076,6 +1076,15 @@ pub fn emit_endpoint(state: &mut EmitState, facts: EndpointFacts) -> anyhow::Res
     // nothing about which ones were reached, and Task 4's read tier needs
     // exactly that.
     //
+    // What "completed" includes: an endpoint the prober FAILED on. `run_sweep`
+    // writes a chunk for every endpoint it was given, including the ones a
+    // panicked group lost, so a chunk of `prober-failed` declines carries this
+    // marker too. The fact is about the chunk being whole, not about the probe
+    // succeeding. Withholding it there would leave that endpoint looking, on a
+    // run that later crashed, exactly like one the run never reached, and the
+    // read tier would report a later sweep as never having got to an endpoint
+    // whose failure that sweep published.
+    //
     // An endpoint that is not a valid IRI has had every fact above skipped for
     // that reason, and there is no term to name it with here either, so the
     // chunk is empty and carries no marker. The warnings above are where that
