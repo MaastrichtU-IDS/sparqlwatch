@@ -74,7 +74,7 @@ cargo run -- --at 2026-08-20T12:00:00Z --out run.nq
 | `--at` | *required* | The run instant, ISO-8601 with an explicit timezone |
 | `--endpoints` | `endpoints.toml` | Endpoint list to sweep |
 | `--metrics` | `metrics.toml` | Metric definitions to apply |
-| `--out` | `run.nq` | Where to write the N-Quads |
+| `--out` | `run.nq` | Where the finished N-Quads land. The run itself is written to `<out>.<at>.partial` and renamed onto this at the end |
 | `--max-cost` | `cheap` | Only run metrics with cost at or below this value (`cheap` or `expensive`) |
 | `--min-gap-ms` | `2000` | Minimum pause between two consecutive requests to one host |
 | `--retry-after-cap-s` | `20` | Longest `Retry-After` waited out before one retry of a throttled request |
@@ -406,6 +406,26 @@ the prober can produce that instant soundly: `emit` reads no clock by design,
 lock file, and a flag supplied at launch would publish a predicted future into a
 graph that is never rewritten.
 
+**A run in progress is written to `<out>.<at>.partial`, and renamed onto `--out`
+when it finishes.** Never to `--out` directly: that file is the source of truth
+for the loaded store, nothing re-creates it, so truncating it at t=0 would mean a
+sweep that died at endpoint 500 of 548 had destroyed the previous complete run.
+Never to a fixed `<out>.partial` either, because the next scheduled sweep would
+truncate the previous crash's file on its first write, which is the same loss one
+run later. `--at` is required and validated before anything is opened, so it
+names the file uniquely per run; two invocations sharing an `--at` are the same
+run and may overwrite. `rename` within a directory is atomic on macOS and Linux,
+so `--out` is always either the previous complete run or this one, and a crash
+leaves the partial file under its own name, where `web/load_run.py` will load it
+as far as its last whole section.
+
+Each chunk is flushed as it is written, and nothing depends on a destructor
+running: a `SIGKILL` runs none. Measured on the shipped `endpoints.toml`: a run
+killed with `SIGKILL` the instant its second chunk landed left 24,094 bytes and
+108 quads on disk, which the loader took whole, while the previous `--out` was
+byte-identical. There is no `fsync`, so a machine that loses power rather than a
+process that dies can still lose a flushed chunk to the page cache.
+
 `completedEndpoint` is per endpoint and not per run, so "did this run reach this
 endpoint" is a fact rather than an inference from absence. It is written even for
 an endpoint the run published no other fact about, because that is the only way
@@ -636,20 +656,26 @@ sufficient.
   run segment is an unencoded `xsd:dateTime` and carries colons of its own.
 
 **Order.** A file is the header, then one chunk per endpoint, then the footer.
-`emit_nquads` derives the endpoint sequence from the union of all four fact
-lists in first-appearance order, because an endpoint can appear in one list
-only: a prober-failed endpoint is in the not-measured list alone, and an
-endpoint whose description was read but whose metrics produced no row is in the
-`declarationsRead` list alone. For a run assembled by `assemble`, whose lists
-are already grouped by endpoint, that reproduces input order, never completion
-order: each endpoint keeps its input index as a slot and `assemble` walks the
-slots afterwards. Within one chunk the order is measurements, then not-measured
+A sweep writes those chunks in COMPLETION order, one as each endpoint finishes,
+which is the whole point of writing incrementally; the `Sweep` it returns is in
+INPUT order, built from the slots after the last chunk was written. Those are two
+different properties and both hold. The chunks a panicked group never delivered
+come after every real chunk and before the footer, because a footer certifies a
+run whose endpoints are all in the file. `emit_nquads`, which is still the
+composition a caller holding a whole run in memory uses, derives its endpoint
+sequence from the union of all four fact lists in first-appearance order, because
+an endpoint can appear in one list only: a prober-failed endpoint is in the
+not-measured list alone, and an endpoint whose description was read but whose
+metrics produced no row is in the `declarationsRead` list alone. For lists
+already grouped by endpoint that reproduces input order. Within one chunk the
+order is measurements, then not-measured
 facts, then content samples, then the `declarationsRead` fact, then the chunk's
 terminator. Within one family it is the order of the definition list the facts
 came from, which is not `metrics.toml` order in general: `within_cost`
 partitions that file into the metrics that run and the metrics the ceiling
-declines, and `assemble` writes an endpoint's not-measured facts as the metrics
-that would have run and then the metrics the ceiling declined, so a cheap metric
+declines, and `assemble_endpoint` writes an endpoint's not-measured facts as the
+metrics that would have run and then the metrics the ceiling declined, so a cheap
+metric
 listed after an expensive one comes out first. That is worth having for diffing
 two files by eye, and it is all it is worth. Beyond the section terminators and
 the two rules above, it is **not** a property of the data:
@@ -658,11 +684,10 @@ the two rules above, it is **not** a property of the data:
   in one.
 - `web/load_run.py` parses the file and inserts the quads into Oxigraph, which is
   order-blind, so the order is gone before any query sees it.
-- Writing each endpoint's chunk as it completes will make the chunk sequence
-  completion order rather than input order, which is the whole point of writing
-  incrementally, and nothing downstream loses anything when it happens. What a
-  consumer may read from the order is only what the terminators say, and those
-  say it as facts rather than as position.
+- Writing each endpoint's chunk as it completes is what makes the chunk sequence
+  completion order rather than input order, and nothing downstream lost anything
+  when that changed. What a consumer may read from the order is only what the
+  terminators say, and those say it as facts rather than as position.
 
 **Output is not byte-identical between two runs of one `--at`.** `emit_nquads`
 reads no clock, no environment and no global, so it is a pure function of its
@@ -799,19 +824,16 @@ The following are deferred deliberately, not oversights:
   list does not exercise this, and 1d's 548-endpoint registry is where it would
   first be measurable.
 
-- **The run's output is still written once, at the end.** The design's
-  per-endpoint isolation rule has two halves and this branch delivers the first
-  only. No endpoint's slowness delays another endpoint's PROBING any more, since
-  hosts are grouped and probed in separate tasks. "Results are written per
-  endpoint as they complete" is **not** met: `run_sweep` joins every task before
-  it returns, `assemble` builds the four fact lists from all the slots at once,
-  and `main` calls `emit_nquads` and `std::fs::write` once, afterwards. So one
-  endpoint burning its whole 600-second budget still delays the run's output by
-  up to 600 seconds, and a crash at endpoint 500 of 548 leaves no file at all.
-  Concurrency divided the constant; it did not change the shape. Crash-safe
-  incremental writing is stage 1c-b4's, and the derived subjects above are what
-  it rests on: an endpoint's facts can be written alone only because no
-  identifier in them depends on how many endpoints came before.
+- **A flushed chunk is not a synced chunk.** Both halves of the design's
+  per-endpoint isolation rule are now met: no endpoint's slowness delays another
+  endpoint's probing, because hosts are grouped into separate tasks, and no
+  endpoint's slowness delays another endpoint's OUTPUT, because each chunk is
+  written and flushed as that endpoint finishes. What that buys is bounded
+  precisely: a process that dies keeps every chunk already flushed, since the
+  bytes are with the kernel and no destructor is needed. A machine that loses
+  power can still lose them, because there is no `fsync` and none is planned:
+  paying a disk sync per endpoint to narrow a window that a re-run closes anyway
+  is the wrong trade for a monitor whose runs are repeatable.
 
 ## Tests
 
