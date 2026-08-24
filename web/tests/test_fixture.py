@@ -202,6 +202,7 @@ def test_the_classes_absent_fixture_measures_absent_and_samples_nothing(tmp_path
 
 
 NEW_SUBJECTS_RUN = "2026-08-22T20:00:00Z"
+PROBER_FAILED_RUN = "2026-08-23T02:00:00Z"
 
 # The two facts each kind of subject is derived from, as (kind segment, the
 # predicate naming the endpoint, the predicate naming the metric). Both pairs
@@ -331,6 +332,25 @@ def test_the_prober_failed_fixture_is_the_shape_it_claims(tmp_path):
         "ASK { GRAPH ?g { ?a <urn:sparqlwatch:failedEndpoints> "
         '1 } }'
     )), "the run must say how many endpoints it failed on"
+
+    # The `not-measured` arm of `_DERIVED_FROM` matches nothing in
+    # run-new-subjects.nq, which is an expensive sweep with no declines, so
+    # this is the only fixture that exercises it. Without this the arm is dead
+    # and a not-measured subject could drift from the scheme unnoticed.
+    expected = _derived_subjects(store, PROBER_FAILED_RUN)
+    assert len(expected) == 8, (
+        f"eight not-measured subjects to check, derived {len(expected)}"
+    )
+    subjects = {
+        row["s"].value
+        for row in store.query(
+            "SELECT DISTINCT ?s WHERE { GRAPH ?g { ?s "
+            "<urn:sparqlwatch:notMeasuredOn> ?e } }"
+        )
+    }
+    assert subjects == set(expected.values()), (
+        "a not-measured subject is not what the derived scheme says it is"
+    )
 
 
 def test_the_later_sample_fixture_samples_without_measuring(tmp_path):

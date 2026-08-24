@@ -419,20 +419,25 @@ def _states_in_the_canonical_document():
     canonical, so a test that reads it is a test that the implementation still
     matches the thing it is supposed to implement.
     """
-    wanted = ("border", "fill", "weight")
+    wanted = ("border", "fill", "weight", "means")
     parsed = {}
     header_seen = False
     for line in CANONICAL_DOC.read_text(encoding="utf-8").splitlines():
         if not line.startswith("|"):
             continue
         cells = [cell.strip(" `*") for cell in line.strip("|").split("|")]
-        if cells[:4] == ["state", *wanted]:
+        if cells[:5] == ["state", *wanted]:
             header_seen = True
             continue
         if not header_seen or set(cells[0]) <= {"-", ":"}:
             continue
         slug = cells[0].replace(" ", "-")
-        parsed[slug] = (cells[1], cells[2] == "filled", int(cells[3].rstrip("px")))
+        parsed[slug] = (
+            cells[1],
+            cells[2] == "filled",
+            int(cells[3].rstrip("px")),
+            cells[4],
+        )
     return parsed
 
 
@@ -445,7 +450,8 @@ def test_the_implementation_equals_the_canonical_table():
     """
     documented = _states_in_the_canonical_document()
     implemented = {
-        state.slug: state.triple for state in verdict_encoding.STATES
+        state.slug: (*state.triple, state.meaning)
+        for state in verdict_encoding.STATES
     }
     assert documented == implemented
 

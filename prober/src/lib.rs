@@ -209,10 +209,14 @@ pub async fn run_sweep(
             // budget, because every acquire happens inside one:
             // `probe_endpoint` wraps the description fetch and each per-metric
             // future in `budget.with_metric_budget`, so a stood-down host's
-            // wait ends after 60s rather than 600s. Nine of those is the most
-            // an endpoint can spend, the description fetch plus the eight
-            // metrics of the shipped `metrics.toml`, which is 540s against a
-            // 600s endpoint budget; the endpoint budget only becomes the
+            // wait ends after 60s rather than 600s. Eight of those is the
+            // most an endpoint can spend against the shipped `metrics.toml`:
+            // the description fetch plus the seven metrics that issue a probe
+            // of their own, `service-description` being `FetchWellKnown`,
+            // which reads that same fetch's outcome rather than making a
+            // request. So 480s against a 600s endpoint budget, and 420s at the
+            // default cheap ceiling, where `classes` is declined. The endpoint
+            // budget only becomes the
             // canceller for a definition file where the metric budget times the
             // number of metrics exceeds it. The cost per group is the one
             // `README.md` already states, a shared host costing the sum of its
