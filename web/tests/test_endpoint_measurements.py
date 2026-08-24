@@ -207,3 +207,113 @@ def test_a_declined_metric_is_distinguishable_from_no_measurement_at_all(store_d
 
     v = _verdicts_by_metric(r)
     assert (M + "classes") not in v, "a declined metric is not a verdict"
+
+
+# ---------------------------------------------------------------------------
+# Did the run whose facts these are actually finish?
+# ---------------------------------------------------------------------------
+# The three run-level facts stage 1c-b4 writes, and the two conditions the
+# read tier derives from them. run-crashed-partway.nq beside
+# run-with-samples.nq is one store answering both questions differently for
+# two of its endpoints; see conftest's store_crashed_partway.
+CRASHED_RUN = "urn:sparqlwatch:run:2026-08-23T04:00:00Z"
+CRASHED_SWEEP = "2026-08-23T04:00:00Z"
+FINISHED_RUN = "urn:sparqlwatch:run:2026-08-23T02:00:00Z"
+QLEVER = "https://qlever.dev/api/osm-planet"
+
+
+def test_a_finished_run_carries_both_terminators_and_derives_neither_condition(
+    store_prober_failed,
+):
+    """run-prober-failed.nq is a whole run: sw:emission, one
+    sw:completedEndpoint for its one endpoint, and sw:finalised.
+
+    Both conditions must be false, and the second one for a reason worth
+    naming: this run IS the newest run in the store, so there is no newer run
+    to say anything about. A derivation that read "the newest run has no
+    sw:completedEndpoint for this endpoint" without first checking that the
+    newest run is a different run would fire on every finished run's own
+    page.
+    """
+    r = endpoint_measurements(store_prober_failed, KADASTER)
+    assert r.run == FINISHED_RUN
+    assert r.emission == "incremental"
+    assert r.finalised is True
+    assert r.newest_run == FINISHED_RUN
+    assert r.newest_completed_this_endpoint is True
+    assert r.run_did_not_finish is False
+    assert r.newer_run_did_not_reach_this_endpoint is False
+
+
+def test_an_unfinished_run_showing_its_own_facts_is_derivable_as_such(
+    store_crashed_partway,
+):
+    """Condition (a): the run whose facts are shown did not finish.
+
+    The crashed run wrote kadaster's chunk, so it is the newest run that
+    recorded anything for kadaster and its facts are the ones this endpoint
+    answers with. The verdict is asserted too, because "which run's facts"
+    is the claim the condition is about: availability reads "indeterminate"
+    in the crashed run and "verified" in the 16:00 sweep.
+
+    Condition (b) must NOT also fire here. The crashed run is the newest run
+    in the store and it is also the run being shown, so there is no later
+    sweep to report, and saying there is one would invent a sweep.
+    """
+    r = endpoint_measurements(store_crashed_partway, KADASTER)
+    assert r.run == CRASHED_RUN
+    assert _verdicts_by_metric(r)[M + "availability"].verdict == "indeterminate"
+    assert r.emission == "incremental"
+    assert r.finalised is False
+    assert r.run_did_not_finish is True
+    assert r.newest_run == CRASHED_RUN
+    assert r.newer_run_did_not_reach_this_endpoint is False
+
+
+def test_an_endpoint_a_crashed_newer_run_never_reached_is_derivable_as_such(
+    store_crashed_partway,
+):
+    """Condition (b), the one a per-endpoint query cannot see.
+
+    The crashed run never reached qlever, so it recorded nothing for it and
+    endpoint_measurements.rq's per-endpoint selection falls back to the 16:00
+    sweep. Every fact about qlever on this page is therefore true and current
+    as far as this endpoint's own facts go, and the store still holds a newer
+    run that died before getting here. Condition (a) is false, because the
+    run being shown is a pre-1c-b4 sweep that promised nothing.
+    """
+    r = endpoint_measurements(store_crashed_partway, QLEVER)
+    assert r.run == CURRENT_RUN
+    assert r.emission is None
+    assert r.finalised is False
+    assert r.run_did_not_finish is False
+
+    assert r.newest_run == CRASHED_RUN
+    assert r.newest_generated_at == CRASHED_SWEEP
+    assert r.newest_emission == "incremental"
+    assert r.newest_finalised is False
+    assert r.newest_completed_this_endpoint is False
+    assert r.newer_run_did_not_reach_this_endpoint is True
+
+
+def test_a_run_from_before_this_stage_derives_neither_condition(store):
+    """A run that promised nothing must read exactly as it did before this
+    stage existed.
+
+    run-with-samples.nq carries no sw:emission, no sw:completedEndpoint and
+    no sw:finalised, because it was captured before the section protocol
+    existed. "No sw:finalised" is therefore not evidence that it did not
+    finish: it is evidence that this run says nothing either way, and the
+    only honest reading is silence. Deriving condition (a) from the absence
+    of sw:finalised alone would mark every historical run in the store as
+    crashed.
+    """
+    r = endpoint_measurements(store, KADASTER)
+    assert r.run == CURRENT_RUN
+    assert r.emission is None
+    assert r.finalised is False
+    assert r.newest_run == CURRENT_RUN
+    assert r.newest_emission is None
+    assert r.newest_finalised is False
+    assert r.run_did_not_finish is False
+    assert r.newer_run_did_not_reach_this_endpoint is False

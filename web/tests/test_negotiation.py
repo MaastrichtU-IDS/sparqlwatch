@@ -734,3 +734,162 @@ def test_a_store_path_holding_a_store_is_opened(tmp_path, monkeypatch):
 
     monkeypatch.setenv(STORE_PATH_VARIABLE, str(path))
     assert len(get_store()) > 0
+
+
+# ---------------------------------------------------------------------------
+# The unfinished-run facts, in both representations
+# ---------------------------------------------------------------------------
+QLEVER = "https://qlever.dev/api/osm-planet"
+CRASHED_SWEEP = "2026-08-23T04:00:00Z"
+FINISHED_SWEEP = "2026-08-23T02:00:00Z"
+
+EMISSION = NamedNode(SW + "emission")
+FINALISED = NamedNode(SW + "finalised")
+COMPLETED = NamedNode(SW + "completedEndpoint")
+GENERATED_AT = NamedNode(PROV + "generatedAtTime")
+
+TRUE = Literal("true", datatype=NamedNode("http://www.w3.org/2001/XMLSchema#boolean"))
+
+
+def activity_at(stamp):
+    return NamedNode(ACTIVITY + stamp)
+
+
+def test_the_rdf_carries_the_inputs_the_unfinished_sentence_is_derived_from(
+    client_for, store_crashed_partway
+):
+    """The HTML says the sweep it is showing did not finish. The RDF must let
+    a machine conclude the same thing, from facts rather than from a flag.
+
+    So the CONSTRUCT emits the inputs: this run's sw:emission, its
+    sw:completedEndpoint for this endpoint, and no sw:finalised, because the
+    run has none. A derived "unfinished" quad would be the read tier
+    asserting something no run graph holds, and endpoint_description.rq's
+    header is explicit that every triple it emits appears verbatim in the
+    store.
+    """
+    client = client_for(store_crashed_partway)
+    shown = texts_with(get(client, KADASTER, accept="text/html"), "data-run-unfinished")
+    assert len(shown) == 1, "the HTML must be making the claim being compared"
+    assert CRASHED_SWEEP in shown[0]
+
+    graph = graph_of(get(client, KADASTER, accept="text/turtle"))
+    activity = activity_at(CRASHED_SWEEP)
+    assert has_triple(graph, activity, EMISSION, Literal("incremental"))
+    assert has_triple(graph, activity, COMPLETED, NamedNode(KADASTER))
+    assert not has_triple(graph, activity, FINALISED, None), (
+        "this run recorded no sw:finalised, so the document must not either"
+    )
+    assert not has_triple(graph, None, NamedNode(SW + "unfinished"), None), (
+        "the derivation's result is not a fact any run graph holds"
+    )
+
+
+def test_a_finished_runs_rdf_carries_finalised(client_for, store_prober_failed):
+    """The converse, and without it the test above proves nothing.
+
+    An absent quad is unreadable on its own: a consumer that sees no
+    sw:finalised cannot tell "this run did not finish" from "this
+    representation does not carry that predicate at all". So a run that DID
+    finish has to serve the quad, and this is the test that says the
+    predicate is served when the store holds it.
+    """
+    graph = graph_of(get(client_for(store_prober_failed), KADASTER, accept="text/turtle"))
+    activity = activity_at(FINISHED_SWEEP)
+    assert has_triple(graph, activity, EMISSION, Literal("incremental"))
+    assert has_triple(graph, activity, FINALISED, TRUE)
+    assert has_triple(graph, activity, COMPLETED, NamedNode(KADASTER))
+
+
+def test_the_rdf_carries_the_newest_run_an_endpoint_was_never_reached_by(
+    client_for, store_crashed_partway
+):
+    """Condition (b)'s inputs, which are the ones a CONSTRUCT cannot state as
+    a conclusion.
+
+    Two of the three are absences: the newest run has no sw:finalised and no
+    sw:completedEndpoint naming qlever. What the document can carry is the
+    newest activity itself, its prov:generatedAtTime and its sw:emission, and
+    that is enough: an activity later than the one the measurements hang off,
+    saying it was written incrementally, with neither terminator that would
+    account for this endpoint. A consumer draws the same conclusion the page
+    draws, from the same facts.
+    """
+    client = client_for(store_crashed_partway)
+    shown = texts_with(
+        get(client, QLEVER, accept="text/html"), "data-newer-run-unfinished"
+    )
+    assert len(shown) == 1, "the HTML must be making the claim being compared"
+    assert CRASHED_SWEEP in shown[0]
+
+    graph = graph_of(get(client, QLEVER, accept="text/turtle"))
+    newest = activity_at(CRASHED_SWEEP)
+    shown_activity = activity_at(SAMPLING_SWEEP)
+
+    assert has_triple(graph, newest, NamedNode(PROV + "type"), None) is False
+    assert has_triple(
+        graph,
+        newest,
+        GENERATED_AT,
+        Literal(
+            CRASHED_SWEEP,
+            datatype=NamedNode("http://www.w3.org/2001/XMLSchema#dateTime"),
+        ),
+    ), "the newest activity must be dated, or nothing says it is the newer one"
+    assert has_triple(graph, newest, EMISSION, Literal("incremental"))
+    assert not has_triple(graph, newest, FINALISED, None)
+    assert not has_triple(graph, newest, COMPLETED, None), (
+        "this run never reached qlever, and it may not carry another "
+        "endpoint's completion marker into qlever's document"
+    )
+
+    # And the run the facts DO come from is a pre-1c-b4 sweep, so it carries
+    # none of the three. The two activities have to be distinguishable, or a
+    # consumer cannot tell which one the measurements belong to.
+    assert has_triple(graph, shown_activity, EMISSION, None) is False
+    assert has_triple(graph, shown_activity, FINALISED, None) is False
+    assert has_triple(graph, shown_activity, COMPLETED, None) is False
+    measured_by = {
+        quad.object
+        for quad in graph.quads_for_pattern(
+            None, NamedNode(PROV + "wasGeneratedBy"), None
+        )
+    }
+    assert measured_by == {shown_activity}
+
+
+def texts_with(response, attribute):
+    """The text of each element carrying ``attribute``, as the reader sees it.
+
+    A second reader of the page in this file, deliberately narrow: the tests
+    above compare one sentence a person is shown against the quads a machine
+    is served, so they need the sentence and not the whole document. Asserting
+    the sentence is somewhere in the body would pass while it sat in a
+    comment.
+    """
+    parser = _SentenceTexts(attribute)
+    parser.feed(response.text)
+    return parser.found
+
+
+class _SentenceTexts(HTMLParser):
+    def __init__(self, attribute):
+        super().__init__()
+        self.attribute = attribute
+        self.found = []
+        self._open = False
+        self._buffer = []
+
+    def handle_starttag(self, tag, attrs):
+        if self.attribute in dict(attrs):
+            self._open = True
+            self._buffer = []
+
+    def handle_endtag(self, tag):
+        if self._open:
+            self.found.append(" ".join("".join(self._buffer).split()))
+            self._open = False
+
+    def handle_data(self, data):
+        if self._open:
+            self._buffer.append(data)
