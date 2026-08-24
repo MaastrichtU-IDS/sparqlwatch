@@ -397,23 +397,32 @@ and a reader that does not may drop the fragment.
 
 A consumer reads three cases off facts that were each true when they were
 written. `emission` with `finalised` is a complete run. `emission` without
-`finalised` is a run that did not finish, and its `failedEndpoints` count says
-nothing, because that count summarises chunks that were never written. Neither
-one is a run emitted before this scheme existed, which promised nothing either
-way. `finalised` is a boolean rather than `prov:endedAtTime` because nothing in
+`finalised` is a run that did not finish, and it carries no `failedEndpoints`
+count at all, because that count is in the missing footer: a summary of chunks
+is not published until the chunks are. Neither terminator is a run emitted
+before this scheme existed, which promised nothing either way. `finalised` is a boolean rather than `prov:endedAtTime` because nothing in
 the prober can produce that instant soundly: `emit` reads no clock by design,
 `std` cannot format a `SystemTime` as `xsd:dateTime`, no date library is in the
 lock file, and a flag supplied at launch would publish a predicted future into a
 graph that is never rewritten.
 
 `completedEndpoint` is per endpoint and not per run, so "did this run reach this
-endpoint" is a fact rather than an inference from absence. It is also the reason
-two ordering rules hold inside the file: every chunk types its own endpoint
-with `dcat:DataService` rather than relying on an earlier chunk having done it,
-and no fact family publishes its own summary before the things it summarises.
-The second is why `sampleSize` and `sampleTruncated` come after the last
-`sampledValue`, and why `failedEndpoints` sits in the footer. A cut inside a
-sample's values then loses the sample, which every consumer already handles,
+endpoint" is a fact rather than an inference from absence. It is written even for
+an endpoint the run published no other fact about, because that is the only way
+"reached but learned nothing" and "never attempted" can be told apart, and such
+a chunk still types its endpoint `dcat:DataService` so the marker names a
+resource the graph describes.
+
+Two ordering rules hold inside the file because the chunk is what a truncated
+one preserves. **A chunk types every endpoint it publishes a fact about**,
+rather than a run typing each endpoint once. For a run this emitter writes the
+two are the same thing, since each endpoint gets exactly one chunk; they differ
+only where one chunk names an endpoint another already typed, and then the
+run-scoped version leaves the chunk that holds the facts with no type for their
+subject. **And no fact family publishes its own summary before the things it
+summarises**, which is why `sampleSize` and `sampleTruncated` come after the
+last `sampledValue`, and why `failedEndpoints` sits in the footer. A cut inside
+a sample's values then loses the sample, which every consumer already handles,
 instead of leaving `sampleSize 200, sampleTruncated false` standing beside three
 values, which a page would render as two hundred classes sampled, complete.
 

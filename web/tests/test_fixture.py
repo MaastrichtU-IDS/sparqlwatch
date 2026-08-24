@@ -304,11 +304,39 @@ def test_the_prober_failed_fixture_is_the_shape_it_claims(tmp_path):
     asserted too: nothing was ever fetched from this endpoint, so a fact
     saying whether its declarations were read would be an answer no request
     was made for.
+
+    The three section terminators are asserted here because this is the only
+    committed fixture that claims to be current emitter output, so it is the
+    only place the Python side can notice the emitter growing a run-level fact
+    or renaming one. Every other fixture is a captured historical sweep and
+    carries no terminator on purpose.
     """
     store = Store(str(tmp_path / "s"))
     store.load(PROBER_FAILED_FIXTURE.read_bytes(), format=RdfFormat.N_QUADS)
-    assert len(store) == 48, f"this fixture is 48 quads, got {len(store)}"
+    assert len(store) == 51, f"this fixture is 51 quads, got {len(store)}"
     assert len(list(store.named_graphs())) == 1, "one run, one named graph"
+
+    # A complete run: the header's terminator, one chunk terminator naming the
+    # one endpoint, and the footer's. A fixture missing any of the three would
+    # be a run this emitter cannot produce, and the loader that has to
+    # recognise all three would have nothing here to recognise.
+    for ask, why in (
+        ('?a <urn:sparqlwatch:emission> "incremental"',
+         "the header says how the run is written"),
+        ("?a <urn:sparqlwatch:completedEndpoint> "
+         "<https://data.kkg.kadaster.nl/query>",
+         "the chunk says which endpoint the run finished"),
+        ('?a <urn:sparqlwatch:finalised> true',
+         "the footer says the run finished"),
+    ):
+        assert bool(store.query(f"ASK {{ GRAPH ?g {{ {ask} }} }}")), why
+    markers = list(store.query(
+        "SELECT ?e WHERE { GRAPH ?g { ?a "
+        "<urn:sparqlwatch:completedEndpoint> ?e } }"
+    ))
+    assert len(markers) == 1, (
+        f"one endpoint, so exactly one chunk terminator, got {len(markers)}"
+    )
 
     reasons = [
         row["r"].value

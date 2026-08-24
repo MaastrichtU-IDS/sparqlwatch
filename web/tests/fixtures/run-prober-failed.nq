@@ -14,12 +14,23 @@
 # ceiling had already declined as cost-ceiling, and NO
 # sw:declarationsRead, because nothing was ever fetched.
 #
+# Regenerated on 2026-08-24 for stage 1c-b4, which splits emission into a
+# header, one chunk per endpoint and a footer. It grew three quads: the
+# header's sw:emission terminator, the chunk's sw:completedEndpoint
+# terminator, and the footer's sw:finalised terminator, with
+# sw:failedEndpoints moving from the header to the footer beside the last of
+# them. This is the only committed fixture that claims to be current emitter
+# output, so it is the only one that has to move when the emitter does; the
+# captured historical sweeps (run-declined.nq and the rest) carry no
+# terminator on purpose, and "neither terminator" is exactly the third case
+# the scheme defines, a run from before it existed.
+#
 # Both reasons in one run is the point. The two are opposite claims about who
 # is responsible, so a page that renders one sentence for every decline says
 # something untrue about seven of these eight rows, and a fixture carrying
 # only one reason cannot see that.
 #
-# 48 quads, one run graph (urn:sparqlwatch:run:2026-08-23T02:00:00Z), one
+# 51 quads, one run graph (urn:sparqlwatch:run:2026-08-23T02:00:00Z), one
 # endpoint (data.kkg.kadaster.nl/query, so that this run can be loaded beside
 # the real 16:00 sweep of the same endpoint), 8 sw:NotMeasured facts, no
 # dqv:QualityMeasurement, no sw:ContentSample. The subjects are the derived
@@ -31,7 +42,7 @@
 <urn:sparqlwatch:activity:2026-08-23T02:00:00Z> <urn:sparqlwatch:metricDefinitionRevision> "fnv1a64:5988db00fe7498fd" <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
 <urn:sparqlwatch:activity:2026-08-23T02:00:00Z> <urn:sparqlwatch:maxCost> "cheap" <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
 <urn:sparqlwatch:activity:2026-08-23T02:00:00Z> <urn:sparqlwatch:concurrency> "2"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
-<urn:sparqlwatch:activity:2026-08-23T02:00:00Z> <urn:sparqlwatch:failedEndpoints> "1"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-23T02:00:00Z> <urn:sparqlwatch:emission> "incremental" <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
 <https://data.kkg.kadaster.nl/query> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dcat#DataService> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
 <urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:availability> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <urn:sparqlwatch:NotMeasured> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
 <urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:availability> <urn:sparqlwatch:notMeasuredOn> <https://data.kkg.kadaster.nl/query> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
@@ -73,3 +84,6 @@
 <urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:classes> <urn:sparqlwatch:notMeasuredMetric> <urn:sparqlwatch:metric:classes> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
 <urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:classes> <urn:sparqlwatch:notMeasuredReason> "cost-ceiling" <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
 <urn:sparqlwatch:not-measured:2026-08-23T02:00:00Z:https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery:classes> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-08-23T02:00:00Z> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-23T02:00:00Z> <urn:sparqlwatch:completedEndpoint> <https://data.kkg.kadaster.nl/query> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-23T02:00:00Z> <urn:sparqlwatch:failedEndpoints> "1"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-23T02:00:00Z> <urn:sparqlwatch:finalised> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> <urn:sparqlwatch:run:2026-08-23T02:00:00Z> .

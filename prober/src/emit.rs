@@ -422,13 +422,21 @@ pub fn emit_header(header: RunHeader) -> anyhow::Result<String> {
         Term::Literal(Literal::new_typed_literal(concurrency.to_string(), xsd::INTEGER)),
         graph.clone(),
     ));
-    // The header's terminator, and a fact about HOW this run is being written
-    // rather than about what it found. A reader holding it knows to expect
-    // chunks and a `finalised` footer; a reader holding it without `finalised`
-    // knows the run did not finish; a reader holding neither has a run from
-    // before this stage, which promised nothing. True the moment it is
-    // written, which is what a graph that is never rewritten requires: it is
-    // not a promise about the future that a later chunk would have to retract.
+    // The header's terminator, and a fact about how this document is built
+    // rather than about what the run found: it says the file is a header, then
+    // one chunk per endpoint, then a footer, each ending in its terminator. A
+    // reader holding it knows to expect chunks and a `finalised` footer; a
+    // reader holding it without `finalised` knows the run did not finish; a
+    // reader holding neither has a run from before this stage, which promised
+    // nothing. True the moment it is written, which is what a graph that is
+    // never rewritten requires: it is not a promise about the future that a
+    // later chunk would have to retract.
+    //
+    // Its section structure is what `emit_nquads` output has too, so the fact
+    // is true of a whole-run document as well as of one written chunk by chunk.
+    // The stronger reading, that the file reached disk incrementally, becomes
+    // true when `run_sweep` writes the sections as they finish; no run emitted
+    // before that is published.
     quads.push(Quad::new(
         NamedOrBlankNode::NamedNode(activity),
         nn("urn:sparqlwatch:emission")?,
@@ -460,14 +468,20 @@ pub struct EndpointFacts<'a> {
 }
 
 /// The one thing that survives between two chunks: which endpoints this writer
-/// has already published.
+/// has already been asked for.
 ///
 /// Nothing else, deliberately. Any other carried state would make a later chunk
 /// depend on an earlier one, and a chunk that cannot be read on its own is not
 /// a unit of truncation.
 #[derive(Debug, Default)]
 pub struct EmitState {
-    written: BTreeSet<String>,
+    /// Attempted, not written: the insert happens before any quad is built and
+    /// is never rolled back, so an endpoint whose IRI is malformed (empty
+    /// chunk, no marker, warnings only) is recorded here too. That is the safe
+    /// direction, because the reason to refuse a retry is that the pre-scan
+    /// cannot see across two chunks, and that is true whether or not the first
+    /// attempt published anything.
+    attempted: BTreeSet<String>,
 }
 
 impl EmitState {
@@ -492,7 +506,7 @@ pub fn emit_endpoint(state: &mut EmitState, facts: EndpointFacts) -> anyhow::Res
     // published twice instead of dropped, on one subject, in a graph that is
     // never rewritten. Refusing the second chunk is the direction that cannot
     // publish a wrong answer.
-    if !state.written.insert(subject_endpoint.to_string()) {
+    if !state.attempted.insert(subject_endpoint.to_string()) {
         tracing::warn!(
             endpoint = %subject_endpoint,
             "dropping a repeat chunk: every fact about an endpoint must be in one chunk, or the \
@@ -503,12 +517,39 @@ pub fn emit_endpoint(state: &mut EmitState, facts: EndpointFacts) -> anyhow::Res
     let (graph, activity) = graph_and_activity(run)?;
     let mut quads: Vec<Quad> = Vec::new();
 
-    // Typed per chunk, so every chunk types its own endpoint: a chunk carrying
-    // facts about an endpoint it never typed is not self-contained. Keyed on
-    // each fact's own endpoint string rather than on `subject_endpoint`, so a
-    // caller that mixes endpoints into one chunk still types every endpoint it
-    // publishes a fact about.
+    // The chunk's endpoint as a term, once. An endpoint that is not a
+    // well-formed IRI can be neither typed nor marked, and every fact about it
+    // is skipped below for the same reason; the marker at the end of this
+    // function is where that loss is logged.
+    let subject_term = NamedNode::new(subject_endpoint);
+
+    // Typed per chunk, so every chunk types every endpoint it names. A chunk
+    // carrying facts about an endpoint it never typed is not self-contained,
+    // and a reader of a truncated file may hold this chunk and not the one that
+    // typed the endpoint.
+    //
+    // Per chunk rather than per run changes nothing about what `emit_nquads`
+    // publishes, because that gives each endpoint exactly one chunk and the old
+    // run-scoped set was keyed on the endpoint too. The difference appears only
+    // where a second chunk names an endpoint an earlier chunk already typed: a
+    // run-scoped set would leave it untyped in the chunk that has its facts,
+    // which is `a_chunk_types_every_endpoint_it_publishes_a_fact_about`.
     let mut typed_endpoints: BTreeSet<String> = BTreeSet::new();
+    // The chunk's own endpoint is typed here rather than at its first fact, so
+    // the claim above holds for a chunk with no publishable fact as well. Such
+    // a chunk still carries the completion marker below, and a marker naming a
+    // resource this graph never types is a join a consumer cannot complete. The
+    // quad lands where it did before, because typing at the first fact already
+    // made it the chunk's first quad.
+    if let Ok(n) = &subject_term {
+        typed_endpoints.insert(subject_endpoint.to_string());
+        quads.push(Quad::new(
+            NamedOrBlankNode::NamedNode(n.clone()),
+            rdf::TYPE.into_owned(),
+            Term::NamedNode(nn(&format!("{DCAT}DataService"))?),
+            graph.clone(),
+        ));
+    }
 
     // Two entries of one fact list can name the same (endpoint, metric) pair.
     // Under the running index they replaced, such a pair got two subjects;
@@ -1023,7 +1064,7 @@ pub fn emit_endpoint(state: &mut EmitState, facts: EndpointFacts) -> anyhow::Res
     // that reason, and there is no term to name it with here either, so the
     // chunk is empty and carries no marker. The warnings above are where that
     // loss is recorded.
-    match NamedNode::new(subject_endpoint) {
+    match subject_term {
         Ok(n) => quads.push(Quad::new(
             NamedOrBlankNode::NamedNode(activity),
             nn("urn:sparqlwatch:completedEndpoint")?,
@@ -1683,14 +1724,11 @@ mod tests {
         // the unit of truncation, and it is per endpoint rather than per run
         // because Task 4's read tier asks "did this run reach THIS endpoint",
         // which a run-level marker cannot answer. The `dcat:DataService` type
-        // has to be in the chunk too: a chunk carrying facts about an endpoint
-        // it never typed is not self-contained, and under the whole-run emitter
-        // the type was written once per run, so only the first chunk would have
-        // carried it.
+        // has to be in the same chunk, because a chunk carrying facts about an
+        // endpoint the reader has no type for is not self-contained.
         let url = "https://a.example/sparql";
-        let mut state = EmitState::new();
-        let a = emit_endpoint(
-            &mut state,
+        let chunk = emit_endpoint(
+            &mut EmitState::new(),
             EndpointFacts {
                 run: &RunId("r1".into()),
                 endpoint: url,
@@ -1701,38 +1739,123 @@ mod tests {
             },
         )
         .unwrap();
-        let qs = quads_of(&a);
+        let qs = quads_of(&chunk);
         assert_eq!(
             objects(&qs, "urn:sparqlwatch:completedEndpoint"),
             vec![&Term::NamedNode(NamedNode::new(url).unwrap())],
             "the chunk names the endpoint it finished, once"
         );
-        assert!(
-            qs.iter().any(|q| q.subject.to_string() == format!("<{url}>")
-                && q.object == Term::NamedNode(NamedNode::new(format!("{DCAT}DataService")).unwrap())),
-            "the chunk types its own endpoint: {a}"
+        assert_eq!(
+            typed_in(&qs),
+            BTreeSet::from([url.to_string()]),
+            "the chunk types its own endpoint, once: {chunk}"
         );
+    }
 
-        // A second endpoint's chunk types its own, rather than relying on the
-        // first chunk having done it.
-        let other = "https://b.example/sparql";
-        let b = emit_endpoint(
+    /// Every endpoint a chunk publishes a fact about, as a set, read off the
+    /// `dcat:DataService` quads.
+    fn typed_in(qs: &[Quad]) -> BTreeSet<String> {
+        let service = Term::NamedNode(NamedNode::new(format!("{DCAT}DataService")).unwrap());
+        qs.iter()
+            .filter(|q| q.predicate == rdf::TYPE && q.object == service)
+            .map(|q| q.subject.to_string().trim_matches(['<', '>']).to_string())
+            .collect()
+    }
+
+    #[test]
+    fn a_chunk_types_every_endpoint_it_publishes_a_fact_about() {
+        // The property `typed_endpoints` being per chunk actually buys, and the
+        // only way it can be made to bite: two chunks, one `EmitState`, where
+        // the second names an endpoint the first already typed. Per chunk, the
+        // second chunk types it again; run-scoped, the second chunk would carry
+        // the endpoint's facts and no type for it, and a reader holding only
+        // that chunk could not tell what the subject is.
+        //
+        // The mixed chunk below is a caller error rather than a shape
+        // `emit_nquads` produces, and Task 3 will refuse it at the writer. This
+        // is the emitter's contract underneath that refusal: the chunk is what
+        // a truncated file preserves, so it has to be complete on its own terms
+        // even when the caller was wrong. The same reasoning covers a repeat
+        // chunk for one endpoint, which `EmitState` refuses here rather than
+        // letting it reach this code.
+        let run = RunId("r1".into());
+        let a = "https://a.example/sparql";
+        let b = "https://b.example/sparql";
+        let mut state = EmitState::new();
+
+        let first = emit_endpoint(
             &mut state,
             EndpointFacts {
-                run: &RunId("r1".into()),
-                endpoint: other,
-                rows: &[row(other, "cors", Verdict::Verified)],
+                run: &run,
+                endpoint: a,
+                rows: &[row(a, "cors", Verdict::Verified)],
                 declarations_read: &[],
                 not_measured: &[],
                 content_samples: &[],
             },
         )
         .unwrap();
-        assert!(
-            quads_of(&b).iter().any(|q| q.subject.to_string() == format!("<{other}>")
-                && q.object == Term::NamedNode(NamedNode::new(format!("{DCAT}DataService")).unwrap())),
-            "the second chunk types its own endpoint too: {b}"
+        assert_eq!(typed_in(&quads_of(&first)), BTreeSet::from([a.to_string()]));
+
+        let second = emit_endpoint(
+            &mut state,
+            EndpointFacts {
+                run: &run,
+                endpoint: b,
+                rows: &[row(b, "cors", Verdict::Verified), row(a, "availability", Verdict::Absent)],
+                declarations_read: &[],
+                not_measured: &[],
+                content_samples: &[],
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            typed_in(&quads_of(&second)),
+            BTreeSet::from([a.to_string(), b.to_string()]),
+            "the second chunk types both endpoints it names, including the one an earlier \
+             chunk already typed: {second}"
         );
+    }
+
+    #[test]
+    fn a_chunk_with_no_publishable_fact_still_types_the_endpoint_it_marks() {
+        // What an empty chunk means, and why it is emitted rather than skipped:
+        // the marker is the run's only statement that it reached this endpoint,
+        // which is the fact Task 4's read tier reads instead of inferring
+        // "never attempted" from absence. So the chunk is worth writing even
+        // when every fact about the endpoint was dropped as unpublishable, or
+        // when the caller had none to give.
+        //
+        // It has to type the endpoint too. A marker naming a resource the graph
+        // never types is a join a consumer cannot complete, and this is the one
+        // shape where typing at the first fact would have typed nothing.
+        // `emit_nquads` cannot reach it, because `endpoint_order` only yields
+        // endpoints that appear in some list; a direct caller can.
+        let url = "https://e.example/sparql";
+        let chunk = emit_endpoint(
+            &mut EmitState::new(),
+            EndpointFacts {
+                run: &RunId("r1".into()),
+                endpoint: url,
+                rows: &[],
+                declarations_read: &[],
+                not_measured: &[],
+                content_samples: &[],
+            },
+        )
+        .unwrap();
+        let qs = quads_of(&chunk);
+        assert_eq!(
+            typed_in(&qs),
+            BTreeSet::from([url.to_string()]),
+            "an empty chunk types the endpoint it marks: {chunk}"
+        );
+        assert_eq!(
+            objects(&qs, "urn:sparqlwatch:completedEndpoint"),
+            vec![&Term::NamedNode(NamedNode::new(url).unwrap())],
+            "and it still says the run reached it: {chunk}"
+        );
+        assert_eq!(qs.len(), 2, "and says nothing else: {chunk}");
     }
 
     #[test]
