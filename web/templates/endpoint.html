@@ -36,6 +36,13 @@
   .panel { border: 1px solid var(--border); border-radius: var(--radius);
            background: var(--bg-secondary); padding: 14px 16px; }
   .note { margin: 11px 0 0; font-size: 12.5px; color: var(--text-muted); max-width: 780px; }
+  /* A sentence about the sweep rather than about the endpoint. Drawn in the
+     warn token, the same one the truncation badge uses, because both say the
+     same kind of thing: what you are reading is bounded in a way the numbers
+     do not show. It is a colour on text that is already there, not a state of
+     its own: the sentence is the whole signal and it reads identically with
+     no styling at all. */
+  .warn-note { color: var(--warn); }
 
   /* The chip geometry is fixed, and the fill token is calibrated to it: see
      verdict_encoding.py. A chip carries no text, because the metric it belongs
@@ -124,6 +131,18 @@
       content sample recorded for it.
     {%- endif %}
   </p>
+  {% if unfinished_text %}
+  {# The sweep named just above did not finish. Said here rather than as a
+     badge or a banner, because it qualifies that sentence's timestamp and
+     nothing else on the page. #}
+  <p class="note warn-note" data-run-unfinished="true">{{ unfinished_text }}</p>
+  {% endif %}
+  {% if newer_unfinished_text %}
+  {# A later sweep did not finish and never reached this endpoint. A different
+     claim from the one above, so a second sentence rather than a longer
+     first one, and both appear when both are true. #}
+  <p class="note warn-note" data-newer-run-unfinished="true">{{ newer_unfinished_text }}</p>
+  {% endif %}
 
   <section>
     <h2>Conformance, attribute by attribute</h2>
