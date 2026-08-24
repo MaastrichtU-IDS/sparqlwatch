@@ -1440,3 +1440,27 @@ def test_a_run_from_before_this_stage_reads_exactly_as_it_did(client_for, store)
         f"Everything below is what one probe sweep observed, at "
         f"{SAMPLING_SWEEP}." in text
     )
+
+
+def test_two_finished_historical_runs_say_nothing_about_not_finishing(
+    client_for, store_later_sample
+):
+    """The fifth state, which is the fourth one on a store of more than one
+    run, and the shape a production store is in most of the time.
+
+    Both sweeps here predate stage 1c-b4 and both finished. The 22:00 one only
+    sampled kadaster, so the page falls back to the 16:00 sweep's verdicts and
+    the newest run in the store is neither the run being shown, nor finalised,
+    nor a run that marked this endpoint. Three of the second sentence's five
+    conditions are therefore met, and the page must still say nothing: a
+    sentence here would assert a crash on every endpoint whose newest facts
+    predate the store's newest run, which is most endpoints most nights.
+    """
+    text = page(client_for(store_later_sample), KADASTER)
+
+    assert [row["data-run"] for row in with_attribute(text, "data-run")] == [
+        RUN + SAMPLING_SWEEP
+    ], "the 22:00 sweep measured nothing here, so the verdicts are 16:00's"
+    assert with_attribute(text, UNFINISHED) == []
+    assert with_attribute(text, NEWER_UNFINISHED) == []
+    assert "did not finish" not in text

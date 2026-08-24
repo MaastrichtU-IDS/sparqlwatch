@@ -141,13 +141,25 @@ class EndpointMeasurements:
         run's and they are complete and current as far as this endpoint's own
         facts go.
 
+        All five conjuncts below are required, and they are not
+        interchangeable. ``newest_run is not None`` is first because
+        ``None != self.run`` is True, so an absent newest run would otherwise
+        read as "a run other than this one".
         ``newest_run != run`` is what stops this firing on a finished run's own
         page, where the newest run in the store IS the run being shown.
         ``newest_emission is not None`` is the same requirement as above, for
-        the same reason. ``newest_completed_this_endpoint`` is what makes the
+        the same reason, and it is the one a store of two finished historical
+        runs turns on: see test_a_newer_historical_run_is_not_a_crash.
+        ``newest_completed_this_endpoint`` is what makes the
         claim a fact: an endpoint the run did finish is one whose facts are
         simply older than the crash, and saying the run never reached it would
         be false.
+
+        Three of the five cannot be reached one at a time through a real run
+        file, because the query binds ?newestRun and ?newestEmission in one
+        OPTIONAL and a chunk's sw:completedEndpoint is in the same chunk as
+        its measurements. They are pinned on this dataclass instead, one test
+        per conjunct, in test_endpoint_measurements.py.
         """
         return (
             self.newest_run is not None

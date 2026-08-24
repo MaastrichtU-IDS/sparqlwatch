@@ -9,7 +9,7 @@ run-with-samples.nq, web/tests/test_fixture.py) for its provenance.
 from pyoxigraph import NamedNode
 
 from endpoint_content import endpoint_content
-from endpoint_measurements import endpoint_measurements
+from endpoint_measurements import EndpointMeasurements, endpoint_measurements
 
 KADASTER = "https://data.kkg.kadaster.nl/query"
 ONTOP = "https://ontop.certain.ai.ustp.at/sparql"
@@ -35,6 +35,11 @@ NEW_SCHEME_CLASSES_VERDICT = "indeterminate"
 OLD_SCHEME_CLASSES_VERDICT = "verified"
 NEW_SCHEME_ONLY_CLASS = "urn:sparqlwatch:test:new-scheme-only-class"
 OLD_SCHEME_ONLY_CLASS = "http://www.w3.org/2002/07/owl#Restriction"
+
+# run-later-sample-only.nq: the 22:00 sweep that sampled kadaster and measured
+# nothing, so it records no measurement and no decline for any endpoint. See
+# that fixture's header comment.
+LATER_SAMPLE_RUN = "urn:sparqlwatch:run:2026-08-22T22:00:00Z"
 
 
 def _verdicts_by_metric(result):
@@ -316,4 +321,135 @@ def test_a_run_from_before_this_stage_derives_neither_condition(store):
     assert r.newest_emission is None
     assert r.newest_finalised is False
     assert r.run_did_not_finish is False
+    assert r.newer_run_did_not_reach_this_endpoint is False
+
+
+def test_a_newer_historical_run_is_not_a_crash(store_later_sample):
+    """The steady state, and the one store shape the four tests above miss.
+
+    Both runs here were captured before stage 1c-b4, so neither carries
+    sw:emission, sw:finalised or sw:completedEndpoint. The 22:00 run only
+    sampled kadaster, so the per-endpoint selection falls back to the 16:00
+    sweep and the newest run in the store is a DIFFERENT run from the one
+    being shown. That makes three of condition (b)'s five conjuncts true at
+    once: the newest run is not this run, it carries no sw:finalised, and it
+    marked no sw:completedEndpoint here. Only "the newest run said it was
+    written incrementally" stops the page reporting a crash that never
+    happened, and a store of two finished historical runs is what every
+    production store holds most of.
+    """
+    r = endpoint_measurements(store_later_sample, KADASTER)
+    assert r.run == CURRENT_RUN, "the 22:00 run measured nothing here"
+    assert r.newest_run == LATER_SAMPLE_RUN
+    assert r.newest_run != r.run
+    assert r.newest_emission is None, "a pre-1c-b4 run promises nothing"
+    assert r.newest_finalised is False
+    assert r.newest_completed_this_endpoint is False
+    assert r.newer_run_did_not_reach_this_endpoint is False
+
+
+# ---------------------------------------------------------------------------
+# Condition (b)'s five conjuncts, one at a time
+# ---------------------------------------------------------------------------
+# The tests above reach the property through the query, which is the right
+# way round for the store shapes a run file can produce. Three of the five
+# conjuncts cannot be reached that way: the query binds ?newestRun whenever it
+# returns a row at all, and a chunk's sw:completedEndpoint is in the same
+# chunk as its measurements, so "the newest run recorded facts here" and "the
+# newest run marked this endpoint" cannot come apart in any file the emitter
+# writes. Those conjuncts are guards against a store shape that would be a
+# bug elsewhere, so they are pinned on the dataclass directly: each case below
+# satisfies four conjuncts and violates exactly one, so it turns True the
+# moment its own conjunct is deleted.
+
+
+def _newest_is_a_crashed_later_run(**overrides):
+    """An EndpointMeasurements where condition (b) is true, before overrides.
+
+    The 16:00 sweep's facts, with a newer run that said it was written
+    incrementally, never said it finished, and never marked this endpoint.
+    """
+    facts = dict(
+        endpoint=KADASTER,
+        assessed=True,
+        run=CURRENT_RUN,
+        generated_at="2026-08-22T16:00:00Z",
+        newest_run=CRASHED_RUN,
+        newest_generated_at=CRASHED_SWEEP,
+        newest_emission="incremental",
+        newest_finalised=False,
+        newest_completed_this_endpoint=False,
+    )
+    facts.update(overrides)
+    return EndpointMeasurements(**facts)
+
+
+def test_the_reference_shape_for_the_conjuncts_below_does_derive_condition_b():
+    """The control. Every test below changes one field of this shape, so if
+    this one did not derive the condition none of them would be testing the
+    conjunct it names."""
+    assert (
+        _newest_is_a_crashed_later_run().newer_run_did_not_reach_this_endpoint
+        is True
+    )
+
+
+def test_no_newest_run_at_all_reports_nothing():
+    """Conjunct 1: there has to BE a newest run.
+
+    ``None != self.run`` is True, so without this conjunct an absent newest
+    run reads as "a run other than this one" and the page names a later sweep
+    the store does not hold. Only this conjunct stops that: the query binds
+    ?newestRun and ?newestEmission in one OPTIONAL, so no store makes the
+    other four conjuncts true with newest_run empty, and the conjunct that
+    would otherwise catch it (conjunct 3) is satisfied here for exactly that
+    reason. What is pinned is the reading, not a store shape: the five fields
+    are read as one answer about one run, so an empty newest_run is "no newer
+    run" and never "a different run".
+    """
+    r = _newest_is_a_crashed_later_run(newest_run=None, newest_generated_at=None)
+    assert r.newer_run_did_not_reach_this_endpoint is False
+
+
+def test_the_newest_run_being_this_run_reports_nothing():
+    """Conjunct 2: the newest run has to be a DIFFERENT run.
+
+    A run that crashed after writing this endpoint's chunk is both the run
+    being shown and the newest run in the store. Its facts are on the page
+    already, so "a later sweep never got here" would invent a second sweep.
+    That case is condition (a)'s, and store_crashed_partway's kadaster page
+    is where it is asserted end to end.
+    """
+    r = _newest_is_a_crashed_later_run(newest_run=CURRENT_RUN)
+    assert r.newer_run_did_not_reach_this_endpoint is False
+
+
+def test_a_newest_run_that_promised_nothing_reports_nothing():
+    """Conjunct 3: the newest run has to have said it writes incrementally.
+
+    Without sw:emission the missing sw:finalised is not evidence of anything,
+    exactly as in run_did_not_finish. This is the conjunct
+    test_a_newer_historical_run_is_not_a_crash reaches through a real store.
+    """
+    r = _newest_is_a_crashed_later_run(newest_emission=None)
+    assert r.newer_run_did_not_reach_this_endpoint is False
+
+
+def test_a_newest_run_that_finished_reports_nothing():
+    """Conjunct 4: the newest run must not have recorded finishing.
+
+    A finished sweep that recorded nothing for this endpoint is a different
+    fact from a crash, and not one this sentence is about.
+    """
+    r = _newest_is_a_crashed_later_run(newest_finalised=True)
+    assert r.newer_run_did_not_reach_this_endpoint is False
+
+
+def test_a_newest_run_that_marked_this_endpoint_reports_nothing():
+    """Conjunct 5: the newest run must not have marked this endpoint done.
+
+    An endpoint the crashed run did finish is one whose facts are simply
+    older than the crash, and saying the run never reached it would be false.
+    """
+    r = _newest_is_a_crashed_later_run(newest_completed_this_endpoint=True)
     assert r.newer_run_did_not_reach_this_endpoint is False
