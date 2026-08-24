@@ -99,8 +99,13 @@ Two narrower properties replace it, and they have **different standing**:
   run has the same IRI no matter when it ran, what else was swept, or how the endpoint
   list was ordered.
 - **Order, which is a property of one emitted file and of nothing else.** Quads appear
-  grouped by endpoint in input-list order, and within an endpoint by metric-definition
-  order. This exists so that `git diff` of two run files is readable. N-Quads order
+  grouped by fact family first, the activity's own quads and then the measurements, the
+  not-measured facts, the content samples and the `declarationsRead` facts, and by
+  endpoint in input-list order within each family. Within one endpoint the order is that
+  of the definition list the facts came from, which is not `metrics.toml` order in
+  general, because `within_cost` partitions that file into the metrics that run and the
+  metrics the ceiling declines and `assemble` writes the two in turn. This exists so
+  that `git diff` of two run files is readable. N-Quads order
   carries no meaning, and `web/load_run.py` inserts into Oxigraph, which is
   order-blind, so no consumer depends on it. **Stage 1c-b4 is expected to break the
   order property**, because writing each endpoint's chunk as it completes is writing

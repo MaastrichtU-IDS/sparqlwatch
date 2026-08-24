@@ -218,7 +218,7 @@ a sweep. A black-holed endpoint costs its whole 600-second endpoint budget
 rather than 14.1 seconds, so the real bound is `sum(per-endpoint cost) /
 concurrency`: 548 dead endpoints would be `548 × 600 / 4` = 22.8 hours, and at
 a plausible 10% dead it is `(493 × 14.1 + 55 × 600) / 4` = 9,988 seconds, or
-about 2 hours 48 minutes. That is the number to plan a scheduled job around,
+about 2 hours 46 minutes. That is the number to plan a scheduled job around,
 not the healthy-endpoint floor.
 
 It also assumes all endpoints are distinct hosts. Registry URLs that share a
@@ -252,8 +252,10 @@ in a registry are a registry problem to see rather than one to collapse
 silently.
 
 A URL whose authority carries a **non-empty userinfo** component is then
-dropped, with a warning naming it, after the deduplication and before anything
-is swept. `http://alice:s3cret@a.example/sparql` is refused and so is
+dropped, with a warning naming the host it was pointed at and never the URL,
+because repeating the URL would copy the credential into the log the drop
+exists to keep it out of. This happens after the deduplication and before
+anything is swept. `http://alice:s3cret@a.example/sparql` is refused and so is
 `ftp://alice:s3cret@a.example/sparql`: the authority is delimited on `//`, so
 the check does not care about the scheme. An empty userinfo
 (`http://@a.example/sparql`) carries no credential and is kept. A bare `@`
@@ -590,9 +592,14 @@ order: each endpoint keeps its input index as a slot, `assemble` walks the slots
 afterwards, and `emit_nquads` writes the activity's own quads, then the
 measurements, then the not-measured facts, then the content samples, then the
 `declarationsRead` facts, each list in the order it was assembled, which is
-endpoint input order and, within an endpoint, metric-definition order. That is
-worth having for diffing two files by eye, and it is all it is worth. It is
-**not** a property of the data:
+endpoint input order first. Within one endpoint it is the order of the
+definition list the facts came from, which is not `metrics.toml` order in
+general: `within_cost` partitions that file into the metrics that run and the
+metrics the ceiling declines, and `assemble` writes an endpoint's not-measured
+facts as the metrics that would have run and then the metrics the ceiling
+declined, so a cheap metric listed after an expensive one comes out first.
+That is worth having for diffing two files by eye, and it is all it is worth.
+It is **not** a property of the data:
 
 - N-Quads serialises a set. No consumer may read meaning from the order of lines
   in one.
