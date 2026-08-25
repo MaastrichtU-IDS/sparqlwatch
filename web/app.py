@@ -1,12 +1,17 @@
-"""The HTTP surface: one endpoint resource, served as HTML or as RDF.
+"""The HTTP surface: three resources, each served as HTML or as RDF.
 
-This is the first thing this project serves over HTTP. It exposes exactly
-one resource, the current state of one monitored SPARQL endpoint, in two
-representations chosen by the request's Accept header. The design spec
+This is what this project serves over HTTP: one endpoint's current state, an
+index of every endpoint, and `/about`. Each is offered in two kinds of
+representation chosen by the request's Accept header. The design spec
 requires content negotiation on every resource ("a quality-measurement
 service that is not itself machine-readable would be self-defeating"), so
 the HTML and the RDF are two representations of one resource rather than two
 resources.
+
+`/about` is the odd one, and the section at the bottom of this file says why:
+it takes no store dependency and its RDF is assembled here rather than
+serialised out of the store, because it describes this service rather than
+anything a sweep measured.
 
 The two representations are derived differently on purpose, and that is
 worth stating plainly because it is a hazard as well as a design:
@@ -49,7 +54,15 @@ from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, Query, Request, Response
 from jinja2 import Environment, FileSystemLoader, select_autoescape
-from pyoxigraph import NamedNode, RdfFormat, Store, Variable, serialize
+from pyoxigraph import (
+    Literal,
+    NamedNode,
+    RdfFormat,
+    Store,
+    Triple,
+    Variable,
+    serialize,
+)
 
 import verdict_encoding
 from endpoint_content import EndpointContent, endpoint_content
@@ -96,6 +109,13 @@ ENDPOINT_PATH = "/endpoint"
 # one route and reaching it meant knowing an endpoint URL and percent-encoding
 # it by hand.
 INDEX_PATH = "/"
+
+# This path is not a choice. Every request the prober makes carries
+# `sparqlwatch/<version> (+https://<host>/about)` in its User-Agent
+# (prober/src/client.rs), so the URL is already published, in somebody else's
+# server log, before this route exists. Renaming it would break the one
+# promise this project has made to every host it has contacted.
+ABOUT_PATH = "/about"
 
 # ---------------------------------------------------------------------------
 # Representations
@@ -1327,3 +1347,246 @@ def index_resource(
         content=_index_rdf(store, media_type),
         media_type=media_type,
     )
+
+
+# ---------------------------------------------------------------------------
+# /about: the page our User-Agent points at
+# ---------------------------------------------------------------------------
+#
+# Every request the prober makes tells the server it is querying where to
+# find out who we are. That makes this the one page in this service whose
+# reader did not come looking for it: they found an unfamiliar agent in a log
+# and followed the URL. Three consequences are built into the code below.
+#
+# It takes NO store dependency. get_store raises on a missing store, an empty
+# one, and one holding run graphs but no derived current graph. Every one of
+# those is a mistake on our side, and none of them is a reason to fail the
+# request of somebody asking why we contacted them. The index and the
+# endpoint page are representations of measurements and are right to require
+# a store; this page is a representation of this service, and a service can
+# describe itself with no data loaded.
+#
+# Its numbers come from named constants below, each one carrying the file and
+# constant in prober/ that decides it, and web/tests/test_about.py reads those
+# files and compares. A politeness figure on this page is a promise made to
+# somebody else's server, so a page saying "two seconds" while
+# DEFAULT_MIN_GAP said otherwise would be a confident wrong answer about this
+# project's own behaviour. The test is the only thing that keeps the two
+# together, because nothing at run time can see the Rust source.
+#
+# Its RDF is assembled HERE, in Python, and it is the only representation in
+# this file that is. endpoint_description.rq and index_description.rq are
+# CONSTRUCTs precisely so that neither can state anything the store does not
+# hold; that argument does not apply to a document about this service, because
+# no run graph holds a triple about who we are or how fast we probe. The
+# hazard the CONSTRUCTs avoid is still real here, so it is closed the other
+# way: both representations read the same constants, and
+# test_the_rdf_and_the_html_state_the_same_numbers_and_the_same_address
+# compares them field by field.
+
+# Supplied by the user for this purpose. It is published deliberately: the
+# page's whole reason to exist is to give a stranger a way to reach a person,
+# and an address nobody can see is not one. Exactly one address, and no form,
+# alias or ticket queue beside it, because each of those would be a channel a
+# reader would use and nobody would read.
+CONTACT_ADDRESS = "michel.dumontier@maastrichtuniversity.nl"
+
+# The string a reader searched their logs for, built by
+# prober/src/client.rs's `.user_agent(concat!(...))` out of
+# env!("CARGO_PKG_VERSION"). Quoted in full rather than described, because
+# matching it against the line in front of them is how a reader confirms this
+# page is about the agent they came here for. The version is part of the
+# quote, so test_the_user_agent_shown_is_the_one_the_prober_sends reds on a
+# version bump and this constant has to move with it.
+PROBER_USER_AGENT = (
+    "sparqlwatch/0.1.0 (+https://sparqlwatch.dev.k8s.semanticscience.org/about)"
+)
+
+# prober/src/registry.rs's DEFAULT_EXCLUSIONS: the file both binaries read at
+# every run, relative to their working directory. Named on the page because it
+# is checkable from outside: a reader can look and see whether their host is
+# on it, which is the only way this promise can be verified by the person it
+# was made to.
+EXCLUSION_FILE = "registry/exclusions.toml"
+
+# How politely the prober behaves, as the prober's own defaults.
+#
+#   min-gap-seconds          politeness.rs DEFAULT_MIN_GAP, the default of
+#                            main.rs's --min-gap-ms
+#   hosts-in-flight          main.rs DEFAULT_CONCURRENCY, the default of
+#                            --concurrency. HOSTS, not endpoints
+#   requests-per-second      hosts-in-flight / min-gap-seconds, which is the
+#                            aggregate rate main.rs's own comment on
+#                            DEFAULT_CONCURRENCY derives
+#   retry-after-cap-seconds  politeness.rs DEFAULT_RETRY_AFTER_CAP, the
+#                            default of --retry-after-cap-s
+#   *-budget-seconds         budget.rs's impl Default for Budget
+#   requests-per-endpoint    one per metric that is cheap at the default cost
+#                            ceiling (main.rs defaults --max-cost to
+#                            Cost::Cheap), counted from prober/metrics.toml
+#
+# Written out as literals rather than computed, because nothing in this
+# process can read Rust. web/tests/test_about.py reads every one of those
+# files and fails on a mismatch, which is what makes these numbers a
+# statement about the prober rather than about this dictionary.
+POLITENESS = {
+    "min-gap-seconds": 2,
+    "hosts-in-flight": 4,
+    "requests-per-second": 2,
+    "retry-after-cap-seconds": 20,
+    "request-budget-seconds": 30,
+    "metric-budget-seconds": 60,
+    "endpoint-budget-seconds": 600,
+    "requests-per-endpoint": 7,
+}
+
+# Where the list of endpoints came from. Every value is in
+# prober/registry/lod-cloud.provenance.toml, which the seeder writes beside
+# the registry it generated, except endpoint-count, which is the length of
+# prober/registry/lod-cloud.toml itself.
+#
+# On the page because it answers the reader's second question. The first is
+# "who are you"; the second is "why me", and the answer is that a public dump
+# of dataset metadata listed their endpoint and nobody asked them. That is
+# also the whole reason the exclusion mechanism has to exist.
+REGISTRY = {
+    "endpoint-count": 543,
+    "dump": "https://lod-cloud.net/versions/2026-06-15/lod-data.json",
+    "dump-version": "2026-06-15",
+    "entries": 725,
+    "distinct": 548,
+}
+
+# The one full sweep of that registry this project has run, from
+# prober/README.md under Sweep cost. Quoted rather than rounded because it is
+# a measurement and the README is where it is recorded; the same section says
+# every other figure there is an estimate.
+FULL_SWEEP_DURATION = "1h26m21s"
+
+# The lead sentence, in one place because both representations state it. A
+# machine that asks this resource for RDF gets the same sentence a person
+# reads, rather than a document that describes the page without saying what
+# the service does.
+SUMMARY = (
+    "sparqlwatch measures public SPARQL endpoints and publishes what it "
+    "measured: it sends a few small read-only queries to each endpoint on a "
+    "public list, and records what came back, per endpoint and per check."
+)
+
+# The subject of the RDF representation, and the namespace its predicates sit
+# in. urn:sparqlwatch: is the scheme every IRI this project mints already
+# uses (sw:metric:..., sw:activity:...), so sw:service and sw:about:... are
+# that convention continued rather than a second one.
+#
+# These predicates are minted here and appear in no run graph, which is the
+# opposite of the rule endpoint_description.rq and index_description.rq
+# follow. The difference is what the document is about: a triple about an
+# endpoint must come from a measurement, and there is no measurement of who we
+# are. Kept deliberately few, and each one is pinned by the test that pins the
+# prose beside it.
+_SERVICE = NamedNode("urn:sparqlwatch:service")
+_ABOUT = "urn:sparqlwatch:about:"
+_XSD_INTEGER = NamedNode("http://www.w3.org/2001/XMLSchema#integer")
+
+
+def _about_context() -> dict:
+    """Everything web/templates/about.html renders, and nothing derived.
+
+    The template writes the prose; this hands it the numbers and the strings
+    that have to agree with something outside the template.
+    """
+    return {
+        "summary": SUMMARY,
+        "contact": CONTACT_ADDRESS,
+        "user_agent": PROBER_USER_AGENT,
+        "exclusion_file": EXCLUSION_FILE,
+        "politeness": POLITENESS,
+        "registry": REGISTRY,
+        "full_sweep": FULL_SWEEP_DURATION,
+        "index_path": INDEX_PATH,
+        "endpoint_path": ENDPOINT_PATH,
+    }
+
+
+def _about_html() -> str:
+    """The page, rendered."""
+    return _TEMPLATES.get_template("about.html").render(**_about_context())
+
+
+def _about_rdf(media_type: str) -> bytes:
+    """The same statements, for a machine.
+
+    A crawler or an operator's tooling wants two things from this resource:
+    where to complain, and what rate to expect. Both are here as data, so
+    neither has to be read out of prose. The politeness figures are typed
+    xsd:integer in seconds and in counts, which is what the flags they come
+    from are.
+    """
+    triples = [
+        Triple(_SERVICE, NamedNode(_ABOUT + "summary"), Literal(SUMMARY)),
+        Triple(
+            _SERVICE,
+            NamedNode(_ABOUT + "contact"),
+            NamedNode("mailto:" + CONTACT_ADDRESS),
+        ),
+        Triple(
+            _SERVICE,
+            NamedNode(_ABOUT + "user-agent"),
+            Literal(PROBER_USER_AGENT),
+        ),
+        Triple(
+            _SERVICE,
+            NamedNode(_ABOUT + "exclusion-list"),
+            Literal(EXCLUSION_FILE),
+        ),
+        Triple(
+            _SERVICE,
+            NamedNode(_ABOUT + "registry-endpoint-count"),
+            Literal(str(REGISTRY["endpoint-count"]), datatype=_XSD_INTEGER),
+        ),
+        Triple(
+            _SERVICE,
+            NamedNode(_ABOUT + "registry-source"),
+            NamedNode(REGISTRY["dump"]),
+        ),
+    ]
+    triples.extend(
+        Triple(
+            _SERVICE,
+            NamedNode(_ABOUT + name),
+            Literal(str(value), datatype=_XSD_INTEGER),
+        )
+        for name, value in POLITENESS.items()
+    )
+    return serialize(iter(triples), format=RdfFormat.from_media_type(media_type))
+
+
+@app.get(ABOUT_PATH)
+def about_resource(request: Request) -> Response:
+    """Who is querying your endpoint, how often, and how to make it stop.
+
+    No store parameter, and that absence is the feature. See the section
+    comment above.
+
+    Negotiated by the same function as the other two resources, because the
+    design spec requires content negotiation of every resource and this one is
+    no exception: an operator's tooling should be able to read our contact
+    address and our rate without parsing English.
+    """
+    media_type = choose_representation(request.headers.get("accept"))
+    if media_type is None:
+        return Response(
+            content=(
+                "none of the requested media types can be served; this "
+                "resource offers " + ", ".join(OFFERED_MEDIA_TYPES) + "\n"
+            ),
+            status_code=406,
+            media_type="text/plain; charset=utf-8",
+        )
+
+    if media_type == HTML_MEDIA_TYPE:
+        return Response(
+            content=_about_html(),
+            media_type="text/html; charset=utf-8",
+        )
+    return Response(content=_about_rdf(media_type), media_type=media_type)

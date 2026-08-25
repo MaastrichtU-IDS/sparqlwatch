@@ -1,0 +1,303 @@
+{# The page the prober's User-Agent points at.
+
+   Written for one reader: somebody who found `sparqlwatch/...` in a server
+   log and followed the URL. They did not come here to browse measurements,
+   so the order is theirs and not ours. What this is, what it did to their
+   server, how often and how politely, why their endpoint is on the list, and
+   how to be taken off it. Everything about this site's own features comes
+   last, because it is the least of what they came for.
+
+   Every number here is rendered from web/app.py's constants, each of which
+   names the file in prober/ that decides it, and web/tests/test_about.py
+   reads those files and compares. The data- attributes are the contract it
+   reads: an element that loses one takes its claim out of the test's reach.
+#}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>About sparqlwatch</title>
+<style>
+  /* The same tokens as web/templates/index.html, from design/Main.dc.html,
+     which is the authority for layout, typography, spacing and these values.
+     No verdict encoding is used on this page: nothing here is a measurement,
+     so there is no state to draw. */
+  :root {
+    --bg: #0a1929; --bg-secondary: #112a3f; --bg-hover: #1a3952; --bg-deep: #061320;
+    --border: #2a5580; --text: #d0e4f5; --text-bright: #ffffff; --text-muted: #7fa5c8;
+    --text-dim: #5c7c9c; --accent: #4fc3f7; --on-accent: #0a1929; --accent-blue: #81d4fa;
+    --good: #66bb6a; --warn: #ffb74d; --crit: #ef5350; --overlay: rgba(255,255,255,0.05);
+    --radius: 6px; --radius-sm: 4px;
+    --mono: ui-monospace, 'Cascadia Code', 'Source Code Pro', monospace;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.5 system-ui, -apple-system, 'Segoe UI', sans-serif; }
+  a { color: var(--accent-blue); text-decoration: none; }
+  a:hover { color: var(--accent); text-decoration: underline; }
+  header { display: flex; align-items: center; gap: 12px; padding: 14px 24px;
+           background: var(--bg-secondary); border-bottom: 1px solid var(--border); }
+  .logo { display: flex; align-items: center; gap: 9px; font-weight: 600; color: var(--text-bright); }
+  .run { margin-left: auto; font-size: 12px; color: var(--text-dim); }
+  /* Narrower than the index's 1120px, because this page is prose and the
+     index is a table: a 1120px measure is a hard line to read a paragraph
+     across. */
+  main { padding: 22px 24px; max-width: 780px; }
+  h1 { margin: 0 0 10px; font-size: 18px; font-weight: 600; color: var(--text-bright);
+       letter-spacing: -0.01em; }
+  h2 { font-size: 12px; font-weight: 600; color: var(--text-dim); text-transform: uppercase;
+       letter-spacing: 0.05em; margin: 0 0 12px; }
+  p { margin: 0 0 11px; }
+  p:last-child { margin-bottom: 0; }
+  .lead { font-size: 15px; color: var(--text-bright); }
+  section + section { margin-top: 22px; }
+  .panel { border: 1px solid var(--border); border-radius: var(--radius);
+           background: var(--bg-secondary); padding: 14px 16px; }
+  code, .ua { font-family: var(--mono); font-size: 12.5px; word-break: break-all; }
+  .ua { display: block; padding: 8px 10px; margin: 0 0 11px;
+        background: var(--bg-deep); border: 1px solid var(--border);
+        border-radius: var(--radius-sm); color: var(--text-bright); }
+  ul.facts { list-style: none; margin: 0; padding: 0; }
+  ul.facts > li { padding: 8px 0; border-bottom: 1px solid var(--border); }
+  ul.facts > li:first-child { border-top: 1px solid var(--border); }
+  ul.facts > li:last-child { border-bottom: none; }
+  ul.facts b { color: var(--text-bright); font-variant-numeric: tabular-nums; }
+  .limit { color: var(--text-muted); }
+  .limit b { color: var(--text); }
+  ul.plain { margin: 0; padding-left: 20px; color: var(--text-muted); }
+  ul.plain li { margin: 3px 0; }
+  .contact { font-family: var(--mono); font-size: 14px; }
+  /* A sentence about a bound on what this page promises, in the same token
+     the index and the endpoint page use for the same kind of claim. It reads
+     identically with no styling at all. */
+  .warn-note { color: var(--warn); }
+</style>
+</head>
+<body>
+<header>
+  <span class="logo">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)"
+         stroke-width="2" stroke-linecap="round" aria-hidden="true">
+      <circle cx="11" cy="11" r="6"/><path d="M15.5 15.5 21 21"/><path d="M8 11h6"/></svg>
+    sparqlwatch
+  </span>
+  <span class="run"><a href="{{ index_path }}">every endpoint measured</a></span>
+</header>
+<main>
+  <h1>What this is, and why it queried your server</h1>
+  <p class="lead" data-summary="true">{{ summary }}</p>
+  <p>
+    If you found this line in a server log, that was this software asking your
+    endpoint a question:
+  </p>
+  <span class="ua" data-user-agent="true">{{ user_agent }}</span>
+  <p>
+    It reads and it does not write. Every query it sends comes from a fixed
+    list of checks in the project's <code>metrics.toml</code>, and each one is a
+    <code>SELECT</code> or an <code>ASK</code> sent as a <code>GET</code> with
+    the query in the query string. Two of the checks are not queries at all:
+    one <code>OPTIONS</code> preflight, to see whether a browser could reach
+    the endpoint, and one plain <code>GET</code> asking for a service
+    description. It does not crawl. It asks the one URL on its list, follows a
+    redirect from it if there is one, and stops.
+  </p>
+  <p>
+    What it measured is published here, as a page per endpoint and
+    <a href="{{ index_path }}">one index of all of them</a>. There is no score
+    and no ranking: each endpoint carries one verdict per check, in words.
+    Every page, this one included, is also available as RDF to a request that
+    asks for it.
+  </p>
+
+  <section class="panel">
+    <h2>How often</h2>
+    <p data-cadence="unscheduled">
+      No sweep runs on a schedule. Each one is started by hand, so a server
+      sees a burst of requests and then nothing, possibly for weeks, rather
+      than a visit at the same time every day. The one full sweep of this list
+      so far took {{ full_sweep }}.
+    </p>
+    <p class="warn-note">
+      That is what is true today and not a policy. If sweeps later run on a
+      timer, this paragraph is what has to say so.
+    </p>
+  </section>
+
+  <section class="panel">
+    <h2>How politely</h2>
+    <p>
+      These are the prober's defaults, and they are the numbers a single
+      operator sees:
+    </p>
+    <ul class="facts">
+      <li data-politeness="min-gap-seconds" data-value="{{ politeness['min-gap-seconds'] }}">
+        <b>{{ politeness['min-gap-seconds'] }} seconds</b> at least between two
+        consecutive requests to one host, measured from the end of one to the
+        start of the next, so a slow answer never shortens the pause that
+        follows it.
+      </li>
+      <li data-politeness="hosts-in-flight" data-value="{{ politeness['hosts-in-flight'] }}">
+        <b>{{ politeness['hosts-in-flight'] }} hosts</b> at once, at most. That
+        counts hosts and not endpoints: endpoints are grouped by host, and one
+        request to one host is in flight at a time however many endpoints that
+        host serves. If you run several of the endpoints on the list, they are
+        probed one after another, not together.
+      </li>
+      <li data-politeness="requests-per-second" data-value="{{ politeness['requests-per-second'] }}">
+        <b>{{ politeness['requests-per-second'] }} requests per second</b> in
+        aggregate, across every host in the sweep, which is what those two
+        numbers come to together.
+      </li>
+      <li data-politeness="requests-per-endpoint" data-value="{{ politeness['requests-per-endpoint'] }}">
+        <b>{{ politeness['requests-per-endpoint'] }} requests</b> to one
+        endpoint in one sweep, one per check that is cheap enough to run by
+        default, plus one more for each redirect followed.
+      </li>
+      <li data-politeness="retry-after-cap-seconds" data-value="{{ politeness['retry-after-cap-seconds'] }}">
+        <b>{{ politeness['retry-after-cap-seconds'] }} seconds</b> is the
+        longest <code>Retry-After</code> that is waited out, and it is waited
+        out once. A longer delay is read as "come back after this sweep", so
+        the throttle is recorded and the request is not repeated.
+      </li>
+      <li data-politeness="request-budget-seconds" data-value="{{ politeness['request-budget-seconds'] }}">
+        <b>{{ politeness['request-budget-seconds'] }} seconds</b> and one
+        request is abandoned.
+      </li>
+      <li data-politeness="metric-budget-seconds" data-value="{{ politeness['metric-budget-seconds'] }}">
+        <b>{{ politeness['metric-budget-seconds'] }} seconds</b> and one check
+        is abandoned, pause and retry included.
+      </li>
+      <li data-politeness="endpoint-budget-seconds" data-value="{{ politeness['endpoint-budget-seconds'] }}">
+        <b>{{ politeness['endpoint-budget-seconds'] }} seconds</b> and this
+        endpoint's whole turn is abandoned and the sweep moves on. Nothing
+        keeps knocking.
+      </li>
+    </ul>
+  </section>
+
+  <section class="panel">
+    <h2>Why your endpoint is on the list</h2>
+    <p>
+      Because a public dump of dataset metadata named it. Nobody opted in.
+    </p>
+    <p>
+      The list was generated from the LOD Cloud dump of
+      <span data-registry="dump-version" data-value="{{ registry['dump-version'] }}">{{ registry['dump-version'] }}</span>,
+      <a data-registry="dump" href="{{ registry['dump'] }}">{{ registry['dump'] }}</a>.
+      That file carried
+      <span data-registry="entries" data-value="{{ registry['entries'] }}">{{ registry['entries'] }}</span>
+      endpoint entries, which came to
+      <span data-registry="distinct" data-value="{{ registry['distinct'] }}">{{ registry['distinct'] }}</span>
+      distinct URLs, of which
+      <span data-registry="endpoint-count" data-value="{{ registry['endpoint-count'] }}">{{ registry['endpoint-count'] }}</span>
+      are on the list a sweep reads. The difference was dropped by rules this
+      project applies to any list it is given: a URL carrying credentials, a
+      reserved documentation name, a private or loopback address, or a string
+      that cannot be published as an identifier.
+    </p>
+    <p>
+      So an endpoint on the list is one somebody registered as public, and
+      that is the only claim being made about it. It is not a claim that its
+      operator wants it probed, which is what the next section is for.
+    </p>
+  </section>
+
+  <section class="panel">
+    <h2>How to ask not to be probed</h2>
+    <p class="warn-note" data-blocking="not-a-signal">
+      Blocking the requests does not stop them. An endpoint that refuses
+      everything is recorded as unreachable and asked again on the next sweep,
+      at the same rate, because nothing yet drops an endpoint from the list for
+      failing. So a firewall rule costs you the requests and gains you
+      nothing, and the list below is the thing that works.
+    </p>
+    <p>
+      Email <a class="contact" data-contact="{{ contact }}" href="mailto:{{ contact }}">{{ contact }}</a>
+      and say which host to leave alone. A log line pasted in helps, and
+      nothing more is needed. The address is a mailbox rather than a service
+      on this machine, so it does not depend on this site being up.
+    </p>
+    <p>Exactly what happens then, including what it does not do:</p>
+    <ul class="facts">
+      <li class="limit" data-exclusion-limit="by-hand">
+        <b>A person adds the entry.</b> Nothing watches that mailbox. Somebody
+        reads the message and writes your host into
+        <code>{{ exclusion_file }}</code> by hand. There is no automation
+        between a message arriving and that edit, and no service level
+        attached to it.
+      </li>
+      <li class="limit" data-exclusion-limit="next-sweep">
+        <b>Once the entry is there, it takes effect at the next sweep.</b> The
+        file is read from disk at the start of every run, so no rebuild and no
+        redeployment stands in between. A sweep already running finishes under
+        the list it started with.
+      </li>
+      <li class="limit" data-exclusion-limit="no-retraction">
+        <b>Nothing already published is retracted.</b> An exclusion stops
+        future probing. It does not remove past measurements: they are written
+        once and never rewritten, and the endpoint's URL is part of the
+        identity of every fact about it.
+      </li>
+      <li class="limit" data-exclusion-limit="whole-host">
+        <b>One entry covers one whole host, and only that host.</b> Every
+        scheme, port and path on it is covered, and nothing below it is:
+        <code>example.org</code> does not cover
+        <code>sub.example.org</code>. Names under one domain routinely belong
+        to different people, so an operator who runs several of them lists
+        them all.
+      </li>
+      <li class="limit" data-exclusion-limit="no-resolution">
+        <b>Nothing is resolved.</b> A second name for the same server, or an
+        alias, is not covered unless it is listed too. Nothing asks a resolver
+        what an entry points at, so two names for one machine are two entries.
+      </li>
+      <li class="limit" data-exclusion-limit="published">
+        <b>An entry publishes the host it excludes.</b>
+        <code>{{ exclusion_file }}</code> is committed to this project's
+        public source repository, and the reason given is copied into a log
+        line each time the rule fires. No person is named in it. A hashed
+        entry was considered and rejected: nobody could then check it,
+        including the person who asked.
+      </li>
+    </ul>
+    <p>
+      The file is named here because it is checkable. If you have asked, you
+      can look and see your host on it, which is the only way this promise can
+      be verified from outside.
+    </p>
+  </section>
+
+  <section class="panel">
+    <h2>What this site does not do</h2>
+    <p>
+      Listed rather than left to be discovered, so nobody hunts for a page
+      that is not here.
+    </p>
+    <ul class="plain">
+      <li data-not-built="leaderboard">No leaderboard, and no sorting by
+        anything. The index has one text filter.</li>
+      <li data-not-built="per-metric-pages">No page per check, so nothing
+        writes out how a check is computed or lists which endpoints fail
+        it.</li>
+      <li data-not-built="history">No history. Each endpoint shows the newest
+        sweep that measured it and nothing before that.</li>
+      <li data-not-built="charts">No charts and no graphs of any kind.</li>
+      <li data-not-built="faceted-search">No faceted search.</li>
+      <li data-not-built="query-editor">No query editor. Nothing here sends a
+        query you type.</li>
+      <li data-not-built="public-sparql-endpoint">No public SPARQL endpoint of
+        our own, which is worth saying plainly given what this project
+        measures. The RDF representation of each page is what there is
+        instead.</li>
+      <li data-not-built="content-facets" data-blocked-on="stage-2b">No
+        browsing by vocabulary or by class, which the design does call for.
+        That one is not merely unbuilt: it needs content data this project
+        does not yet gather, which is a later stage of the plan. Asking again
+        after that stage lands is worthwhile in a way it is not for the items
+        above.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>
