@@ -205,12 +205,102 @@ Two endpoint lists live in this crate and they are not interchangeable.
 | `endpoints.toml` | The **development list**: three endpoints, written by hand, and the default `--endpoints`. `registry.rs` asserts it loads exactly three entries with `qlever.dev` first, and none of the three appears in the LOD Cloud dump. |
 | `registry/lod-cloud.toml` | The **seeded list**: 543 candidates extracted from a LOD Cloud dump. Generated, so a hand edit is overwritten by the next re-seed and fails the fixed-point test in `src/bin/seed-registry.rs`. |
 | `registry/lod-cloud.provenance.toml` | Which dump produced that list, and every count behind it. A parseable file rather than a comment header, so a test can read it back and compare it against the list beside it. Generated too, and a fixed point of its own writer for the same reason the list is: a hand edit or a change to the renderer fails a test rather than standing as the only record of where the list came from. |
+| `registry/exclusions.toml` | The **exclusion list**: the hosts this project does not probe, because somebody asked. The one file in `registry/` that is not generated, and the one a re-seed leaves alone. See Asking not to be probed below. |
 | `registry/calibration-sample.toml` | 54 candidates cut out of the seeded list to price a sweep before one was attempted. It is a sample and not a registry, and its own header says so. |
 
 No sweep reaches the seeded list by accident. `--endpoints
 registry/lod-cloud.toml` is how a run gets it, a plain `cargo run` uses the
 three-endpoint development list, and `seed-registry` has no flag that can write
 to `endpoints.toml`.
+
+### Asking not to be probed
+
+`registry/exclusions.toml` names the hosts this project does not probe. It is
+the one file in `registry/` that is **not generated**: `seed-registry` never
+writes it, has no flag naming it, and a re-seed leaves it byte for byte as it
+was. That is the whole point of it. Deleting a URL from `lod-cloud.toml` by hand
+lasts until the next re-seed, which regenerates the list from the dump and puts
+the host straight back.
+
+One table per host, and both fields are required:
+
+```toml
+[[exclusion]]
+host = "sparql.example.org"
+reason = "A person asked, 2026-08-25"
+```
+
+`reason` cannot be missing or blank: an entry without one **fails the load**. An
+anonymous exclusion is one nobody can maintain, because removing it would be as
+unaccountable as adding it, and "a person asked" with a date is a perfectly good
+reason. Put no personal data there: the file is public and the reason is copied
+into the warning the drop emits, so the fact that a request was made and when is
+enough.
+
+`host` is a host and not a URL: no scheme, no port, no path. A value carrying
+`/`, `:`, `@` or a space **fails the load** rather than standing as an exclusion
+that quietly matches nothing, which is what pasting a URL out of a server log
+would otherwise produce. Case and a trailing DNS root label are normalised, so
+`Asked.Example.` and `asked.example` are one entry.
+
+The list is applied in two places and needs both:
+
+- `load_endpoints`, so an excluded host never reaches a sweep whatever file
+  `--endpoints` names, hand-written or seeded.
+- `seed::candidates`, so an excluded host is **absent from a freshly seeded
+  registry** rather than merely skipped when one is read.
+  `registry/lod-cloud.toml` is committed and public, and leaving a host in it on
+  the strength of a filter somewhere else would publish the name of a host that
+  asked to be left alone while giving a reader no way to see that the sweep
+  skips it.
+
+It is the only rule in `registry.rs` that fails the load instead of dropping an
+entry with a warning. The others fail open because the endpoint list is seeded
+from real-world dumps and refusing the whole file over one bad string would mean
+monitoring nothing. This one cannot fail open: failing open means probing a host
+that asked not to be, and a sweep that does not happen is a smaller wrong than a
+sweep somebody asked us not to run.
+
+The file carries one worked example, `sparqlwatch-exclusion-worked-example`,
+which nobody asked for and whose `reason` says so. A single-label host is
+refused by no other rule in `registry.rs`, which makes it the one input that can
+show the mechanism is wired in at all:
+`the_shipped_exclusion_list_is_subtracted_by_load_endpoints` would prove nothing
+against an empty list.
+
+Adding an entry can red two other tests, and both reds are the point. If the
+host is in `lod-cloud.toml`, re-seed, or the fixed-point test fails because the
+loader no longer reads back what that file holds. If it is in
+`calibration-sample.toml`, that sample's own count test fails and the sample has
+to be re-cut, because its measured costs then describe a population that no
+longer includes the host.
+
+**What this mechanism does not do.** Every line of this belongs on any page that
+tells a sysadmin how to ask to be excluded:
+
+- **Nothing watches a mailbox.** An exclusion becomes real when a person adds it
+  to the file and commits it, and it takes effect at the next build, because
+  `registry.rs` compiles the file in with `include_str!`. A deployment already
+  running honours the file it was built from until it is rebuilt. There is no
+  automation anywhere between a request and the file.
+- **Nothing already published is retracted.** A run graph is immutable and
+  append-only and the endpoint URL is part of the subject of every fact about it,
+  so an exclusion stops future sweeps and leaves past measurements standing.
+- **The granularity is the name.** Every URL on an excluded host goes, whatever
+  its scheme, port or path, and one path cannot be excluded while another is
+  kept. The match is on the whole host and not a suffix, so `sub.asked.example`
+  is not covered by an entry for `asked.example`: hosts under one domain
+  routinely belong to different people, and a suffix match would silently remove
+  endpoints belonging to parties who never asked. Somebody who runs several
+  names names them all.
+- **Nothing is resolved.** A second name for the same server, or a server
+  renamed, is a second entry, because nothing here asks a resolver what an entry
+  points at.
+- **An entry publishes the host it excludes**, in a public repository. A hashed
+  entry would be checkable by nobody, including the person who asked.
+- **This crate carries no contact address**, so nothing here tells anybody where
+  to send the request. The page that does is the page that has to carry the
+  address.
 
 ### Re-seeding
 
@@ -308,8 +398,9 @@ admission rule.
 
 ### The refusals
 
-Five rules stand between the dump and the seeded list, and 5 of the 548 distinct
-URLs were refused by them. Every one is decidable from the string with nobody
+Six rules stand between the dump and the seeded list, and 5 of the 548 distinct
+URLs were refused by them: the exclusion list was empty of real entries when
+this dump was seeded, so five rules did the refusing. Every one is decidable from the string with nobody
 contacted, which is what makes it honest to apply before a sweep rather than
 after one, and every one is counted under its own reason, so a difference
 between two seeds can be attributed to a rule rather than guessed at.
@@ -318,6 +409,7 @@ between two seeds can be attributed to a rule rather than guessed at.
 | --- | --- | --- | --- |
 | `dedupe` | 177 (725 entries to 548 distinct) | every path | One `declarationsRead` fact is published per list ENTRY, so a URL listed twice put two of them on one endpoint IRI in one run graph, and two differing fetches made them contradict each other. It also stops the sweep sending one stranger's server two identical sets of requests. |
 | `without_credentials` | 0 | every path | The endpoint string is published verbatim inside every subject, in a run graph never rewritten, so a credential admitted here would be permanent. |
+| `without_excluded` | 0 | every path, **and** the seeder | Somebody asked. It holds on every path because the request is made to this software, and it is applied by the seeder as well so that the committed list does not name a host that asked to be left alone. It is also the only rule here that fails the load rather than dropping an entry, because failing open means probing that host. See Asking not to be probed above. |
 | `without_unroutable_hosts` | 1 (`http://localhost:3030/Dataset/query`, really in the dump) | **the seeder only** | The question is not "may this be probed" but "may a third-party dump nominate it". An operator pointing this tool at their own machine is a legitimate use and this suite does it constantly through wiremock, so the rule sits at the seam where a stranger's list becomes ours. Wiring it into `load_endpoints` was tried and reverted: it emptied the endpoint list of `end_to_end.rs:1142` and `:1183`. |
 | `without_reserved_names` | 2 (`example.org`, `www.example.org`) | every path | RFC 2606 reserves these for documentation and `.invalid` never to resolve, so no service can be there and no operator could mean to point at one. |
 | `without_unpublishable_iris` | 2 (a `{SPARQL}` template placeholder, a URL with an example query inlined) | every path | `emit_nquads` builds the endpoint term with `NamedNode::new` and drops every fact about it when that fails, so such an entry costs a stranger's bandwidth to produce nothing at all. |
@@ -520,13 +612,17 @@ is the only concurrency measurement this project has actually taken.
 
 **`endpoints.toml`** is the list to sweep, one array of URLs, and it is the
 three-endpoint development list rather than the seeded registry (see The seeded
-registry above). Whatever file `--endpoints` names, `load_endpoints` applies four
-rules in a fixed order: `dedupe`, `without_credentials`,
-`without_reserved_names`, `without_unpublishable_iris`. Each drops an entry with
-a warning rather than failing the load, because the list can be seeded from a
-real-world dump known to contain junk, and one bad string must not discard a
-whole sweep's work. `without_unroutable_hosts` is deliberately not among them,
-and the table in The seeded registry says why.
+registry above). Whatever file `--endpoints` names, `load_endpoints` applies five
+rules in a fixed order: `dedupe`, `without_credentials`, `without_excluded`,
+`without_reserved_names`, `without_unpublishable_iris`. Four of them drop an
+entry with a warning rather than failing the load, because the list can be
+seeded from a real-world dump known to contain junk, and one bad string must not
+discard a whole sweep's work. `without_excluded` is the exception in both
+directions: it subtracts the hosts in `registry/exclusions.toml`, and an
+exclusion list that does not parse fails the load, because failing open there
+means probing a host that asked not to be probed (see Asking not to be probed
+above). `without_unroutable_hosts` is deliberately not among the five, and the
+table in The seeded registry says why.
 
 The last two arrived with stage 1d-a. `without_reserved_names` drops a host
 under an RFC 2606 documentation name (`.example`, `example.com`, `example.net`,
@@ -1192,6 +1288,13 @@ The following are deferred deliberately, not oversights:
   nothing here, and stage 5 accepts public submissions. None of it touches the
   query-string case above, so the standing advice is unchanged: do not put a
   secret in `endpoints.toml`.
+
+- **An exclusion is honoured by the next build, not by the request.**
+  `registry/exclusions.toml` is the only removal path this project has, nothing
+  watches a mailbox, and nothing retracts what an earlier run already published.
+  Asking not to be probed, above, states every limit of the mechanism, and any
+  page that offers a sysadmin a way out has to state them too rather than imply
+  a promise the file cannot keep.
 
 - **A cross-host redirect can wait at another endpoint's gate, and that wait is
   charged to the metric budget.** `--concurrency` groups endpoints by the host

@@ -225,3 +225,51 @@ fn the_right_claim_seeds_two_files_that_describe_the_dump_read() {
 
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// A re-seed preserves `registry/exclusions.toml`.
+///
+/// The property the exclusion mechanism rests on. `seed-registry` regenerates
+/// the registry, so removing a host from `lod-cloud.toml` by hand lasts until
+/// the next seed; the exclusion file is what outlives one, and it can only do
+/// that if the seeder never writes it. There is no flag naming it and no code
+/// path that opens it for writing, which is a claim about the absence of code
+/// and therefore one a test has to hold rather than a reader.
+///
+/// Both copies are checked. The one in the tempdir sits in the same `registry/`
+/// directory the seeder writes its two outputs into, which is where a future
+/// "regenerate everything in this directory" would clobber it. The shipped one
+/// is the file that actually matters, and this invocation runs with the crate
+/// root as its working directory, so a default `--out` would have reached it.
+#[test]
+fn a_re_seed_leaves_the_exclusion_list_exactly_as_it_was() {
+    let dir = tempdir("exclusions");
+    let beside = dir.join("registry/exclusions.toml");
+    std::fs::create_dir_all(beside.parent().unwrap()).unwrap();
+    let planted = "# planted by a_re_seed_leaves_the_exclusion_list_exactly_as_it_was\n";
+    std::fs::write(&beside, planted).unwrap();
+
+    let shipped = Path::new(env!("CARGO_MANIFEST_DIR")).join("registry/exclusions.toml");
+    let before = std::fs::read(&shipped).expect("the shipped exclusion list must exist");
+    assert!(!before.is_empty(), "an empty file would be preserved trivially");
+
+    let (output, out, provenance) = seed(&dir, SAMPLE_SHA256);
+    assert!(
+        output.status.success(),
+        "the seed itself has to succeed for this to be about the exclusion file: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(out.exists() && provenance.exists(), "both outputs must have been written");
+
+    assert_eq!(
+        std::fs::read_to_string(&beside).unwrap(),
+        planted,
+        "a file in the directory the seeder writes into was rewritten"
+    );
+    assert_eq!(
+        std::fs::read(&shipped).unwrap(),
+        before,
+        "the shipped exclusion list must survive a re-seed byte for byte"
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}

@@ -1,8 +1,10 @@
 //! Loading `endpoints.toml`: the list of endpoints one sweep probes.
 //!
-//! There are two rules here beyond parsing. The list holds each entry once,
-//! and no entry's authority carries a non-empty userinfo component, whatever
-//! its scheme.
+//! Every rule about which endpoints may be on such a list lives here, so there
+//! is one implementation of endpoint-list policy. Two of them are worth stating
+//! up front: the list holds each entry once, and no entry's authority carries a
+//! non-empty userinfo component, whatever its scheme. `prober/README.md` under
+//! Configuration files lists all of them in the order they run.
 //!
 //! The first, because `run_sweep` emits exactly one `declarationsRead` fact per
 //! LIST ENTRY, so a URL listed twice put two of those facts on one endpoint IRI
@@ -23,6 +25,13 @@
 //! subject `emit::subject_iri` builds, in a run graph this project never
 //! rewrites: a URL carrying userinfo would put a credential in the permanent
 //! record. See `without_credentials`.
+//!
+//! A third is not decidable from the string at all: `registry/exclusions.toml`
+//! names the hosts somebody asked this project to leave alone. It is the only
+//! rule applied both here and in the seeder, it is the only one that fails the
+//! load rather than dropping an entry with a warning, and `without_excluded`
+//! documents both, along with the limits `/about` has to state: nothing watches
+//! a mailbox, and nothing already published is retracted.
 
 use serde::Deserialize;
 
@@ -32,7 +41,11 @@ struct EndpointFile {
 }
 
 /// Parse `endpoints.toml` and return its endpoint list, each entry once, with
-/// no entry carrying credentials, in first-seen order.
+/// no entry carrying credentials and no entry on an excluded host, in
+/// first-seen order.
+///
+/// An unparseable `registry/exclusions.toml` fails this call rather than being
+/// skipped. See `parse_exclusions` for why that one rule does not fail open.
 ///
 /// Deduplicating before dropping credentials, not after, so a URL listed twice
 /// produces one warning of each kind rather than two of the second. That
@@ -44,7 +57,13 @@ pub fn load_endpoints(toml_text: &str) -> anyhow::Result<Vec<String>> {
     let file: EndpointFile = toml::from_str(toml_text)?;
     let deduped = dedupe(&file.endpoint);
     let named = without_credentials(&deduped);
-    let unreserved = without_reserved_names(&named);
+    // Before the two rules that judge the string itself, so an excluded host
+    // is reported as excluded rather than as a documentation name or a bad
+    // IRI: the one refusal made on a person's request is the one worth naming.
+    // After `without_credentials` for that function's own reason, which is
+    // that nothing downstream of it may log a password.
+    let wanted = without_excluded(&named, &exclusions()?);
+    let unreserved = without_reserved_names(&wanted);
     Ok(without_unpublishable_iris(&unreserved))
 }
 
@@ -297,6 +316,179 @@ pub fn without_unpublishable_iris(endpoints: &[String]) -> Vec<String> {
                 "registry entry dropped: it cannot be an IRI, so every fact about it would be \
                  unpublishable and probing it would spend a stranger's bandwidth for nothing"
             ),
+        }
+    }
+    kept
+}
+
+/// One host this project does not probe, and why it is on the list.
+///
+/// `reason` is required and cannot be blank, so an exclusion cannot be
+/// anonymous: somebody reading `registry/exclusions.toml` in a year has to be
+/// able to tell why a host is on it, and "a person asked" with a date is a
+/// perfectly good reason. Without that, removing an entry would be as
+/// unaccountable as adding one.
+#[derive(Debug, Deserialize)]
+pub struct Exclusion {
+    /// The host to leave alone, lowercased and with any DNS root label
+    /// stripped by `parse_exclusions`, so it compares equal to what `host_of`
+    /// returns for a URL.
+    pub host: String,
+    pub reason: String,
+}
+
+#[derive(Deserialize)]
+struct ExclusionFile {
+    /// `default` so a file whose last entry has been removed still parses. A
+    /// file of nothing but comments is an empty exclusion list, not a broken
+    /// one, and without this removing the final entry would fail every load in
+    /// the crate.
+    #[serde(default)]
+    exclusion: Vec<Exclusion>,
+}
+
+/// The exclusion list this binary was built with.
+///
+/// `include_str!`, so the file is compiled in rather than read at run time.
+/// Three consequences, all of them deliberate. A sweep cannot fail to find the
+/// list or read a different one depending on its working directory. A malformed
+/// list cannot reach a deployment quietly, because it fails this crate's whole
+/// test suite at the build that introduced it. And an entry takes effect at the
+/// next BUILD, so a deployment already running honours the file it was built
+/// from until it is rebuilt, which is a limit `/about` has to state rather than
+/// imply.
+pub fn exclusions() -> anyhow::Result<Vec<Exclusion>> {
+    parse_exclusions(include_str!("../registry/exclusions.toml"))
+}
+
+/// Parse an exclusion list, with every host normalised the way a URL's host is.
+///
+/// **An error here fails the load**, which is the one place in this module that
+/// does not drop-with-a-warning. `dedupe`, `without_credentials`,
+/// `without_reserved_names` and `without_unpublishable_iris` all fail open,
+/// because the endpoint list is seeded from real-world dumps and refusing the
+/// file would mean monitoring nothing. This one cannot: failing open means
+/// probing a host that asked not to be, and a sweep that does not happen is a
+/// smaller wrong than a sweep somebody asked us not to run.
+///
+/// A `host` that is really a URL is refused rather than kept as an exclusion
+/// that matches nothing. That is the failure this check exists for: somebody
+/// honours a request by pasting the URL out of their logs, every comparison
+/// then misses, and the host is probed anyway with a file on disk saying it is
+/// excluded. The same reasoning refuses an empty host.
+pub fn parse_exclusions(toml_text: &str) -> anyhow::Result<Vec<Exclusion>> {
+    let file: ExclusionFile = toml::from_str(toml_text).map_err(|error| {
+        anyhow::anyhow!(
+            "the exclusion list does not parse, so nothing can know which hosts to leave \
+             alone. Every [[exclusion]] needs a host and a reason: {error}"
+        )
+    })?;
+    let mut parsed: Vec<Exclusion> = Vec::with_capacity(file.exclusion.len());
+    for Exclusion { host: written, reason } in file.exclusion {
+        let host = exclusion_key(written.trim());
+        if host.is_empty() {
+            anyhow::bail!(
+                "an exclusion with an empty host excludes nothing: name the host to leave \
+                 alone, with no scheme and no port"
+            );
+        }
+        // A URL carries at least one of these and a host carries none of them.
+        // Space is in the list because a host cannot contain one either, and a
+        // pasted line is as likely to arrive with one as with a scheme.
+        if host.contains(['/', ':', '@', ' ']) {
+            anyhow::bail!(
+                "the exclusion {written:?} names a URL rather than a host: write the host on \
+                 its own, so https://a.example/sparql becomes a.example. A URL here would \
+                 match no endpoint, and the exclusion would quietly do nothing at all"
+            );
+        }
+        if reason.trim().is_empty() {
+            anyhow::bail!(
+                "the exclusion for {host} has no reason, and an exclusion cannot be \
+                 anonymous: say why the host is on the list. \"A person asked\" with a date \
+                 is enough"
+            );
+        }
+        parsed.push(Exclusion { host, reason });
+    }
+    Ok(parsed)
+}
+
+/// `host` lowercased with any DNS root label stripped, which is how a host in
+/// the exclusion file and a host out of a URL are compared.
+///
+/// One function used on both sides rather than two: two copies would be one
+/// edit away from an entry typed `Asked.Example.` never matching the URL it was
+/// written for, which is an exclusion that silently does nothing.
+fn exclusion_key(host: &str) -> String {
+    host.strip_suffix('.').unwrap_or(host).to_ascii_lowercase()
+}
+
+/// `endpoints` with every entry on an excluded host dropped, and one warning
+/// per entry dropped naming the host and the reason it is excluded.
+///
+/// **Called by `load_endpoints`, so it holds on every path, AND by
+/// `seed::candidates`.** It is the only rule in this module applied in both
+/// places, and it needs both. `load_endpoints` is the one door a sweep comes
+/// through, whatever file `--endpoints` names, so subtracting there is what
+/// makes "an excluded host is never probed" true of a hand-written list and of
+/// the seeded one alike. The seeder is not redundant with that: it regenerates
+/// `registry/lod-cloud.toml` from the dump, so a host deleted from that file by
+/// hand comes back at the next re-seed, and the committed artefact is public.
+/// Leaving an excluded host in a checked-in list, on the strength of a filter
+/// somewhere else, would publish the name of a host that asked to be left alone
+/// and give a reader no way to see that the sweep skips it.
+///
+/// Unlike `without_unroutable_hosts`, there is no legitimate use to protect
+/// here. A request to be excluded is a request made to THIS software, and this
+/// software is what honours it; that is why the rule is on every path rather
+/// than at the seam where a stranger's list becomes ours.
+///
+/// The subtraction is on the HOST, because the request behind an exclusion is
+/// "stop probing us" and a host is what a person controls. Excluding one URL
+/// would leave the `https://` spelling beside the `http://` one, and the port
+/// and path variants, in every sweep. The comparison shares `host_of` with
+/// `without_reserved_names` and `without_unroutable_hosts`, so it cannot drift
+/// from the host the politeness gate groups by.
+///
+/// It is on the WHOLE host and not on a suffix. A suffix match would drop
+/// `sub.asked.example` on an entry for `asked.example`, and hosts under one
+/// domain routinely belong to different people: a request from one department
+/// would silently remove every other department's endpoint from the sweep, with
+/// nothing to notice it by. An operator who runs several names names them all.
+///
+/// The position is `filtered_position`, in the list this was handed, matching
+/// `without_reserved_names` and not `dedupe`'s `position`.
+///
+/// What this does NOT do, all of it needed by `/about`:
+///
+/// - It does not watch a mailbox. An exclusion becomes real when a person adds
+///   it to `registry/exclusions.toml` and commits it, and takes effect at the
+///   next build. There is no automation between a request and the file.
+/// - It does not retract anything already published. A run graph is immutable
+///   and append-only, and `emit::subject_iri` puts the endpoint string inside
+///   every subject, so an exclusion stops future sweeps and leaves past
+///   measurements standing.
+/// - It does not resolve names. A second name for the same server, or the same
+///   server renamed, is a second exclusion, because nothing here asks a
+///   resolver what an entry points at.
+/// - It cannot exclude one path on a host and keep another. The granularity is
+///   the name, which errs toward not probing.
+/// - It publishes the host it excludes: the file is in a public repository. A
+///   hashed entry would be checkable by nobody, including the person who asked.
+pub fn without_excluded(endpoints: &[String], exclusions: &[Exclusion]) -> Vec<String> {
+    let mut kept: Vec<String> = Vec::with_capacity(endpoints.len());
+    for (filtered_position, ep) in endpoints.iter().enumerate() {
+        let host = exclusion_key(&host_of(ep));
+        match exclusions.iter().find(|excluded| excluded.host == host) {
+            Some(excluded) => tracing::warn!(
+                host = %host,
+                filtered_position,
+                reason = %excluded.reason,
+                "registry entry dropped: its host asked not to be probed, and \
+                 registry/exclusions.toml records why"
+            ),
+            None => kept.push(ep.clone()),
         }
     }
     kept
@@ -886,5 +1078,224 @@ mod tests {
     fn a_file_that_is_not_an_endpoint_list_is_a_load_error() {
         assert!(load_endpoints("nonsense = 1").is_err());
         assert!(load_endpoints("endpoint = \"not a list\"").is_err());
+    }
+
+    /// A one-host exclusion list written inline, so a test that is about the
+    /// RULE does not depend on what the shipped file happens to hold today.
+    fn excluding(host: &str) -> Vec<Exclusion> {
+        parse_exclusions(&format!(
+            "[[exclusion]]\nhost = {host:?}\nreason = \"a person asked, 2026-08-25\"\n"
+        ))
+        .expect("a host and a reason is a well formed exclusion")
+    }
+
+    /// The exclusion is on the HOST, so every URL on that name goes. The
+    /// request behind an exclusion is "stop probing us", and a host is what a
+    /// person controls: excluding one URL spelling would leave the `https://`
+    /// one beside the `http://` one, and the port and path variants, in every
+    /// sweep.
+    ///
+    /// `sparqlwatch-exclusion-worked-example` is not used here on purpose.
+    /// These hosts are refused by no other rule either, so a green here is
+    /// about `without_excluded` and not about the shipped file.
+    #[test]
+    fn every_url_on_an_excluded_host_is_dropped() {
+        let excluded = excluding("asked.test-host");
+        for url in [
+            "http://asked.test-host/sparql",
+            "https://asked.test-host/sparql",
+            "https://asked.test-host:8890/sparql",
+            "https://asked.test-host/other/path?query=x",
+            "https://ASKED.TEST-HOST/sparql",
+            // The DNS root label spells one host two ways, as it does for
+            // `unroutable` and `reserved_name`.
+            "https://asked.test-host./sparql",
+        ] {
+            let logs = logs_of(|| {
+                let kept = without_excluded(&v(&[url]), &excluded);
+                assert!(kept.is_empty(), "{url} must not reach a sweep, kept {kept:?}");
+            });
+            assert!(logs.contains("asked.test-host"), "the warning must name the host: {logs}");
+            assert_eq!(logs.matches("WARN").count(), 1, "one warning per entry: {logs}");
+        }
+    }
+
+    /// The match is on the WHOLE host and not on a suffix or a substring.
+    ///
+    /// A substring check would drop `notasked.test-host`, which is somebody
+    /// else's server. A suffix check would drop `sub.asked.test-host`, and that
+    /// is the dangerous direction here rather than the safe one: hosts under
+    /// one domain routinely belong to different people, so a request from one
+    /// department would silently remove every other department's endpoint from
+    /// the sweep with nothing to notice it by. An operator who runs several
+    /// names names them all.
+    #[test]
+    fn a_host_that_merely_resembles_an_excluded_one_is_kept() {
+        let excluded = excluding("asked.test-host");
+        let urls = v(&[
+            "https://notasked.test-host/sparql",
+            "https://asked.test-hosting/sparql",
+            "https://sub.asked.test-host/sparql",
+        ]);
+        let logs = logs_of(|| {
+            assert_eq!(without_excluded(&urls, &excluded), urls);
+        });
+        assert!(logs.is_empty(), "nothing was excluded, so nothing to warn about: {logs}");
+    }
+
+    /// The reason travels into the warning. An operator who finds an endpoint
+    /// missing from a sweep has to be able to tell from the log why it is
+    /// missing, and "excluded" without a reason is the anonymous exclusion this
+    /// file's required field exists to prevent.
+    #[test]
+    fn the_warning_carries_the_reason_the_exclusion_was_given() {
+        let excluded = excluding("asked.test-host");
+        let logs = logs_of(|| {
+            let kept = without_excluded(&v(&["https://asked.test-host/sparql"]), &excluded);
+            assert!(kept.is_empty());
+        });
+        assert!(
+            logs.contains("a person asked, 2026-08-25"),
+            "the reason has to reach the log: {logs}"
+        );
+    }
+
+    /// The wiring, on every path. `load_endpoints` is the only door a sweep
+    /// comes through, whatever file `--endpoints` names, so subtracting there
+    /// is what makes "an excluded host is never probed" true of a hand-written
+    /// list and of the seeded one alike.
+    ///
+    /// The input is the SHIPPED file's own entry, which is why that entry
+    /// exists: a single-label host is refused by no other rule in this module,
+    /// so this URL disappearing can only be `registry/exclusions.toml` having
+    /// been read and applied. With the list empty this test could not tell the
+    /// wiring from its absence.
+    #[test]
+    fn the_shipped_exclusion_list_is_subtracted_by_load_endpoints() {
+        let worked_example = "sparqlwatch-exclusion-worked-example";
+        assert!(
+            exclusions().unwrap().iter().any(|e| e.host == worked_example),
+            "the shipped file has to name it for this test to be about anything"
+        );
+        let url = format!("https://{worked_example}/sparql");
+        let logs = logs_of(|| {
+            let loaded =
+                load_endpoints(&format!(r#"endpoint = [{url:?}, "https://b/sparql"]"#)).unwrap();
+            assert_eq!(
+                loaded,
+                v(&["https://b/sparql"]),
+                "an excluded host must not reach a sweep from any endpoint list"
+            );
+        });
+        assert_eq!(logs.matches("WARN").count(), 1, "one warning per entry: {logs}");
+        assert!(logs.contains("asked not to be probed"), "say why it went: {logs}");
+    }
+
+    /// An exclusion cannot be anonymous. A missing `reason` is a parse error
+    /// and a blank one is refused by name, because a file whose entries do not
+    /// say why a host is on it cannot be maintained by whoever reads it next:
+    /// removing an entry would be as unaccountable as adding one.
+    #[test]
+    fn an_exclusion_without_a_reason_is_a_load_error() {
+        let missing = parse_exclusions("[[exclusion]]\nhost = \"a.test-host\"\n")
+            .expect_err("an exclusion with no reason is anonymous")
+            .to_string();
+        assert!(missing.contains("reason"), "name the missing field: {missing}");
+
+        for blank in ["", "   ", "\n\t"] {
+            let error = parse_exclusions(&format!(
+                "[[exclusion]]\nhost = \"a.test-host\"\nreason = {blank:?}\n"
+            ))
+            .expect_err("a blank reason is an anonymous exclusion spelled differently")
+            .to_string();
+            assert!(error.contains("anonymous"), "say what is wrong: {error}");
+            assert!(error.contains("a.test-host"), "name the entry: {error}");
+        }
+    }
+
+    /// A `host` that is really a URL is a load error and not an exclusion that
+    /// matches nothing.
+    ///
+    /// This is the failure mode that matters: somebody honours a request by
+    /// pasting the URL from their logs, every comparison then misses, and the
+    /// host is probed anyway with a file on disk saying it is excluded. Failing
+    /// the load is the only outcome that cannot be mistaken for success.
+    #[test]
+    fn an_exclusion_naming_a_url_rather_than_a_host_is_a_load_error() {
+        for host in [
+            "https://a.test-host/sparql",
+            "a.test-host/sparql",
+            "a.test-host:8890",
+            "user@a.test-host",
+        ] {
+            let error = parse_exclusions(&format!(
+                "[[exclusion]]\nhost = {host:?}\nreason = \"a person asked, 2026-08-25\"\n"
+            ))
+            .expect_err("a URL here would quietly match nothing")
+            .to_string();
+            assert!(error.contains("rather than a host"), "{host} must be refused: {error}");
+            assert!(error.contains(host), "name the value: {error}");
+        }
+
+        let empty = parse_exclusions("[[exclusion]]\nhost = \"\"\nreason = \"a person asked\"\n")
+            .expect_err("an exclusion with no host excludes nothing")
+            .to_string();
+        assert!(empty.contains("host"), "name what is missing: {empty}");
+    }
+
+    /// An exclusion list that does not parse fails the LOAD.
+    ///
+    /// The deliberate difference from every other rule in this module, all of
+    /// which drop an entry with a warning and carry on: those fail open because
+    /// a real-world dump carries junk and refusing the file would mean
+    /// monitoring nothing. This one cannot fail open, because failing open here
+    /// means probing a host that asked not to be. A sweep that does not happen
+    /// is a smaller wrong than a sweep somebody asked us not to run.
+    #[test]
+    fn a_broken_exclusion_list_fails_the_load_rather_than_being_ignored() {
+        assert!(parse_exclusions("[[exclusion]]\nhost = 7\n").is_err());
+        assert!(parse_exclusions("exclusion = \"not a list of tables\"").is_err());
+        assert!(parse_exclusions("[[exclusion").is_err());
+        exclusions().expect("the shipped exclusion list must parse");
+    }
+
+    /// A list with no entries is a list. When the last exclusion is ever
+    /// removed the file still has to load: `#[serde(default)]` is what makes a
+    /// file of nothing but comments parse, and without it removing the final
+    /// entry would fail every load in the crate.
+    #[test]
+    fn an_exclusion_list_with_no_entries_loads_and_excludes_nothing() {
+        let none = parse_exclusions("# every entry removed again\n")
+            .expect("a file with no entries is an empty exclusion list");
+        assert!(none.is_empty());
+        let urls = v(&["https://a/sparql", "https://b/sparql"]);
+        assert_eq!(without_excluded(&urls, &none), urls);
+    }
+
+    /// A host is a host whatever its case, and whether or not it carries the
+    /// DNS root label. Normalised on the FILE's side too, so an entry typed
+    /// `Asked.Test-Host.` is not an exclusion that silently matches nothing.
+    #[test]
+    fn an_exclusion_is_normalised_the_way_a_url_host_is() {
+        let excluded = excluding("Asked.Test-Host.");
+        let kept = without_excluded(&v(&["https://asked.test-host/sparql"]), &excluded);
+        assert!(kept.is_empty(), "one host written two ways, kept {kept:?}");
+    }
+
+    /// The shipped file's own shape. Every entry names a host and says why, and
+    /// the list is not empty, because an empty list is applied vacuously and the
+    /// wiring test above would then prove nothing.
+    #[test]
+    fn every_shipped_exclusion_names_a_host_and_a_reason() {
+        let list = exclusions().expect("the shipped exclusion list must parse");
+        assert!(!list.is_empty(), "an empty list is subtracted vacuously");
+        for entry in &list {
+            assert!(!entry.host.is_empty(), "an exclusion with no host excludes nothing");
+            assert!(
+                !entry.reason.trim().is_empty(),
+                "{} is on the list anonymously",
+                entry.host
+            );
+        }
     }
 }

@@ -97,7 +97,7 @@ struct Extraction {
 ///
 /// `seeded` is stated rather than left implied so this file can be checked
 /// against the list beside it without re-running anything, and against its own
-/// arithmetic: `distinct` minus the four refusals.
+/// arithmetic: `distinct` minus the five refusals.
 #[derive(Serialize, Deserialize)]
 struct CountsRecord {
     datasets: usize,
@@ -105,6 +105,7 @@ struct CountsRecord {
     entries: usize,
     distinct: usize,
     refused_credentials: usize,
+    refused_excluded: usize,
     refused_unroutable: usize,
     refused_reserved: usize,
     refused_unpublishable: usize,
@@ -330,6 +331,7 @@ fn provenance_of(args: &Args, dump: &[u8], digest: &str, counts: &seed::Counts) 
             entries: counts.entries,
             distinct: counts.distinct,
             refused_credentials: counts.refused_credentials,
+            refused_excluded: counts.refused_excluded,
             refused_unroutable: counts.refused_unroutable,
             refused_reserved: counts.refused_reserved,
             refused_unpublishable: counts.refused_unpublishable,
@@ -364,6 +366,7 @@ fn main() -> anyhow::Result<()> {
         entries = counts.entries,
         distinct = counts.distinct,
         refused_credentials = counts.refused_credentials,
+        refused_excluded = counts.refused_excluded,
         refused_unroutable = counts.refused_unroutable,
         refused_reserved = counts.refused_reserved,
         refused_unpublishable = counts.refused_unpublishable,
@@ -504,6 +507,7 @@ mod tests {
             c.seeded,
             c.distinct
                 - c.refused_credentials
+                - c.refused_excluded
                 - c.refused_unroutable
                 - c.refused_reserved
                 - c.refused_unpublishable,
