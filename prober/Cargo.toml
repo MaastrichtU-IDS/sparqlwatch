@@ -3,6 +3,11 @@ name = "sparqlwatch-prober"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.96"
+# The sweeper, so a bare `cargo run` stays the sweeper after `seed-registry` was
+# added as a second `[[bin]]`. Without this key cargo refuses to choose, and
+# README.md:69 and :1276 and src/bin/seed-registry.rs:11 all instruct a bare
+# `cargo run`.
+default-run = "sparqlwatch-prober"
 
 [dependencies]
 oxrdf = "0.3"
@@ -28,3 +33,10 @@ path = "src/lib.rs"
 [[bin]]
 name = "sparqlwatch-prober"
 path = "src/main.rs"
+
+# The seeder. A separate binary and not a flag on the prober: it reads a dump
+# nobody probes, writes files rather than a run graph, and a plain sweep must
+# not be one flag away from regenerating its own registry.
+[[bin]]
+name = "seed-registry"
+path = "src/bin/seed-registry.rs"

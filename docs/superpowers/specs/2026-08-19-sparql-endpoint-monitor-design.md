@@ -407,7 +407,7 @@ that each end in something demonstrable, and each gets its own plan.
 | **1c-b2** | **DELIVERED 2026-08-21**: Per-host politeness (concurrency cap of 1, configurable `--min-gap-ms` between requests), `Retry-After` handling (delta-seconds within `--retry-after-cap-s`), and honest User-Agent. | stage 1c-b1 |
 | **1c-b3** | **DELIVERED 2026-08-24**: Stable measurement identifiers and bounded concurrency across hosts. Every run-scoped fact's subject is derived from (run, endpoint, metric) rather than from a row index, so reordering the registry renames nothing and one endpoint's facts can be written alone; a metric id that would make a subject ambiguous is refused both at load and in the subject builder, a registry URL carrying userinfo is dropped with a warning, and a repeated (endpoint, metric) with conflicting facts publishes **nothing** about that pair rather than a contradiction. `--concurrency` (default 4) bounds how many **hosts** are talked to at once: endpoints group by host, one sequential task per group, so per-host concurrency stays at 1. A panicked group publishes `NotMeasured` with reason `prober-failed` for every metric it held, the activity publishes `sw:concurrency` and `sw:failedEndpoints`, and the run exits non-zero after writing its output. Measured on the three committed endpoints: 14.4s at `--concurrency 4` against 38.7s at 1, both producing 156 quads. This delivered only the **first half** of the per-endpoint isolation rule above. "Results are written per endpoint as they complete" was **not built here**: `run_sweep` joined every group before returning and the whole sweep was buffered and written once, so one endpoint burning its 600s budget still delayed the run's output by that much, and a crash lost the file. Concurrency shrank the constant, not the shape. Stage 1c-b4 built the missing half. | stage 1c-b2 |
 | **1c-b4** | **DELIVERED 2026-08-24**: Crash-safe incremental writing, so output survives a crash at endpoint 500 of 548 and the second half of the per-endpoint isolation rule is met. A run is emitted as a header, one self-contained chunk per endpoint written and flushed as that endpoint completes, and a footer, each section closed by its own terminator quad on the run's activity: `sw:emission "incremental"` for the header, `sw:completedEndpoint <endpoint>` for a chunk, and `sw:finalised true` for the footer, which is the last line a finished run ever writes. No fact family publishes its own summary before the things it summarises, so `sw:sampleSize` follows its values and `sw:failedEndpoints` moved into the footer. A run in progress is written to `<out>.<at>.partial` and renamed onto `--out` at the end, so a crash cannot touch the previous complete run, and a retry sharing an `--at` is **refused** rather than overwriting the earlier attempt's partial. `web/load_run.py` cuts an incomplete file back to its last terminator line, matched in predicate position rather than by substring, and reports the bytes it discarded; a file corrupted before that line is still refused whole. The read tier says both "this run did not finish" and "a later run did not finish and never reached this endpoint", in HTML and in RDF, carrying the inputs to that derivation rather than a derived flag. As predicted, the file's order is now **completion** order, deliberately breaking the old input-order property; the `Sweep` returned in memory is still input order, and those are two different properties. Measured: a `SIGKILL` mid-sweep left a 25,634-byte partial that loaded as 114 quads with 0 discarded, marked unfinished, one completed endpoint with its 8 verdicts intact, and the previous `--out` byte-identical; a retry at the same `--at` exited 1 and left that partial byte-identical. The guarantee is bounded at process death: there is no `fsync` per chunk, so a power loss can still lose a flushed chunk, and the zeroed tail such a loss can leave is refused whole rather than rescued. | stage 1c-b3 |
-| **1d. Registry seeding** | Ingest LOD Cloud + YummyData candidates, resolve front-ends to real endpoints, probe with politeness, admit responders. **Gate now open**: 1c-b4 is delivered, and a 548-endpoint sweep is what the incremental write was built for. It is also where three deferrals the prober documents become measurable rather than argued: an endpoint that keeps its data in named graphs, which is the only thing that can exercise the `GRAPH` branch of the content queries by execution; how often a cross-host redirect really queues at another host's gate; and whether a seeded URL can be told from a credentialed one, since an endpoint URL is published permanently in every subject. Whether 548 chunks per sweep want an `fsync` is a question this stage can finally measure. | stage 1c-b4 |
+| **1d. Registry seeding** | Ingest LOD Cloud + YummyData candidates, resolve front-ends to real endpoints, probe with politeness, admit responders. **PARTLY DELIVERED 2026-08-24** (stage 1d-a): ingest from LOD Cloud alone, plus the first registry-scale sweep. `seed::candidates` turns the 2026-06-15 dump (1683 datasets, 725 `access_url` entries, 548 distinct URLs) into **543 seeded candidates**, refusing 5 with a count per reason, and `seed-registry` writes `prober/registry/lod-cloud.toml` beside a parseable provenance file naming the dump, its SHA-256 (which the tool computes itself, refusing to write if `--sha256` disagrees) and every count. Endpoint-list policy has one implementation, because the seeder calls `registry.rs`, and the two refusals added there are split by the question each answers: `without_unroutable_hosts` in the seeder alone, since an operator may legitimately probe their own machine and this suite does so through wiremock, while `without_reserved_names` and `without_unpublishable_iris` are wired into `load_endpoints` so they hold whoever supplied the list. The dump's own `status` field gates nothing and a test pins that. The sweep: 543 candidates, cheap ceiling, `--concurrency 4`, **1h26m21s**, 3801 measurements, 0 failed endpoints, 6.3 MB, `finalised=true`, so 1c-b4's incremental protocol held at registry scale; 57 of 543 answered a query where the survey found 65 of 548, and **26** published a parseable service description (`service-description` `verified`; 30 returned some parseable RDF to the queryless GET, which is the weaker `declarationsRead` claim). Among the living, 24 of the 57 carry a description, 42.1%, against the survey's 28 of 65, 43.1%, so this sweep is slightly lower on both. Of the 26, **23 are at level 1, 2 at level 2 and one at level 4**, which is the survey's Virtuoso-stub finding reproduced by the graded metric. **Not built: front-end resolution, YummyData's list, and the admission policy**, so nothing yet stops the dead being re-probed and the registry is **not operable on a daily cadence**. The three deferrals with their reasons, the two items the measurement retired, and an answer to each of the four questions this row used to ask are under [Endpoint registry](#endpoint-registry). | stage 1c-b4 |
 | **2. Scoring as queries** | Score computation as pure SPARQL/functions over stored measurements, with recomputation over history proven. **PARTLY DELIVERED 2026-08-22** (stage 2-1): Storage in Oxigraph is in place, and one read query (`endpoint_content.rq`) is implemented and tested. Score computation is not built. | stage 1b |
 | **2b. Content metadata + examples** | Tiered VoID extraction, SIB example ingestion, `/.well-known/sparql-examples` discovery. **PARTLY DELIVERED 2026-08-22** (stage 2b-1): distinct classes are sampled and published as a `ContentSample` fact, deliberately not as VoID; see the tier-2 status note under [1b](#1b-content-metadata-extraction-tiered). Properties per class, counts, SIB ingestion, and example discovery are not built. | stage 1d |
 | **3. Web read tier** | Faceted search, browse, endpoint pages, metric pages, charts, content negotiation, read-only public SPARQL endpoint. **PARTLY DELIVERED 2026-08-23** (stage 3-1): One endpoint resource served at `GET /endpoint?url=...` with content negotiation returning HTML or any of four RDF serialisations (Turtle, N-Triples, RDF/XML, JSON-LD), the HTML and the RDF agreeing on every verdict the run recorded. Leaderboard, per-metric pages, history, evidence per measurement, faceted search, embedded query editor, and read-only public SPARQL endpoint are not built. | stage 2, 2b |
@@ -532,14 +532,97 @@ tombstones and waste most of every sweep.
 
 Two resolution steps are mandatory before admission, both from measured failure modes:
 
-- **114 URLs return HTTP 200 with HTML**, i.e. a query front-end rather than a protocol
-  endpoint. The real endpoint often lives at a different path. This is not a corner case:
-  it happened with all three endpoints hand-supplied during evaluation.
+- **114 URLs return HTTP 200 with HTML** to a queryless GET. Treat an HTML response as a
+  query front-end rather than a protocol endpoint, and resolve the real protocol URL
+  first: **some** of those hosts do have a working endpoint at a different path
+  (`SURVEY.md:215-218`, which is where this recommendation comes from), and it is not a
+  corner case, since it happened with all three endpoints hand-supplied during evaluation.
+  What was measured is the 114 and the "some". How many of the 114 have a resolvable
+  endpoint is not measured, and stage 1d-a did not build the resolution step, so this
+  remains a recommendation rather than a delivered capability.
 - **472 of 548 URLs are still plain `http://`**, which is itself a decay signal and worth
   recording rather than silently upgrading.
 
 The LOD Cloud's own `status` field is not a usable liveness oracle: it disagreed with
 observation in both directions, marking 10 responders FAIL and 54 non-responders OK.
+
+**Stage 1d-a status, 2026-08-24: 1d is partly delivered.** Ingest from LOD Cloud alone,
+plus the first registry-scale sweep of what it produced. See `prober/README.md`'s "The
+seeded registry" and "Sweep cost" sections for the detail, and
+`docs/superpowers/plans/2026-08-24-seed-the-registry.md` for the plan. Built:
+`seed::candidates` turns the 2026-06-15 dump into **543 seeded candidates**, refusing 5 of
+its 548 distinct URLs with a count per reason; `seed-registry` writes
+`prober/registry/lod-cloud.toml` beside a parseable provenance file naming the dump, its
+SHA-256 and every count; endpoint-list policy has one implementation, since the seeder calls
+`registry.rs`; the dump's `status` field gates nothing and a test pins that; and one sweep
+of all 543 ran in **1h26m21s** at `--concurrency 4` under the cheap ceiling, producing 3801
+measurements, 0 failed endpoints and `finalised=true`, so stage 1c-b4's incremental protocol
+held at registry scale.
+
+**Three deferrals, with their reasons.**
+
+1. **YummyData's candidate list.** It lives in that application's database rather than in a
+   checked-in file: `~/code/umakadata/db/migrate/20190904034259_create_endpoints.rb`
+   creates the table and nothing in that repository carries the rows. Acquiring it needs a
+   running instance or a dump, which is its own task, so this slice seeds from LOD Cloud
+   alone and says so.
+2. **Front-end resolution.** Turning the 114 HTML responders above into endpoints is a
+   judgement capability with its own failure modes: guessing a path, following a form
+   action, mistaking a console for an endpoint. None of it is built.
+3. **The admission policy and the `unreachable-candidates` list.** What makes a daily sweep
+   affordable is not re-probing the dead, and that policy should be written against the
+   first sweep's real numbers rather than ahead of them. Those numbers now exist, which is
+   what makes this the next slice: **486 of 543 answered nothing**, and the 43 candidates
+   the dump had marked timed-out cost **two thirds of the sweep's serial probe time**,
+   2.28 of its 3.46 serial hours. Until it is built the
+   seeded registry is **not operable on a daily cadence**, because nothing stops the dead
+   being re-probed on every sweep.
+
+**Two things the measurement retired.**
+
+1. The **scheme allowlist** deferred to this stage is unnecessary **for this dump**, which
+   holds only `http` (472) and `https` (76) and nothing else. Not retired in general: a
+   later source may differ.
+2. The **credential refusal** from stage 1c-b3 fires on nothing here, since this dump
+   carries no credentialed URL. It stays, because stage 5 accepts public submissions.
+
+**The four questions the 1d row asked, each answered or explicitly not.**
+
+1. **An endpoint that keeps its data in named graphs.** NOT ANSWERED, and the deferral
+   stands. `classes` is `expensive`, so the cheap sweep never ran it, and
+   `prober/tests/live_smoke.rs:52-62` records the shipped query passing with the `GRAPH`
+   branch deleted, so a passing query would prove nothing about that branch anyway. What
+   the sweep produced is a list for a dedicated verification: 18 candidates among the
+   responders, six of them named in the stage ledger, `dbpedia.org`, `data.bnf.fr`,
+   `data.cervantesvirtual.com`, `dati.camera.it`, `ldf.fi/warsa` and `ldf.fi/ww1lod`.
+   That 18 is not re-derivable from the preserved run, since `classes` was declined 543
+   times; it points at those six endpoints rather than measuring anything.
+2. **How often a cross-host redirect really queues at another host's gate.** CANNOT BE
+   ANSWERED from this run, and no rate may be inferred from it. The hop-level line logs at
+   DEBUG (`prober/src/client.rs:353`) and the run was at `info`, so the run's count of
+   cross-host hops is zero for the wrong reason. What the run does show is a different
+   fact: 14 chains looped and were not resolved. Answering the question needs a run at
+   `RUST_LOG=debug` or a counter on the client.
+3. **Whether a seeded URL can be told from a credentialed one.** For this dump the question
+   does not arise: it contains **no credentialed URL at all**, so `without_credentials`
+   refused 0 of the 548. That is recorded rather than dropped precisely because it was
+   asked, and it is a property of this dump and not of seeding in general. The refusal
+   stays for stage 5, and the query-string case (`?apikey=...`) is untouched and still
+   open.
+4. **Whether a chunk per endpoint wants an `fsync`.** Now measured, and the measurement
+   **reverses this project's own argument**. `prober/README.md` had said that the `fsync`
+   calls "cost something on the deployment's volume that nobody here has measured" and used
+   that as part of why there is none. Measured: 543 chunks over a 5181-second sweep, so
+   even at a pessimistic 10 ms each the whole sweep pays 5.4 seconds, about 0.1% of its
+   wall clock. **Cost is no longer the argument.** Whether to `fsync` is a
+   durability-versus-simplicity call and has to be argued on that basis. Nothing in the
+   code changed.
+
+One finding qualifies the paragraph this note follows. The `status` field is a bad
+**liveness** oracle, which is what that paragraph says and what the sweep confirms, and at
+the same time a good **cost** predictor for one bucket, since its 43 timed-out candidates
+accounted for 66% of the sweep's serial cost. Both are true, and this project gates on the field in
+neither direction.
 
 ## Deliberately out of scope for v1
 

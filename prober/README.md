@@ -196,11 +196,271 @@ endpoint (600s), and every one of them cancels the future rather than
 reporting afterwards that it took too long. A metric the budget never reached
 is `indeterminate` and carries no `elapsedMs`, because nothing was measured.
 
+## The seeded registry
+
+Two endpoint lists live in this crate and they are not interchangeable.
+
+| File | What it is |
+| --- | --- |
+| `endpoints.toml` | The **development list**: three endpoints, written by hand, and the default `--endpoints`. `registry.rs` asserts it loads exactly three entries with `qlever.dev` first, and none of the three appears in the LOD Cloud dump. |
+| `registry/lod-cloud.toml` | The **seeded list**: 543 candidates extracted from a LOD Cloud dump. Generated, so a hand edit is overwritten by the next re-seed and fails the fixed-point test in `src/bin/seed-registry.rs`. |
+| `registry/lod-cloud.provenance.toml` | Which dump produced that list, and every count behind it. A parseable file rather than a comment header, so a test can read it back and compare it against the list beside it. Generated too, and a fixed point of its own writer for the same reason the list is: a hand edit or a change to the renderer fails a test rather than standing as the only record of where the list came from. |
+| `registry/calibration-sample.toml` | 54 candidates cut out of the seeded list to price a sweep before one was attempted. It is a sample and not a registry, and its own header says so. |
+
+No sweep reaches the seeded list by accident. `--endpoints
+registry/lod-cloud.toml` is how a run gets it, a plain `cargo run` uses the
+three-endpoint development list, and `seed-registry` has no flag that can write
+to `endpoints.toml`.
+
+### Re-seeding
+
+The dump is **not committed**: it is 4 MB of a third party's data, and `[dump]`
+in the provenance file says where to get it.
+
+```sh
+cargo run --bin seed-registry -- \
+  --dump ~/code/umaka-test/lod-data.json \
+  --sha256 d94fdb394ed423e305f8dc51040ff01a155023f60dbfcc4b62ff87f9b6a2cc35 \
+  --source https://lod-cloud.net/versions/2026-06-15/lod-data.json \
+  --dump-version 2026-06-15 \
+  --downloaded 2026-08-19
+```
+
+`--source` has to be the **versioned** URL, because a hash is only worth
+recording if the exact bytes can be fetched again and checked; an unversioned
+path is the case where the hash records what was used and nothing recovers it.
+`--dump-version` and `--downloaded` are two flags because a versioned dump can
+be fetched long after it was published. The tool **computes the digest itself**
+and writes nothing if it disagrees with `--sha256`, so the hash in the
+provenance file describes the bytes that produced the list beside it rather than
+what somebody typed. Nothing here reads a clock, so re-seeding one dump writes
+the same two files byte for byte and a diff shows only what the dump or the rule
+changed.
+
+Both files are written together or not at all: each text goes to a `.tmp` path
+beside its destination and both are renamed only after both writes have
+succeeded. Two independent `std::fs::write` calls had a window in which a full
+disk or a read-only `registry/` left a regenerated list beside a provenance file
+describing the previous dump, which is the state the digest gate exists to
+prevent. A crash between the two renames can still leave one new file beside one
+old one; that window is two renames wide rather than two file writes wide.
+
+A write that fails partway **leaves its `.tmp` files behind**, because the tool
+would rather leave a staged file for an operator to see than delete evidence of
+what it was doing when it failed. They are safe to remove, and the next
+successful re-seed renames over them. `a_second_write_that_fails_leaves_neither_destination_written`
+in `tests/seed_registry.rs` is what holds the rename after both writes: it plants
+a directory where the provenance's `.tmp` has to go, which is the only shape that
+distinguishes renaming-after-both from renaming-as-you-go, and moving the rename
+into the write loop reds it.
+
+**That SHA-256 is hand-written, and it is for provenance only.** No digest crate
+is in this project's lock file and a checksum for provenance did not warrant
+adding one, so `sha256_hex` in `src/bin/seed-registry.rs` is FIPS 180-4 written
+out by hand. It is asserted against four published vectors, including the
+56-byte case where the length no longer fits in the block and pads into a second
+one, which is the most common place a hand-rolled SHA-256 is wrong, and the
+digest it recorded for the real 4,172,695-byte dump agrees with `shasum -a 256`.
+That is enough to identify an input. It is **not** the code to use for anything
+security-bearing, and nothing in this project asks it to be.
+
+### LOD Cloud only, and why
+
+The seeded list comes from the LOD Cloud dump alone. The design names a second
+source, YummyData's curated list, and that one lives in the application's
+database rather than in a checked-in file
+(`~/code/umakadata/db/migrate/20190904034259_create_endpoints.rb` creates the
+table and nothing in that repository carries the rows), so acquiring it needs a
+running instance or a dump and is its own slice.
+
+What the 2026-06-15 dump yielded, every count also recorded in the provenance
+file:
+
+| Count | Stage |
+| --- | --- |
+| 1683 | datasets, all of them carrying a `sparql` key, 970 of the arrays empty |
+| 713 | datasets naming at least one endpoint |
+| 725 | `access_url` entries |
+| 548 | distinct URLs, matching the survey behind this project |
+| 5 | refused, under the rules below |
+| 543 | seeded |
+
+Order in the file is ascending by dataset key, then by position within that
+dataset's `sparql` array. That is not document order: `serde_json` without
+`preserve_order` backs an object with a `BTreeMap`. What the order has to be is
+deterministic and stable, because `run_sweep` dispatches host groups in
+first-seen order and two seeds of one dump must diff cleanly, and sorted-by-key
+gives both without moving if the dump's serialiser changes how it lays keys out.
+
+### The dump's `status` field is recorded and gates nothing
+
+It reports 72 URLs OK where the survey found 65 answering a query, so it is a
+third party's stale judgement, and admitting or refusing on it would be this
+project publishing somebody else's confidence as its own. A `FAIL` entry is
+still a candidate, and `the_dumps_own_status_field_does_not_gate_a_candidate`
+pins that against a `FAIL` entry taken from the real dump.
+
+The measurement adds a second reading that does not change the first: the field
+is a bad LIVENESS oracle and a good COST predictor for one bucket, since the 43
+candidates it had marked timed-out accounted for 66% of the sweep's serial cost
+(see Sweep cost below). Both are true at once, and neither makes the field an
+admission rule.
+
+### The refusals
+
+Five rules stand between the dump and the seeded list, and 5 of the 548 distinct
+URLs were refused by them. Every one is decidable from the string with nobody
+contacted, which is what makes it honest to apply before a sweep rather than
+after one, and every one is counted under its own reason, so a difference
+between two seeds can be attributed to a rule rather than guessed at.
+
+| Rule | Fired here | Holds | Why |
+| --- | --- | --- | --- |
+| `dedupe` | 177 (725 entries to 548 distinct) | every path | One `declarationsRead` fact is published per list ENTRY, so a URL listed twice put two of them on one endpoint IRI in one run graph, and two differing fetches made them contradict each other. It also stops the sweep sending one stranger's server two identical sets of requests. |
+| `without_credentials` | 0 | every path | The endpoint string is published verbatim inside every subject, in a run graph never rewritten, so a credential admitted here would be permanent. |
+| `without_unroutable_hosts` | 1 (`http://localhost:3030/Dataset/query`, really in the dump) | **the seeder only** | The question is not "may this be probed" but "may a third-party dump nominate it". An operator pointing this tool at their own machine is a legitimate use and this suite does it constantly through wiremock, so the rule sits at the seam where a stranger's list becomes ours. Wiring it into `load_endpoints` was tried and reverted: it emptied the endpoint list of `end_to_end.rs:1142` and `:1183`. |
+| `without_reserved_names` | 2 (`example.org`, `www.example.org`) | every path | RFC 2606 reserves these for documentation and `.invalid` never to resolve, so no service can be there and no operator could mean to point at one. |
+| `without_unpublishable_iris` | 2 (a `{SPARQL}` template placeholder, a URL with an example query inlined) | every path | `emit_nquads` builds the endpoint term with `NamedNode::new` and drops every fact about it when that fails, so such an entry costs a stranger's bandwidth to produce nothing at all. |
+
+Whitespace is not a rule of its own: an `access_url` is taken verbatim, never
+trimmed, because `dqv:computedOn` publishes the registry string as it stands and
+a trimmed spelling is a string the registry does not contain. A value carrying
+whitespace cannot be a `NamedNode`, so it is refused by the IRI rule under that
+reason. This dump carried no blank or whitespace-bearing value.
+
+`https://test-svu/sparql` is in the dump and is **seeded on purpose**. A
+single-label host cannot resolve publicly, but it is neither harmful to probe
+nor unpublishable, and the refusals here are for what must not be contacted or
+cannot be published. It appears in the run as an honest failure, which is the
+correct outcome; refusing it would be this project asserting an outcome it had
+not measured.
+
+Roughly 37 seeded entries cannot be endpoints at all on inspection (a WordPress
+route, a GitHub `.owl` blob, Yandex Disk links). They stay seeded, because that
+is decidable only BY PROBE and not from the string, and the admission slice is
+where they go.
+
+### Not yet operable on a daily cadence
+
+Saying this plainly rather than leaving it to be inferred: **the seeded registry
+is not something to put on a schedule today**, because nothing yet stops the
+dead being re-probed on every sweep. 486 of the 543 candidates answered no query
+at all, and the 43 candidates the dump had marked timed-out cost two thirds of
+the sweep's serial probe time, 2.28 of its 3.46 serial hours. What makes a daily sweep affordable is an admission
+policy, which admits responders and keeps the rest as a published
+`unreachable-candidates` list that is not re-probed daily, and that is the next
+slice. Until it exists, a sweep of `registry/lod-cloud.toml` is a measurement
+somebody runs deliberately, not a `CronJob`.
+
+### Where the runs are kept
+
+Both sweeps described below are preserved **outside this repository**, at
+`~/code/sparqlwatch-runs/`, with a `SHA256SUMS.txt` to check them against
+(`shasum -a 256 -c SHA256SUMS.txt`). They are kept because `web/load_run.py`
+states that the .nq files are the source of truth and the Oxigraph store is the
+derived artefact, and a sweep observes a changing world: re-running the same
+`--at` gives different `elapsedMs` and can give different verdicts, so a lost
+run is not reproducible, it is gone. They are not in git because the full sweep
+is 6.3 MB, though it gzips to 140 KB, and a compressed copy could be committed
+later if that is wanted.
+
 ## Sweep cost
 
-At the default `--min-gap-ms` of 2000 and `--max-cost cheap`, a sweep's
-wall-clock time is arithmetic. This is a rough estimate, not a measurement,
-because no full registry sweep has been run yet.
+At the default `--min-gap-ms` of 2000 and `--max-cost cheap`, one full sweep of
+the seeded registry has now been run, so this section states the measurement
+first, then the arithmetic that was used to predict it, then what the
+measurement did to that arithmetic.
+
+### Measured: the first registry-scale sweep
+
+543 candidates from `registry/lod-cloud.toml`, `--max-cost cheap`,
+`--concurrency 4`, `--at 2026-08-24T19:45:03Z`. It ran from 19:45:03Z to
+21:11:24Z, **1h26m21s**, and produced 3801 measurements, 543 `declarationsRead`
+facts, 543 cost-ceiling declines, 0 content samples (`classes` is `expensive`),
+0 failed endpoints and 6.3 MB of N-Quads. The activity carries
+`emission=incremental`, `finalised=true` and `failedEndpoints=0`, so stage
+1c-b4's protocol held on a real registry-scale run.
+
+Per-endpoint cost from the run's own `elapsedMs`, in seconds, grouped by the
+cause the dump's `status` field had recorded for that candidate:
+
+| Bucket | n | median | mean | max | Share of all serial cost |
+| --- | --- | --- | --- | --- | --- |
+| timed out | 43 | 210.0 | 191.2 | 210.0 | 66.0% |
+| an HTTP status | 185 | 2.1 | 12.4 | 210.0 | 18.4% |
+| OK | 70 | 0.9 | 11.5 | 210.0 | 6.4% |
+| refused or unreachable | 16 | 0.6 | 37.9 | 210.0 | 4.9% |
+| cause unrecorded | 229 | 0.0 | 2.3 | 210.0 | 4.3% |
+| total, serial | 543 | | | | 3.46 h |
+
+Two things in that table are worth reading twice. **Dead hosts are cheap and
+half-alive hosts are expensive**: a host whose DNS is gone refuses in
+milliseconds, while a host that answers with a status code is up, so our seven
+probes can each hang for the full 30s request budget. And the driver is one of
+the smallest buckets: 43 candidates, two thirds of the serial cost.
+
+Liveness and self-description, against the survey this project's metric set came
+from. Three quantities, stated separately because they are easy to conflate and
+an earlier draft of this paragraph did conflate them, all counted over the 543:
+
+- **57 answered a query**: `availability` `verified`, 10.5% of the 543, against
+  the survey's 65 of 548.
+- **26 published a parseable service description**: `service-description`
+  `verified`. The rest are 508 `indeterminate` and 9 `absent`, and the file
+  carries 35 `sw:level` triples, one per non-indeterminate verdict.
+- **30 returned some parseable RDF to the queryless GET**: `declarationsRead`
+  `true`. This is the weakest of the three. It says at least one triple came
+  back and was read, not that it resolved to a service-description verdict.
+
+The figure comparable with the survey's is the description rate among the
+living, because both populations were probed once and both are mostly dead: 24
+of the 57 that answered a query also published a description, **42.1% of live**,
+against the survey's 28 of 65, **43.1% of live**. (Two of the 26 answered no
+query, which is the difference between 26 and 24.) So this sweep is **slightly
+lower on both** liveness and descriptions, consistent with five more days of
+decay since the survey probed on 2026-08-19, and the rate among the living is
+almost unchanged.
+
+The 26 descriptions are graded: **23 at level 1, 2 at level 2, and exactly one
+at level 4**. Level 1 is the stub the design's level table calls "the Virtuoso
+default", so **one endpoint in the whole registry** declares an entailment
+regime, example resources or extension functions. That echoes the survey's
+finding that 21 of its 28 descriptions were byte-identical 14-triple Virtuoso
+stubs: a binary "publishes a service description" credits the engine, and the
+graded metric is what separates the publisher from it.
+
+### The estimate, and how badly it missed
+
+The sweep was priced before it ran, from a 54-candidate calibration sample
+(`registry/calibration-sample.toml`) drawn to include the largest host groups: 47
+hosts, cheap ceiling, concurrency 4, 13m59s, 378 measurements, and only 6 of the
+54 endpoints producing any positive verdict. Projected from those measured costs
+against the population, at concurrency 4, that gave **2.24 hours with a 90%
+interval of 2.05 to 2.43 hours**, comfortably under the 4-hour abort threshold
+the plan had set, so the sweep proceeded.
+
+**That projection was wrong, and the outcome fell outside its own interval.**
+Measured: 1.44 hours. The cause is recorded here rather than rounded away,
+because it is a fault in the estimate and not in the sweep. The projection was
+dominated by the HTTP-status bucket, one of the buckets sampled only 8 times,
+whose mean was estimated at 62.1s from three slow values and is really 12.4s,
+five times lower. The 90% interval was bootstrapped from those same 8 values, so
+it could not express any uncertainty about their own mean. The sample had been
+enlarged to 30 draws for the bucket believed to matter, leaving the bucket that
+actually mattered at 8.
+
+So the measured number is the one to plan a scheduled job around, and it is the
+only full-sweep number this project has: **1h26m21s for 543 candidates at
+`--concurrency 4`**, against 3.46 hours of serial cost. Everything in the
+arithmetic below remains an estimate. It now has exactly one calibration point.
+
+### The floor arithmetic, which is still an estimate
+
+A note on the two sizes in this document. The arithmetic below is sized at
+**548**, which is the dump's distinct-URL count; the seeded registry holds
+**543**, because five URLs are refused by the rules under The refusals above.
+The numbers here are round-number estimates and the 5-endpoint difference does
+not change any of them, so they are left as they were rather than restated.
 
 Seven metrics are `cheap` at the default cost ceiling: availability, cors,
 cors-preflight, geo-functions, geo-data, service-description, has-classes.
@@ -228,13 +488,27 @@ a sweep. A black-holed endpoint costs its whole 600-second endpoint budget
 rather than 14.1 seconds, so the real bound is `sum(per-endpoint cost) /
 concurrency`: 548 dead endpoints would be `548 × 600 / 4` = 22.8 hours, and at
 a plausible 10% dead it is `(493 × 14.1 + 55 × 600) / 4` = 9,988 seconds, or
-about 2 hours 46 minutes. That is the number to plan a scheduled job around,
-not the healthy-endpoint floor.
+about 2 hours 46 minutes. Before the sweep above, that was the number to plan a
+scheduled job around rather than the healthy-endpoint floor. Against the
+measurement it is high by roughly a factor of two, and the reason is visible in
+the bucket table: this model charges a dead endpoint its whole 600-second
+budget, while a host whose DNS is gone actually costs milliseconds. It is a
+bound, and it held.
 
 It also assumes all endpoints are distinct hosts. Registry URLs that share a
 host are one group and are probed one after another, so a host carrying several
 endpoints costs the sum of them however high `--concurrency` is set. Request
 latencies vary widely too; the 300 ms above is a middle estimate.
+
+**In this population that host-group risk does not exist**, which is worth
+recording because the plan behind the sweep was built around it. Two groups
+tie for most expensive at 7.0 minutes, `data.gov.uz` and `linked.opendata.cz`,
+each two candidates that each burned the full 210-second budget; the largest
+group, `api.talis.com` with 27 candidates, costs 0.2 seconds in total because
+its DNS is gone. The makespan was set by the aggregate over 436
+groups, not by any one of them. A different registry could still be shaped the
+other way, so the arithmetic above stays; what changed is that the lever is
+measured and small rather than assumed and large.
 
 Measured, not estimated, on this repository's three-endpoint `endpoints.toml`
 on 2026-08-24: 14.4 seconds at the default `--concurrency 4` and 38.7 seconds
@@ -244,10 +518,26 @@ is the only concurrency measurement this project has actually taken.
 
 ## Configuration files
 
-**`endpoints.toml`** is the list to sweep, one array of URLs. A URL that is not
-a valid IRI is warned about and skipped at emission time, not fatal: the
-registry is seeded from a real-world dump known to contain junk, and one bad
-string must not discard a whole sweep's work.
+**`endpoints.toml`** is the list to sweep, one array of URLs, and it is the
+three-endpoint development list rather than the seeded registry (see The seeded
+registry above). Whatever file `--endpoints` names, `load_endpoints` applies four
+rules in a fixed order: `dedupe`, `without_credentials`,
+`without_reserved_names`, `without_unpublishable_iris`. Each drops an entry with
+a warning rather than failing the load, because the list can be seeded from a
+real-world dump known to contain junk, and one bad string must not discard a
+whole sweep's work. `without_unroutable_hosts` is deliberately not among them,
+and the table in The seeded registry says why.
+
+The last two arrived with stage 1d-a. `without_reserved_names` drops a host
+under an RFC 2606 documentation name (`.example`, `example.com`, `example.net`,
+`example.org`, `.invalid`), because nobody serves anything there, and the match
+is on whole labels so `notexample.org` and `example.org.uk` are kept.
+`without_unpublishable_iris` drops an entry that cannot be an
+`oxrdf::NamedNode`, which is what `emit_nquads` builds the endpoint term with:
+such an entry would cost a stranger's bandwidth and then have every fact about
+it dropped at emission, so refusing it before probing is strictly better. It
+calls `NamedNode::new` itself rather than checking a character list, so it cannot
+drift from the constraint the emitter actually applies.
 
 The list is deduplicated at load, first-seen order preserved, with a warning
 naming each entry dropped. One row per (endpoint, metric) and one
@@ -261,8 +551,8 @@ though the declaration scoper treats them as one service, because two spellings
 in a registry are a registry problem to see rather than one to collapse
 silently.
 
-A URL whose authority carries a **non-empty userinfo** component is then
-dropped, with a warning naming the host it was pointed at and never the URL,
+A URL whose authority carries a **non-empty userinfo** component is dropped
+after that, with a warning naming the host it was pointed at and never the URL,
 because repeating the URL would copy the credential into the log the drop
 exists to keep it out of. This happens after the deduplication and before
 anything is swept. `http://alice:s3cret@a.example/sparql` is refused and so is
@@ -857,9 +1147,24 @@ The following are deferred deliberately, not oversights:
   `data.kkg.kadaster.nl` answers both branches from its default graph, so it
   would pass with the `GRAPH` branch deleted), so nothing here demonstrates that
   a partitioned endpoint is actually reached. Closing that gap needs an endpoint
-  that holds its data that way. It becomes testable at stage 1d, where the
-  registry is seeded from 548 real endpoints, some of which are certainly
-  partitioned.
+  that holds its data that way.
+
+  Stage 1d-a seeded 543 real candidates and swept them, and **the deferral still
+  stands**. Two reasons, either sufficient. `classes` is `expensive`, so the
+  `--max-cost cheap` sweep never ran it: that run published 543 cost-ceiling
+  declines and 0 content samples. And `live_smoke.rs:52-62` records the shipped
+  query passing with the `GRAPH` branch deleted, so a passing query against a
+  seeded endpoint would prove nothing about that branch either. What the sweep
+  produced is a list to verify against rather than a verification: 18 candidates
+  among the responders, six of them named in the stage's ledger, `dbpedia.org`,
+  `data.bnf.fr`, `data.cervantesvirtual.com`, `dati.camera.it`, `ldf.fi/warsa`
+  and `ldf.fi/ww1lod`. **That 18 cannot be re-derived from the preserved run**:
+  `classes` was declined 543 times, so no measurement in the file speaks to
+  named graphs. It is a pointer to the six endpoints named above, not a
+  measurement to build on. Retiring the deferral needs a dedicated run at
+  `--max-cost expensive` against an endpoint from that list, plus a check that
+  the result actually depends on the `GRAPH` branch and not on the endpoint's
+  default graph.
 
 - **An API key in an endpoint's query string is published, permanently.** Every
   run-scoped fact's subject is `urn:sparqlwatch:<kind>:<run>:<percent-encoded
@@ -875,8 +1180,18 @@ The following are deferred deliberately, not oversights:
   would be a confident wrong answer in both directions: it would drop legitimate
   endpoints whose query carries a dataset selector, and admit a credential under
   a name nobody guessed. Closing it properly needs the registry to distinguish a
-  public URL from a credentialed one, which is a stage 1d question about how the
-  list is seeded. Until then: do not put a secret in `endpoints.toml`.
+  public URL from a credentialed one, which is the question stage 1d was to
+  answer.
+
+  Stage 1d-a answers it for one source, narrowly: **the LOD Cloud dump contains
+  no credentialed URL at all.** `without_credentials` refused 0 of its 548
+  distinct URLs, recorded as `refused_credentials = 0` in
+  `registry/lod-cloud.provenance.toml`. So nothing in this dump forced the
+  seeder to tell a public URL from a credentialed one, and that is a property of
+  this dump rather than of seeding in general. The refusal stays: it costs
+  nothing here, and stage 5 accepts public submissions. None of it touches the
+  query-string case above, so the standing advice is unchanged: do not put a
+  secret in `endpoints.toml`.
 
 - **A cross-host redirect can wait at another endpoint's gate, and that wait is
   charged to the metric budget.** `--concurrency` groups endpoints by the host
@@ -899,8 +1214,21 @@ The following are deferred deliberately, not oversights:
   real registry is **unquantified**. Of the three endpoints in the shipped
   `endpoints.toml`, measured on 2026-08-24, none redirects at all: a queryless
   GET returns 404, 200 and 500 respectively, with no `Location`. So the shipped
-  list does not exercise this, and 1d's 548-endpoint registry is where it would
-  first be measurable.
+  list does not exercise this.
+
+  The 543-candidate sweep **cannot answer it either**, and the reason is our own
+  logging rather than the registry. The hop-level line, "re-issuing the request
+  at a redirect target", is a `tracing::debug!` (`client.rs:353`) and that run
+  was at `info`, so the run's count of cross-host hops is zero for the wrong
+  reason and **no rate may be inferred from it**. What the run does show is a
+  different fact: 14 redirect chains looped and were not resolved. That line is a
+  `tracing::warn!` (`client.rs:350`), so it was visible at `info` and the count
+  is real, unlike the DEBUG hop line above; but it was counted from the run's
+  console output, which was not kept beside the `.nq` in
+  `~/code/sparqlwatch-runs/`, so it cannot be re-derived either. Answering the
+  question properly needs a run at `RUST_LOG=debug` or a counter on the client,
+  and neither is worth another 1.5 hours of strangers' traffic on its own, so
+  the frequency stays unquantified.
 
 - **Two sweeps with different `--at` values and the same `--out` lose one of
   them, silently.** The partial file is named for the run, so each gets its own
@@ -921,17 +1249,27 @@ The following are deferred deliberately, not oversights:
   precisely: a process that dies keeps every chunk already flushed, since the
   bytes are with the kernel and no destructor is needed. A machine that loses
   power can still lose them, because there is no `fsync` and none is planned.
-  Three reasons, in order of weight. A lost run is a **gap in history rather
-  than a false fact**: a run graph is written once and never corrected, so
-  losing one leaves a missing sweep, not a wrong verdict standing in the store
-  as current. Coverage returns on its own: the next scheduled sweep probes the
-  same registry under its own `--at`, into its own graph. And 548 `fsync` calls
-  per sweep, one per endpoint, cost something on the deployment's volume that
-  nobody here has measured, so paying it would buy an unquantified amount of
-  durability with an unquantified amount of latency. What a re-run does NOT do
-  is recover the lost run: the same `--at` names the same graph, but a sweep
-  observes a changing world, so what it writes is a new observation and not the
-  old file back. The other half of the boundary, the zeroed tail a power loss
+  Three reasons were given, in order of weight, and **the third is now retired
+  by measurement**. A lost run is a **gap in history rather than a false fact**:
+  a run graph is written once and never corrected, so losing one leaves a
+  missing sweep, not a wrong verdict standing in the store as current. Coverage
+  returns on its own: the next scheduled sweep probes the same registry under
+  its own `--at`, into its own graph.
+
+  The third reason, which this file used to make, was that 548 `fsync` calls per
+  sweep, one per endpoint, cost something on the deployment's volume that nobody
+  here had measured, so paying it would buy an unquantified amount of durability
+  with an unquantified amount of latency. **That cost is now measured, and it is
+  negligible.** The 543-candidate sweep wrote 543 chunks over 5181 seconds, 11.6
+  KB per chunk on average, so even at a pessimistic 10 ms per `fsync` the whole
+  sweep would pay 5.4 seconds, about 0.1% of its wall clock. Cost is therefore
+  no longer an argument in either direction, and whether to `fsync` is now
+  purely a durability-versus-simplicity call, to be argued on that basis. The
+  first two reasons are untouched and nothing in the code has changed.
+
+  What a re-run does NOT do is recover the lost run: the same `--at` names the
+  same graph, but a sweep observes a changing world, so what it writes is a new
+  observation and not the old file back. The other half of the boundary, the zeroed tail a power loss
   can leave and no terminator rule can rescue, is under "How a run is written".
 
 ## Tests

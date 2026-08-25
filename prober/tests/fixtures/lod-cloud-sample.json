@@ -1,0 +1,105 @@
+{
+  "CONNECTED": {
+    "_fixture_role": "somebody's local Fuseki, which a public dump must not nominate",
+    "sparql": [
+      {
+        "access_url": "http://localhost:3030/Dataset/query",
+        "status": "FAIL (Connection refused)",
+        "title": "MIMO/endpoint"
+      }
+    ],
+    "title": "MIMO"
+  },
+  "EGovOntology": {
+    "_fixture_role": "a name RFC 2606 reserves for documentation",
+    "sparql": [
+      {
+        "access_url": "http://example.org",
+        "status": "OK",
+        "title": "e-gov ontology sparql endpoint"
+      }
+    ],
+    "title": "E-Government Ontology"
+  },
+  "Generalized_Super_Ontology": {
+    "_fixture_role": "a {SPARQL} template placeholder, which cannot be an IRI",
+    "sparql": [
+      {
+        "access_url": "https://query.wikidata.org/bigdata/namespace/wdq/sparql?query={SPARQL}",
+        "status": "FAIL (403)",
+        "title": "Big Data End Point"
+      }
+    ],
+    "title": "Super Ontology"
+  },
+  "cz-ctia-bans": {
+    "_fixture_role": "the other half of that pair",
+    "sparql": [
+      {
+        "access_url": "http://linked.opendata.cz/sparql",
+        "status": "FAIL (Connection refused)",
+        "title": "Opendata.cz SPARQL Endpoint"
+      }
+    ],
+    "title": "Bans of the Czech Trade Inspection Authority"
+  },
+  "cz-vavai-results": {
+    "_fixture_role": "two datasets naming one endpoint, so 725 entries collapse to 548",
+    "sparql": [
+      {
+        "access_url": "http://linked.opendata.cz/sparql",
+        "status": "FAIL (Connection refused)",
+        "title": "Opendata.cz SPARQL Endpoint"
+      }
+    ],
+    "title": "Results of R&D"
+  },
+  "dbpedia-ja": {
+    "_fixture_role": "status FAIL, which must NOT stop it being a candidate",
+    "sparql": [
+      {
+        "access_url": "http://ja.dbpedia.org/sparql",
+        "status": "FAIL (301)",
+        "title": "SPARQL Endpoint"
+      }
+    ],
+    "title": "DBpedia in Japanese"
+  },
+  "foodista": {
+    "_fixture_role": "one dataset with two entries, plus a HAND-ADDED third whose access_url is the empty string: 0 of the real dump's 725 entries have one, so seed.rs's !url.is_empty() guard has no input in the dump that reaches it",
+    "sparql": [
+      {
+        "access_url": "http://kasabi.com/api/sparql-endpoint-foodista",
+        "status": "FAIL (404)",
+        "title": "SPARQL page"
+      },
+      {
+        "access_url": "http://api.kasabi.com/dataset/foodista/apis/sparql",
+        "status": "OK",
+        "title": "SPARQL"
+      },
+      {
+        "access_url": "",
+        "status": "OK",
+        "title": "HAND-ADDED, not from the dump"
+      }
+    ],
+    "title": "Foodista"
+  },
+  "hand-added-credentialed": {
+    "_fixture_role": "HAND-ADDED: the real dump carries zero credentialed URLs, so this shape cannot be cut from it, and without_credentials still needs covering here",
+    "sparql": [
+      {
+        "access_url": "http://alice:s3cret@sparql.credentialed-host.net/sparql",
+        "status": "OK",
+        "title": "hand-added"
+      }
+    ],
+    "title": "HAND-ADDED, not from the dump"
+  },
+  "statusnet-progval-net": {
+    "_fixture_role": "an EMPTY sparql array, which 970 of 1683 datasets have; none lacks the key",
+    "sparql": [],
+    "title": "statusnet-progval-net"
+  }
+}
