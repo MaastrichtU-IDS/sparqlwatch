@@ -1,0 +1,187 @@
+//! The seeder, run as a process against a fixture dump.
+//!
+//! `seed-registry`'s `main` is where the two gates are wired: the digest
+//! comparison that ties the provenance file to the dump beside it, and the
+//! counts check that backstops a `debug_assert` a release build removes. A
+//! review of stage 1d-a measured what leaving `main` untested cost: disabling
+//! the digest comparison with `if false &&`, writing `counts.distinct` into
+//! `seeded`, and replacing `bytes: dump.len()` with `bytes: 1` each left all 351
+//! tests green. Those three are now killed by unit tests in the binary itself;
+//! what only a process can answer is whether `main` still CALLS them, and
+//! whether the two files it writes are the ones it rendered.
+//!
+//! `prober/tests/binary.rs` is the precedent, and for the same reason:
+//! `env!("CARGO_BIN_EXE_...")` is the built binary's path, which cargo sets for
+//! integration targets, so running the real process needs no dependency beyond
+//! what the suite already has.
+//!
+//! No timeout guard here, unlike `binary.rs`. That file bounds its wait because
+//! a sweep can hang on a network read; this binary reads one 3 KB file, hashes
+//! it, and writes two more, with no socket and no runtime anywhere in it.
+
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+
+const SAMPLE: &[u8] = include_bytes!("fixtures/lod-cloud-sample.json");
+
+/// The SHA-256 of `tests/fixtures/lod-cloud-sample.json`, from `shasum -a 256`.
+///
+/// Pinned from outside this crate on purpose: the gate under test compares the
+/// digest this crate computes against a claim, and checking it against a claim
+/// this crate also computed would test the comparison against itself. Editing
+/// the fixture changes this value, and the assertions below name it when they
+/// disagree.
+const SAMPLE_SHA256: &str = "8eeab4e60ac258c64fd81e7f04e978685c87c3ee6a13934dfe8645b6e4adbd12";
+
+/// A digest no file has, for the mismatch case.
+const NOT_THE_DUMP: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+
+/// Where the fixture lives on disk, since the binary reads a path and not bytes.
+fn fixture() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/lod-cloud-sample.json")
+}
+
+/// A fresh directory under the target dir cargo already owns, named for the
+/// caller and this process, so two tests in this file cannot overwrite each
+/// other's output.
+fn tempdir(named: &str) -> PathBuf {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("seed-{named}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("the target tmpdir must be writable");
+    dir
+}
+
+/// Run the seeder over the fixture, claiming `sha256`, writing into `dir`.
+///
+/// The output paths are nested one level deeper than `dir` so that the
+/// directory-creating half of `write_both` is exercised too: the real invocation
+/// writes into a `registry/` subdirectory that a fresh checkout may not have.
+fn seed(dir: &Path, sha256: &str) -> (Output, PathBuf, PathBuf) {
+    let out = dir.join("registry/lod-cloud.toml");
+    let provenance = dir.join("registry/lod-cloud.provenance.toml");
+    let output = Command::new(env!("CARGO_BIN_EXE_seed-registry"))
+        .args(["--dump", fixture().to_str().unwrap()])
+        .args(["--sha256", sha256])
+        .args(["--source", "https://lod-cloud.net/versions/2026-06-15/lod-data.json"])
+        .args(["--dump-version", "2026-06-15"])
+        .args(["--downloaded", "2026-08-19"])
+        .args(["--out", out.to_str().unwrap()])
+        .args(["--provenance", provenance.to_str().unwrap()])
+        .output()
+        .expect("the built binary must be runnable");
+    (output, out, provenance)
+}
+
+/// A claim that does not match the dump stops the run, and nothing is written.
+///
+/// This is the gate the tool computes its own digest for. The message has to
+/// name the digest it actually read, because that is how the caller fixes the
+/// command line, and it is also what pins the digest to a value `shasum`
+/// produced rather than to whatever this crate happens to compute.
+#[test]
+fn a_dump_that_does_not_hash_to_the_claim_writes_nothing() {
+    let dir = tempdir("mismatch");
+    let (output, out, provenance) = seed(&dir, NOT_THE_DUMP);
+
+    assert!(
+        !output.status.success(),
+        "a dump that is not the one named must not seed a registry, exited {:?}",
+        output.status
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("is not the dump named on the command line"),
+        "the failure must say which check refused it: {stderr}"
+    );
+    assert!(
+        stderr.contains(SAMPLE_SHA256),
+        "the message must name the digest the file really has, {SAMPLE_SHA256}: {stderr}"
+    );
+    assert!(
+        stderr.contains(NOT_THE_DUMP),
+        "and the claim it was compared against: {stderr}"
+    );
+    assert!(!out.exists(), "no registry may be written: {}", out.display());
+    assert!(
+        !provenance.exists(),
+        "and no provenance: {}",
+        provenance.display()
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// The right claim seeds both files, and both describe the dump that was read.
+///
+/// Every assertion here is against the library's own answer for the same bytes
+/// rather than against a transcribed list, so this cannot drift from
+/// `seed::candidates`, and against `dump.len()` and `SAMPLE_SHA256` rather than
+/// against the flags, which is the property the provenance file exists to have.
+#[test]
+fn the_right_claim_seeds_two_files_that_describe_the_dump_read() {
+    let dir = tempdir("seeded");
+    let (output, out, provenance) = seed(&dir, SAMPLE_SHA256);
+    assert!(
+        output.status.success(),
+        "the fixture's own digest must be accepted, exited {:?}: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let expected = sparqlwatch_prober::seed::candidates(SAMPLE).unwrap();
+    assert!(!expected.endpoints.is_empty(), "an empty list would agree with anything");
+
+    let written = std::fs::read_to_string(&out).expect("the registry must be written");
+    assert_eq!(
+        sparqlwatch_prober::registry::load_endpoints(&written).unwrap(),
+        expected.endpoints,
+        "the registry has to be the candidates the extractor found, in that order"
+    );
+    assert!(
+        written.starts_with("# Generated by"),
+        "a generated file has to say so: {written}"
+    );
+
+    let text = std::fs::read_to_string(&provenance).expect("the provenance must be written");
+    assert!(
+        text.starts_with("# Generated by"),
+        "a generated file has to say so: {text}"
+    );
+    let record: toml::Value = toml::from_str(&text).expect("the provenance must parse");
+    let integer = |table: &str, key: &str| {
+        record[table][key]
+            .as_integer()
+            .unwrap_or_else(|| panic!("{table}.{key} must be an integer: {text}")) as usize
+    };
+    let string = |table: &str, key: &str| {
+        record[table][key]
+            .as_str()
+            .unwrap_or_else(|| panic!("{table}.{key} must be a string: {text}"))
+            .to_string()
+    };
+    assert_eq!(string("dump", "sha256"), SAMPLE_SHA256, "the digest of the bytes read");
+    assert_eq!(integer("dump", "bytes"), SAMPLE.len(), "the length of the bytes read");
+    assert_eq!(
+        integer("counts", "seeded"),
+        expected.endpoints.len(),
+        "the total the registry beside it has"
+    );
+    assert_eq!(integer("counts", "distinct"), expected.counts.distinct);
+    assert_ne!(
+        integer("counts", "seeded"),
+        integer("counts", "distinct"),
+        "this fixture refuses four candidates, so the two totals must differ for the \
+         assertion above to be about anything"
+    );
+    assert_eq!(string("dump", "version"), "2026-06-15", "the caller's word, not the bytes'");
+    assert_eq!(string("dump", "downloaded"), "2026-08-19");
+
+    // `write_both` stages through `.tmp` paths and renames. A leftover means a
+    // rename did not happen, which is the half-written state it exists to avoid.
+    for path in [&out, &provenance] {
+        let tmp = PathBuf::from(format!("{}.tmp", path.display()));
+        assert!(!tmp.exists(), "a staging file was left behind: {}", tmp.display());
+    }
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}

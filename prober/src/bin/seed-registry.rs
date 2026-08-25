@@ -251,30 +251,48 @@ fn sha256_hex(bytes: &[u8]) -> String {
     state.iter().map(|word| format!("{word:08x}")).collect()
 }
 
-fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
-    let args = Args::parse();
-    let dump = std::fs::read(&args.dump)?;
-
-    // Before anything is extracted: a list seeded from a dump other than the
-    // one the provenance file will name is a list whose provenance is wrong,
-    // and no later check could tell.
-    let digest = sha256_hex(&dump);
-    let expected = args.sha256.to_ascii_lowercase();
-    if digest != expected {
+/// Fail unless the dump's own digest is the one the caller named.
+///
+/// Before anything is extracted: a list seeded from a dump other than the one
+/// the provenance file will name is a list whose provenance is wrong, and no
+/// later check could tell.
+///
+/// A function of its own, and not three lines inside `main`, because it is one
+/// of the two gates the whole tool exists to hold and `main` had no test. A
+/// review of this branch disabled the comparison and all 351 tests stayed
+/// green.
+///
+/// The claim is lowercased so `--sha256` may be pasted from a tool that prints
+/// uppercase hex. The digest is not: `sha256_hex` writes `{:08x}`.
+fn check_digest(dump_path: &str, digest: &str, claimed: &str) -> anyhow::Result<()> {
+    let claimed = claimed.to_ascii_lowercase();
+    if digest != claimed {
         anyhow::bail!(
-            "{} is not the dump named on the command line: it hashes to {digest}, not to \
-             {expected}. Nothing was written, because a registry seeded from one dump and a \
+            "{dump_path} is not the dump named on the command line: it hashes to {digest}, not \
+             to {claimed}. Nothing was written, because a registry seeded from one dump and a \
              provenance file naming another cannot be told apart afterwards.",
-            args.dump,
         );
     }
+    Ok(())
+}
 
-    let seeded = seed::candidates(&dump)?;
-    // `seed::candidates` states this as a `debug_assert`, which is compiled out
-    // of a release build. Checked again here because this is where the number
-    // becomes a permanent claim in a file, and the two files would then disagree
-    // about a total neither produced.
+/// Fail unless the counts add up to the list they will be written beside.
+///
+/// `seed::candidates` states this as a `debug_assert`, which is compiled out of
+/// a release build. Checked again because this is where the number becomes a
+/// permanent claim in a file, and the two files would then disagree about a
+/// total neither produced. No input can reach the bail today, which is why it
+/// is a function with a test rather than a line inside `main`: replacing it with
+/// `if false` is invisible to a suite that can only drive it through
+/// `seed::candidates`.
+///
+/// What no test here can show is that `main` still CALLS it. Removing the call
+/// was tried and survived the whole suite, because there is no dump for which
+/// the arithmetic disagrees, so nothing observable changes. Recorded rather than
+/// papered over: the function's own behaviour is pinned by
+/// `counts_that_do_not_add_up_to_the_list_are_refused`, and the `debug_assert`
+/// in `seed::candidates` is the second place the same invariant is stated.
+fn check_counts(seeded: &seed::Seeded) -> anyhow::Result<()> {
     if seeded.counts.seeded() != seeded.endpoints.len() {
         anyhow::bail!(
             "the counts do not add up: {} seeded by arithmetic against {} candidates kept, so a \
@@ -283,17 +301,24 @@ fn main() -> anyhow::Result<()> {
             seeded.endpoints.len(),
         );
     }
+    Ok(())
+}
 
-    let counts = &seeded.counts;
-    let provenance = Provenance {
+/// The provenance record for one seeding run.
+///
+/// `bytes` and `sha256` come from the dump that was read, not from the flags,
+/// for the same reason the digest is computed rather than trusted: the file has
+/// to describe the input that produced the list beside it. The three strings
+/// that CANNOT be derived from the bytes, `source`, `version` and `downloaded`,
+/// are the caller's word and are the only fields taken from flags.
+fn provenance_of(args: &Args, dump: &[u8], digest: &str, counts: &seed::Counts) -> Provenance {
+    Provenance {
         dump: Dump {
-            source: args.source,
-            version: args.dump_version,
-            downloaded: args.downloaded,
-            // From the bytes read, not from a flag, for the same reason as the
-            // digest.
+            source: args.source.clone(),
+            version: args.dump_version.clone(),
+            downloaded: args.downloaded.clone(),
             bytes: dump.len(),
-            sha256: digest,
+            sha256: digest.to_string(),
         },
         extraction: Extraction {
             rule: "sparqlwatch_prober::seed::candidates".to_string(),
@@ -310,10 +335,27 @@ fn main() -> anyhow::Result<()> {
             refused_unpublishable: counts.refused_unpublishable,
             seeded: counts.seeded(),
         },
-    };
+    }
+}
 
-    write_beside(&args.out, &registry_toml(&seeded.endpoints))?;
-    write_beside(&args.provenance, &provenance_toml(&provenance))?;
+fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt::init();
+    let args = Args::parse();
+    let dump = std::fs::read(&args.dump)?;
+
+    let digest = sha256_hex(&dump);
+    check_digest(&args.dump, &digest, &args.sha256)?;
+
+    let seeded = seed::candidates(&dump)?;
+    check_counts(&seeded)?;
+
+    let counts = &seeded.counts;
+    let provenance = provenance_of(&args, &dump, &digest, counts);
+
+    write_both(
+        (&args.out, &registry_toml(&seeded.endpoints)),
+        (&args.provenance, &provenance_toml(&provenance)),
+    )?;
     tracing::info!(
         out = %args.out,
         provenance = %args.provenance,
@@ -331,18 +373,38 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Write `text` to `path`, creating the directory it names if it is missing.
+/// Write both files, creating the directories they name, or leave both as they
+/// were.
 ///
-/// The directory, because the default paths put both files in a `registry/`
+/// The directories, because the default paths put both files in a `registry/`
 /// subdirectory and a first run in a fresh checkout would otherwise fail on the
 /// second half of a path the caller did not choose.
-fn write_beside(path: &str, text: &str) -> anyhow::Result<()> {
-    if let Some(parent) = std::path::Path::new(path).parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
+///
+/// Both rather than one at a time: `std::fs::write` truncates, so two
+/// independent writes had a window in which the registry was regenerated and
+/// the provenance beside it still described the previous dump, which is exactly
+/// the state the digest gate exists to prevent. Both texts go to `.tmp` paths
+/// first and both are renamed only after both writes have succeeded, so a full
+/// disk or a read-only `registry/` fails before either destination is touched.
+///
+/// What this does NOT give is atomicity ACROSS the two renames: a crash between
+/// them still leaves one new file beside one old one. That window is two
+/// renames wide rather than two file writes wide, and closing it needs a
+/// directory swap this tool has no reason to grow.
+fn write_both(registry: (&str, &str), provenance: (&str, &str)) -> anyhow::Result<()> {
+    let staged = [registry, provenance]
+        .map(|(path, text)| (path.to_string(), format!("{path}.tmp"), text));
+    for (path, tmp, text) in &staged {
+        if let Some(parent) = std::path::Path::new(path).parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)?;
+            }
         }
+        std::fs::write(tmp, text)?;
     }
-    std::fs::write(path, text)?;
+    for (path, tmp, _) in &staged {
+        std::fs::rename(tmp, path)?;
+    }
     Ok(())
 }
 
@@ -352,7 +414,9 @@ mod tests {
     // Only the tests load a registry file back; `main` writes and never reads.
     use sparqlwatch_prober::registry;
 
+    const SAMPLE: &[u8] = include_bytes!("../../tests/fixtures/lod-cloud-sample.json");
     const SHIPPED_REGISTRY: &str = include_str!("../../registry/lod-cloud.toml");
+    const CALIBRATION_SAMPLE: &str = include_str!("../../registry/calibration-sample.toml");
     const SHIPPED_PROVENANCE: &str = include_str!("../../registry/lod-cloud.provenance.toml");
 
     fn shipped_provenance() -> Provenance {
@@ -368,6 +432,14 @@ mod tests {
     /// every URL in the file rather than a hand-picked few, two of which carry a
     /// query string and one a percent escape. It also catches a hand edit: the file is only
     /// byte-identical to the render if nobody has touched it since.
+    ///
+    /// What it CANNOT do is tie the file to the dump. The dump is 4 MB of a
+    /// third party's data and is not committed, so nothing in this suite reads
+    /// it, and this green covers the renderer and the loader rather than the
+    /// extraction. That tie was checked by hand once, and the digest in
+    /// `registry/lod-cloud.provenance.toml` is what makes it checkable again
+    /// against the same bytes. `tests/seed_registry.rs` covers the extraction
+    /// against a committed fixture instead.
     ///
     /// The list is asserted non-empty first because an empty one round trips
     /// trivially, so without that this would pass on a file that seeded
@@ -444,6 +516,34 @@ mod tests {
         );
     }
 
+    /// Every endpoint in the calibration sample is still in the registry it was
+    /// cut from.
+    ///
+    /// `registry/calibration-sample.toml` is hand-cut, is loaded through
+    /// `load_endpoints` like any other list, and had no test at all. What goes
+    /// wrong is a re-seed: a candidate a newer dump stops naming leaves the
+    /// registry while the sample still names it, and the costs measured on that
+    /// sample are then attributed to a population that no longer contains it.
+    /// The sample's own header states its composition, and its total is asserted
+    /// here so a silently truncated file cannot pass the subset check trivially.
+    #[test]
+    fn every_calibration_endpoint_is_still_in_the_registry_it_was_cut_from() {
+        let seeded = registry::load_endpoints(SHIPPED_REGISTRY).unwrap();
+        let sample = registry::load_endpoints(CALIBRATION_SAMPLE).unwrap();
+        assert_eq!(
+            sample.len(),
+            54,
+            "the sample's header says 30 unknown plus 8 each from OK, timed out and \
+             http_status"
+        );
+        let gone: Vec<&String> = sample.iter().filter(|e| !seeded.contains(e)).collect();
+        assert!(
+            gone.is_empty(),
+            "the calibration sample names endpoints registry/lod-cloud.toml no longer \
+             holds, so its measured costs describe a different population: {gone:?}"
+        );
+    }
+
     /// The recorded hash is only useful if the exact bytes can be fetched
     /// again, so the source has to be the versioned path. An unversioned URL is
     /// the case where the hash records what was used and nothing recovers it.
@@ -469,6 +569,139 @@ mod tests {
         );
         assert!(prov.dump.bytes > 0, "a dump of no bytes names no datasets");
         assert!(!prov.extraction.rule.is_empty(), "the rule has to be findable from here");
+    }
+
+    /// The provenance file is a fixed point of its own writer, symmetric with
+    /// the registry's.
+    ///
+    /// Without this, `provenance_toml` is compared against nothing: the two
+    /// tests below read the SHIPPED file and check its arithmetic and its shape,
+    /// which are properties of the DATA, so the code that writes it could change
+    /// or the file could be hand-edited with no red. A review of this branch
+    /// proved that: rewriting `PROVENANCE_HEADER` survived, and so did dropping
+    /// both headers from the render, which would have removed the one line that
+    /// tells a reader the file is generated and not to edit it.
+    ///
+    /// This also promotes a wrong count in the provenance from "caught at the
+    /// next commit" to "caught now": a `seeded` the writer would not produce
+    /// fails here rather than waiting for somebody to re-seed.
+    #[test]
+    fn the_shipped_provenance_is_a_fixed_point_of_write_then_read() {
+        let parsed = shipped_provenance();
+        assert!(parsed.counts.seeded > 0, "an empty record round trips too easily");
+        assert_eq!(
+            provenance_toml(&parsed),
+            SHIPPED_PROVENANCE,
+            "the shipped provenance must be what this binary writes for its own contents"
+        );
+    }
+
+    /// A dump that does not hash to the claim is refused, and the message names
+    /// both digests.
+    ///
+    /// This is the gate the whole digest exists for. `main` had no test, and a
+    /// review disabled the comparison with `if false &&` and watched all 351
+    /// tests stay green: `--sha256 0000...` was then accepted and the tool wrote
+    /// a provenance file whose `source`, `version` and `downloaded` described
+    /// whatever the caller typed.
+    #[test]
+    fn a_dump_that_does_not_hash_to_the_claim_is_refused() {
+        let digest = sha256_hex(b"abc");
+        let wrong = "0".repeat(64);
+        let error = check_digest("lod-data.json", &digest, &wrong)
+            .expect_err("a dump that hashes to something else is not the dump named")
+            .to_string();
+        assert!(error.contains("lod-data.json"), "name the input: {error}");
+        assert!(error.contains(&digest), "name what it hashes to: {error}");
+        assert!(error.contains(&wrong), "name what was claimed: {error}");
+        assert!(error.contains("Nothing was written"), "say what did not happen: {error}");
+
+        check_digest("lod-data.json", &digest, &digest).expect("the right claim is accepted");
+    }
+
+    /// `--sha256` may be pasted in uppercase. The digest this crate computes is
+    /// lowercase, so the claim is folded and not the other way round.
+    #[test]
+    fn an_uppercase_claim_names_the_same_dump() {
+        let digest = sha256_hex(b"abc");
+        check_digest("lod-data.json", &digest, &digest.to_ascii_uppercase())
+            .expect("hex case does not change which bytes are named");
+    }
+
+    /// Counts that do not add up to the list are refused before anything is
+    /// written.
+    ///
+    /// `seed::candidates` asserts this with `debug_assert`, which a release
+    /// build compiles out, so this is the backstop. No dump can reach it, which
+    /// is exactly why it needs a test: a review replaced the whole condition
+    /// with `if false` and nothing went red, because the only way the suite
+    /// could drive it was through `candidates`, where the arithmetic always
+    /// agrees.
+    #[test]
+    fn counts_that_do_not_add_up_to_the_list_are_refused() {
+        let honest = seed::Seeded {
+            endpoints: vec!["https://a/sparql".to_string()],
+            counts: seed::Counts { distinct: 1, ..seed::Counts::default() },
+        };
+        check_counts(&honest).expect("one distinct and one kept is one seeded");
+
+        let uncounted = seed::Seeded {
+            endpoints: vec!["https://a/sparql".to_string()],
+            // Two distinct, one refused, and the refusal not counted: the
+            // arithmetic says 2 while the list holds 1.
+            counts: seed::Counts { distinct: 2, ..seed::Counts::default() },
+        };
+        let error = check_counts(&uncounted)
+            .expect_err("2 by arithmetic against 1 kept is a refusal that went uncounted")
+            .to_string();
+        assert!(error.contains("2 seeded by arithmetic against 1"), "name both: {error}");
+        assert!(error.contains("without being counted"), "name the cause: {error}");
+    }
+
+    /// The provenance describes the bytes that were read, and takes from the
+    /// flags only what the bytes cannot say.
+    ///
+    /// `bytes` and `sha256` are the two fields a caller could get wrong without
+    /// noticing, and a review found both mutable in silence: `bytes: 1` survived
+    /// the whole suite, and so did writing `counts.distinct` into `seeded`,
+    /// which on the real dump is 548 against the 543 the list holds. The digest
+    /// passed in here deliberately differs from `--sha256`, so a record that
+    /// echoed the flag would fail.
+    #[test]
+    fn the_provenance_records_the_dump_that_was_read_and_not_the_flags() {
+        let dump = SAMPLE;
+        let digest = sha256_hex(dump);
+        let args = Args {
+            dump: "lod-data.json".to_string(),
+            // Not the digest of `dump`: nothing in the record may come from
+            // here.
+            sha256: "0".repeat(64),
+            source: "https://lod-cloud.net/versions/2026-06-15/lod-data.json".to_string(),
+            dump_version: "2026-06-15".to_string(),
+            downloaded: "2026-08-19".to_string(),
+            out: "registry/lod-cloud.toml".to_string(),
+            provenance: "registry/lod-cloud.provenance.toml".to_string(),
+        };
+        let seeded = seed::candidates(dump).unwrap();
+        let record = provenance_of(&args, dump, &digest, &seeded.counts);
+
+        assert_eq!(record.dump.bytes, dump.len(), "the bytes read, not a constant");
+        assert_eq!(record.dump.sha256, digest, "the digest read, not --sha256");
+        assert_ne!(record.dump.sha256, args.sha256, "the flag is not the record");
+        assert_eq!(
+            record.counts.seeded,
+            seeded.endpoints.len(),
+            "the total the list has, not the distinct count before the refusals"
+        );
+        assert_ne!(
+            record.counts.seeded, record.counts.distinct,
+            "this fixture refuses four, so the two totals must differ for that \
+             assertion to be about anything"
+        );
+        assert_eq!(record.dump.source, args.source, "only the caller knows where it came from");
+        assert_eq!(record.dump.version, args.dump_version);
+        assert_eq!(record.dump.downloaded, args.downloaded);
+        assert_eq!(record.extraction.crate_version, env!("CARGO_PKG_VERSION"));
     }
 
     /// The digest is computed here rather than copied from a flag, so it has to
