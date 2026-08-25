@@ -192,6 +192,31 @@ mod tests {
         );
     }
 
+    /// An `access_url` of the empty string names no endpoint, so it is not an
+    /// entry.
+    ///
+    /// The fixture's third foodista entry is HAND-ADDED: 0 of the real dump's
+    /// 725 entries have an empty or missing `access_url`, so this guard has no
+    /// input in the dump that reaches it and, without this fixture entry,
+    /// replacing `if !url.is_empty()` with `if true` changes nothing anywhere.
+    /// With it, the empty string would be counted as an entry, survive
+    /// deduplication, and then be refused by the IRI rule under a reason that
+    /// says the registry contained a URL, which is a fact about nothing.
+    #[test]
+    fn an_empty_access_url_is_not_an_entry() {
+        let seeded = candidates(SAMPLE).unwrap();
+        assert_eq!(seeded.counts.entries, 9, "the empty value is not a tenth entry");
+        assert_eq!(
+            seeded.counts.refused_unpublishable, 1,
+            "only the {{SPARQL}} placeholder, so the empty string never reached the IRI rule"
+        );
+        assert!(
+            !seeded.endpoints.iter().any(|e| e.is_empty()),
+            "an empty candidate cannot be probed or published: {:?}",
+            seeded.endpoints
+        );
+    }
+
     /// 725 entries collapse to 548 in the real dump, so this is the common case
     /// rather than an edge.
     #[test]

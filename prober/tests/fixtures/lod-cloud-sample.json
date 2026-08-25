@@ -66,7 +66,7 @@
     "title": "DBpedia in Japanese"
   },
   "foodista": {
-    "_fixture_role": "one dataset with two entries",
+    "_fixture_role": "one dataset with two entries, plus a HAND-ADDED third whose access_url is the empty string: 0 of the real dump's 725 entries have one, so seed.rs's !url.is_empty() guard has no input in the dump that reaches it",
     "sparql": [
       {
         "access_url": "http://kasabi.com/api/sparql-endpoint-foodista",
@@ -77,6 +77,11 @@
         "access_url": "http://api.kasabi.com/dataset/foodista/apis/sparql",
         "status": "OK",
         "title": "SPARQL"
+      },
+      {
+        "access_url": "",
+        "status": "OK",
+        "title": "HAND-ADDED, not from the dump"
       }
     ],
     "title": "Foodista"
