@@ -204,7 +204,7 @@ Two endpoint lists live in this crate and they are not interchangeable.
 | --- | --- |
 | `endpoints.toml` | The **development list**: three endpoints, written by hand, and the default `--endpoints`. `registry.rs` asserts it loads exactly three entries with `qlever.dev` first, and none of the three appears in the LOD Cloud dump. |
 | `registry/lod-cloud.toml` | The **seeded list**: 543 candidates extracted from a LOD Cloud dump. Generated, so a hand edit is overwritten by the next re-seed and fails the fixed-point test in `src/bin/seed-registry.rs`. |
-| `registry/lod-cloud.provenance.toml` | Which dump produced that list, and every count behind it. A parseable file rather than a comment header, so a test can read it back and compare it against the list beside it. |
+| `registry/lod-cloud.provenance.toml` | Which dump produced that list, and every count behind it. A parseable file rather than a comment header, so a test can read it back and compare it against the list beside it. Generated too, and a fixed point of its own writer for the same reason the list is: a hand edit or a change to the renderer fails a test rather than standing as the only record of where the list came from. |
 | `registry/calibration-sample.toml` | 54 candidates cut out of the seeded list to price a sweep before one was attempted. It is a sample and not a registry, and its own header says so. |
 
 No sweep reaches the seeded list by accident. `--endpoints
@@ -236,6 +236,14 @@ provenance file describes the bytes that produced the list beside it rather than
 what somebody typed. Nothing here reads a clock, so re-seeding one dump writes
 the same two files byte for byte and a diff shows only what the dump or the rule
 changed.
+
+Both files are written together or not at all: each text goes to a `.tmp` path
+beside its destination and both are renamed only after both writes have
+succeeded. Two independent `std::fs::write` calls had a window in which a full
+disk or a read-only `registry/` left a regenerated list beside a provenance file
+describing the previous dump, which is the state the digest gate exists to
+prevent. A crash between the two renames can still leave one new file beside one
+old one; that window is two renames wide rather than two file writes wide.
 
 **That SHA-256 is hand-written, and it is for provenance only.** No digest crate
 is in this project's lock file and a checksum for provenance did not warrant
@@ -285,8 +293,8 @@ pins that against a `FAIL` entry taken from the real dump.
 
 The measurement adds a second reading that does not change the first: the field
 is a bad LIVENESS oracle and a good COST predictor for one bucket, since the 43
-candidates it had marked timed-out accounted for 66% of the whole sweep (see
-Sweep cost below). Both are true at once, and neither makes the field an
+candidates it had marked timed-out accounted for 66% of the sweep's serial cost
+(see Sweep cost below). Both are true at once, and neither makes the field an
 admission rule.
 
 ### The refusals
@@ -329,7 +337,7 @@ Saying this plainly rather than leaving it to be inferred: **the seeded registry
 is not something to put on a schedule today**, because nothing yet stops the
 dead being re-probed on every sweep. 486 of the 543 candidates answered no query
 at all, and the 43 candidates the dump had marked timed-out cost two thirds of
-the sweep's wall clock. What makes a daily sweep affordable is an admission
+the sweep's serial probe time, 2.28 of its 3.46 serial hours. What makes a daily sweep affordable is an admission
 policy, which admits responders and keeps the rest as a published
 `unreachable-candidates` list that is not re-probed daily, and that is the next
 slice. Until it exists, a sweep of `registry/lod-cloud.toml` is a measurement
@@ -367,7 +375,7 @@ facts, 543 cost-ceiling declines, 0 content samples (`classes` is `expensive`),
 Per-endpoint cost from the run's own `elapsedMs`, in seconds, grouped by the
 cause the dump's `status` field had recorded for that candidate:
 
-| Bucket | n | median | mean | max | Share of all cost |
+| Bucket | n | median | mean | max | Share of all serial cost |
 | --- | --- | --- | --- | --- | --- |
 | timed out | 43 | 210.0 | 191.2 | 210.0 | 66.0% |
 | an HTTP status | 185 | 2.1 | 12.4 | 210.0 | 18.4% |
@@ -380,13 +388,37 @@ Two things in that table are worth reading twice. **Dead hosts are cheap and
 half-alive hosts are expensive**: a host whose DNS is gone refuses in
 milliseconds, while a host that answers with a status code is up, so our seven
 probes can each hang for the full 30s request budget. And the driver is one of
-the smallest buckets: 43 candidates, two thirds of the sweep.
+the smallest buckets: 43 candidates, two thirds of the serial cost.
 
-Liveness, against the survey this project's metric set came from: **57 of 543
-answered a query** where the survey found 65 of 548, and **30 published a
-parseable service description** where the survey found 28. Slightly lower on
-liveness and slightly higher on descriptions, consistent with five more days of
-decay since the survey probed on 2026-08-19.
+Liveness and self-description, against the survey this project's metric set came
+from. Three quantities, stated separately because they are easy to conflate and
+an earlier draft of this paragraph did conflate them, all counted over the 543:
+
+- **57 answered a query**: `availability` `verified`, 10.5% of the 543, against
+  the survey's 65 of 548.
+- **26 published a parseable service description**: `service-description`
+  `verified`. The rest are 508 `indeterminate` and 9 `absent`, and the file
+  carries 35 `sw:level` triples, one per non-indeterminate verdict.
+- **30 returned some parseable RDF to the queryless GET**: `declarationsRead`
+  `true`. This is the weakest of the three. It says at least one triple came
+  back and was read, not that it resolved to a service-description verdict.
+
+The figure comparable with the survey's is the description rate among the
+living, because both populations were probed once and both are mostly dead: 24
+of the 57 that answered a query also published a description, **42.1% of live**,
+against the survey's 28 of 65, **43.1% of live**. (Two of the 26 answered no
+query, which is the difference between 26 and 24.) So this sweep is **slightly
+lower on both** liveness and descriptions, consistent with five more days of
+decay since the survey probed on 2026-08-19, and the rate among the living is
+almost unchanged.
+
+The 26 descriptions are graded: **23 at level 1, 2 at level 2, and exactly one
+at level 4**. Level 1 is the stub the design's level table calls "the Virtuoso
+default", so **one endpoint in the whole registry** declares an entailment
+regime, example resources or extension functions. That echoes the survey's
+finding that 21 of its 28 descriptions were byte-identical 14-triple Virtuoso
+stubs: a binary "publishes a service description" credits the engine, and the
+graded metric is what separates the publisher from it.
 
 ### The estimate, and how badly it missed
 
@@ -414,6 +446,12 @@ only full-sweep number this project has: **1h26m21s for 543 candidates at
 arithmetic below remains an estimate. It now has exactly one calibration point.
 
 ### The floor arithmetic, which is still an estimate
+
+A note on the two sizes in this document. The arithmetic below is sized at
+**548**, which is the dump's distinct-URL count; the seeded registry holds
+**543**, because five URLs are refused by the rules under The refusals above.
+The numbers here are round-number estimates and the 5-endpoint difference does
+not change any of them, so they are left as they were rather than restated.
 
 Seven metrics are `cheap` at the default cost ceiling: availability, cors,
 cors-preflight, geo-functions, geo-data, service-description, has-classes.
@@ -454,10 +492,11 @@ endpoints costs the sum of them however high `--concurrency` is set. Request
 latencies vary widely too; the 300 ms above is a middle estimate.
 
 **In this population that host-group risk does not exist**, which is worth
-recording because the plan behind the sweep was built around it. The most
-expensive group in the whole run is 7.0 minutes (`data.gov.uz`, 2 endpoints),
-and the largest group, `api.talis.com` with 27 candidates, costs essentially
-nothing because its DNS is gone. The makespan was set by the aggregate over 436
+recording because the plan behind the sweep was built around it. Two groups
+tie for most expensive at 7.0 minutes, `data.gov.uz` and `linked.opendata.cz`,
+each two candidates that each burned the full 210-second budget; the largest
+group, `api.talis.com` with 27 candidates, costs 0.2 seconds in total because
+its DNS is gone. The makespan was set by the aggregate over 436
 groups, not by any one of them. A different registry could still be shaped the
 other way, so the arithmetic above stays; what changed is that the lever is
 measured and small rather than assumed and large.
@@ -1110,7 +1149,10 @@ The following are deferred deliberately, not oversights:
   produced is a list to verify against rather than a verification: 18 candidates
   among the responders, six of them named in the stage's ledger, `dbpedia.org`,
   `data.bnf.fr`, `data.cervantesvirtual.com`, `dati.camera.it`, `ldf.fi/warsa`
-  and `ldf.fi/ww1lod`. Retiring the deferral needs a dedicated run at
+  and `ldf.fi/ww1lod`. **That 18 cannot be re-derived from the preserved run**:
+  `classes` was declined 543 times, so no measurement in the file speaks to
+  named graphs. It is a pointer to the six endpoints named above, not a
+  measurement to build on. Retiring the deferral needs a dedicated run at
   `--max-cost expensive` against an endpoint from that list, plus a check that
   the result actually depends on the `GRAPH` branch and not on the endpoint's
   default graph.
@@ -1170,7 +1212,11 @@ The following are deferred deliberately, not oversights:
   at a redirect target", is a `tracing::debug!` (`client.rs:353`) and that run
   was at `info`, so the run's count of cross-host hops is zero for the wrong
   reason and **no rate may be inferred from it**. What the run does show is a
-  different fact: 14 redirect chains looped and were not resolved. Answering the
+  different fact: 14 redirect chains looped and were not resolved. That line is a
+  `tracing::warn!` (`client.rs:350`), so it was visible at `info` and the count
+  is real, unlike the DEBUG hop line above; but it was counted from the run's
+  console output, which was not kept beside the `.nq` in
+  `~/code/sparqlwatch-runs/`, so it cannot be re-derived either. Answering the
   question properly needs a run at `RUST_LOG=debug` or a counter on the client,
   and neither is worth another 1.5 hours of strangers' traffic on its own, so
   the frequency stays unquantified.
