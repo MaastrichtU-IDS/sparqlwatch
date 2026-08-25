@@ -91,6 +91,20 @@ pub fn load_endpoints(toml_text: &str) -> anyhow::Result<Vec<String>> {
 /// `IpAddr::from_str` parses neither). A textual check cannot close that; the
 /// place that can is a guard on the address the resolver actually returned,
 /// which is a separate slice. Recorded here so it is not mistaken for covered.
+///
+/// Two further edges, both textual and both closed as of this note, so the list
+/// above is not read as covering more than it does. An IPv4-MAPPED IPv6 literal
+/// IS caught: `[::ffff:127.0.0.1]` and `[::ffff:169.254.169.254]` are decided as
+/// the IPv4 addresses they map to, because `Ipv6Addr::is_loopback` is true only
+/// for `::1`. And a trailing DNS root label IS stripped, so `localhost.` and
+/// `127.0.0.1.` are refused like their undotted spellings.
+///
+/// Still open, and textual, so a future reader knows where the edge now is:
+/// `.local` (RFC 6762 mDNS) and `.home.arpa` (RFC 8375) are reserved for names
+/// that resolve on the prober's own link, and neither is refused. Neither
+/// appears in the 2026-06-15 dump. They are left out because this arm is framed
+/// around the two RFC 2606 local-use names and adding a third reservation is a
+/// decision to take with a dump that carries one, not on a guess.
 pub fn without_unroutable_hosts(endpoints: &[String]) -> Vec<String> {
     let mut kept: Vec<String> = Vec::with_capacity(endpoints.len());
     for (filtered_position, ep) in endpoints.iter().enumerate() {
@@ -134,6 +148,25 @@ fn host_of(url: &str) -> String {
 /// even though RFC 2606 reserves both, because they are reserved FOR local use:
 /// `http://localhost:3030` and `http://127.0.0.1:3030` are the same machine, so
 /// refusing one on every path while allowing the other would be incoherent.
+/// Why an IPv4 address is not one to send a stranger's dump at, or `None`.
+///
+/// Split out of `unroutable` so the IPv4-mapped IPv6 arm reaches the same
+/// decision rather than a second copy of it: two copies would be one edit away
+/// from `[::ffff:10.0.0.1]` and `10.0.0.1` being answered differently.
+fn unroutable_v4(v4: std::net::Ipv4Addr) -> Option<&'static str> {
+    if v4.is_loopback() {
+        Some("a loopback address")
+    } else if v4.is_private() {
+        Some("a private address")
+    } else if v4.is_link_local() {
+        Some("a link-local address")
+    } else if v4.is_unspecified() {
+        Some("the unspecified address")
+    } else {
+        None
+    }
+}
+
 fn unroutable(host: &str) -> Option<&'static str> {
     // The DNS root label: `example.org.` and `example.org` are one host, and a
     // registry hand-edited from a zone file can carry the dotted spelling.
@@ -145,32 +178,29 @@ fn unroutable(host: &str) -> Option<&'static str> {
         // else, including a multicast or documentation-range address, is left
         // to fail honestly at probe time rather than be refused on a guess.
         return match ip {
-            std::net::IpAddr::V4(v4) => {
-                if v4.is_loopback() {
-                    Some("a loopback address")
-                } else if v4.is_private() {
-                    Some("a private address")
-                } else if v4.is_link_local() {
-                    Some("a link-local address")
-                } else if v4.is_unspecified() {
-                    Some("the unspecified address")
-                } else {
-                    None
+            std::net::IpAddr::V4(v4) => unroutable_v4(v4),
+            // An IPv4-mapped literal is decided as the IPv4 address it maps to.
+            // `Ipv6Addr::is_loopback` is true only for `::1`, and
+            // `is_unique_local` and `is_unicast_link_local` do not see through
+            // the mapping either, so `[::ffff:127.0.0.1]` and
+            // `[::ffff:169.254.169.254]` would otherwise be seeded while
+            // reaching 127.0.0.1 and the cloud metadata service on the wire.
+            std::net::IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+                Some(v4) => unroutable_v4(v4),
+                None => {
+                    if v6.is_loopback() {
+                        Some("a loopback address")
+                    } else if v6.is_unique_local() {
+                        Some("a unique-local address")
+                    } else if v6.is_unicast_link_local() {
+                        Some("a link-local address")
+                    } else if v6.is_unspecified() {
+                        Some("the unspecified address")
+                    } else {
+                        None
+                    }
                 }
-            }
-            std::net::IpAddr::V6(v6) => {
-                if v6.is_loopback() {
-                    Some("a loopback address")
-                } else if v6.is_unique_local() {
-                    Some("a unique-local address")
-                } else if v6.is_unicast_link_local() {
-                    Some("a link-local address")
-                } else if v6.is_unspecified() {
-                    Some("the unspecified address")
-                } else {
-                    None
-                }
-            }
+            },
         };
     }
 
@@ -634,6 +664,19 @@ mod tests {
             ("http://192.168.1.1/sparql", "private"),
             ("http://169.254.169.254/latest/meta-data/", "link-local"),
             ("http://0.0.0.0/sparql", "unspecified"),
+            // The DNS root label. `unroutable` strips it, and without that
+            // strip `127.0.0.1.` parses as no `IpAddr` and reaches a sweep.
+            ("http://127.0.0.1./sparql", "loopback"),
+            // IPv4-mapped IPv6, which `Ipv6Addr::is_loopback` and its two
+            // siblings do not see through: `is_loopback` is true only for
+            // `::1`. The address on the wire is still 127.0.0.1, and the last
+            // of these is the cloud metadata URL the link-local arm exists to
+            // refuse.
+            ("http://[::ffff:127.0.0.1]/sparql", "loopback"),
+            ("http://[::ffff:127.0.0.1]:8890/sparql", "loopback"),
+            ("http://[0:0:0:0:0:ffff:7f00:1]/sparql", "loopback"),
+            ("http://[::ffff:10.0.0.1]/sparql", "private"),
+            ("http://[::ffff:169.254.169.254]/latest/meta-data/", "link-local"),
         ] {
             let logs = logs_of(|| {
                 let kept = without_unroutable_hosts(&v(&[url]));
@@ -645,7 +688,15 @@ mod tests {
     }
 
     /// RFC 2606 reserves these names so that nobody sends them traffic. The
-    /// dump contains two of them, one of which it marks `OK`.
+    /// dump contains two of them, `http://example.org` and
+    /// `http://www.example.org`, and it marks BOTH `OK`, which is the strongest
+    /// form of the point: the dump's own field would have admitted a name that
+    /// exists to receive no traffic.
+    ///
+    /// One case asserts the whole warning sentence and not just the `RFC 2606`
+    /// token. A test that matches only the token cannot see a formatting
+    /// mistake in the sentence around it, and this branch shipped a warning with
+    /// eighteen spaces in the middle of it for exactly that reason.
     #[test]
     fn an_rfc_2606_reserved_name_is_refused_with_its_reason() {
         for url in [
@@ -665,6 +716,18 @@ mod tests {
             });
             assert!(logs.contains("RFC 2606"), "{url} must be refused as reserved: {logs}");
         }
+
+        let logs = logs_of(|| {
+            assert!(without_reserved_names(&v(&["http://example.org"])).is_empty());
+        });
+        assert!(
+            logs.contains(
+                "registry entry dropped: its host is under a second-level domain RFC 2606 \
+                 reserves for documentation, so no service can be there to measure"
+            ),
+            "the whole sentence, not just the token, so a formatting mistake inside it is \
+             visible: {logs}"
+        );
     }
 
     /// The refusal is on the host, not on a substring of it. Each of these is a
@@ -723,7 +786,16 @@ mod tests {
     /// may legitimately have pointed at their own host.
     #[test]
     fn a_local_use_name_is_refused_by_the_seeder_and_not_on_every_path() {
-        for url in ["http://localhost:3030/query", "http://anything.test/sparql"] {
+        // The last two carry the DNS root label, which spells one host two
+        // ways. Without `unroutable`'s trailing-dot strip the TLD arm never
+        // fires on them, because `host.rsplit('.').next()` is then the empty
+        // string, and the seeder keeps them.
+        for url in [
+            "http://localhost:3030/query",
+            "http://anything.test/sparql",
+            "http://localhost./query",
+            "http://anything.test./sparql",
+        ] {
             let loaded = load_endpoints(&format!("endpoint = [{url:?}]")).unwrap();
             assert_eq!(loaded, v(&[url]), "{url} is for local use, not documentation");
 
