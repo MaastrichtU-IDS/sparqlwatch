@@ -273,11 +273,11 @@ The list is applied in two places and needs both:
   skips it.
 
 It is the only rule in `registry.rs` that fails the load instead of dropping an
-entry with a warning, and the reasoning is the same one step in. The others fail open because the endpoint list is seeded
-from real-world dumps and refusing the whole file over one bad string would mean
-monitoring nothing. This one cannot fail open: failing open means probing a host
-that asked not to be, and a sweep that does not happen is a smaller wrong than a
-sweep somebody asked us not to run.
+entry with a warning, and the reasoning is the same one step in. The others fail
+open because the endpoint list is seeded from real-world dumps and refusing the
+whole file over one bad string would mean monitoring nothing. This one cannot fail
+open: failing open means probing a host that asked not to be, and a sweep that does
+not happen is a smaller wrong than a sweep somebody asked us not to run.
 
 The file carries one worked example, `sparqlwatch-exclusion-worked-example`,
 which nobody asked for and whose `reason` says so. It keeps the shipped file's
@@ -325,7 +325,11 @@ tells a sysadmin how to ask to be excluded:
   entry would be checkable by nobody, including the person who asked.
 - **This crate carries no contact address**, so nothing here tells anybody where
   to send the request. The page that does is the page that has to carry the
-  address.
+  address, and since 2026-08-25 that page exists: the `/about` the
+  `User-Agent` points at, served by `web/app.py`, names one address and states
+  every limit in this list. Nothing in this crate reads that page, so the two
+  are kept in step by `web/tests/test_about.py`, which reads this crate's
+  sources and fails when the page and the code disagree.
 
 ### Re-seeding
 
@@ -1326,7 +1330,10 @@ The following are deferred deliberately, not oversights:
   watches a mailbox, and nothing retracts what an earlier run already published.
   Asking not to be probed, above, states every limit of the mechanism, and any
   page that offers a sysadmin a way out has to state them too rather than imply
-  a promise the file cannot keep.
+  a promise the file cannot keep. The `/about` page delivered on 2026-08-25
+  states all of them, including that blocking the requests does not stop them:
+  a refusing endpoint is recorded as unreachable and asked again on the next
+  sweep, because nothing yet drops an endpoint from the list for failing.
 
 - **A cross-host redirect can wait at another endpoint's gate, and that wait is
   charged to the metric budget.** `--concurrency` groups endpoints by the host
