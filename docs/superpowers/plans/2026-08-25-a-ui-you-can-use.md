@@ -333,7 +333,13 @@ Add a test that it responds with no store configured at all.
 
 It must answer, plainly and near the top: what this is; that it probes public SPARQL endpoints and publishes what it measured; **how often and how politely**, taking the numbers from `main.rs`'s actual defaults rather than a remembered pair; where the endpoint list came from; and **how to ask to be excluded**, describing the mechanism Task 3 builds and saying plainly that requests are handled by hand today.
 
-**Do not invent a contact address.** If none has been supplied, the page says what the channel is going to be and the test asserts that the page does not promise a channel that does not exist. Ask me for the address rather than inventing one.
+**The contact address is `michel.dumontier@maastrichtuniversity.nl`**, supplied for this
+purpose. Name it, and say plainly that requests are read and handled by a person rather than
+by an automated system, because that is what is true: Task 3 builds the list an exclusion
+lands in, and nothing watches a mailbox. Do not soften that into an implied service level.
+
+This is a public page, so the address is published deliberately and not as a side effect.
+Do not add any other address, and do not invent a form, a ticket queue or an alias.
 
 Say what the site cannot yet do, for the same reason the README does.
 
