@@ -22,50 +22,82 @@
 # (web/tests/fixtures/run-truncated.nq has none) whereas every quad the
 # prober writes lands in its run's graph by construction.
 #
-# "Most recent" is decided by the activity's prov:generatedAtTime, a typed
-# xsd:dateTime, and NOT by ordering the run IRI as a string. Today's run IRIs
-# happen to embed an ISO-8601 instant, so string ordering would agree with
-# this on every fixture we have and would quietly start returning a stale run
-# the day that IRI shape changes. Ordering by the timestamp the data actually
-# models has no such trapdoor.
+# "Most recent" IS NOT COMPUTED HERE. This endpoint's sw:currentSampleRun in
+# the derived urn:sparqlwatch:current graph names the newest run that published
+# a class sample for it, written by web/load_run.py as each run is loaded.
 #
-# It is expressed as "no newer run sampled this same endpoint" rather than as
-# an ORDER BY ... LIMIT 1 subquery. Both read the same at first glance, and
-# the subquery form is wrong: the value substituted for ?endpoint does not
-# reach inside a subquery's own projection, so the subquery would pick the
-# newest run in the whole store and then fail to join whenever that run did
-# not happen to sample the endpoint being asked about. NOT EXISTS is
-# evaluated against the current solution, so ?endpoint is bound inside it and
-# the comparison stays per-endpoint.
+# It is a SECOND pointer, beside sw:currentRun, and that is the load-bearing
+# part rather than a convenience. The newest run that MEASURED an endpoint and
+# the newest run that SAMPLED it are different runs the moment a cheap sweep
+# declines sw:metric:classes, and that is the steady state and not an edge
+# case: the 543-endpoint registry sweep declined classes for every one of them.
+# A single pointer with a single notion of recency loses the class sample
+# outright, which is the defect stage 3-1 exists to have fixed.
+#
+# Why the pointer instead of the FILTER NOT EXISTS that was here, measured. The
+# figures first taken for this query were 0.10, 0.15 and 0.17 ms at 1, 7 and 30
+# runs, and they were a query with nothing to match: the registry sweep
+# produced zero content samples. With one sample per endpoint per run the same
+# shape is 1.2 ms, 115.6 ms and 6,488.5 ms. The shape was not the mistake, and
+# still would not be: the value substituted for ?endpoint does not reach inside
+# a subquery's own projection, so an ORDER BY ... LIMIT 1 subquery would pick
+# the newest run in the whole store and fail to join whenever that run did not
+# sample this endpoint. Deciding recency at query time was the mistake.
+#
+# The sample's own quads stay in their run graph and are read through the
+# pointer, one hop below. They are not copied into current: the index this
+# stage builds scans current for verdicts and never for sample values, so
+# copying several hundred sw:sampledValue triples per endpoint would grow the
+# graph that scan reads and buy nothing.
 
 PREFIX prov: <http://www.w3.org/ns/prov#>
 PREFIX sw: <urn:sparqlwatch:>
 
 SELECT ?endpoint ?run ?generatedAt ?size ?truncated ?class
 WHERE {
-  GRAPH ?run {
-    ?sample sw:sampledFrom ?endpoint ;
-            sw:sampledBy sw:metric:classes ;
-            sw:sampleSize ?size ;
-            sw:sampleTruncated ?truncated .
-    ?activity a prov:Activity ;
-              prov:generatedAtTime ?generatedAt .
-    # OPTIONAL so a sample that genuinely found no classes still reports its
-    # size and truncation flag instead of vanishing, which the caller could
-    # not tell apart from there being no sample at all. The prober does not
-    # emit such a sample today (it skips one with no values, so a size of 0
-    # cannot be misread as "this endpoint has no classes"), so this is defence
-    # rather than a live case, and web/tests/fixtures/run-zero-classes.nq is
-    # the synthetic fixture that pins it.
-    OPTIONAL { ?sample sw:sampledValue ?class }
-  }
-  FILTER NOT EXISTS {
-    GRAPH ?newerRun {
-      ?newerSample sw:sampledFrom ?endpoint ;
-                   sw:sampledBy sw:metric:classes .
-      ?newerActivity a prov:Activity ;
-                     prov:generatedAtTime ?newerGeneratedAt .
+  # The run that took this endpoint's class sample. One quad, and the reason
+  # this query does no recency work at all.
+  GRAPH sw:current { ?endpoint sw:currentSampleRun ?run }
+  # ONE HOP into that run's graph for the sample itself, wrapped in OPTIONAL
+  # with a FILTER that requires what it binds. That pair means exactly what a
+  # plain GRAPH block means, and only the plain form grows with the history this
+  # graph exists to make irrelevant. Measured over the 543-endpoint registry
+  # replayed under N run IRIs with one 20-class sample per endpoint per run:
+  #
+  #                                        1 run     7 runs
+  #   GRAPH ?run { ... }                   3.08 ms   35.64 ms
+  #   OPTIONAL { GRAPH ?run { ... } }      see the header table
+  #
+  # The same shape and the same measurement appear in
+  # endpoint_measurements.rq's hop, which states the mechanism.
+  OPTIONAL {
+    GRAPH ?run {
+      # sw:sampledBy is written as a bound variable plus a FILTER for the
+      # reason endpoint_measurements.rq's header measures: a pattern with an
+      # unbound subject and a bound object is scanned by predicate and object
+      # across the store. Comparing two IRIs with = is identity, so the
+      # solutions are the same ones.
+      ?sample sw:sampledFrom ?endpoint ;
+              sw:sampleSize ?size ;
+              sw:sampleTruncated ?truncated ;
+              sw:sampledBy ?sampledBy .
+      FILTER (?sampledBy = sw:metric:classes)
+      ?activity a prov:Activity ;
+                prov:generatedAtTime ?generatedAt .
+      # OPTIONAL so a sample that genuinely found no classes still reports its
+      # size and truncation flag instead of vanishing, which the caller could
+      # not tell apart from there being no sample at all. The prober does not
+      # emit such a sample today (it skips one with no values, so a size of 0
+      # cannot be misread as "this endpoint has no classes"), so this is defence
+      # rather than a live case, and web/tests/fixtures/run-zero-classes.nq is
+      # the synthetic fixture that pins it.
+      OPTIONAL { ?sample sw:sampledValue ?class }
     }
-    FILTER (?newerGeneratedAt > ?generatedAt)
   }
+  # ?sample is what the required patterns above bind, so requiring it requires
+  # all of them, and a pointer naming a run whose graph no longer holds the
+  # sample reads as "no sample" exactly as it did before, rather than as a
+  # sample with no size and no timestamp. That state is drift, and
+  # web/load_run.py's --check names the endpoint.
+  FILTER (BOUND(?sample) && BOUND(?generatedAt))
 }

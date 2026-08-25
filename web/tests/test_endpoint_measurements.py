@@ -11,7 +11,7 @@ from pyoxigraph import NamedNode, Store
 
 from conftest import RUN_WITH_SAMPLES
 from endpoint_content import endpoint_content
-from load_run import load_run
+from load_run import check_current, load_run, rebuild_current
 from endpoint_measurements import EndpointMeasurements, endpoint_measurements
 
 KADASTER = "https://data.kkg.kadaster.nl/query"
@@ -153,8 +153,20 @@ def test_the_old_scheme_run_is_still_reachable_once_the_newer_one_is_gone(store_
     depended on the new derived subject shape rather than on predicates
     alone, the old row-index subjects would already be invisible to it and
     removing the newer run would surface nothing rather than the old run's
-    real values."""
+    real values.
+
+    Dropping a run graph is one of the two things urn:sparqlwatch:current
+    cannot follow on its own, and the spec's whole reason for one graph per run
+    is that a bad run can be dropped wholesale. So the drop is followed by the
+    rebuild that is its documented repair, and the check is asserted on both
+    sides of it: current names a graph that is gone, and afterwards it does
+    not."""
     store_new_subjects.remove_graph(NamedNode(NEW_RUN))
+    assert not check_current(store_new_subjects).ok, (
+        "current still names the run that was dropped"
+    )
+    rebuild_current(store_new_subjects)
+    assert check_current(store_new_subjects).ok
 
     m = endpoint_measurements(store_new_subjects, KADASTER)
     assert m.run == OLD_RUN

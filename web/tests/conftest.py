@@ -13,7 +13,7 @@ what they claimed to check.
 from pathlib import Path
 
 import pytest
-from pyoxigraph import Store
+from pyoxigraph import NamedNode, Store
 
 from load_run import load_run
 
@@ -31,6 +31,47 @@ RUN_HOSTILE_LITERALS = FIXTURES / "run-hostile-literals.nq"
 RUN_NEW_SUBJECTS = FIXTURES / "run-new-subjects.nq"
 RUN_PROBER_FAILED = FIXTURES / "run-prober-failed.nq"
 RUN_CRASHED_PARTWAY = FIXTURES / "run-crashed-partway.nq"
+
+
+CURRENT_GRAPH = NamedNode("urn:sparqlwatch:current")
+
+
+def run_graph_names(store: Store) -> list[NamedNode]:
+    """The store's run graphs: every named graph except the derived one.
+
+    load_run maintains urn:sparqlwatch:current beside the run graphs, so
+    counting named_graphs() directly would count it as a run. It is not one: it
+    holds no rdf:type prov:Activity triple at all, which is what
+    test_current_holds_no_typed_activity pins and what keeps the newest-run
+    aggregate in the read queries a question about runs.
+    """
+    return [graph for graph in store.named_graphs() if graph != CURRENT_GRAPH]
+
+
+def run_quad_count(store: Store) -> int:
+    """How many quads the store holds in its run graphs.
+
+    Everything a run file states lands in a run graph, so this is what a
+    fixture's quad count is a claim about. current holds copies of some of
+    those quads, and counting those copies again would turn every fixture's
+    count into a statement about the loader rather than about the file.
+    """
+    return sum(
+        len(list(store.quads_for_pattern(None, None, None, graph)))
+        for graph in run_graph_names(store)
+    )
+
+
+def run_graph_query(store: Store, query: str):
+    """Ask ``query`` of the store's run graphs alone.
+
+    Every assertion in web/tests/test_fixture.py is a claim about what a run
+    FILE holds, and its queries match GRAPH ?g. current holds copies of some of
+    those quads, so without this restriction a claim like "eight declines, one
+    of them cost-ceiling" would count each of them twice and a fixture that
+    really did lose a decline could still satisfy the count.
+    """
+    return store.query(query, named_graphs=run_graph_names(store))
 
 
 def _loaded_store(tmp_path: Path, name: str, *fixtures: Path) -> Store:

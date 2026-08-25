@@ -63,10 +63,16 @@ result = load_run(store, run_bytes)
 print(f"Loaded {result.quad_count} quads; replaced graphs: {result.replaced}")
 ```
 
-`LoadResult` has exactly those two fields: `quad_count`, and `replaced`, the
-list of graph IRIs that were already in the store and were dropped to make
-room for this file's quads. An empty `replaced` means every graph the file
-names was new.
+`LoadResult` reports what the load did. `quad_count` is how many quads it
+parsed; `replaced` lists the graph IRIs that were already in the store and were
+dropped to make room for this file's quads, so an empty `replaced` means every
+graph the file names was new; `discarded_bytes` is how many trailing bytes were
+cut off as an incomplete final section. The remaining four are about the derived
+`urn:sparqlwatch:current` graph (below): `advanced` and `advanced_samples` name
+the endpoints whose verdicts and whose class sample this load moved forward,
+`kept_newer` names those left alone because `current` already pointed at a newer
+run, and `drifted` names those whose pointer now names a run that no longer
+mentions them.
 
 The same thing from the command line, for one or more files at once:
 
@@ -105,9 +111,22 @@ means a malformed file is rejected with the store intact.
 
 That covers a bad file and nothing else. **The replacement is not atomic.**
 Dropping the graphs and inserting the quads are two separate store operations,
-because pyoxigraph 0.5.9's `Store` has no transaction API to group them in. An
-insert that cannot complete (a full disk, an OOM kill, a power loss) leaves the
-graphs dropped and the new quads not inserted.
+so an insert that cannot complete (a full disk, an OOM kill, a power loss)
+leaves the graphs dropped and the new quads not inserted.
+
+An earlier version of this section said the reason was that pyoxigraph 0.5.9's
+`Store` has no transaction API. **That was false.** `Store.update()` is
+documented as transactional ("either the full operation succeeds, or nothing is
+written to the database") and that holds across `;`-separated operations:
+`DROP GRAPH <urn:g> ; DROP GRAPH <urn:missing>` raises on the second and leaves
+`urn:g` in place. What pyoxigraph does not offer is an explicit transaction
+**handle**, something that could group this module's own `remove_graph` and
+`extend` calls. The real objection to writing the replacement as one update is
+the size of the `INSERT DATA` body it would need: one run of the 543-endpoint
+registry is 27,194 quads, and serialising them into SPARQL text to be re-parsed
+is a different cost from handing parsed `Quad` objects to `extend`. So the
+window stays, and is reported rather than hidden. The derived graph below does
+use that transactionality, one update per endpoint.
 
 The design can live with that window because **the store is a derived
 artefact**. The prober's `.nq` files are the source of truth and a run graph is
@@ -141,6 +160,115 @@ Two different runs coexist in one store (they have different IRIs, separate
 named graphs, and can be loaded one after another without collision). It is
 re-loading a graph name the store already holds that triggers replacement.
 
+## The derived `urn:sparqlwatch:current` graph
+
+Beside the run graphs, `load_run()` maintains one more named graph, and all
+three read queries read it instead of deciding for themselves which run is the
+newest. The reason is measured, over the 543-endpoint registry sweep replayed
+under 1, 7 and 30 run IRIs:
+
+| history | `endpoint_measurements.rq` | `endpoint_content.rq` | `endpoint_description.rq` |
+| --- | --- | --- | --- |
+| 1 run | 10.0 ms | 1.2 ms | 3.3 ms |
+| 7 runs | 309.7 ms | 115.6 ms | 200.0 ms |
+| 30 runs | 5,801.8 ms | 6,488.5 ms | 11,704.3 ms |
+
+One month of daily sweeps made the endpoint page a 5.8 second load and its RDF
+representation an 11.7 second one. The query shape was not the mistake:
+per-endpoint recency has to be written as `FILTER NOT EXISTS`, because a value
+substituted for `?endpoint` does not reach inside a subquery's own projection.
+Deciding recency **at query time** was the mistake, and it is now decided once
+per load.
+
+### What it holds
+
+For each endpoint, in graph `urn:sparqlwatch:current`:
+
+- `<endpoint> sw:currentRun <run>`, the newest run that recorded a measurement,
+  a decline or a `sw:declarationsRead` for it
+- `<endpoint> sw:currentSampleRun <run>`, the newest run that published a
+  `sw:metric:classes` sample of it
+- that endpoint's `sw:declarationsRead` quad, and every quad of every
+  `dqv:QualityMeasurement` and every `sw:NotMeasured` about it, copied verbatim
+  out of the run `sw:currentRun` names
+
+and nothing else. In particular **no `rdf:type prov:Activity` and no
+`prov:generatedAtTime`, ever**: all three read queries select their run as
+`GRAPH ?run { ?a a prov:Activity ; prov:generatedAtTime ?t }` with no
+restriction on which graph, so a `current` graph carrying a typed activity would
+be a run to every one of them, and the newest by construction, and both readers
+would raise "runs tied as most recent" on every page. No run-level fact either:
+`sw:emission`, `sw:finalised` and `sw:completedEndpoint` belong to a run, and
+the readers reach them in one hop through the pointer, so nothing in `current`
+states anything a run graph does not.
+
+**Two pointers, not one.** The newest run that measured an endpoint and the
+newest run that sampled it are different runs the moment a cheap sweep declines
+`sw:metric:classes`, and that is the steady state: the registry sweep declined
+`classes` for all 543 endpoints. One pointer loses the class sample outright.
+
+### How it is updated, and what it cannot follow
+
+For every endpoint the incoming run mentions, `load_run()` replaces what
+`current` holds for that endpoint in **one `store.update()`**, so an endpoint is
+never half-updated. It refuses to advance only when the run `current` already
+points at is **strictly newer**, so re-loading the same run IRI does refresh
+(which is the documented recovery) while an out-of-order older run is still
+refused. A **tie** between two different runs at the same instant is refused
+rather than resolved by load order, naming both runs, because both readers
+refuse such a store and deciding it silently would be a behaviour change.
+
+Three things the rule cannot fix:
+
+- a run graph that **shrinks**, which is the full sweep followed by the
+  truncated file a crashed prober leaves under the same run IRI
+- a run graph **dropped** wholesale, which is the whole reason the design keeps
+  one graph per run
+- the **finished/unfinished flip**, which needs nothing: the run-level facts are
+  read through the pointer, so a footer arriving changes what the page says
+  without a quad of `current` moving
+
+The first two are detected, not left to a reader: an endpoint whose pointer
+names a run whose graph no longer mentions it comes back in
+`LoadResult.drifted`, and the fix is a rebuild.
+
+### Check and rebuild
+
+```bash
+web/.venv/bin/python web/load_run.py --check   path/to/sparqlwatch.db
+web/.venv/bin/python web/load_run.py --rebuild path/to/sparqlwatch.db
+```
+
+`--check` recomputes, from the run graphs alone, which run each endpoint's facts
+should come from and what those facts are, and names every endpoint that
+disagrees with `current`. It exits non-zero when anything drifted. It is
+deliberately a second derivation rather than a call into the writing path,
+because a check that used the writer's own answer could only ever agree with it,
+and it is deliberately the expensive shape: it does the per-endpoint recency scan
+the read queries no longer do, paid by an operator running a check rather than by
+a page load.
+
+`--rebuild` derives `current` from the run graphs alone. **The algorithm:** walk
+the run graphs once, oldest first, to learn the newest run that measured each
+endpoint and the newest that sampled each one, drop `current`, then write each
+endpoint with the same per-endpoint update the load path uses. That is
+`O(run graphs)` queries plus one update per endpoint, not one per endpoint per
+run, and it shares its writing code with the load path so the two cannot derive
+different graphs. Deriving the whole graph in one SPARQL update instead measures
+**43.5 s** over the 30-run store, because every endpoint's recency is then
+decided by scanning the whole history, which is the 5.8 second page again, once
+per endpoint. That is why rebuild is a repair tool and the incremental
+per-endpoint update at load time is the maintenance mechanism.
+
+### The migration
+
+A store built before this graph existed holds run graphs and no `current`
+graph, and every endpoint would then answer as though no sweep had ever
+measured it. `app.py`'s `_opened_store` refuses to serve such a store and names
+the `--rebuild` invocation, for the same reason it refuses a missing or empty
+one: answering "nothing measured" out of a store that does hold the
+measurements is the failure to prevent.
+
 ## Query the store
 
 The first read query is `endpoint_content()`, which answers "what is in this
@@ -160,8 +288,10 @@ print(f"Classes: {r.classes}")
 ```
 
 The query uses the **most recent run that sampled the requested endpoint**,
-decided by comparing `prov:generatedAtTime` values (typed `xsd:dateTime`), not
-by string-ordering the run IRI. This matters because today's run IRIs embed
+read from that endpoint's `sw:currentSampleRun` pointer in the derived
+`urn:sparqlwatch:current` graph (above). The loader decides which run that is by
+comparing `prov:generatedAtTime` values (typed `xsd:dateTime`), not by
+string-ordering the run IRI. This matters because today's run IRIs embed
 ISO-8601 timestamps, so naive string ordering would agree; but the day that
 shape changes, string ordering would start returning a stale run silently.
 
@@ -306,10 +436,11 @@ that is not tied to one metric belongs to spec stage 2b, where properties sampli
 ### Which sweep saw what
 
 The two questions this resource answers are answered by two independent run selections:
-`endpoint_measurements.rq` picks the newest run that measured or declined anything for the
-endpoint, and `endpoint_content.rq` picks the newest run that published a class sample for
-it. Those are different runs whenever the newest sweep declined `sw:metric:classes`, which
-the prober does at its default cost ceiling, so it is the ordinary case rather than an odd
+`endpoint_measurements.rq` reads the endpoint's `sw:currentRun`, the newest run that measured
+or declined anything for it, and `endpoint_content.rq` reads its `sw:currentSampleRun`, the
+newest run that published a class sample for it. Those are different runs whenever the newest
+sweep declined `sw:metric:classes`, which the prober does at its default cost ceiling, so it
+is the ordinary case rather than an odd one, and it is why there are two pointers rather than
 one.
 
 Both facts are kept, and each is attributed to the sweep that observed it. When the two runs

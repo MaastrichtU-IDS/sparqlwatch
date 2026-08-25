@@ -114,8 +114,9 @@ Fixture provenance:
 
 from pathlib import Path
 
-from pyoxigraph import Store
+from pyoxigraph import NamedNode, Store
 
+from conftest import run_graph_names, run_graph_query, run_quad_count
 from load_run import load_run
 
 FIXTURE = Path(__file__).parent / "fixtures" / "run-with-samples.nq"
@@ -142,11 +143,15 @@ def test_the_fixture_loads_and_reopens(tmp_path):
     different process."""
     store = Store(str(tmp_path / "s"))
     load_run(store, FIXTURE.read_bytes())
-    loaded = len(store)
+    loaded = run_quad_count(store)
     assert loaded == 278, f"the fixture is 278 quads, got {loaded}"
-    assert len(list(store.named_graphs())) == 1, "one run, one named graph"
+    assert len(run_graph_names(store)) == 1, "one run, one named graph"
     del store
-    assert len(Store(str(tmp_path / "s"))) == loaded, "reopening must see the same quads"
+    reopened = Store(str(tmp_path / "s"))
+    assert run_quad_count(reopened) == loaded, "reopening must see the same quads"
+    assert reopened.contains_named_graph(NamedNode("urn:sparqlwatch:current")), (
+        "and the derived graph the read queries read must persist too"
+    )
 
 
 def test_the_truncated_fixture_is_the_shape_it_claims(tmp_path):
@@ -156,8 +161,8 @@ def test_the_truncated_fixture_is_the_shape_it_claims(tmp_path):
     built on it, and quietly stop testing what it claims to test."""
     store = Store(str(tmp_path / "s"))
     load_run(store, TRUNCATED_FIXTURE.read_bytes())
-    assert len(store) == 12, f"the truncated fixture is 12 quads, got {len(store)}"
-    assert len(list(store.named_graphs())) == 1
+    assert run_quad_count(store) == 12, f"the truncated fixture is 12 quads, got {run_quad_count(store)}"
+    assert len(run_graph_names(store)) == 1
 
 
 def test_the_two_sweeps_fixture_is_the_shape_it_claims(tmp_path):
@@ -166,8 +171,8 @@ def test_the_two_sweeps_fixture_is_the_shape_it_claims(tmp_path):
     two runs of the same endpoint coexist with different values."""
     store = Store(str(tmp_path / "s"))
     load_run(store, TWO_SWEEPS_FIXTURE.read_bytes())
-    assert len(store) == 556, f"the two-sweeps fixture is 556 quads, got {len(store)}"
-    assert len(list(store.named_graphs())) == 2, "two sweeps, two named graphs"
+    assert run_quad_count(store) == 556, f"the two-sweeps fixture is 556 quads, got {run_quad_count(store)}"
+    assert len(run_graph_names(store)) == 2, "two sweeps, two named graphs"
 
 
 def test_the_zero_classes_fixture_is_the_shape_it_claims(tmp_path):
@@ -177,9 +182,9 @@ def test_the_zero_classes_fixture_is_the_shape_it_claims(tmp_path):
     testing the OPTIONAL it exists for."""
     store = Store(str(tmp_path / "s"))
     load_run(store, ZERO_CLASSES_FIXTURE.read_bytes())
-    assert len(store) == 9, f"the zero-classes fixture is 9 quads, got {len(store)}"
-    assert len(list(store.named_graphs())) == 1
-    assert not bool(store.query(
+    assert run_quad_count(store) == 9, f"the zero-classes fixture is 9 quads, got {run_quad_count(store)}"
+    assert len(run_graph_names(store)) == 1
+    assert not bool(run_graph_query(store, 
         "ASK { GRAPH ?g { ?s <urn:sparqlwatch:sampledValue> ?v } }"
     )), "the sample must list no values at all"
 
@@ -191,12 +196,12 @@ def test_the_properties_fixture_samples_no_classes(tmp_path):
     metric pin from its absence."""
     store = Store(str(tmp_path / "s"))
     load_run(store, PROPERTIES_FIXTURE.read_bytes())
-    assert len(store) == 11, f"the properties fixture is 11 quads, got {len(store)}"
-    assert bool(store.query(
+    assert run_quad_count(store) == 11, f"the properties fixture is 11 quads, got {run_quad_count(store)}"
+    assert bool(run_graph_query(store, 
         "ASK { GRAPH ?g { ?s <urn:sparqlwatch:sampledBy> "
         "<urn:sparqlwatch:metric:properties> } }"
     )), "the sample must be sampledBy metric:properties"
-    assert not bool(store.query(
+    assert not bool(run_graph_query(store, 
         "ASK { GRAPH ?g { ?s <urn:sparqlwatch:sampledBy> "
         "<urn:sparqlwatch:metric:classes> } }"
     )), "nothing here may be sampledBy metric:classes"
@@ -209,14 +214,14 @@ def test_the_classes_absent_fixture_measures_absent_and_samples_nothing(tmp_path
     that verdict. A fixture that gained one would stop testing the case."""
     store = Store(str(tmp_path / "s"))
     load_run(store, CLASSES_ABSENT_FIXTURE.read_bytes())
-    assert len(store) == 16, f"this fixture is 16 quads, got {len(store)}"
-    assert len(list(store.named_graphs())) == 1
-    assert bool(store.query(
+    assert run_quad_count(store) == 16, f"this fixture is 16 quads, got {run_quad_count(store)}"
+    assert len(run_graph_names(store)) == 1
+    assert bool(run_graph_query(store, 
         "ASK { GRAPH ?g { ?m <http://www.w3.org/ns/dqv#isMeasurementOf> "
         "<urn:sparqlwatch:metric:classes> ; "
         "<http://www.w3.org/ns/dqv#value> 'absent' } }"
     )), "the classes metric must read absent"
-    assert not bool(store.query(
+    assert not bool(run_graph_query(store, 
         "ASK { GRAPH ?g { ?s <urn:sparqlwatch:sampledFrom> ?e } }"
     )), "there must be no content sample at all"
 
@@ -274,7 +279,7 @@ def _derived_subjects(store, run: str) -> dict[str, str]:
     it should be, derived from that subject's own two facts."""
     expected = {}
     for kind, on, of in _DERIVED_FROM:
-        rows = store.query(
+        rows = run_graph_query(store, 
             "SELECT ?s ?e ?m WHERE { GRAPH ?g { "
             f"?s <{on}> ?e ; <{of}> ?m" + " } }"
         )
@@ -301,9 +306,9 @@ def test_the_new_subjects_fixture_is_the_shape_it_claims(tmp_path):
     """
     store = Store(str(tmp_path / "s"))
     load_run(store, NEW_SUBJECTS_FIXTURE.read_bytes())
-    assert len(store) == 278, f"the new-subjects fixture is 278 quads, got {len(store)}"
-    assert len(list(store.named_graphs())) == 1, "one run, one named graph"
-    assert bool(store.query(
+    assert run_quad_count(store) == 278, f"the new-subjects fixture is 278 quads, got {run_quad_count(store)}"
+    assert len(run_graph_names(store)) == 1, "one run, one named graph"
+    assert bool(run_graph_query(store, 
         "ASK { GRAPH ?g { ?s <urn:sparqlwatch:sampledValue> "
         "<urn:sparqlwatch:test:new-scheme-only-class> } }"
     )), "the hand-swapped class must be present"
@@ -344,8 +349,8 @@ def test_the_prober_failed_fixture_is_the_shape_it_claims(tmp_path):
     """
     store = Store(str(tmp_path / "s"))
     load_run(store, PROBER_FAILED_FIXTURE.read_bytes())
-    assert len(store) == 51, f"this fixture is 51 quads, got {len(store)}"
-    assert len(list(store.named_graphs())) == 1, "one run, one named graph"
+    assert run_quad_count(store) == 51, f"this fixture is 51 quads, got {run_quad_count(store)}"
+    assert len(run_graph_names(store)) == 1, "one run, one named graph"
 
     # A complete run: the header's terminator, one chunk terminator naming the
     # one endpoint, and the footer's. A fixture missing any of the three would
@@ -360,8 +365,8 @@ def test_the_prober_failed_fixture_is_the_shape_it_claims(tmp_path):
         ('?a <urn:sparqlwatch:finalised> true',
          "the footer says the run finished"),
     ):
-        assert bool(store.query(f"ASK {{ GRAPH ?g {{ {ask} }} }}")), why
-    markers = list(store.query(
+        assert bool(run_graph_query(store, f"ASK {{ GRAPH ?g {{ {ask} }} }}")), why
+    markers = list(run_graph_query(store, 
         "SELECT ?e WHERE { GRAPH ?g { ?a "
         "<urn:sparqlwatch:completedEndpoint> ?e } }"
     ))
@@ -371,7 +376,7 @@ def test_the_prober_failed_fixture_is_the_shape_it_claims(tmp_path):
 
     reasons = [
         row["r"].value
-        for row in store.query(
+        for row in run_graph_query(store, 
             "SELECT ?r WHERE { GRAPH ?g { ?s "
             "<urn:sparqlwatch:notMeasuredReason> ?r } }"
         )
@@ -383,11 +388,11 @@ def test_the_prober_failed_fixture_is_the_shape_it_claims(tmp_path):
         "<http://www.w3.org/ns/dqv#value>",
         "<urn:sparqlwatch:sampledFrom>",
     ):
-        assert not bool(store.query(
+        assert not bool(run_graph_query(store, 
             f"ASK {{ GRAPH ?g {{ ?s {predicate} ?o }} }}"
         )), f"a failed endpoint has no {predicate}"
 
-    assert bool(store.query(
+    assert bool(run_graph_query(store, 
         "ASK { GRAPH ?g { ?a <urn:sparqlwatch:failedEndpoints> "
         '1 } }'
     )), "the run must say how many endpoints it failed on"
@@ -402,7 +407,7 @@ def test_the_prober_failed_fixture_is_the_shape_it_claims(tmp_path):
     )
     subjects = {
         row["s"].value
-        for row in store.query(
+        for row in run_graph_query(store, 
             "SELECT DISTINCT ?s WHERE { GRAPH ?g { ?s "
             "<urn:sparqlwatch:notMeasuredOn> ?e } }"
         )
@@ -419,8 +424,8 @@ def test_the_later_sample_fixture_samples_without_measuring(tmp_path):
     produces the two-run skew it exists for."""
     store = Store(str(tmp_path / "s"))
     load_run(store, LATER_SAMPLE_FIXTURE.read_bytes())
-    assert len(store) == 12, f"this fixture is 12 quads, got {len(store)}"
-    assert bool(store.query(
+    assert run_quad_count(store) == 12, f"this fixture is 12 quads, got {run_quad_count(store)}"
+    assert bool(run_graph_query(store, 
         "ASK { GRAPH ?g { ?s <urn:sparqlwatch:sampledFrom> "
         "<https://data.kkg.kadaster.nl/query> ; "
         "<urn:sparqlwatch:sampledBy> <urn:sparqlwatch:metric:classes> } }"
@@ -429,7 +434,7 @@ def test_the_later_sample_fixture_samples_without_measuring(tmp_path):
         "<http://www.w3.org/ns/dqv#computedOn>",
         "<urn:sparqlwatch:notMeasuredOn>",
     ):
-        assert not bool(store.query(
+        assert not bool(run_graph_query(store, 
             f"ASK {{ GRAPH ?g {{ ?s {predicate} ?e }} }}"
         )), f"this run must record no {predicate}"
 
@@ -452,8 +457,8 @@ def test_the_crashed_partway_fixture_stops_before_its_footer(tmp_path):
     """
     store = Store(str(tmp_path / "s"))
     load_run(store, CRASHED_PARTWAY_FIXTURE.read_bytes())
-    assert len(store) == 67, f"this fixture is 67 quads, got {len(store)}"
-    assert len(list(store.named_graphs())) == 1, "one run, one named graph"
+    assert run_quad_count(store) == 67, f"this fixture is 67 quads, got {run_quad_count(store)}"
+    assert len(run_graph_names(store)) == 1, "one run, one named graph"
 
     for ask, why in (
         ('?a <urn:sparqlwatch:emission> "incremental"',
@@ -462,17 +467,17 @@ def test_the_crashed_partway_fixture_stops_before_its_footer(tmp_path):
          "<https://data.kkg.kadaster.nl/query>",
          "the one chunk says the run finished that endpoint"),
     ):
-        assert bool(store.query(f"ASK {{ GRAPH ?g {{ {ask} }} }}")), why
+        assert bool(run_graph_query(store, f"ASK {{ GRAPH ?g {{ {ask} }} }}")), why
 
     for predicate in (
         "<urn:sparqlwatch:finalised>",
         "<urn:sparqlwatch:failedEndpoints>",
     ):
-        assert not bool(store.query(
+        assert not bool(run_graph_query(store, 
             f"ASK {{ GRAPH ?g {{ ?a {predicate} ?o }} }}"
         )), f"no footer was written, so there is no {predicate}"
 
-    markers = list(store.query(
+    markers = list(run_graph_query(store, 
         "SELECT ?e WHERE { GRAPH ?g { ?a "
         "<urn:sparqlwatch:completedEndpoint> ?e } }"
     ))

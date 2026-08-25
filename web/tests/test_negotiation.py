@@ -719,6 +719,56 @@ def test_a_directory_of_run_files_is_not_mistaken_for_a_store(tmp_path, monkeypa
     assert STORE_PATH_VARIABLE in str(raised.value)
 
 
+def test_an_empty_database_is_still_refused(tmp_path, monkeypatch):
+    """The empty-store refusal, kept as its own test.
+
+    A store directory that exists and opens as zero quads is either a store
+    nothing has been loaded into yet or a path that is not the store at all,
+    and answering "no measurement, no decline and no class sample in this store
+    mentions ..." out of it reports the operator's mistake as a fact about the
+    endpoints. The refusal has a paragraph of reasoning in _opened_store and
+    the first draft of stage 3-2's plan dropped it while adding the current
+    graph check beside it, so it gets a test of its own that names the
+    condition.
+    """
+    path = tmp_path / "empty.db"
+    Store(str(path))
+    gc.collect()
+    monkeypatch.setenv(STORE_PATH_VARIABLE, str(path))
+    with pytest.raises(RuntimeError, match="holding no quads"):
+        get_store()
+
+
+def test_a_store_with_run_graphs_and_no_current_is_refused_at_open(
+    tmp_path, monkeypatch
+):
+    """The migration guard, and the same reasoning as the two refusals above.
+
+    Every store built before stage 3-2 holds run graphs and no
+    urn:sparqlwatch:current graph, and that includes the only real store this
+    project has. The three read queries read current, so such a store answers
+    "we know nothing about this endpoint" for every endpoint it fully
+    describes. That is the failure _opened_store already exists to prevent,
+    reached by a third route, so it is refused the same way and the message
+    names the command that fixes it.
+    """
+    path = tmp_path / "pre-current.db"
+    built = Store(str(path))
+    load_run(built, FIXTURE.read_bytes())
+    built.remove_graph(NamedNode("urn:sparqlwatch:current"))
+    assert len(built) > 0, "the run graph is still there"
+    del built
+    gc.collect()
+
+    monkeypatch.setenv(STORE_PATH_VARIABLE, str(path))
+    with pytest.raises(RuntimeError) as raised:
+        get_store()
+    message = str(raised.value)
+    assert "urn:sparqlwatch:current" in message, "name the graph that is missing"
+    assert "--rebuild" in message, "and name the command that builds it"
+    assert str(path) in message
+
+
 def test_a_store_path_holding_a_store_is_opened(tmp_path, monkeypatch):
     """The other half of the check: a real store still opens.
 

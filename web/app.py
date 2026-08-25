@@ -52,6 +52,7 @@ from pyoxigraph import NamedNode, RdfFormat, Store, Variable, serialize
 import verdict_encoding
 from endpoint_content import EndpointContent, endpoint_content
 from endpoint_measurements import EndpointMeasurements, endpoint_measurements
+from load_run import CURRENT_GRAPH
 from queries import read_query
 
 # ---------------------------------------------------------------------------
@@ -281,6 +282,16 @@ def _opened_store(path: str) -> Store:
             f"rather than its first). Every endpoint would answer 404 as "
             f"though no sweep had ever run. Build the store first with "
             f"web/load_run.py."
+        )
+    if not store.contains_named_graph(CURRENT_GRAPH):
+        raise RuntimeError(
+            f"{STORE_PATH_VARIABLE} is {path!r}, which holds run graphs and "
+            f"no {CURRENT_GRAPH.value} graph. All three read paths read that "
+            f"graph, so every endpoint would answer as though no sweep had "
+            f"ever measured it, which is the same wrong answer out of a store "
+            f"that does hold the measurements. Every store built before the "
+            f"derived graph existed looks like this. Build it with "
+            f"'python web/load_run.py --rebuild {path}'."
         )
     return store
 

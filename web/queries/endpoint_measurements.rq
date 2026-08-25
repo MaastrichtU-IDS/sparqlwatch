@@ -23,23 +23,38 @@
 # verdict) would state a confident value for a metric nobody measured that
 # run.
 #
-# "Most recent run" is decided by the run's activity's prov:generatedAtTime, a
-# typed xsd:dateTime, exactly as in endpoint_content.rq, and for the same
-# reason: today's run IRIs happen to embed an ISO-8601 instant, so string
-# ordering would agree by coincidence, and would silently break the day that
-# shape changes.
+# "Most recent run" IS NOT COMPUTED HERE. It is read from the derived
+# urn:sparqlwatch:current graph, which web/load_run.py maintains as each run is
+# loaded: this endpoint's sw:currentRun names the newest run that recorded a
+# measurement or a decline for it, and current holds that run's measurement,
+# decline and sw:declarationsRead quads verbatim.
 #
-# It is expressed as "no newer run recorded anything (a measurement or a
-# decline) for this endpoint" rather than as an ORDER BY ... LIMIT 1 subquery,
-# and for the identical reason recorded in endpoint_content.rq's header: the
-# value substituted for ?endpoint does not reach inside a subquery's own
-# projection, so the subquery would pick the newest run in the whole store and
-# then fail to join whenever that run did not happen to touch the endpoint
-# being asked about. At 548 endpoints, an endpoint whose probe timed out or
-# whose sweep failed in the latest run hits exactly that case, routinely
-# rather than rarely. FILTER NOT EXISTS is evaluated against the current
-# solution, so ?endpoint stays bound inside it and the comparison stays
-# per-endpoint.
+# Why, measured. Until stage 3-2 this query decided recency itself, with a
+# FILTER NOT EXISTS comparing every run against every other run once per row.
+# Over the 543-endpoint registry replayed under N run IRIs that cost 10.0 ms at
+# one run, 309.7 ms at seven and 5,801.8 ms at thirty, so one month of daily
+# sweeps made this page a 5.8 second load. A flat scan of current over the same
+# 30-run store is 3.1 ms for all 3,801 rows. The query shape was not the
+# mistake: per-endpoint recency HAS to use FILTER NOT EXISTS, because the value
+# substituted for ?endpoint does not reach inside a subquery's own projection,
+# so a subquery would pick the newest run in the whole store and then fail to
+# join whenever that run did not touch the endpoint being asked about. Deciding
+# recency at query time was the mistake, and it is decided once per load
+# instead.
+#
+# What current does NOT hold is any run-level fact. sw:emission, sw:finalised
+# and sw:completedEndpoint are properties of a RUN, so they are reached through
+# the pointer, in the GRAPH ?run block below: one hop, no copies, and nothing
+# in current that a run graph does not state. Copying them onto the endpoint
+# would put triples in current that no run holds and would force the CONSTRUCT
+# in endpoint_description.rq to publish <endpoint> sw:finalised true, which is
+# a wrong fact.
+#
+# current holds NO rdf:type prov:Activity triple, which is what lets the
+# newest-run branch below stay a query over the run graphs: it selects any
+# graph holding a typed activity, so a current graph carrying one would be a
+# run to it, and the newest one by construction, and both readers would raise
+# "runs tied as most recent" on every page.
 #
 # The run chosen is the one that recorded ANYTHING for this endpoint, measured
 # or declined, not the newest run per individual metric: one sweep either
@@ -98,47 +113,96 @@ SELECT ?endpoint ?run ?generatedAt ?metric ?verdict ?level ?elapsedMs ?reason
        ?emission ?finalised
        ?newestRun ?newestGeneratedAt ?newestEmission ?newestFinalised
        ?newestCompleted
+# THE rdf:type PATTERNS BELOW ARE WRITTEN AS A BOUND VARIABLE PLUS A FILTER,
+# AND THAT IS LOAD-BEARING RATHER THAN A STYLE. A triple pattern with an
+# unbound subject and a BOUND object, "?m a dqv:QualityMeasurement", is
+# evaluated as a scan by predicate and object across the whole store even
+# inside GRAPH sw:current, so its cost grows with the history current exists
+# to make irrelevant. Measured over the 543-endpoint registry replayed under
+# N run IRIs, one endpoint's rows out of current:
+#
+#                                     1 run     30 runs
+#   ?m a dqv:QualityMeasurement       3.34 ms   28.15 ms
+#   ?m a ?type . FILTER (?type = ...) 0.06 ms    0.13 ms
+#
+# Reordering does not help: putting dqv:computedOn first measures 3.37 ms and
+# 28.67 ms. Binding ?type and comparing it matches exactly the same solutions,
+# because = on two IRIs is identity, and it turns the pattern into a lookup by
+# the subject the selective pattern has already bound.
 WHERE {
-  GRAPH ?run {
-    ?activity a prov:Activity ;
-              prov:generatedAtTime ?generatedAt .
+  GRAPH sw:current {
     {
-      ?measurement a dqv:QualityMeasurement ;
-                   dqv:computedOn ?endpoint ;
+      # The run this endpoint's facts came from. One quad, written by
+      # web/load_run.py, and the reason this query does no recency work at all.
+      #
+      # IT IS INSIDE EACH UNION ARM, NOT BEFORE THE UNION, and that placement
+      # is load-bearing. A triple pattern standing before a braced group in the
+      # same block loses the substituted ?endpoint for that group, which is
+      # then evaluated unbound and rejoined. Measured over the 543-endpoint
+      # registry replayed under N run IRIs, one endpoint's rows:
+      #
+      #                                     1 run     30 runs
+      #   pointer before the UNION          8.31 ms   123.16 ms
+      #   pointer after the UNION          12.85 ms   134.64 ms
+      #   pointer inside each arm           0.24 ms     0.24 ms
+      #
+      # The third form is the only one that is flat in the history, which is
+      # the whole point of reading current at all. The cost of repeating one
+      # triple pattern is that it is repeated; the cost of hoisting it is the
+      # 5.8 second page coming back.
+      ?endpoint sw:currentRun ?run .
+      ?measurement dqv:computedOn ?endpoint ;
                    dqv:isMeasurementOf ?metric ;
                    dqv:value ?verdict ;
-                   prov:wasGeneratedBy ?activity .
+                   prov:wasGeneratedBy ?activity ;
+                   a ?measurementType .
+      FILTER (?measurementType = dqv:QualityMeasurement)
       OPTIONAL { ?measurement sw:level ?level }
       OPTIONAL { ?measurement sw:elapsedMs ?elapsedMs }
     }
     UNION
     {
-      ?notMeasured a sw:NotMeasured ;
-                   sw:notMeasuredOn ?endpoint ;
+      # The same pointer, in this arm too. See the arm above.
+      ?endpoint sw:currentRun ?run .
+      ?notMeasured sw:notMeasuredOn ?endpoint ;
                    sw:notMeasuredMetric ?metric ;
                    sw:notMeasuredReason ?reason ;
-                   prov:wasGeneratedBy ?activity .
+                   prov:wasGeneratedBy ?activity ;
+                   a ?notMeasuredType .
+      FILTER (?notMeasuredType = sw:NotMeasured)
     }
-    # This run's own account of how it was written and whether it finished.
-    # Both OPTIONAL, because a run from before stage 1c-b4 carries neither and
-    # its verdicts are still the answer to the question that was asked.
-    OPTIONAL { ?activity sw:emission ?emission }
-    OPTIONAL { ?activity sw:finalised ?finalised }
   }
-  FILTER NOT EXISTS {
-    GRAPH ?newerRun {
-      {
-        ?newerThing dqv:computedOn ?endpoint
-      }
-      UNION
-      {
-        ?newerThing sw:notMeasuredOn ?endpoint
-      }
-      ?newerActivity a prov:Activity ;
-                     prov:generatedAtTime ?newerGeneratedAt .
+  # ONE HOP to the run current names, for the facts that belong to the run and
+  # not to the endpoint. It is wrapped in OPTIONAL with a FILTER that requires
+  # what it binds, which reads like a contradiction and is not: the two
+  # together mean exactly what a plain GRAPH block would mean, and only the
+  # plain form is slow. Measured over the 543-endpoint registry replayed under
+  # N run IRIs, one endpoint's rows:
+  #
+  #                                          1 run     30 runs
+  #   GRAPH ?run { ... }                    10.61 ms   151.33 ms
+  #   OPTIONAL { GRAPH ?run { ... } }        0.17 ms     0.45 ms
+  #   the same plus FILTER (BOUND(...))      0.15 ms     0.40 ms
+  #
+  # The plain form grows with the history this graph exists to make irrelevant,
+  # which at a year of daily sweeps is the 5.8 second page returning. Under
+  # OPTIONAL the same join is flat, and FILTER (BOUND(?generatedAt)) restores
+  # the requirement: a solution whose run graph is gone (which is drift, and
+  # web/load_run.py's --check names it) is dropped exactly as before, so an
+  # endpoint whose pointer names a vanished run still reads as not assessed
+  # rather than as assessed with no timestamp.
+  OPTIONAL {
+    GRAPH ?run {
+      ?activity a prov:Activity ;
+                prov:generatedAtTime ?generatedAt .
+      # This run's own account of how it was written and whether it finished.
+      # Both OPTIONAL, because a run from before stage 1c-b4 carries neither and
+      # its verdicts are still the answer to the question that was asked.
+      OPTIONAL { ?activity sw:emission ?emission }
+      OPTIONAL { ?activity sw:finalised ?finalised }
     }
-    FILTER (?newerGeneratedAt > ?generatedAt)
   }
+  FILTER (BOUND(?generatedAt))
 
   # The newest run in the store. See this query's header: this is the one
   # selection here that is not scoped to ?endpoint, and the per-endpoint

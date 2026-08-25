@@ -70,27 +70,46 @@
 # completion markers are facts about other resources and have no place in this
 # one's description.
 #
-# Each branch's "most recent" is the run whose activity has the greatest
-# prov:generatedAtTime, expressed as "no newer run recorded this for this
-# endpoint" rather than as an ORDER BY ... LIMIT 1 subquery. Both the choice
-# of the typed xsd:dateTime over the run IRI's string form and the choice of
-# FILTER NOT EXISTS over a subquery are argued at length in
-# endpoint_content.rq's header; the reasoning is identical here and is not
-# repeated.
+# Each branch's "most recent" IS NOT COMPUTED HERE. The first two branches read
+# this endpoint's sw:currentRun out of the derived urn:sparqlwatch:current
+# graph, the sample branch reads its sw:currentSampleRun, and web/load_run.py
+# writes both as each run is loaded. The two pointers exist because the newest
+# run that measured an endpoint and the newest that sampled it are routinely
+# different runs; endpoint_content.rq's header argues that at length.
+#
+# Why, measured, and this query is the worst of the three. Deciding recency
+# here cost 2.0 ms at one run, 13.4 ms at seven and 78.9 ms at thirty over a
+# store with ZERO content samples, and with one sample per endpoint per run it
+# is 3.3 ms, 200.0 ms and 11,704.3 ms. This is the whole RDF representation of
+# the resource, so at thirty runs it was twice the HTML page this stage exists
+# to fix.
+#
+# The three branches move together with the two SELECTs, in one commit, and the
+# constraint is stronger than tidiness: the HTML representation is built from
+# those two queries, so a resource whose two representations computed recency
+# differently would have two notions of "newest" and could disagree about which
+# run a fact came from. Reading the same pointers is what makes them agree by
+# construction rather than by review.
+#
+# Nothing this query emits comes out of current that a run graph does not also
+# state. current holds copies of the measurement and decline quads, verbatim,
+# and the run-level facts are read from the run graph the pointer names, so
+# this document's own rule still holds: every triple in the template appears
+# verbatim in some run graph in the store.
 
 PREFIX dqv: <http://www.w3.org/ns/dqv#>
 PREFIX prov: <http://www.w3.org/ns/prov#>
 PREFIX sw: <urn:sparqlwatch:>
 
 CONSTRUCT {
-  ?measurement a dqv:QualityMeasurement ;
+  ?measurement a ?measurementType ;
                dqv:computedOn ?endpoint ;
                dqv:isMeasurementOf ?metric ;
                dqv:value ?verdict ;
                prov:wasGeneratedBy ?activity ;
                sw:level ?level ;
                sw:elapsedMs ?elapsedMs .
-  ?notMeasured a sw:NotMeasured ;
+  ?notMeasured a ?notMeasuredType ;
                sw:notMeasuredOn ?endpoint ;
                sw:notMeasuredMetric ?declinedMetric ;
                sw:notMeasuredReason ?reason ;
@@ -125,7 +144,7 @@ CONSTRUCT {
   # here to be allowed to emit it would make the two disagree about any
   # untyped sample.
   ?sample sw:sampledFrom ?endpoint ;
-          sw:sampledBy sw:metric:classes ;
+          sw:sampledBy ?sampledBy ;
           sw:sampleSize ?size ;
           sw:sampleTruncated ?truncated ;
           sw:sampledValue ?class ;
@@ -142,102 +161,113 @@ CONSTRUCT {
 }
 WHERE {
   {
-    GRAPH ?run {
-      ?measurement a dqv:QualityMeasurement ;
-                   dqv:computedOn ?endpoint ;
+    GRAPH sw:current {
+      ?endpoint sw:currentRun ?run .
+      # rdf:type as a bound variable plus a FILTER, and the CONSTRUCT emits
+      # ?measurementType rather than the IRI, so the triple published is the
+      # one that matched. The reason for the shape is measured in
+      # endpoint_measurements.rq's header: the bound-object form is scanned
+      # across the whole store and costs 28 ms at 30 runs against 0.13 ms.
+      ?measurement dqv:computedOn ?endpoint ;
                    dqv:isMeasurementOf ?metric ;
                    dqv:value ?verdict ;
-                   prov:wasGeneratedBy ?activity .
-      ?activity a prov:Activity ;
-                prov:generatedAtTime ?generatedAt .
+                   prov:wasGeneratedBy ?activity ;
+                   a ?measurementType .
+      FILTER (?measurementType = dqv:QualityMeasurement)
       # OPTIONAL because only sw:metric:service-description carries a
       # conformance level today, and an unbound variable in a CONSTRUCT
       # template simply drops its triple rather than failing the solution.
       OPTIONAL { ?measurement sw:level ?level }
       OPTIONAL { ?measurement sw:elapsedMs ?elapsedMs }
-      # OPTIONAL because a run captured before stage 1c-b4 carries none of the
-      # three, and its measurements are still this endpoint's answer.
-      OPTIONAL { ?activity sw:emission ?emission }
-      OPTIONAL { ?activity sw:finalised ?finalised }
-      OPTIONAL {
-        ?activity sw:completedEndpoint ?endpoint .
-        BIND (?endpoint AS ?completedEndpoint)
+    }
+    # One hop to the run current names, for the facts that belong to the run
+    # rather than to the endpoint. OPTIONAL with a FILTER that requires what it
+    # binds, for the measured reason endpoint_measurements.rq's hop states: the
+    # plain GRAPH form costs 151 ms at 30 runs against 0.40 ms, and the two
+    # together mean the same thing.
+    OPTIONAL {
+      GRAPH ?run {
+        ?activity a prov:Activity ;
+                  prov:generatedAtTime ?generatedAt .
+        # OPTIONAL because a run captured before stage 1c-b4 carries none of the
+        # three, and its measurements are still this endpoint's answer.
+        OPTIONAL { ?activity sw:emission ?emission }
+        OPTIONAL { ?activity sw:finalised ?finalised }
+        OPTIONAL {
+          ?activity sw:completedEndpoint ?endpoint .
+          BIND (?endpoint AS ?completedEndpoint)
+        }
       }
     }
-    FILTER NOT EXISTS {
-      GRAPH ?newerRun {
-        { ?newerThing dqv:computedOn ?endpoint }
-        UNION
-        { ?newerThing sw:notMeasuredOn ?endpoint }
-        ?newerActivity a prov:Activity ;
-                       prov:generatedAtTime ?newerGeneratedAt .
-      }
-      FILTER (?newerGeneratedAt > ?generatedAt)
-    }
+    FILTER (BOUND(?generatedAt))
   }
   UNION
   {
-    GRAPH ?declineRun {
-      ?notMeasured a sw:NotMeasured ;
-                   sw:notMeasuredOn ?endpoint ;
+    GRAPH sw:current {
+      ?endpoint sw:currentRun ?declineRun .
+      ?notMeasured sw:notMeasuredOn ?endpoint ;
                    sw:notMeasuredMetric ?declinedMetric ;
                    sw:notMeasuredReason ?reason ;
-                   prov:wasGeneratedBy ?declineActivity .
-      ?declineActivity a prov:Activity ;
-                       prov:generatedAtTime ?generatedAt .
-      # The same three facts as the measurement branch, on this branch's own
-      # activity: a run that declined every metric it applied to an endpoint
-      # can equally have stopped before finishing.
-      OPTIONAL { ?declineActivity sw:emission ?emission }
-      OPTIONAL { ?declineActivity sw:finalised ?finalised }
-      OPTIONAL {
-        ?declineActivity sw:completedEndpoint ?endpoint .
-        BIND (?endpoint AS ?completedEndpoint)
+                   prov:wasGeneratedBy ?declineActivity ;
+                   a ?notMeasuredType .
+      FILTER (?notMeasuredType = sw:NotMeasured)
+    }
+    # The same pointer as the measurement branch, because one sweep either
+    # measures or declines every metric it applies to an endpoint in the same
+    # pass, so the two always share a run. Same OPTIONAL-plus-FILTER shape and
+    # the same measured reason.
+    OPTIONAL {
+      GRAPH ?declineRun {
+        ?declineActivity a prov:Activity ;
+                         prov:generatedAtTime ?generatedAt .
+        # The same three facts as the measurement branch, on this branch's own
+        # activity: a run that declined every metric it applied to an endpoint
+        # can equally have stopped before finishing.
+        OPTIONAL { ?declineActivity sw:emission ?emission }
+        OPTIONAL { ?declineActivity sw:finalised ?finalised }
+        OPTIONAL {
+          ?declineActivity sw:completedEndpoint ?endpoint .
+          BIND (?endpoint AS ?completedEndpoint)
+        }
       }
     }
-    FILTER NOT EXISTS {
-      GRAPH ?newerRun {
-        { ?newerThing dqv:computedOn ?endpoint }
-        UNION
-        { ?newerThing sw:notMeasuredOn ?endpoint }
-        ?newerActivity a prov:Activity ;
-                       prov:generatedAtTime ?newerGeneratedAt .
-      }
-      FILTER (?newerGeneratedAt > ?generatedAt)
-    }
+    FILTER (BOUND(?generatedAt))
   }
   UNION
   {
-    GRAPH ?sampleRun {
-      ?sample sw:sampledFrom ?endpoint ;
-              sw:sampledBy sw:metric:classes ;
-              sw:sampleSize ?size ;
-              sw:sampleTruncated ?truncated .
-      ?sampleActivity a prov:Activity ;
-                      prov:generatedAtTime ?sampleGeneratedAt .
-      # OPTIONAL for the same reason as in endpoint_content.rq: a sample
-      # that genuinely found no classes must still report its size and its
-      # truncation flag instead of vanishing.
-      OPTIONAL { ?sample sw:sampledValue ?class }
-      # OPTIONAL, and bound separately from ?sampleActivity, because a
-      # sample is not obliged to carry this link: every content-sample the
-      # real prober writes does, and the synthetic
-      # web/tests/fixtures/run-truncated.nq does not. Asserting
-      # ?sample prov:wasGeneratedBy ?sampleActivity from the run's activity
-      # alone would emit a triple no run graph holds, which is the one thing
-      # this CONSTRUCT is built not to do; requiring the link instead would
-      # drop a sample the HTML representation still shows.
-      OPTIONAL { ?sample prov:wasGeneratedBy ?sampleProvenance }
-    }
-    FILTER NOT EXISTS {
-      GRAPH ?newerSampleRun {
-        ?newerSample sw:sampledFrom ?endpoint ;
-                     sw:sampledBy sw:metric:classes .
-        ?newerSampleActivity a prov:Activity ;
-                             prov:generatedAtTime ?newerSampleGeneratedAt .
+    # The sample's OWN run, read from the second pointer. See
+    # endpoint_content.rq's header on why one pointer cannot serve both.
+    GRAPH sw:current { ?endpoint sw:currentSampleRun ?sampleRun }
+    # OPTIONAL plus a FILTER that requires what it binds, the same shape and the
+    # same measured reason as the two branches above and as endpoint_content.rq,
+    # which this branch has to match exactly.
+    OPTIONAL {
+      GRAPH ?sampleRun {
+        # Same shape and same reason as the two type patterns above, and the same
+        # as endpoint_content.rq, which this branch has to match exactly.
+        ?sample sw:sampledFrom ?endpoint ;
+                sw:sampleSize ?size ;
+                sw:sampleTruncated ?truncated ;
+                sw:sampledBy ?sampledBy .
+        FILTER (?sampledBy = sw:metric:classes)
+        ?sampleActivity a prov:Activity ;
+                        prov:generatedAtTime ?sampleGeneratedAt .
+        # OPTIONAL for the same reason as in endpoint_content.rq: a sample
+        # that genuinely found no classes must still report its size and its
+        # truncation flag instead of vanishing.
+        OPTIONAL { ?sample sw:sampledValue ?class }
+        # OPTIONAL, and bound separately from ?sampleActivity, because a
+        # sample is not obliged to carry this link: every content-sample the
+        # real prober writes does, and the synthetic
+        # web/tests/fixtures/run-truncated.nq does not. Asserting
+        # ?sample prov:wasGeneratedBy ?sampleActivity from the run's activity
+        # alone would emit a triple no run graph holds, which is the one thing
+        # this CONSTRUCT is built not to do; requiring the link instead would
+        # drop a sample the HTML representation still shows.
+        OPTIONAL { ?sample prov:wasGeneratedBy ?sampleProvenance }
       }
-      FILTER (?newerSampleGeneratedAt > ?sampleGeneratedAt)
     }
+    FILTER (BOUND(?sample) && BOUND(?sampleGeneratedAt))
   }
   UNION
   {
