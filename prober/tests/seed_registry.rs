@@ -51,6 +51,46 @@ fn tempdir(named: &str) -> PathBuf {
     dir
 }
 
+/// Both destinations are renamed only after BOTH writes succeed, so a failure
+/// on the second write leaves neither in place.
+///
+/// The window this closes is not hypothetical: `std::fs::write` truncates, so
+/// two independent writes had a state in which the registry described the new
+/// dump and the provenance beside it still described the old one, which is
+/// exactly what the digest gate exists to prevent.
+///
+/// Provoked by planting a DIRECTORY where the provenance's `.tmp` file has to
+/// go. A directory cannot be overwritten by a file write, so the second staged
+/// write fails while the first has already succeeded, which is the only shape
+/// that distinguishes renaming-after-both from renaming-as-you-go. Moving the
+/// rename inside the write loop leaves the registry file behind and this test
+/// is what notices.
+#[test]
+fn a_second_write_that_fails_leaves_neither_destination_written() {
+    let dir = tempdir("staged");
+    let out = dir.join("registry/lod-cloud.toml");
+    let prov = dir.join("registry/lod-cloud.provenance.toml");
+    std::fs::create_dir_all(prov.parent().unwrap()).unwrap();
+    // The seeder stages `<path>.tmp` beside each destination.
+    std::fs::create_dir_all(format!("{}.tmp", prov.display())).unwrap();
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_seed-registry"))
+        .args(["--dump", fixture().to_str().unwrap(), "--sha256", SAMPLE_SHA256,
+               "--source", "https://lod-cloud.net/versions/2026-06-15/lod-data.json",
+               "--dump-version", "2026-06-15", "--downloaded", "2026-08-19",
+               "--out", out.to_str().unwrap(), "--provenance", prov.to_str().unwrap()])
+        .output()
+        .expect("the seeder binary must run");
+
+    assert!(!output.status.success(), "a failed staged write must not report success");
+    assert!(
+        !out.exists(),
+        "the registry was renamed into place while the provenance could not be written, so \
+         the two files would describe different dumps"
+    );
+    assert!(!prov.exists(), "and the provenance itself must not appear");
+}
+
 /// Run the seeder over the fixture, claiming `sha256`, writing into `dir`.
 ///
 /// The output paths are nested one level deeper than `dir` so that the

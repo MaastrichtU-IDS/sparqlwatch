@@ -245,6 +245,15 @@ describing the previous dump, which is the state the digest gate exists to
 prevent. A crash between the two renames can still leave one new file beside one
 old one; that window is two renames wide rather than two file writes wide.
 
+A write that fails partway **leaves its `.tmp` files behind**, because the tool
+would rather leave a staged file for an operator to see than delete evidence of
+what it was doing when it failed. They are safe to remove, and the next
+successful re-seed renames over them. `a_second_write_that_fails_leaves_neither_destination_written`
+in `tests/seed_registry.rs` is what holds the rename after both writes: it plants
+a directory where the provenance's `.tmp` has to go, which is the only shape that
+distinguishes renaming-after-both from renaming-as-you-go, and moving the rename
+into the write loop reds it.
+
 **That SHA-256 is hand-written, and it is for provenance only.** No digest crate
 is in this project's lock file and a checksum for provenance did not warrant
 adding one, so `sha256_hex` in `src/bin/seed-registry.rs` is FIPS 180-4 written
