@@ -17,6 +17,7 @@
 //! provenance and it gates nothing.
 //!
 //! It does not regenerate `registry/exclusions.toml`, and it never writes it.
+//! It reads the path `--exclusions` names, at every run.
 //! That file is the only thing here that survives a re-seed: a host deleted
 //! from the seeded registry by hand is back in it at the next seed, and an
 //! entry in the exclusion list is not. The list is applied, so an excluded host
@@ -114,7 +115,7 @@ impl Counts {
 /// only refusal here that can change between two seeds of the SAME dump, which
 /// is what makes counting it separately the difference between an attributable
 /// diff and a guess.
-pub fn candidates(dump: &[u8]) -> anyhow::Result<Seeded> {
+pub fn candidates(dump: &[u8], excluded: &[registry::Exclusion]) -> anyhow::Result<Seeded> {
     let parsed: serde_json::Value = serde_json::from_slice(dump)
         .map_err(|e| anyhow::anyhow!("the dump is not valid JSON: {e}"))?;
     let datasets = parsed.as_object().ok_or_else(|| {
@@ -158,7 +159,7 @@ pub fn candidates(dump: &[u8]) -> anyhow::Result<Seeded> {
     // deleted by hand comes back. See `registry::without_excluded`. An error
     // stops the seed: a registry written without the exclusion list applied
     // would be indistinguishable afterwards from one written with it.
-    let wanted = registry::without_excluded(&named, &registry::exclusions()?);
+    let wanted = registry::without_excluded(&named, excluded);
     counts.refused_excluded = named.len() - wanted.len();
 
     // Seeder-only, and the one refusal that is not in `load_endpoints`. See
@@ -189,7 +190,7 @@ mod tests {
     /// which shape each dataset was chosen for.
     #[test]
     fn the_sample_dump_yields_the_candidates_it_names() {
-        let seeded = candidates(SAMPLE).unwrap();
+        let seeded = candidates(SAMPLE, &[]).unwrap();
         assert_eq!(
             seeded.endpoints,
             vec![
@@ -210,7 +211,7 @@ mod tests {
     /// shape the dump never contains.
     #[test]
     fn a_dataset_whose_sparql_array_is_empty_contributes_nothing() {
-        let seeded = candidates(SAMPLE).unwrap();
+        let seeded = candidates(SAMPLE, &[]).unwrap();
         assert_eq!(seeded.counts.datasets, 9);
         assert_eq!(
             seeded.counts.datasets_with_entries, 8,
@@ -230,7 +231,7 @@ mod tests {
     /// says the registry contained a URL, which is a fact about nothing.
     #[test]
     fn an_empty_access_url_is_not_an_entry() {
-        let seeded = candidates(SAMPLE).unwrap();
+        let seeded = candidates(SAMPLE, &[]).unwrap();
         assert_eq!(seeded.counts.entries, 9, "the empty value is not a tenth entry");
         assert_eq!(
             seeded.counts.refused_unpublishable, 1,
@@ -247,7 +248,7 @@ mod tests {
     /// rather than an edge.
     #[test]
     fn two_datasets_naming_one_endpoint_yield_one_candidate() {
-        let seeded = candidates(SAMPLE).unwrap();
+        let seeded = candidates(SAMPLE, &[]).unwrap();
         assert_eq!(seeded.counts.entries, 9);
         assert_eq!(seeded.counts.distinct, 8);
         assert_eq!(
@@ -261,7 +262,7 @@ mod tests {
     /// a candidate, and `dbpedia-ja` in the fixture is one.
     #[test]
     fn the_dumps_own_status_field_does_not_gate_a_candidate() {
-        let seeded = candidates(SAMPLE).unwrap();
+        let seeded = candidates(SAMPLE, &[]).unwrap();
         let failed = "http://ja.dbpedia.org/sparql";
         assert!(
             seeded.endpoints.iter().any(|e| e == failed),
@@ -275,7 +276,7 @@ mod tests {
     /// difference between two seeds unattributable.
     #[test]
     fn every_refusal_is_counted_under_its_own_reason() {
-        let counts = candidates(SAMPLE).unwrap().counts;
+        let counts = candidates(SAMPLE, &[]).unwrap().counts;
         assert_eq!(counts.refused_credentials, 1, "the hand-added one");
         assert_eq!(
             counts.refused_excluded, 0,
@@ -291,20 +292,20 @@ mod tests {
     /// produced.
     #[test]
     fn the_counts_add_up_to_the_list() {
-        let seeded = candidates(SAMPLE).unwrap();
+        let seeded = candidates(SAMPLE, &[]).unwrap();
         assert_eq!(seeded.counts.seeded(), seeded.endpoints.len());
         assert_eq!(seeded.endpoints.len(), 4);
     }
 
     #[test]
     fn malformed_json_is_an_error_naming_the_problem() {
-        let error = candidates(b"{not json").unwrap_err().to_string();
+        let error = candidates(b"{not json", &[]).unwrap_err().to_string();
         assert!(error.contains("not valid JSON"), "unhelpful: {error}");
     }
 
     #[test]
     fn a_dump_that_is_not_an_object_of_datasets_is_an_error() {
-        let error = candidates(b"[]").unwrap_err().to_string();
+        let error = candidates(b"[]", &[]).unwrap_err().to_string();
         assert!(error.contains("names none"), "unhelpful: {error}");
     }
 
@@ -327,7 +328,12 @@ mod tests {
           "asked": {"sparql": [{"access_url": "https://sparqlwatch-exclusion-worked-example/sparql"}]},
           "kept": {"sparql": [{"access_url": "https://kept.test-host/sparql"}]}
         }"#;
-        let seeded = candidates(dump).unwrap();
+        let excluded = registry::parse_exclusions(
+            "[[exclusion]]\nhost = \"sparqlwatch-exclusion-worked-example\"\nreason = \"a \
+             person asked, 2026-08-25\"\n",
+        )
+        .unwrap();
+        let seeded = candidates(dump, &excluded).unwrap();
         assert_eq!(
             seeded.endpoints,
             vec!["https://kept.test-host/sparql".to_string()],

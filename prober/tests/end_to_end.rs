@@ -1139,7 +1139,7 @@ async fn a_registry_that_lists_one_url_twice_probes_it_once() {
         .mount(&server).await;
 
     let url = format!("{}/sparql", server.uri());
-    let endpoints = load_endpoints(&format!("endpoint = [{url:?}, {url:?}]")).unwrap();
+    let endpoints = load_endpoints(&format!("endpoint = [{url:?}, {url:?}]"), &[]).unwrap();
     assert_eq!(endpoints.len(), 1, "the loader is what drops the duplicate");
 
     let defs = load_shipped_metrics();
@@ -1180,7 +1180,7 @@ async fn a_near_duplicate_differing_by_a_trailing_slash_stays_two_entries() {
 
     let url = format!("{}/sparql", server.uri());
     let slashed = format!("{url}/");
-    let endpoints = load_endpoints(&format!("endpoint = [{url:?}, {slashed:?}]")).unwrap();
+    let endpoints = load_endpoints(&format!("endpoint = [{url:?}, {slashed:?}]"), &[]).unwrap();
     assert_eq!(endpoints, vec![url.clone(), slashed.clone()], "these are two entries");
 
     let defs = load_shipped_metrics();

@@ -302,6 +302,124 @@ async fn the_published_failure_count_describes_the_run_that_published_it() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// An excluded host is not contacted by the real binary, and does not appear in
+/// the run it writes.
+///
+/// The one place this can be shown end to end. `registry.rs` proves the rule
+/// and `load_endpoints` proves the wiring inside the library, but only a process
+/// can show that `main` reads the file it is pointed at and hands the list to
+/// the loader: a review of stage 1c-b3 measured what leaving that untested
+/// costs, and a `main` that read the flag and passed `&[]` would look exactly
+/// like this one.
+///
+/// Both entries name the SAME mock server, one by `127.0.0.1` and one by
+/// `localhost`, so the host string is the only thing that differs and the
+/// request count is unambiguous: three requests is one endpoint's worth, six
+/// would be both. The excluded name is never resolved, so whether `localhost`
+/// resolves on this machine cannot affect the result.
+#[tokio::test]
+async fn an_excluded_host_is_never_contacted_by_the_binary() {
+    let dir = tempdir("excluded");
+    let log: Log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/sparql"))
+        .respond_with(Recording {
+            label: "kept",
+            delay: std::time::Duration::ZERO,
+            log: std::sync::Arc::clone(&log),
+        })
+        .mount(&server)
+        .await;
+
+    let port = server.address().port();
+    let kept = format!("http://127.0.0.1:{port}/sparql");
+    let excluded = format!("http://localhost:{port}/sparql");
+    let list = dir.join("endpoints.toml");
+    let defs = dir.join("metrics.toml");
+    let exclusions = dir.join("exclusions.toml");
+    let out = dir.join("run.nq");
+    std::fs::write(&list, format!("endpoint = [{excluded:?}, {kept:?}]\n")).unwrap();
+    std::fs::write(&defs, METRICS).unwrap();
+    std::fs::write(
+        &exclusions,
+        "[[exclusion]]\nhost = \"localhost\"\nreason = \"a person asked, 2026-08-25\"\n",
+    )
+    .unwrap();
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_sparqlwatch-prober"));
+    command
+        .args(["--endpoints", list.to_str().unwrap()])
+        .args(["--metrics", defs.to_str().unwrap()])
+        .args(["--exclusions", exclusions.to_str().unwrap()])
+        .args(["--out", out.to_str().unwrap()])
+        .args(["--at", "2026-08-25T12:00:00Z"])
+        .args(["--min-gap-ms", "0"]);
+    let status = ran_without_hanging(&mut command).await;
+    assert!(
+        status.status.success(),
+        "the sweep must exit zero when it failed on no endpoint, got {:?}: {}",
+        status.status,
+        String::from_utf8_lossy(&status.stderr)
+    );
+
+    let arrivals = log.lock().unwrap_or_else(|p| p.into_inner()).clone();
+    assert_eq!(
+        arrivals.len(),
+        3,
+        "three requests is one endpoint's worth: the excluded host must not be contacted at \
+         all, got {arrivals:?}"
+    );
+
+    let nq = std::fs::read_to_string(&out).unwrap();
+    assert!(!nq.contains("localhost"), "an excluded host may not appear in a run: {nq}");
+    assert!(nq.contains(&kept), "the endpoint that nobody excluded must be measured: {nq}");
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A sweep whose exclusion list cannot be read refuses to start, names the
+/// path, and writes no run.
+///
+/// The file is read at run time, so "not where this process was told to look"
+/// is a state that exists: a container that forgot to mount it, or a prober
+/// started from the wrong working directory with the default relative path.
+/// Failing closed makes that a loud stop instead of a sweep of every host that
+/// had asked to be left alone.
+#[tokio::test]
+async fn a_sweep_whose_exclusion_list_cannot_be_read_refuses_to_start() {
+    let dir = tempdir("no-list");
+    let list = dir.join("endpoints.toml");
+    let defs = dir.join("metrics.toml");
+    let missing = dir.join("absent-exclusions.toml");
+    let out = dir.join("run.nq");
+    std::fs::write(&list, "endpoint = [\"https://b/sparql\"]\n").unwrap();
+    std::fs::write(&defs, METRICS).unwrap();
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_sparqlwatch-prober"));
+    command
+        .args(["--endpoints", list.to_str().unwrap()])
+        .args(["--metrics", defs.to_str().unwrap()])
+        .args(["--exclusions", missing.to_str().unwrap()])
+        .args(["--out", out.to_str().unwrap()])
+        .args(["--at", "2026-08-25T12:00:00Z"]);
+    let status = ran_without_hanging(&mut command).await;
+
+    assert!(
+        !status.status.success(),
+        "a sweep that cannot read the exclusion list must not report success, exited {:?}",
+        status.status
+    );
+    let stderr = String::from_utf8_lossy(&status.stderr);
+    assert!(
+        stderr.contains("absent-exclusions.toml"),
+        "the failure must name the path it could not read: {stderr}"
+    );
+    assert!(!out.exists(), "and no run may be written: {}", out.display());
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// A fresh directory under the target dir cargo already owns, named for the
 /// caller and for this process, so neither two tests in this file nor two runs
 /// of the suite can collide. They would: the tests here run in parallel and

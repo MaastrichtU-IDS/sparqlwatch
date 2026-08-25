@@ -28,10 +28,12 @@
 //!
 //! A third is not decidable from the string at all: `registry/exclusions.toml`
 //! names the hosts somebody asked this project to leave alone. It is the only
-//! rule applied both here and in the seeder, it is the only one that fails the
-//! load rather than dropping an entry with a warning, and `without_excluded`
-//! documents both, along with the limits `/about` has to state: nothing watches
-//! a mailbox, and nothing already published is retracted.
+//! rule applied both here and in the seeder, and the only one that fails the
+//! load rather than dropping an entry with a warning: a list that cannot be
+//! read or parsed stops the run, because the alternative is probing a host that
+//! asked not to be. The list is read from disk at every run, so an entry takes
+//! effect at the next sweep; `without_excluded` documents that and the rest of
+//! the limits `/about` has to state, and `read_exclusions` documents the path.
 
 use serde::Deserialize;
 
@@ -44,8 +46,10 @@ struct EndpointFile {
 /// no entry carrying credentials and no entry on an excluded host, in
 /// first-seen order.
 ///
-/// An unparseable `registry/exclusions.toml` fails this call rather than being
-/// skipped. See `parse_exclusions` for why that one rule does not fail open.
+/// `excluded` is a parameter rather than something this function reads, so the
+/// I/O sits at the edge, in each binary's `main`, where the path comes from a
+/// flag. `read_exclusions` is what reads it, and it fails rather than returning
+/// an empty list when it cannot.
 ///
 /// Deduplicating before dropping credentials, not after, so a URL listed twice
 /// produces one warning of each kind rather than two of the second. That
@@ -53,7 +57,7 @@ struct EndpointFile {
 /// `dedupe` reports `position` in the file's list, `without_credentials`
 /// reports `deduped_position` in the list it was handed, and the second is not
 /// a line in `endpoints.toml` whenever a duplicate came before it.
-pub fn load_endpoints(toml_text: &str) -> anyhow::Result<Vec<String>> {
+pub fn load_endpoints(toml_text: &str, excluded: &[Exclusion]) -> anyhow::Result<Vec<String>> {
     let file: EndpointFile = toml::from_str(toml_text)?;
     let deduped = dedupe(&file.endpoint);
     let named = without_credentials(&deduped);
@@ -62,7 +66,7 @@ pub fn load_endpoints(toml_text: &str) -> anyhow::Result<Vec<String>> {
     // IRI: the one refusal made on a person's request is the one worth naming.
     // After `without_credentials` for that function's own reason, which is
     // that nothing downstream of it may log a password.
-    let wanted = without_excluded(&named, &exclusions()?);
+    let wanted = without_excluded(&named, excluded);
     let unreserved = without_reserved_names(&wanted);
     Ok(without_unpublishable_iris(&unreserved))
 }
@@ -347,18 +351,53 @@ struct ExclusionFile {
     exclusion: Vec<Exclusion>,
 }
 
-/// The exclusion list this binary was built with.
+/// Where the exclusion list lives, as both binaries' `--exclusions` default.
 ///
-/// `include_str!`, so the file is compiled in rather than read at run time.
-/// Three consequences, all of them deliberate. A sweep cannot fail to find the
-/// list or read a different one depending on its working directory. A malformed
-/// list cannot reach a deployment quietly, because it fails this crate's whole
-/// test suite at the build that introduced it. And an entry takes effect at the
-/// next BUILD, so a deployment already running honours the file it was built
-/// from until it is rebuilt, which is a limit `/about` has to state rather than
-/// imply.
-pub fn exclusions() -> anyhow::Result<Vec<Exclusion>> {
-    parse_exclusions(include_str!("../registry/exclusions.toml"))
+/// A path relative to the WORKING DIRECTORY, like `--endpoints`'s
+/// `endpoints.toml` and `--metrics`'s `metrics.toml` beside it, so the tool
+/// keeps one convention rather than growing a second one for this file. The
+/// trap that comes with that is worth naming: run from anywhere but `prober/`,
+/// this default names a file that is not there, and `read_exclusions` then
+/// fails and says which path it tried. That is the intended outcome. An
+/// operator running from elsewhere gives `--exclusions` an absolute path.
+///
+/// Not `include_str!` and not a path baked in at compile time. Compiling the
+/// list in was tried and reverted: it made an entry take effect at the next
+/// BUILD, so a deployment already running kept probing a host that had asked
+/// not to be until somebody rebuilt and redeployed it. The whole point of the
+/// mechanism is to honour that request promptly, and a courtesy channel that
+/// takes a release cycle is a weaker promise than `/about` will imply. Baking
+/// in `CARGO_MANIFEST_DIR` would be worse than either: it names the build
+/// machine's checkout, which on a deployed binary is a path that may not exist
+/// or, worse, may hold somebody else's file.
+pub const DEFAULT_EXCLUSIONS: &str = "registry/exclusions.toml";
+
+/// The exclusion list at `path`, or an error naming the path.
+///
+/// **Fails closed**, and that is the property that makes run-time reading safe.
+/// A file that cannot be read is not an empty exclusion list: it is a process
+/// that does not know what it was asked to leave alone. A deployment that
+/// forgets to mount the file then stops loudly instead of quietly resuming a
+/// sweep of every host that had asked not to be probed. Same reasoning as
+/// `parse_exclusions` applies to a malformed entry, one step out.
+///
+/// The message names the path and says a relative one is resolved against the
+/// working directory, because that is the one mistake this shape invites and an
+/// operator cannot fix what the error does not name.
+pub fn read_exclusions(path: &std::path::Path) -> anyhow::Result<Vec<Exclusion>> {
+    let text = std::fs::read_to_string(path).map_err(|error| {
+        anyhow::anyhow!(
+            "the exclusion list at {} could not be read ({error}), so nothing here knows which \
+             hosts asked not to be probed, and refusing to continue is the only answer that \
+             cannot probe one of them by mistake. A relative path is resolved against the \
+             working directory: pass --exclusions an absolute path, or run from the directory \
+             holding {}",
+            path.display(),
+            DEFAULT_EXCLUSIONS
+        )
+    })?;
+    parse_exclusions(&text)
+        .map_err(|error| anyhow::anyhow!("the exclusion list at {}: {error}", path.display()))
 }
 
 /// Parse an exclusion list, with every host normalised the way a URL's host is.
@@ -463,8 +502,13 @@ fn exclusion_key(host: &str) -> String {
 /// What this does NOT do, all of it needed by `/about`:
 ///
 /// - It does not watch a mailbox. An exclusion becomes real when a person adds
-///   it to `registry/exclusions.toml` and commits it, and takes effect at the
-///   next build. There is no automation between a request and the file.
+///   it to `registry/exclusions.toml`. There is no automation anywhere between
+///   a request arriving and somebody editing the file, and this is the limit
+///   that stays no matter how the file is read.
+/// - It takes effect at the next SWEEP, not at the request. The file is read
+///   from disk at every run, so no rebuild and no redeploy stands between an
+///   entry and its being honoured, and a sweep already in flight finishes under
+///   the list it started with.
 /// - It does not retract anything already published. A run graph is immutable
 ///   and append-only, and `emit::subject_iri` puts the endpoint string inside
 ///   every subject, so an exclusion stops future sweeps and leaves past
@@ -688,6 +732,23 @@ mod tests {
         String::from_utf8_lossy(&bytes).to_string()
     }
 
+    /// `load_endpoints` with no exclusions in force, which is what every test
+    /// in this module except the two below is about.
+    fn load_unrestricted(toml_text: &str) -> anyhow::Result<Vec<String>> {
+        load_endpoints(toml_text, &[])
+    }
+
+    /// The shipped exclusion list, found through `CARGO_MANIFEST_DIR` rather
+    /// than the default relative path, because a unit test's working directory
+    /// is not something to depend on.
+    fn shipped_exclusions() -> Vec<Exclusion> {
+        read_exclusions(&shipped_exclusions_path()).expect("the shipped list must be readable")
+    }
+
+    fn shipped_exclusions_path() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(DEFAULT_EXCLUSIONS)
+    }
+
     fn v(items: &[&str]) -> Vec<String> {
         items.iter().map(|s| s.to_string()).collect()
     }
@@ -764,7 +825,7 @@ mod tests {
         // from real-world dumps, and refusing the file would mean monitoring
         // nothing.
         let logs = logs_of(|| {
-            let loaded = load_endpoints(
+            let loaded = load_unrestricted(
                 r#"endpoint = ["http://alice:s3cret@a.example/sparql", "https://b/sparql"]"#,
             )
             .unwrap();
@@ -786,7 +847,7 @@ mod tests {
         // `politeness::authority` parses.
         let kept = "http://a/sparql?contact=x@y.example";
         let logs = logs_of(|| {
-            let loaded = load_endpoints(&format!(r#"endpoint = ["{kept}"]"#)).unwrap();
+            let loaded = load_unrestricted(&format!(r#"endpoint = ["{kept}"]"#)).unwrap();
             assert_eq!(loaded, v(&[kept]));
         });
         assert!(logs.is_empty(), "a legitimate endpoint must be quiet, logged: {logs}");
@@ -800,7 +861,7 @@ mod tests {
         // authority is delimited by `//` whatever the scheme, so the check
         // does not depend on recognising the scheme.
         let logs = logs_of(|| {
-            let loaded = load_endpoints(
+            let loaded = load_unrestricted(
                 r#"endpoint = ["ftp://alice:s3cret@a.example/sparql", "sparql://bob:hunter2@c.example/x", "https://b/sparql"]"#,
             )
             .unwrap();
@@ -819,7 +880,7 @@ mod tests {
         // bare `@`.
         let kept = "http://@a/sparql";
         let logs = logs_of(|| {
-            let loaded = load_endpoints(&format!(r#"endpoint = ["{kept}"]"#)).unwrap();
+            let loaded = load_unrestricted(&format!(r#"endpoint = ["{kept}"]"#)).unwrap();
             assert_eq!(loaded, v(&[kept]));
         });
         assert!(logs.is_empty(), "nothing was dropped, so nothing to warn about: {logs}");
@@ -827,14 +888,14 @@ mod tests {
 
     #[test]
     fn the_shipped_registry_file_loads_and_is_already_unique() {
-        let loaded = load_endpoints(include_str!("../endpoints.toml")).unwrap();
+        let loaded = load_unrestricted(include_str!("../endpoints.toml")).unwrap();
         assert_eq!(loaded.len(), 3);
         assert_eq!(loaded[0], "https://qlever.dev/api/osm-planet");
     }
 
     #[test]
     fn a_file_listing_one_url_twice_loads_it_once() {
-        let loaded = load_endpoints(
+        let loaded = load_unrestricted(
             r#"endpoint = ["https://a/sparql", "https://b/sparql", "https://a/sparql"]"#,
         )
         .unwrap();
@@ -964,7 +1025,7 @@ mod tests {
     #[test]
     fn a_loopback_url_survives_a_hand_written_registry_and_is_refused_by_the_seeder() {
         let local = "http://127.0.0.1:3030/query";
-        let loaded = load_endpoints(&format!("endpoint = [{local:?}]")).unwrap();
+        let loaded = load_unrestricted(&format!("endpoint = [{local:?}]")).unwrap();
         assert_eq!(loaded, v(&[local]), "an operator may probe their own machine");
 
         let seeded = without_unroutable_hosts(&v(&[local]));
@@ -988,7 +1049,7 @@ mod tests {
             "http://localhost./query",
             "http://anything.test./sparql",
         ] {
-            let loaded = load_endpoints(&format!("endpoint = [{url:?}]")).unwrap();
+            let loaded = load_unrestricted(&format!("endpoint = [{url:?}]")).unwrap();
             assert_eq!(loaded, v(&[url]), "{url} is for local use, not documentation");
 
             let logs = logs_of(|| {
@@ -1036,7 +1097,7 @@ mod tests {
     #[test]
     fn a_value_containing_whitespace_is_refused_not_trimmed() {
         let logs = logs_of(|| {
-            let loaded = load_endpoints(
+            let loaded = load_unrestricted(
                 r#"endpoint = [" https://a/sparql", "https://b/sparql"]"#,
             )
             .unwrap();
@@ -1060,7 +1121,7 @@ mod tests {
     #[test]
     fn load_endpoints_applies_the_refusals_that_hold_on_every_path() {
         let logs = logs_of(|| {
-            let loaded = load_endpoints(
+            let loaded = load_unrestricted(
                 r#"endpoint = ["http://localhost:3030/Dataset/query", "http://example.org", "https://q/sparql?query={SPARQL}", "https://b/sparql"]"#,
             )
             .unwrap();
@@ -1076,8 +1137,8 @@ mod tests {
 
     #[test]
     fn a_file_that_is_not_an_endpoint_list_is_a_load_error() {
-        assert!(load_endpoints("nonsense = 1").is_err());
-        assert!(load_endpoints("endpoint = \"not a list\"").is_err());
+        assert!(load_unrestricted("nonsense = 1").is_err());
+        assert!(load_unrestricted("endpoint = \"not a list\"").is_err());
     }
 
     /// A one-host exclusion list written inline, so a test that is about the
@@ -1165,22 +1226,18 @@ mod tests {
     /// is what makes "an excluded host is never probed" true of a hand-written
     /// list and of the seeded one alike.
     ///
-    /// The input is the SHIPPED file's own entry, which is why that entry
-    /// exists: a single-label host is refused by no other rule in this module,
-    /// so this URL disappearing can only be `registry/exclusions.toml` having
-    /// been read and applied. With the list empty this test could not tell the
-    /// wiring from its absence.
+    /// The list is a parameter and not something this function reads, so a test
+    /// states the policy it runs under and no test depends on what the shipped
+    /// file happens to hold. `tests/binary.rs` is where the real binary is
+    /// shown to pass the file's contents in.
     #[test]
-    fn the_shipped_exclusion_list_is_subtracted_by_load_endpoints() {
-        let worked_example = "sparqlwatch-exclusion-worked-example";
-        assert!(
-            exclusions().unwrap().iter().any(|e| e.host == worked_example),
-            "the shipped file has to name it for this test to be about anything"
-        );
-        let url = format!("https://{worked_example}/sparql");
+    fn load_endpoints_subtracts_the_exclusion_list_it_is_given() {
         let logs = logs_of(|| {
-            let loaded =
-                load_endpoints(&format!(r#"endpoint = [{url:?}, "https://b/sparql"]"#)).unwrap();
+            let loaded = load_endpoints(
+                r#"endpoint = ["https://asked.test-host/sparql", "https://b/sparql"]"#,
+                &excluding("asked.test-host"),
+            )
+            .unwrap();
             assert_eq!(
                 loaded,
                 v(&["https://b/sparql"]),
@@ -1189,6 +1246,32 @@ mod tests {
         });
         assert_eq!(logs.matches("WARN").count(), 1, "one warning per entry: {logs}");
         assert!(logs.contains("asked not to be probed"), "say why it went: {logs}");
+    }
+
+    /// An exclusion list that cannot be READ fails the load, naming the path.
+    ///
+    /// The file is read at run time, so "the file is not where this process was
+    /// told to look" is a state that exists, and it is exactly the state in
+    /// which a deployment would otherwise probe every host that had asked not
+    /// to be. Failing closed turns a forgotten mount into a loud stop instead
+    /// of a quiet resumption of probing, which is the same reasoning
+    /// `parse_exclusions` applies to a malformed entry, one step out.
+    #[test]
+    fn an_exclusion_list_that_cannot_be_read_is_an_error_naming_the_path() {
+        let missing = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("registry/no-such-exclusion-list.toml");
+        let error = read_exclusions(&missing)
+            .expect_err("a list that cannot be read is not an empty list")
+            .to_string();
+        assert!(
+            error.contains("no-such-exclusion-list.toml"),
+            "name the path that could not be read: {error}"
+        );
+        assert!(
+            error.contains("working directory"),
+            "a relative path is the trap, so the message has to name it: {error}"
+        );
+        read_exclusions(&shipped_exclusions_path()).expect("the shipped list is readable");
     }
 
     /// An exclusion cannot be anonymous. A missing `reason` is a parse error
@@ -1256,7 +1339,8 @@ mod tests {
         assert!(parse_exclusions("[[exclusion]]\nhost = 7\n").is_err());
         assert!(parse_exclusions("exclusion = \"not a list of tables\"").is_err());
         assert!(parse_exclusions("[[exclusion").is_err());
-        exclusions().expect("the shipped exclusion list must parse");
+        parse_exclusions(&std::fs::read_to_string(shipped_exclusions_path()).unwrap())
+            .expect("the shipped exclusion list must parse");
     }
 
     /// A list with no entries is a list. When the last exclusion is ever
@@ -1287,7 +1371,7 @@ mod tests {
     /// wiring test above would then prove nothing.
     #[test]
     fn every_shipped_exclusion_names_a_host_and_a_reason() {
-        let list = exclusions().expect("the shipped exclusion list must parse");
+        let list = shipped_exclusions();
         assert!(!list.is_empty(), "an empty list is subtracted vacuously");
         for entry in &list {
             assert!(!entry.host.is_empty(), "an exclusion with no host excludes nothing");

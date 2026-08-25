@@ -7,10 +7,17 @@
 # point: deleting a URL from the seeded registry by hand is undone by the next
 # re-seed, and an entry here is not.
 #
-# `registry.rs` compiles this file in with `include_str!` and applies it in
-# `load_endpoints` and in the seeder both. So an entry takes effect at the next
-# BUILD of the prober, and a deployment already running honours the file it was
-# built from until it is rebuilt.
+# Read from disk at every run, by both binaries, through `--exclusions`, whose
+# default is this path relative to the working directory. `registry.rs` applies
+# it in `load_endpoints` and in the seeder both. So an entry takes effect AT THE
+# NEXT SWEEP: no rebuild and no redeploy stands between adding a host here and
+# the host being left alone.
+#
+# If the file cannot be read or does not parse, neither binary runs. That is
+# deliberate: a missing list is not an empty one, and a process that does not
+# know what it was asked to leave alone must not probe anything. A prober
+# started from a directory other than `prober/` hits exactly that, and the
+# error names the path it tried.
 #
 # One table per exclusion, both fields required:
 #
@@ -42,4 +49,4 @@
 
 [[exclusion]]
 host = "sparqlwatch-exclusion-worked-example"
-reason = "Nobody asked for this one. It is the file's worked example, and it is the one input that proves the rule is wired in: a single-label host is refused by no other rule in registry.rs, so a test that watches this URL disappear can only be passing because this file was read and applied. Keep it, and add real entries beside it."
+reason = "Nobody asked for this one. It is the file's worked example, and it keeps the shipped file's own checks honest: every_shipped_exclusion_names_a_host_and_a_reason in registry.rs asserts the list is not empty, because an empty list satisfies every other assertion about it vacuously. A single-label host is refused by no other rule in registry.rs and cannot resolve publicly, so nobody is affected by it. Keep it, and add real entries beside it."
