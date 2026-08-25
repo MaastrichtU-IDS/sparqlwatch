@@ -13,7 +13,9 @@ what they claimed to check.
 from pathlib import Path
 
 import pytest
-from pyoxigraph import RdfFormat, Store
+from pyoxigraph import Store
+
+from load_run import load_run
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -37,10 +39,17 @@ def _loaded_store(tmp_path: Path, name: str, *fixtures: Path) -> Store:
     More than one is the normal case for a real deployment: a store that has
     been swept twice holds two run graphs. Two fixtures in one store is how
     the "different runs answer different questions" cases below are built.
+
+    Built through load_run() and not through Store.load(), because load_run()
+    is the only way a run reaches a real store and it writes more than the run
+    graph: it maintains the derived urn:sparqlwatch:current graph the three
+    read queries read. A fixture built with a raw load holds run graphs and no
+    current graph, which is a store shape the deployment never has, so every
+    test over it would be testing a store that cannot exist.
     """
     store = Store(str(tmp_path / name))
     for fixture in fixtures:
-        store.load(fixture.read_bytes(), format=RdfFormat.N_QUADS)
+        load_run(store, fixture.read_bytes())
     return store
 
 

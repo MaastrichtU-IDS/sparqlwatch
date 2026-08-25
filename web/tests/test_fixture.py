@@ -114,7 +114,9 @@ Fixture provenance:
 
 from pathlib import Path
 
-from pyoxigraph import RdfFormat, Store
+from pyoxigraph import Store
+
+from load_run import load_run
 
 FIXTURE = Path(__file__).parent / "fixtures" / "run-with-samples.nq"
 TRUNCATED_FIXTURE = Path(__file__).parent / "fixtures" / "run-truncated.nq"
@@ -139,7 +141,7 @@ def test_the_fixture_loads_and_reopens(tmp_path):
     this suite and be useless to a web tier that opens the store in a
     different process."""
     store = Store(str(tmp_path / "s"))
-    store.load(FIXTURE.read_bytes(), format=RdfFormat.N_QUADS)
+    load_run(store, FIXTURE.read_bytes())
     loaded = len(store)
     assert loaded == 278, f"the fixture is 278 quads, got {loaded}"
     assert len(list(store.named_graphs())) == 1, "one run, one named graph"
@@ -153,7 +155,7 @@ def test_the_truncated_fixture_is_the_shape_it_claims(tmp_path):
     a fixture that silently lost content would still pass every query test
     built on it, and quietly stop testing what it claims to test."""
     store = Store(str(tmp_path / "s"))
-    store.load(TRUNCATED_FIXTURE.read_bytes(), format=RdfFormat.N_QUADS)
+    load_run(store, TRUNCATED_FIXTURE.read_bytes())
     assert len(store) == 12, f"the truncated fixture is 12 quads, got {len(store)}"
     assert len(list(store.named_graphs())) == 1
 
@@ -163,7 +165,7 @@ def test_the_two_sweeps_fixture_is_the_shape_it_claims(tmp_path):
     top of that file): the real run plus a rewritten, altered copy of it, so
     two runs of the same endpoint coexist with different values."""
     store = Store(str(tmp_path / "s"))
-    store.load(TWO_SWEEPS_FIXTURE.read_bytes(), format=RdfFormat.N_QUADS)
+    load_run(store, TWO_SWEEPS_FIXTURE.read_bytes())
     assert len(store) == 556, f"the two-sweeps fixture is 556 quads, got {len(store)}"
     assert len(list(store.named_graphs())) == 2, "two sweeps, two named graphs"
 
@@ -174,7 +176,7 @@ def test_the_zero_classes_fixture_is_the_shape_it_claims(tmp_path):
     fixture that quietly gained a value would keep passing while no longer
     testing the OPTIONAL it exists for."""
     store = Store(str(tmp_path / "s"))
-    store.load(ZERO_CLASSES_FIXTURE.read_bytes(), format=RdfFormat.N_QUADS)
+    load_run(store, ZERO_CLASSES_FIXTURE.read_bytes())
     assert len(store) == 9, f"the zero-classes fixture is 9 quads, got {len(store)}"
     assert len(list(store.named_graphs())) == 1
     assert not bool(store.query(
@@ -188,7 +190,7 @@ def test_the_properties_fixture_samples_no_classes(tmp_path):
     metric:classes, which is the only reason the fixture tells the query's
     metric pin from its absence."""
     store = Store(str(tmp_path / "s"))
-    store.load(PROPERTIES_FIXTURE.read_bytes(), format=RdfFormat.N_QUADS)
+    load_run(store, PROPERTIES_FIXTURE.read_bytes())
     assert len(store) == 11, f"the properties fixture is 11 quads, got {len(store)}"
     assert bool(store.query(
         "ASK { GRAPH ?g { ?s <urn:sparqlwatch:sampledBy> "
@@ -206,7 +208,7 @@ def test_the_classes_absent_fixture_measures_absent_and_samples_nothing(tmp_path
     sw:ContentSample anywhere, because the prober writes no sample beside
     that verdict. A fixture that gained one would stop testing the case."""
     store = Store(str(tmp_path / "s"))
-    store.load(CLASSES_ABSENT_FIXTURE.read_bytes(), format=RdfFormat.N_QUADS)
+    load_run(store, CLASSES_ABSENT_FIXTURE.read_bytes())
     assert len(store) == 16, f"this fixture is 16 quads, got {len(store)}"
     assert len(list(store.named_graphs())) == 1
     assert bool(store.query(
@@ -298,7 +300,7 @@ def test_the_new_subjects_fixture_is_the_shape_it_claims(tmp_path):
     ``...:1`` through ``...:23`` would have passed.
     """
     store = Store(str(tmp_path / "s"))
-    store.load(NEW_SUBJECTS_FIXTURE.read_bytes(), format=RdfFormat.N_QUADS)
+    load_run(store, NEW_SUBJECTS_FIXTURE.read_bytes())
     assert len(store) == 278, f"the new-subjects fixture is 278 quads, got {len(store)}"
     assert len(list(store.named_graphs())) == 1, "one run, one named graph"
     assert bool(store.query(
@@ -341,7 +343,7 @@ def test_the_prober_failed_fixture_is_the_shape_it_claims(tmp_path):
     terminator on purpose.
     """
     store = Store(str(tmp_path / "s"))
-    store.load(PROBER_FAILED_FIXTURE.read_bytes(), format=RdfFormat.N_QUADS)
+    load_run(store, PROBER_FAILED_FIXTURE.read_bytes())
     assert len(store) == 51, f"this fixture is 51 quads, got {len(store)}"
     assert len(list(store.named_graphs())) == 1, "one run, one named graph"
 
@@ -416,7 +418,7 @@ def test_the_later_sample_fixture_samples_without_measuring(tmp_path):
     is what makes the run invisible to endpoint_measurements.rq and so
     produces the two-run skew it exists for."""
     store = Store(str(tmp_path / "s"))
-    store.load(LATER_SAMPLE_FIXTURE.read_bytes(), format=RdfFormat.N_QUADS)
+    load_run(store, LATER_SAMPLE_FIXTURE.read_bytes())
     assert len(store) == 12, f"this fixture is 12 quads, got {len(store)}"
     assert bool(store.query(
         "ASK { GRAPH ?g { ?s <urn:sparqlwatch:sampledFrom> "
@@ -449,7 +451,7 @@ def test_the_crashed_partway_fixture_stops_before_its_footer(tmp_path):
     inference from the presence of its measurements.
     """
     store = Store(str(tmp_path / "s"))
-    store.load(CRASHED_PARTWAY_FIXTURE.read_bytes(), format=RdfFormat.N_QUADS)
+    load_run(store, CRASHED_PARTWAY_FIXTURE.read_bytes())
     assert len(store) == 67, f"this fixture is 67 quads, got {len(store)}"
     assert len(list(store.named_graphs())) == 1, "one run, one named graph"
 

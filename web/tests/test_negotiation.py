@@ -23,6 +23,7 @@ from pyoxigraph import Literal, NamedNode, RdfFormat, Store, parse
 from starlette.testclient import TestClient
 
 from app import STORE_PATH_VARIABLE, ENDPOINT_PATH, app, get_store
+from load_run import load_run
 
 KADASTER = "https://data.kkg.kadaster.nl/query"
 TRUNCATED = "https://truncated.example/sparql"
@@ -726,7 +727,7 @@ def test_a_store_path_holding_a_store_is_opened(tmp_path, monkeypatch):
     """
     path = tmp_path / "sparqlwatch.db"
     built = Store(str(path))
-    built.load(FIXTURE.read_bytes(), format=RdfFormat.N_QUADS)
+    load_run(built, FIXTURE.read_bytes())
     # An on-disk Oxigraph store cannot be opened twice at once, so this test
     # has to let go of its own handle before asking the app to open the path.
     del built

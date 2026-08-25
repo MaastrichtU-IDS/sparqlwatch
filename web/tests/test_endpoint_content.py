@@ -6,9 +6,10 @@ web/tests/fixtures/. See each fixture's header comment for its provenance.
 """
 
 import pytest
-from pyoxigraph import NamedNode, RdfFormat, Store
+from pyoxigraph import NamedNode, Store
 
 from endpoint_content import endpoint_content
+from load_run import load_run
 
 # run-truncated.nq: the only endpoint in that synthetic run.
 TRUNCATED_ENDPOINT = "https://truncated.example/sparql"
@@ -185,7 +186,7 @@ def test_two_runs_tied_as_most_recent_are_refused_not_blended(tmp_path):
     a comment: deleting the raise leaves every other test in this suite
     green."""
     store = Store(str(tmp_path / "s"))
-    store.load(_tied_runs(), format=RdfFormat.N_QUADS)
+    load_run(store, _tied_runs())
 
     with pytest.raises(ValueError, match="2 runs tied as most recent") as raised:
         endpoint_content(store, TIED_ENDPOINT)
