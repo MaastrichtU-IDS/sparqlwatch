@@ -110,6 +110,31 @@ Fixture provenance:
   and sample come back" is testable regardless of which subject scheme either
   run uses. See the comment at the top of that file for the exact
   construction.
+
+- ``fixtures/run-registry-sample.nq`` is SYNTHETIC and DERIVED, and it is
+  derived by CUTTING rather than by rewriting: it is a strict line subset of
+  ``~/code/sparqlwatch-runs/run-2026-08-24T19-45-03Z-lod-cloud-543.nq``, the
+  project's first registry-scale sweep, in that file's own order. Nothing was
+  rewritten, so the run IRI, the prov:generatedAtTime, the verdicts and the
+  elapsed times are the real sweep's and every quad here appears verbatim in
+  it. What was dropped is 534 of its 543 endpoint chunks. The whole sweep is
+  6.3 MB and is deliberately not in git (``~/code/sparqlwatch-runs/README.md``
+  says why), and the index this fixture exists for needs nine rows rather than
+  543 to be testable.
+
+  The nine were chosen to cover every verdict value that sweep produced.
+  Their availability verdicts, which is what the index groups by, are three
+  "verified", four "indeterminate" and two "absent", and two of the sweep's
+  only four "absent" endpoints are here on purpose: one of them is a .ttl file
+  on raw.githubusercontent.com, so the host answered with something that was
+  not a SPARQL result, which is what that verdict means and why it is not the
+  same fact as "indeterminate". Their other metrics carry "verified",
+  "undeclared-but-verified", "declared-but-wrong", "indeterminate" and
+  "absent"; "declared-only" appears nowhere, in this file or in the 543 it was
+  cut from. Every one of the nine also carries a "cost-ceiling" decline of
+  sw:metric:classes, because the sweep ran at the cheap ceiling, so there is
+  no content sample anywhere in it. See the comment at the top of the file for
+  which nine and what each one is for.
 """
 
 from pathlib import Path
@@ -134,6 +159,9 @@ PROBER_FAILED_FIXTURE = (
 )
 CRASHED_PARTWAY_FIXTURE = (
     Path(__file__).parent / "fixtures" / "run-crashed-partway.nq"
+)
+REGISTRY_SAMPLE_FIXTURE = (
+    Path(__file__).parent / "fixtures" / "run-registry-sample.nq"
 )
 
 
@@ -505,3 +533,95 @@ def test_the_crashed_partway_fixture_stops_before_its_footer(tmp_path):
     )
     wrong = {s: want for s, want in expected.items() if s != want}
     assert not wrong, f"these subjects are not what the scheme derives: {wrong}"
+
+
+def test_the_registry_sample_fixture_is_the_shape_it_claims(tmp_path):
+    """run-registry-sample.nq is nine endpoint chunks cut out of the real
+    543-endpoint sweep (see its header and the provenance list above).
+
+    THE ENDPOINT COUNT ASSERTED IS THE FIXTURE'S OWN NINE, not the sweep's 543.
+    Asserting 543 here would be a claim about a file that is not in git, and it
+    would pass for as long as nobody looked: every test built on this fixture
+    would then be quietly measuring nine rows while saying 543.
+
+    The rest is the shape the index's tests depend on, and each part of it is
+    something a careless re-cut would lose: three availability verdicts across
+    the nine rather than one, the two "absent" endpoints that make the grouping
+    more than a boolean, and the eight metrics per endpoint made of seven
+    measurements and one cost-ceiling decline.
+    """
+    store = Store(str(tmp_path / "s"))
+    load_run(store, REGISTRY_SAMPLE_FIXTURE.read_bytes())
+    assert run_quad_count(store) == 462, (
+        f"the registry sample is 462 quads, got {run_quad_count(store)}"
+    )
+    assert len(run_graph_names(store)) == 1, "one sweep, one named graph"
+
+    endpoints = {
+        row["endpoint"].value
+        for row in run_graph_query(
+            store,
+            "SELECT DISTINCT ?endpoint WHERE { GRAPH ?g { "
+            "?m <http://www.w3.org/ns/dqv#computedOn> ?endpoint } }",
+        )
+    }
+    assert len(endpoints) == 9, f"nine endpoints, got {len(endpoints)}"
+
+    availability = sorted(
+        row["verdict"].value
+        for row in run_graph_query(
+            store,
+            "SELECT ?verdict WHERE { GRAPH ?g { "
+            "?m <http://www.w3.org/ns/dqv#isMeasurementOf> "
+            "<urn:sparqlwatch:metric:availability> ; "
+            "<http://www.w3.org/ns/dqv#value> ?verdict } }",
+        )
+    )
+    assert availability == [
+        "absent",
+        "absent",
+        "indeterminate",
+        "indeterminate",
+        "indeterminate",
+        "indeterminate",
+        "verified",
+        "verified",
+        "verified",
+    ], availability
+
+    verdicts = {
+        row["verdict"].value
+        for row in run_graph_query(
+            store,
+            "SELECT ?verdict WHERE { GRAPH ?g { "
+            "?m <http://www.w3.org/ns/dqv#value> ?verdict } }",
+        )
+    }
+    assert verdicts == {
+        "absent",
+        "declared-but-wrong",
+        "indeterminate",
+        "undeclared-but-verified",
+        "verified",
+    }, verdicts
+
+    declines = sorted(
+        row["reason"].value
+        for row in run_graph_query(
+            store,
+            "SELECT ?reason WHERE { GRAPH ?g { "
+            "?n <urn:sparqlwatch:notMeasuredReason> ?reason } }",
+        )
+    )
+    assert declines == ["cost-ceiling"] * 9, declines
+    assert not bool(
+        run_graph_query(
+            store, "ASK { GRAPH ?g { ?s <urn:sparqlwatch:sampledValue> ?v } }"
+        )
+    ), "the cheap ceiling declined the classes metric, so there is no sample"
+    assert bool(
+        run_graph_query(
+            store,
+            "ASK { GRAPH ?g { ?a <urn:sparqlwatch:finalised> ?f } }",
+        )
+    ), "the sweep finished, and its footer has to be here to say so"

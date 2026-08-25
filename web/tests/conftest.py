@@ -31,6 +31,7 @@ RUN_HOSTILE_LITERALS = FIXTURES / "run-hostile-literals.nq"
 RUN_NEW_SUBJECTS = FIXTURES / "run-new-subjects.nq"
 RUN_PROBER_FAILED = FIXTURES / "run-prober-failed.nq"
 RUN_CRASHED_PARTWAY = FIXTURES / "run-crashed-partway.nq"
+RUN_REGISTRY_SAMPLE = FIXTURES / "run-registry-sample.nq"
 
 
 CURRENT_GRAPH = NamedNode("urn:sparqlwatch:current")
@@ -234,4 +235,55 @@ def store_crashed_partway(tmp_path):
     """
     return _loaded_store(
         tmp_path, "store-crashed-partway", RUN_WITH_SAMPLES, RUN_CRASHED_PARTWAY
+    )
+
+
+@pytest.fixture
+def store_registry_sample(tmp_path):
+    """Nine endpoints of the real 543-endpoint registry sweep, cut from it line
+    by line: three whose availability verdict is "verified", four
+    "indeterminate" and two "absent", and every verdict value that sweep
+    produced somewhere among their other metrics. See the comment in
+    web/tests/fixtures/run-registry-sample.nq for which nine and why."""
+    return _loaded_store(tmp_path, "store-registry-sample", RUN_REGISTRY_SAMPLE)
+
+
+@pytest.fixture
+def store_registry_and_failure(tmp_path):
+    """The nine-endpoint sample beside run-prober-failed.nq, whose one endpoint
+    has no availability verdict at all: every metric it applies was declined,
+    seven as "prober-failed" and one on the cost ceiling.
+
+    Ten endpoints in one store, and the tenth is the one the index cannot draw
+    a verdict for, because the run recorded none for it. The two files are
+    loaded together rather than merged into one because they are two runs: the
+    registry sweep is 2026-08-24T19:45:03Z and the failed run is
+    2026-08-23T02:00:00Z, and they name different endpoints, so each endpoint's
+    sw:currentRun is its own run's and neither hides the other.
+    """
+    return _loaded_store(
+        tmp_path,
+        "store-registry-and-failure",
+        RUN_REGISTRY_SAMPLE,
+        RUN_PROBER_FAILED,
+    )
+
+
+@pytest.fixture
+def store_two_metric_sets(tmp_path):
+    """Two runs whose metric sets differ, which is what a store holds for as
+    long as prober/metrics.toml can change.
+
+    The registry sweep measured seven metrics and declined one on all nine of
+    its endpoints; run-classes-absent.nq recorded two metrics, availability and
+    classes, on one endpoint and nothing else. So the index's columns are the
+    union of the two, eight, and no-classes.example has a fact for two of them
+    and no fact at all for the other six.
+
+    That is not a verdict about that endpoint and it must not be drawn as one:
+    "this run recorded nothing about that metric" is a gap in what this service
+    holds, and the six states it could be mistaken for are all findings.
+    """
+    return _loaded_store(
+        tmp_path, "store-two-metric-sets", RUN_REGISTRY_SAMPLE, RUN_CLASSES_ABSENT
     )

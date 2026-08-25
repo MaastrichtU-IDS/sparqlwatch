@@ -57,6 +57,15 @@ STORES: dict[str, tuple[Path, ...]] = {
     "store_new_subjects": (conftest.RUN_WITH_SAMPLES, conftest.RUN_NEW_SUBJECTS),
     "store_prober_failed": (conftest.RUN_PROBER_FAILED,),
     "store_crashed_partway": (conftest.RUN_WITH_SAMPLES, conftest.RUN_CRASHED_PARTWAY),
+    "store_registry_sample": (conftest.RUN_REGISTRY_SAMPLE,),
+    "store_registry_and_failure": (
+        conftest.RUN_REGISTRY_SAMPLE,
+        conftest.RUN_PROBER_FAILED,
+    ),
+    "store_two_metric_sets": (
+        conftest.RUN_REGISTRY_SAMPLE,
+        conftest.RUN_CLASSES_ABSENT,
+    ),
 }
 
 _DESCRIPTION = read_query("endpoint_description")
