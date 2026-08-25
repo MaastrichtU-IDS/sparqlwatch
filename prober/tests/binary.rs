@@ -215,6 +215,23 @@ fn overlapped(arrivals: &[&str]) -> bool {
     first_of("fast") < last_of("slow") && first_of("slow") < last_of("fast")
 }
 
+/// A bare `cargo run` in `prober/` has to be the sweeper.
+///
+/// Two `[[bin]]` targets and no `default-run` key make `cargo run` an error
+/// instead of a sweep, and a bare `cargo run` is what `README.md:69`, `:1276`
+/// and `src/bin/seed-registry.rs:11` instruct. No test can invoke `cargo run`
+/// itself without running cargo inside cargo, so this asserts the manifest key
+/// those instructions depend on.
+#[test]
+fn a_bare_cargo_run_in_this_crate_is_the_sweeper() {
+    let manifest = include_str!("../Cargo.toml");
+    assert!(
+        manifest.contains("\ndefault-run = \"sparqlwatch-prober\"\n"),
+        "prober/Cargo.toml has two [[bin]] targets, so it must name one as \
+         default-run or `cargo run` is an error: {manifest}"
+    );
+}
+
 #[tokio::test]
 async fn the_concurrency_flag_reaches_the_sweep_and_the_graph() {
     let dir = tempdir("concurrency");

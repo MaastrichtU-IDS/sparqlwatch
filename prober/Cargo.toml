@@ -3,6 +3,11 @@ name = "sparqlwatch-prober"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.96"
+# The sweeper, so a bare `cargo run` stays the sweeper after `seed-registry` was
+# added as a second `[[bin]]`. Without this key cargo refuses to choose, and
+# README.md:69 and :1276 and src/bin/seed-registry.rs:11 all instruct a bare
+# `cargo run`.
+default-run = "sparqlwatch-prober"
 
 [dependencies]
 oxrdf = "0.3"
