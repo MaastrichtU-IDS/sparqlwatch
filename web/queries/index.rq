@@ -1,0 +1,201 @@
+# What does this service know about every endpoint? One row per endpoint per
+# metric, over the whole registry: the endpoint, the metric id, the dqv:value
+# verdict where the run measured it, and the sw:notMeasuredReason where the run
+# declined it instead. Plus, per row and constant within a run, the run these
+# facts came from and whether it finished, and the newest run in the store and
+# whether IT finished and reached this endpoint.
+#
+# This is web/queries/endpoint_measurements.rq asked of every endpoint at once,
+# and it is deliberately the same query shape: the index and the endpoint page
+# are two renderings of one question, and a reader that selected its run
+# differently could show a verdict the endpoint's own page contradicts. So the
+# per-endpoint pointer, the one hop to the run graph, the type patterns and the
+# newest-run branch are all the shapes that file argues for, for the reasons it
+# gives, and every column it selects except the substituted ?endpoint is
+# selected here too.
+#
+# ?level and ?elapsedMs are here even though the index draws neither, and that
+# is the point: a row of this query and a row of that one are the same object
+# (web/endpoint_index.py builds the same EndpointMeasurements the endpoint page
+# reads), so a field cannot mean one thing on one page and another on the
+# other. Leaving them out would give every index row elapsed_ms None, which
+# reads as "the graph carries no elapsed time" for measurements that all carry
+# one. They cost 10 ms of the query's 60 ms over the 543-endpoint sweep.
+#
+# Nothing is substituted into this query: the question is about every endpoint
+# the derived graph knows, so there is no ?endpoint to bind.
+#
+# NO PAGINATION, and no LIMIT. The whole point of the derived
+# urn:sparqlwatch:current graph is that it is O(endpoints) rather than
+# O(endpoints x history), so this is a flat scan whose cost does not grow as
+# sweeps accumulate. Measured on this machine over the 543-endpoint registry
+# sweep: 4,344 rows in 34 ms without the newest-run branch and 60 ms with it.
+#
+# A MEASURED row has ?verdict bound and ?reason unbound; a DECLINED row has
+# ?reason bound and ?verdict unbound. They are two different facts and a caller
+# must read them as two shapes: "we chose not to run this metric" is not a
+# verdict, and rendering a reason where a verdict goes would state a confident
+# value for a metric nobody measured. endpoint_measurements.rq's header argues
+# this at length and this query inherits it.
+#
+# WHAT THE METRIC LIST IS. There is no list. ?metric comes back per row from
+# what the run recorded, so the columns the page draws are the metrics the
+# store holds and not the eight of prober/metrics.toml as it stands today. A
+# page built around a fixed eight draws chips no measurement stands behind the
+# first time that file changes, and a store holding two runs at different
+# metric revisions has two different metric sets in it at once.
+
+PREFIX dqv: <http://www.w3.org/ns/dqv#>
+PREFIX prov: <http://www.w3.org/ns/prov#>
+PREFIX sw: <urn:sparqlwatch:>
+
+SELECT ?endpoint ?run ?generatedAt ?metric ?verdict ?level ?elapsedMs ?reason
+       ?emission ?finalised
+       ?newestRun ?newestGeneratedAt ?newestEmission ?newestFinalised
+       ?newestCompleted
+WHERE {
+  GRAPH sw:current {
+    {
+      # THE POINTER IS INSIDE EACH UNION ARM, and here that is a measured
+      # decision rather than the substitution one endpoint_measurements.rq
+      # documents. A triple pattern standing before a braced group in the same
+      # block is evaluated with the group and rejoined, and over the
+      # 543-endpoint registry sweep this query's 4,344 rows measured:
+      #
+      #   pointer before the UNION        1,252 ms
+      #   pointer inside each arm            30 ms
+      #
+      # Same solutions either way. The cost of repeating one triple pattern is
+      # that it is repeated.
+      #
+      # It is also what makes the row set the right one: sw:currentRun is the
+      # graph's own statement of which endpoints current holds facts for, so
+      # binding it here means the page lists exactly those and cannot list an
+      # endpoint whose facts were left behind by a load.
+      ?endpoint sw:currentRun ?run .
+      # rdf:type as a bound variable plus a FILTER, matching exactly the same
+      # solutions as "?m a dqv:QualityMeasurement" and costing 0.13 ms rather
+      # than 28 ms at thirty runs. The measurement is in
+      # endpoint_measurements.rq's header.
+      ?measurement dqv:computedOn ?endpoint ;
+                   dqv:isMeasurementOf ?metric ;
+                   dqv:value ?verdict ;
+                   a ?measurementType .
+      FILTER (?measurementType = dqv:QualityMeasurement)
+      # OPTIONAL because only sw:metric:service-description carries a
+      # conformance level today (35 of the sweep's 3,801 measurements), and a
+      # measurement from before sw:elapsedMs existed would carry no elapsed
+      # time either.
+      OPTIONAL { ?measurement sw:level ?level }
+      OPTIONAL { ?measurement sw:elapsedMs ?elapsedMs }
+    }
+    UNION
+    {
+      # The same pointer, in this arm too. See the arm above.
+      ?endpoint sw:currentRun ?run .
+      ?notMeasured sw:notMeasuredOn ?endpoint ;
+                   sw:notMeasuredMetric ?metric ;
+                   sw:notMeasuredReason ?reason ;
+                   a ?notMeasuredType .
+      FILTER (?notMeasuredType = sw:NotMeasured)
+    }
+  }
+  # ONE HOP to the run current names, for the facts that belong to the run and
+  # not to the endpoint: sw:emission and sw:finalised. OPTIONAL with a FILTER
+  # that requires what it binds, which means exactly what a plain GRAPH block
+  # would mean and is the only form that is flat in the history. The numbers are
+  # in endpoint_measurements.rq's header: 151 ms against 0.40 ms at thirty runs.
+  #
+  # A solution whose run graph is gone is dropped, so an endpoint whose pointer
+  # names a vanished run is left out of the index rather than listed with no
+  # sweep behind it. That is drift, and web/load_run.py's --check names it.
+  OPTIONAL {
+    GRAPH ?run {
+      ?activity a prov:Activity ;
+                prov:generatedAtTime ?generatedAt .
+      # Both OPTIONAL, because a run from before stage 1c-b4 carries neither and
+      # its verdicts are still the answer to the question that was asked.
+      OPTIONAL { ?activity sw:emission ?emission }
+      OPTIONAL { ?activity sw:finalised ?finalised }
+    }
+  }
+  FILTER (BOUND(?generatedAt))
+
+  # The newest run in the store, which is routinely not ?run. This is the one
+  # selection here that is not per-endpoint, and it is the only way to see the
+  # case a per-endpoint question cannot: a run that died partway recorded
+  # nothing at all for every endpoint it never reached, so those endpoints'
+  # newest facts are an older complete run's and nothing about them hints that
+  # tonight's sweep died. On the index that is most of the rows.
+  #
+  # ITS PLACEMENT IS MEASURED. The aggregate does not mention ?endpoint, so it
+  # looks like something that should be evaluated once, at the top of the
+  # pattern, and joined. It is not: over the 543-endpoint sweep's 4,344 rows,
+  #
+  #   this form, the whole branch OPTIONAL          60 ms
+  #   the aggregate hoisted above the row scan   1,832 ms
+  #   the aggregate below the row scan           1,863 ms
+  #
+  # because a required join against the aggregate's one row costs the row scan
+  # its pointer plan (the 1,252 ms shape above). Asked on its own as a separate
+  # query the aggregate is 1.4 ms, so the ~26 ms this branch adds is the price
+  # of asking it in the same query as the rows, and it is paid for agreement:
+  # endpoint_measurements.rq selects the newest run with this exact subquery, so
+  # the index and the endpoint page cannot disagree about which run is newest.
+  # A future stage that needs those 100 ms back has the numbers here.
+  OPTIONAL {
+    {
+      SELECT (MAX(?anyGeneratedAt) AS ?newestGeneratedAt) WHERE {
+        GRAPH ?anyRun {
+          ?anyActivity a prov:Activity ;
+                       prov:generatedAtTime ?anyGeneratedAt .
+        }
+      }
+    }
+    GRAPH ?newestRun {
+      ?newestActivity a prov:Activity ;
+                      prov:generatedAtTime ?newestGeneratedAt .
+      OPTIONAL { ?newestActivity sw:emission ?newestEmission }
+      OPTIONAL { ?newestActivity sw:finalised ?newestFinalised }
+    }
+  }
+
+  # Whether the newest run recorded finishing THIS row's endpoint, and it is a
+  # separate OPTIONAL with a FILTER rather than one nested inside the branch
+  # above. THAT IS NOT A STYLE, IT IS THE DIFFERENCE BETWEEN RIGHT AND WRONG
+  # ANSWERS, and endpoint_measurements.rq does nest it because there ?endpoint is
+  # substituted before evaluation and is therefore a constant inside the group.
+  #
+  # Here ?endpoint is a variable the rows bind, and an OPTIONAL group is
+  # evaluated on its own and then left-joined on the variables it shares with
+  # the left. A nested "?newestActivity sw:completedEndpoint ?endpoint" BINDS
+  # ?endpoint inside the group, so the group's solutions are exactly the
+  # endpoints that run completed, and every row about any OTHER endpoint then has
+  # nothing compatible to join with and loses the whole branch. Measured on
+  # web/tests/fixtures/run-crashed-partway.nq, which completed one endpoint of
+  # three: kadaster got the newest-run facts and the other two came back with
+  # ?newestRun unbound, so the two endpoints that newer run never reached were
+  # the two the page could not say so about. The condition inverted itself
+  # exactly where it mattered.
+  #
+  # As its OWN OPTIONAL the group still binds ?endpoint, and that is fine and is
+  # the point: ?endpoint is shared with the row, so a row whose endpoint the
+  # newest run completed joins and a row whose endpoint it did not keeps every
+  # other binding it had and leaves ?newestCompleted unbound, which is exactly
+  # the fact wanted. What broke above was not binding ?endpoint, it was binding
+  # it in the same group as the run-level facts, where losing the join lost
+  # those too.
+  #
+  # Written as a join rather than as a FILTER on a separate variable, which is
+  # the same answer and is measured: over the 543-endpoint sweep's 4,344 rows,
+  #
+  #   this form                                       60 ms
+  #   FILTER (?newestCompleted = ?endpoint)        2,373 ms
+  #
+  # because the filter form has to compare that run's 543 completion markers
+  # against every row instead of looking each row's endpoint up.
+  OPTIONAL {
+    GRAPH ?newestRun { ?newestActivity sw:completedEndpoint ?endpoint }
+    BIND (?endpoint AS ?newestCompleted)
+  }
+}

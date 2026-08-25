@@ -354,7 +354,14 @@ so a typo used to produce a server whose every response was a 404 saying the
 store held nothing about the endpoint. That was true of the empty store it had
 just created and indistinguishable from a registry nobody has swept.
 
-The single HTTP resource is the current state of a monitored endpoint:
+There are two HTTP resources. The index is every endpoint this service holds
+facts for, and it is the way in:
+
+```
+GET /
+```
+
+and the current state of one monitored endpoint:
 
 ```
 GET /endpoint?url=<percent-encoded endpoint URL>
@@ -366,6 +373,41 @@ becomes `https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery`:
 ```bash
 curl 'http://localhost:8000/endpoint?url=https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery'
 ```
+
+### The index
+
+`GET /` lists one row per endpoint the store holds facts for, with one chip per
+metric, grouped by the availability verdict's own value. There is no pagination,
+because the derived `urn:sparqlwatch:current` graph makes the whole registry a
+flat scan: the 543-endpoint sweep is 4,344 rows in about 60 ms of query and
+about 85 ms end to end, and neither number grows as sweeps accumulate.
+
+The groups are the availability verdict's values, one per value present, in the
+order of the table in `web/verdict_encoding.py`, followed by one group for
+endpoints whose newest run recorded no availability verdict at all. They are not
+"up" and "down", and there is no "did not answer" heading, because `absent` and
+`indeterminate` are not one fact: `absent` means the host answered with
+something that was not a SPARQL result (one of the four in the 543-endpoint
+sweep is a `.ttl` file on raw.githubusercontent.com), while `indeterminate`
+covers a timeout, a transport error, a DNS failure and an HTML front end.
+Collapsing them would turn "we could not determine this" into a determined
+negative.
+
+Each chip reads two letters, the metric's abbreviation, and the metric key at
+the top of the page writes every abbreviation out in full. The abbreviations are
+generated from the metric names the store holds, so they change with the metric
+set rather than being a list in the template. That is the page's size budget at
+work: 543 rows carrying full metric names, or the metric repeated in an
+attribute beside each chip, measured 610 KB against the 500 KB the page is
+allowed. It is 434 KB as it stands.
+
+**The row filter is an inline `<script>`, and the page does not depend on it.**
+Every row is in the document as served; with JavaScript off or blocked, all of
+them are visible and only the filtering is missing. The spec's risk table flags
+the `ids3` content security policy for a later stage's editor bundle, and this
+script raises the same question one stage early: under a policy that forbids
+inline script it will need a nonce or to become a static file, and nothing about
+what the page says changes either way.
 
 ### Why a query parameter instead of a path
 
@@ -388,7 +430,14 @@ parameter is the right choice.
 
 ### Content negotiation
 
-The same endpoint resource is served in two representations, chosen by the `Accept` header:
+Both resources are served in two kinds of representation, chosen by the `Accept`
+header and by the same code. The index's RDF representation is every endpoint's
+measurements and declines, which is 2.2 MB of Turtle for the 543-endpoint sweep:
+a bulk representation, deliberately, and it carries no class samples and no
+triple about the index itself, because a CONSTRUCT here may only emit triples
+some run graph already holds.
+
+The endpoint resource is served in two representations, chosen by the `Accept` header:
 
 - `text/html` returns an HTML page with metrics, verdicts, and sampled classes
 - `text/turtle`, `application/rdf+xml`, `application/n-triples`, `application/ld+json`
@@ -545,7 +594,7 @@ theme tokens; they are not authoritative for verdict encoding.
 The design spec lists four read paths and several write features. This slice delivers one.
 
 **Not built:**
-- Leaderboard (filterable, sortable by dimension)
+- Leaderboard (sortable by dimension; the index has one text filter and no sorts)
 - Per-metric pages (definition, computation method, which endpoints fail it)
 - History (per-endpoint measurement history)
 - Evidence (request, response headers, timing for each measurement)

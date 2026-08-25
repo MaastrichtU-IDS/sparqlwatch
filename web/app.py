@@ -42,8 +42,10 @@ from __future__ import annotations
 import html
 import os
 import re
+from collections import Counter
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, Query, Request, Response
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -51,6 +53,7 @@ from pyoxigraph import NamedNode, RdfFormat, Store, Variable, serialize
 
 import verdict_encoding
 from endpoint_content import EndpointContent, endpoint_content
+from endpoint_index import endpoint_index
 from endpoint_measurements import EndpointMeasurements, endpoint_measurements
 from load_run import CURRENT_GRAPH
 from queries import read_query
@@ -88,6 +91,11 @@ from queries import read_query
 # behaviour and not a cost. Losing the endpoint URL is a correctness bug;
 # an unpretty IRI is a matter of taste, so the taste loses.
 ENDPOINT_PATH = "/endpoint"
+
+# The index lives at the root, because it is the way in: before it there was
+# one route and reaching it meant knowing an endpoint URL and percent-encoding
+# it by hand.
+INDEX_PATH = "/"
 
 # ---------------------------------------------------------------------------
 # Representations
@@ -317,6 +325,7 @@ def get_store() -> Store:
 # The resource
 # ---------------------------------------------------------------------------
 _DESCRIPTION_QUERY = read_query("endpoint_description")
+_INDEX_DESCRIPTION_QUERY = read_query("index_description")
 _ENDPOINT_VARIABLE = Variable("endpoint")
 
 app = FastAPI(
@@ -884,5 +893,437 @@ def endpoint_resource(
         )
     return Response(
         content=_endpoint_rdf(store, url, media_type),
+        media_type=media_type,
+    )
+
+
+
+# ---------------------------------------------------------------------------
+# The index
+# ---------------------------------------------------------------------------
+#
+# One row per endpoint the store holds facts for, grouped by the availability
+# verdict's own value. Four things about it are load-bearing rather than
+# cosmetic, and each is a mistake this project has written down.
+#
+# GROUPED BY THE VERDICT'S OWN VALUE, one group per value present, in
+# verdict_encoding.STATES' order, plus one final group for endpoints whose
+# newest run recorded no availability verdict at all. Not a boolean, and no
+# "did not answer" heading over the last three: "absent" means the host
+# answered with something that was not a SPARQL result (in the 543-endpoint
+# sweep one of the four is a .ttl file on raw.githubusercontent.com) while
+# "indeterminate" covers a timeout, a transport error, a DNS failure and an
+# HTML front end. Collapsing those turns "we could not determine this" into a
+# determined negative, which is the one thing the conformance model exists to
+# prevent.
+#
+# THE METRIC COLUMNS COME FROM THE ROWS, not from a list of eight. See
+# web/queries/index.rq's header: a store holding two runs at different metric
+# revisions holds two metric sets at once, and a page built around today's
+# eight draws chips no measurement stands behind the first time
+# prober/metrics.toml changes.
+#
+# EVERY COUNT CARRIES ITS DENOMINATOR. Stage 1d-a published a wrong number by
+# conflating three quantities that were each true of something else, and the
+# correction was to state each distinctly.
+#
+# EVERY ROW WHOSE FACTS ARE NOT CURRENT SAYS SO, with the same two conditions
+# the endpoint page states and for the same reason: 543 rows of a crashed
+# sweep's facts presented as current is the same wrong answer 543 times.
+
+# The metric the page groups by. Named rather than spelled at the call site so
+# that the one place the index turns a verdict into a heading is traceable, the
+# same way _CLASSES_METRIC is for the sample.
+_AVAILABILITY_METRIC = _METRIC_PREFIX + "availability"
+
+# The two words a qualified row carries, and they are words rather than a
+# colour or a title attribute: a marker only a mouse can find qualifies
+# nothing. Each is explained in a full sentence in the page's key, which is
+# where the reasoning that will not fit in three words lives.
+ROW_UNFINISHED_TEXT = "from a sweep that stopped"
+ROW_NEVER_REACHED_TEXT = "a later sweep never got here"
+
+# What an empty cell in a metric's column means. It is NOT one of the seven
+# states and it is deliberately not drawn as one: a metric this endpoint's
+# newest run recorded neither a measurement nor a decline for is a gap in what
+# the store holds, and drawing it as "not measured" would claim the run said so.
+EMPTY_CELL_TEXT = (
+    "A cell holding only a dot means this endpoint's newest run recorded "
+    "nothing at all about that metric, neither a measurement nor a decline. It "
+    "is a gap in what this service holds, not a verdict about the endpoint, "
+    "which is why it is not drawn as one of the states below."
+)
+
+
+def _abbreviation(name: str, width: int) -> str:
+    """One metric's abbreviation: ``width`` letters of its first word, then the
+    initial of each word after it."""
+    words = name.split("-")
+    return (words[0][:width] + "".join(word[:1] for word in words[1:])).upper()
+
+
+def metric_abbreviations(metrics: list[str]) -> dict[str, str]:
+    """An abbreviation per metric, unique across the ones given.
+
+    The chips on this page carry an abbreviation rather than the metric's name,
+    which is what design/Main.dc.html does (``c.abbr``) and what the size budget
+    requires: 543 rows times a full metric name is a third of the budget spent
+    on repeating eight words. The endpoint page's chips carry no text at all
+    because the metric is named beside them; here there is no room to name it
+    beside them, so the abbreviation is the only thing identifying the column
+    and it has to be unique and it has to be written out somewhere. The metric
+    key on the page is where it is written out.
+
+    A single-word metric gets two letters and a hyphenated one gets the initials
+    of its words, which is what keeps "classes" (CL) apart from "cors" (CO) and
+    both apart from "cors-preflight" (CP). Where that is still not enough the
+    first word lengthens by a letter at a time, and if two metrics cannot be
+    told apart that way at all they fall back to their whole names, which are
+    unique because they are the metrics' own ids.
+    """
+    ordered = list(dict.fromkeys(metrics))
+    names = {metric: _metric_name(metric) for metric in ordered}
+    widths = {
+        metric: (2 if "-" not in names[metric] else 1) for metric in ordered
+    }
+
+    while True:
+        abbreviations = {
+            metric: _abbreviation(names[metric], widths[metric])
+            for metric in ordered
+        }
+        counts = Counter(abbreviations.values())
+        colliding = [
+            metric for metric in ordered if counts[abbreviations[metric]] > 1
+        ]
+        if not colliding:
+            return abbreviations
+        grew = False
+        for metric in colliding:
+            first_word = names[metric].split("-")[0]
+            if widths[metric] < len(first_word):
+                widths[metric] += 1
+                grew = True
+        if not grew:
+            # Two metrics whose names cannot produce distinct abbreviations,
+            # which takes a metric id that is a prefix-free duplicate of
+            # another's. The name itself is the abbreviation then: long, and
+            # unique, and the page stays readable rather than showing two
+            # different metrics under one label.
+            return {
+                metric: (
+                    abbreviations[metric]
+                    if counts[abbreviations[metric]] == 1
+                    else names[metric].upper()
+                )
+                for metric in ordered
+            }
+
+
+def _index_metrics(entries: list[EndpointMeasurements]) -> list[dict]:
+    """Every metric any row has a fact for, in metric id order.
+
+    Sorted rather than left in the order the store returned them, for the same
+    reason EndpointMeasurements sorts its verdicts: SPARQL solution order is
+    not specified, and columns that moved between two identical requests would
+    look like the metric set had changed.
+    """
+    metrics = sorted(
+        {verdict.metric for entry in entries for verdict in entry.verdicts}
+        | {declined.metric for entry in entries for declined in entry.declined}
+    )
+    abbreviations = metric_abbreviations(metrics)
+    return [
+        {
+            "metric": metric,
+            "name": _metric_name(metric),
+            "abbr": abbreviations[metric],
+        }
+        for metric in metrics
+    ]
+
+
+def _index_chips(entry: EndpointMeasurements, metrics: list[dict]) -> list[dict]:
+    """One cell per metric column, in the page's column order.
+
+    A cell is a chip when this endpoint's newest run recorded something about
+    that metric and an empty placeholder when it did not, so the columns line
+    up across rows without a gap being drawn as one of the seven states. See
+    EMPTY_CELL_TEXT.
+    """
+    verdicts = {verdict.metric: verdict for verdict in entry.verdicts}
+    declined = {decline.metric: decline for decline in entry.declined}
+
+    cells = []
+    for column in metrics:
+        metric = column["metric"]
+        if metric in verdicts:
+            state = verdict_encoding.presentation(verdicts[metric].verdict)
+            cells.append(
+                {
+                    "present": True,
+                    "name": column["name"],
+                    "abbr": column["abbr"],
+                    # The value the store holds, verbatim, including a value
+                    # this build has no encoding for: relabelling it would hide
+                    # which value the store actually holds.
+                    "verdict": verdicts[metric].verdict,
+                    "reason": None,
+                    "css_class": verdict_encoding.css_class(state.slug),
+                    "slug": state.slug,
+                }
+            )
+        elif metric in declined:
+            state = verdict_encoding.presentation(verdict_encoding.NOT_MEASURED)
+            cells.append(
+                {
+                    "present": True,
+                    "name": column["name"],
+                    "abbr": column["abbr"],
+                    # No verdict at all, which is the point: the run said it did
+                    # not look. The reason travels instead, so a reader and a
+                    # test can tell "we priced it out" from "our own probe
+                    # died".
+                    "verdict": None,
+                    "reason": declined[metric].reason,
+                    "css_class": verdict_encoding.css_class(state.slug),
+                    "slug": state.slug,
+                }
+            )
+        else:
+            cells.append({"present": False})
+    return cells
+
+
+def _index_row(entry: EndpointMeasurements, metrics: list[dict]) -> dict:
+    """One row: the endpoint, its link, its cells, and any qualification.
+
+    The link is percent-encoded with nothing left safe, because the endpoint
+    resource names its endpoint in a url query parameter and a query string is
+    unquoted exactly once: an endpoint URL holding a '&' or a '#' left bare
+    would arrive truncated, and one holding a percent sequence of its own would
+    arrive as a different URL. See "The URL shape" at the top of this file.
+    """
+    return {
+        "endpoint": entry.endpoint,
+        "href": ENDPOINT_PATH + "?url=" + quote(entry.endpoint, safe=""),
+        "cells": _index_chips(entry, metrics),
+        "run_unfinished": entry.run_did_not_finish,
+        "never_reached": entry.newer_run_did_not_reach_this_endpoint,
+    }
+
+
+def _index_groups(
+    entries: list[EndpointMeasurements], metrics: list[dict]
+) -> list[dict]:
+    """The rows, grouped by the availability verdict's own value.
+
+    One group per value PRESENT, in verdict_encoding.STATES' order, then any
+    value this build has no encoding for, then one final group for endpoints
+    whose newest run recorded no availability verdict at all.
+
+    The order is the encoding table's and not any notion of better or worse.
+    Ranking the groups would be this service's opinion about the endpoints; the
+    table's order is a fact about the vocabulary.
+
+    The final group is merged with nothing, and its key is not a verdict value:
+    an endpoint whose run declined every metric it applied has no availability
+    verdict, and web/tests/fixtures/run-prober-failed.nq is a whole run of
+    exactly that shape, which stage 1c-b3 makes the normal outcome for a host
+    group whose probe task panicked. Merging it into "absent" would turn
+    "nobody looked" into "we established nothing was there"; merging it into
+    "indeterminate" would claim a measurement nobody took.
+    """
+    availability: dict[str | None, list[EndpointMeasurements]] = {}
+    for entry in entries:
+        verdict = next(
+            (
+                measured.verdict
+                for measured in entry.verdicts
+                if measured.metric == _AVAILABILITY_METRIC
+            ),
+            None,
+        )
+        availability.setdefault(verdict, []).append(entry)
+
+    order = {state.slug: index for index, state in enumerate(verdict_encoding.STATES)}
+    # A value the table has no entry for sorts after every value it has, and
+    # ties among such values are broken by the value itself so the page is
+    # stable. None sorts last of all, and it is not a value: see the docstring.
+    values = sorted(
+        (value for value in availability if value is not None),
+        key=lambda value: (order.get(value, len(order)), value),
+    )
+    if None in availability:
+        values.append(None)
+
+    total = len(entries)
+    groups = []
+    for value in values:
+        rows = availability[value]
+        if value is None:
+            state = verdict_encoding.presentation(verdict_encoding.NOT_MEASURED)
+            label = state.label
+            meaning = (
+                "The newest run for these endpoints recorded no availability "
+                "verdict at all: every metric it applied to them was declined "
+                "rather than measured. That is not a verdict about the "
+                "endpoint, and it is not merged with one."
+            )
+        else:
+            state = verdict_encoding.presentation(value)
+            recognised = state is not verdict_encoding.UNRECOGNISED
+            # An unrecognised value is shown verbatim in the heading, the same
+            # way the endpoint page shows it in a row's state text.
+            label = state.label if recognised else value
+            # What the group IS, and deliberately not what the state means in
+            # general. verdict_encoding's meanings are written for a metric that
+            # can be declared ("works, and the endpoint declares it"), which is
+            # true of cors and of the service description and is not true of
+            # availability: nothing declares that it answers queries. Printing
+            # that generic gloss under an availability heading would explain the
+            # group with a sentence about a different metric. The legend at the
+            # foot of the page explains the drawing, which is what it is for.
+            meaning = (
+                f"These are the endpoints whose availability metric read "
+                f"\"{value}\" in the newest run that measured them. Nothing "
+                f"about their other metrics follows from it: every metric "
+                f"carries its own verdict, and the rows are where those are."
+            )
+        groups.append(
+            {
+                # Empty for the final group, so that a group keyed on a verdict
+                # and the group keyed on no verdict stay distinguishable to a
+                # reader of the markup even where a store carried the literal
+                # value "not-measured" as a dqv:value.
+                "availability": "" if value is None else value,
+                "label": label,
+                "meaning": meaning,
+                "css_class": verdict_encoding.css_class(state.slug),
+                "count": len(rows),
+                "of": total,
+                # The heading a reader sees. It names the metric, because
+                # "verified: 3 of 9" on a page of eight metrics does not say
+                # verified at what, and it carries the denominator, because
+                # "verified 3" invites the question stage 1d-a got wrong.
+                "heading": (
+                    f"availability {label}: {len(rows)} of {total} endpoints"
+                ),
+                "rows": [_index_row(entry, metrics) for entry in rows],
+            }
+        )
+    return groups
+
+
+def _newest_sweep_note(entries: list[EndpointMeasurements]) -> str | None:
+    """The sentence for a store whose newest sweep did not finish.
+
+    Said once, at the top, because it is one fact about the store rather than
+    543 facts about endpoints: the rows below say which of them it leaves
+    qualified and how. Both halves of the condition are required for the reason
+    EndpointMeasurements.run_did_not_finish gives: a run from before stage
+    1c-b4 promised nothing about finishing, so its missing sw:finalised says
+    nothing either.
+    """
+    if not entries:
+        return None
+    first = entries[0]
+    if first.newest_emission is None or first.newest_finalised:
+        return None
+    return (
+        f"The newest sweep in this store, at {first.newest_generated_at}, did "
+        f"not finish: it recorded that it was being written one endpoint at a "
+        f"time and never recorded that it was complete. Every row below says "
+        f"whether that leaves it qualified, and how."
+    )
+
+
+def _index_context(entries: list[EndpointMeasurements]) -> dict:
+    """Everything the index template renders, decided here rather than in the
+    page.
+
+    The template loops and formats. What a group is, what order the groups come
+    in, what a missing metric means and how a state is drawn are all decisions
+    with a right answer, and they belong where they can be tested.
+    """
+    metrics = _index_metrics(entries)
+    groups = _index_groups(entries, metrics)
+    # The legend counts the chips on this page, and it is built by the same
+    # function as the endpoint page's legend from the same table, so the two
+    # pages cannot explain the encoding differently. A cell that is a gap
+    # rather than a chip is not counted: it is not one of the states.
+    drawn = [
+        {"slug": cell["slug"]}
+        for group in groups
+        for row in group["rows"]
+        for cell in row["cells"]
+        if cell["present"]
+    ]
+    return {
+        "endpoint_count": len(entries),
+        "metrics": metrics,
+        "metric_count": len(metrics),
+        "groups": groups,
+        "newest_generated_at": (
+            entries[0].newest_generated_at if entries else None
+        ),
+        "newest_sweep_note": _newest_sweep_note(entries),
+        "row_unfinished_text": ROW_UNFINISHED_TEXT,
+        "row_never_reached_text": ROW_NEVER_REACHED_TEXT,
+        "empty_cell_text": EMPTY_CELL_TEXT,
+        "legend": _legend(drawn),
+        "chip_width": verdict_encoding.CHIP_WIDTH_PX,
+        "chip_height": verdict_encoding.CHIP_HEIGHT_PX,
+        "encoding_css": verdict_encoding.css_rules(),
+    }
+
+
+def _index_html(entries: list[EndpointMeasurements]) -> str:
+    """The index, rendered."""
+    return _TEMPLATES.get_template("index.html").render(**_index_context(entries))
+
+
+def _index_rdf(store: Store, media_type: str) -> bytes:
+    """Serialise every endpoint's facts, straight from the store."""
+    triples = store.query(_INDEX_DESCRIPTION_QUERY)
+    return serialize(triples, format=RdfFormat.from_media_type(media_type))
+
+
+@app.get(INDEX_PATH)
+def index_resource(
+    request: Request,
+    store: Store = Depends(get_store),
+) -> Response:
+    """Every endpoint this service knows about, in one representation or the
+    other.
+
+    Negotiated the same way and by the same function as the endpoint resource,
+    because the design spec requires content negotiation of every resource: an
+    index a person can read and a machine cannot would make the fleet the one
+    thing this service will not publish as data.
+
+    There is no 404 branch. This resource exists whatever the store holds: an
+    index of no endpoints is an answer, and _opened_store already refuses a
+    store that holds no quads or no derived graph, which is the mistake a 404
+    here would be reporting as an empty registry.
+    """
+    media_type = choose_representation(request.headers.get("accept"))
+    if media_type is None:
+        return Response(
+            content=(
+                "none of the requested media types can be served; this "
+                "resource offers " + ", ".join(OFFERED_MEDIA_TYPES) + "\n"
+            ),
+            status_code=406,
+            media_type="text/plain; charset=utf-8",
+        )
+
+    if media_type == HTML_MEDIA_TYPE:
+        return Response(
+            content=_index_html(endpoint_index(store)),
+            media_type="text/html; charset=utf-8",
+        )
+    return Response(
+        content=_index_rdf(store, media_type),
         media_type=media_type,
     )
