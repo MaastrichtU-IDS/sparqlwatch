@@ -374,23 +374,32 @@ pub fn dedupe(endpoints: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
     use std::io::Write;
-    use std::sync::{Arc, Mutex};
 
-    /// A `MakeWriter` that keeps what a subscriber wrote, so a test can assert
-    /// the warning was actually emitted rather than assume it.
-    #[derive(Clone, Default)]
-    struct Captured(Arc<Mutex<Vec<u8>>>);
-
-    impl Captured {
-        fn text(&self) -> String {
-            String::from_utf8_lossy(&self.0.lock().unwrap()).to_string()
-        }
+    thread_local! {
+        /// Where this thread's `logs_of` call, if it is inside one, wants the
+        /// subscriber's output put.
+        static CAPTURED: RefCell<Option<Vec<u8>>> = const { RefCell::new(None) };
     }
 
-    impl Write for Captured {
+    /// A `MakeWriter` that appends to the calling thread's `CAPTURED` buffer, so
+    /// a test can assert the warning was actually emitted rather than assume it.
+    ///
+    /// Per thread and not one shared buffer, because `cargo test` runs these
+    /// tests in parallel and a shared buffer would hand one test another test's
+    /// warnings. A thread with no buffer set is not inside `logs_of`, and its
+    /// output is dropped.
+    #[derive(Clone, Copy, Default)]
+    struct ThreadCapture;
+
+    impl Write for ThreadCapture {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(buf);
+            CAPTURED.with(|slot| {
+                if let Some(sink) = slot.borrow_mut().as_mut() {
+                    sink.extend_from_slice(buf);
+                }
+            });
             Ok(buf.len())
         }
         fn flush(&mut self) -> std::io::Result<()> {
@@ -398,24 +407,63 @@ mod tests {
         }
     }
 
-    impl tracing_subscriber::fmt::MakeWriter<'_> for Captured {
+    impl tracing_subscriber::fmt::MakeWriter<'_> for ThreadCapture {
         type Writer = Self;
         fn make_writer(&self) -> Self::Writer {
-            self.clone()
+            *self
         }
     }
 
-    /// Run `f` with a subscriber of our own, scoped to this thread, and return
-    /// what it logged.
+    /// Install one subscriber for the whole test binary, once.
+    ///
+    /// A process-wide default rather than a `tracing::subscriber::with_default`
+    /// per call, which is what `logs_of` used to do and which made this suite
+    /// fail 9 times in 80 parallel `cargo test --lib` runs with an empty log.
+    /// `with_default` installs per thread, but `tracing-core`'s call-site
+    /// interest cache is process-global, and every `with_default` builds a
+    /// `Dispatch` whose constructor rebuilds that cache. With one dispatcher
+    /// registered the rebuild asks `dispatcher::get_default` on the rebuilding
+    /// thread (`tracing-core-0.1.36/src/callsite.rs:564-566`); a thread that is
+    /// not inside `with_default` has no default, so `NoSubscriber` answers
+    /// `Interest::never`, and that verdict is then cached for every thread. It
+    /// disabled the `tracing::warn!` call site under whichever test happened to
+    /// be capturing.
+    ///
+    /// A global default cannot lose that race. `get_default` falls back to the
+    /// global whenever no scoped dispatcher is set anywhere in the process
+    /// (`tracing-core-0.1.36/src/dispatcher.rs:383-386`), and nothing in this
+    /// crate sets one, so every rebuild on every thread sees this subscriber.
+    /// The cache is rebuilt explicitly afterwards because `Dispatch::new`
+    /// rebuilds it BEFORE `set_global_default` stores the dispatch
+    /// (`dispatcher.rs:299-326`), so a call site already registered by an
+    /// earlier test would otherwise keep the `never` it was handed.
+    fn install_capture() {
+        static INSTALLED: std::sync::Once = std::sync::Once::new();
+        INSTALLED.call_once(|| {
+            let subscriber = tracing_subscriber::fmt()
+                .with_writer(ThreadCapture)
+                .without_time()
+                .with_ansi(false)
+                .finish();
+            tracing::subscriber::set_global_default(subscriber)
+                .expect("nothing else in this test binary sets a global default");
+            tracing::callsite::rebuild_interest_cache();
+        });
+    }
+
+    /// Run `f` and return what it logged on this thread.
+    ///
+    /// The buffer is set rather than checked for absence: a panic inside `f`
+    /// leaves it behind, and libtest may put another test on that thread.
+    /// `logs_of` is not nested anywhere in this module.
     fn logs_of(f: impl FnOnce()) -> String {
-        let captured = Captured::default();
-        let subscriber = tracing_subscriber::fmt()
-            .with_writer(captured.clone())
-            .without_time()
-            .with_ansi(false)
-            .finish();
-        tracing::subscriber::with_default(subscriber, f);
-        captured.text()
+        install_capture();
+        CAPTURED.with(|slot| *slot.borrow_mut() = Some(Vec::new()));
+        f();
+        let bytes = CAPTURED
+            .with(|slot| slot.borrow_mut().take())
+            .unwrap_or_default();
+        String::from_utf8_lossy(&bytes).to_string()
     }
 
     fn v(items: &[&str]) -> Vec<String> {
