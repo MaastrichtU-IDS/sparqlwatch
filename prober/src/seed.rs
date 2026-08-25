@@ -1,9 +1,11 @@
 //! Turning a LOD Cloud dump into a candidate registry.
 //!
 //! The dump is a JSON object of datasets, each carrying a `sparql` array whose
-//! entries have an `access_url`. Measured on the 2026-08-24 dump: 1683
-//! datasets, all of them carrying the key, 970 of those arrays empty, 725
-//! entries, 548 distinct URLs.
+//! entries have an `access_url`. Measured on the dump whose own version is
+//! 2026-06-15, fetched on 2026-08-19: 1683 datasets, all of them carrying the
+//! key, 970 of those arrays empty, 725 entries, 548 distinct URLs. The version
+//! and the fetch date are different things, which is why `seed-registry` takes
+//! them as separate flags.
 //!
 //! Two things this module deliberately does not do.
 //!

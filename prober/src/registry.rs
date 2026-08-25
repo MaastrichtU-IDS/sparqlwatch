@@ -13,9 +13,11 @@
 //! endpoint IRI with no measurement identity to distinguish two of them.
 //!
 //! Deduplicating at load rather than at emission also stops the sweep probing
-//! one stranger's server twice in the same run, and stage 1d seeds this list
-//! from LOD Cloud plus YummyData, two overlapping real-world dumps: duplicates
-//! are the expected case, not the exotic one.
+//! one stranger's server twice in the same run, and stage 1d-a seeds this list
+//! from the LOD Cloud dump, where 725 `access_url` entries collapse to 548
+//! distinct URLs: duplicates are the expected case, not the exotic one. A
+//! second source, YummyData's list, is deferred because it lives in that
+//! application's database rather than a checked-in file.
 //!
 //! The second, because the endpoint string is published verbatim inside every
 //! subject `emit::subject_iri` builds, in a run graph this project never
@@ -201,7 +203,8 @@ pub fn without_reserved_names(endpoints: &[String]) -> Vec<String> {
             Some(reason) => tracing::warn!(
                 host = %host,
                 filtered_position,
-                "registry entry dropped: its host is {reason}, so no service can be there to                  measure"
+                "registry entry dropped: its host is {reason}, so no service can be there \
+                 to measure"
             ),
             None => kept.push(ep.clone()),
         }
@@ -301,7 +304,10 @@ pub fn without_unpublishable_iris(endpoints: &[String]) -> Vec<String> {
 /// authority on `//`, so `ftp://alice:s3cret@a.example/sparql` is dropped like
 /// any `http` one. Whether a non-http endpoint belongs in the registry at all
 /// is a separate question, and a scheme allowlist here would change what gets
-/// swept, so it is left to stage 1d's triage of the seeding dumps.
+/// swept. Stage 1d-a retired that question FOR THE LOD CLOUD DUMP by measuring
+/// it: all 548 candidates are `http` or `https`, so an allowlist would refuse
+/// nothing. A different source may differ, so the question is retired for this
+/// dump rather than in general.
 pub fn without_credentials(endpoints: &[String]) -> Vec<String> {
     let mut kept: Vec<String> = Vec::with_capacity(endpoints.len());
     for (deduped_position, ep) in endpoints.iter().enumerate() {
