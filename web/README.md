@@ -308,9 +308,31 @@ Three things the rule cannot fix:
   read through the pointer, so a footer arriving changes what the page says
   without a quad of `current` moving
 
-The first two are detected, not left to a reader: an endpoint whose pointer
+The first two are detected, not left to a reader. An endpoint whose pointer
 names a run whose graph no longer mentions it comes back in
-`LoadResult.drifted`, and the fix is a rebuild.
+`LoadResult.drifted`, which `load_run.py` prints and which makes the load exit
+non-zero, and the fix is a rebuild.
+
+`drifted` is computed inside a load, though, and dropping a run graph is not a
+load. So the dropped case is caught a second time, where nothing has to be run
+for it to be noticed: **the server refuses to open a store in which any pointer
+names a run graph the store does not hold**, names an affected endpoint and the
+count and the run, and names the rebuild. Answering "no run in this store has
+measured this endpoint" out of a store whose older run graph holds every verdict
+for it is the same wrong answer the two refusals beside it exist to prevent.
+
+**So dropping a run graph is a two-step operation.** Drop it, then rebuild:
+
+```bash
+web/.venv/bin/python web/load_run.py --rebuild path/to/sparqlwatch.db
+```
+
+Nothing falls back at read time, deliberately. Recency is decided in one place,
+which is what moving it into `current` bought, and a reader that fell back to an
+older run would put a second derivation beside the one the three read queries
+use. A rebuild derives `current` from the run graphs alone, so it points every
+endpoint at the newest run that still measures it, which after a drop is the
+newest survivor.
 
 ### Check and rebuild
 

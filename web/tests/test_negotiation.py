@@ -23,7 +23,7 @@ from pyoxigraph import Literal, NamedNode, RdfFormat, Store, parse
 from starlette.testclient import TestClient
 
 from app import STORE_PATH_VARIABLE, ENDPOINT_PATH, app, get_store
-from load_run import load_run
+from load_run import load_run, rebuild_current
 
 KADASTER = "https://data.kkg.kadaster.nl/query"
 TRUNCATED = "https://truncated.example/sparql"
@@ -672,6 +672,17 @@ def test_an_endpoint_sampled_only_by_another_metric_is_404_that_says_what_was_ch
 # in this file replaces get_store through app.dependency_overrides and never
 # touches a path on disk.
 FIXTURE = Path(__file__).parent / "fixtures" / "run-with-samples.nq"
+DECLINED_FIXTURE = Path(__file__).parent / "fixtures" / "run-declined.nq"
+NEW_SUBJECTS_FIXTURE = Path(__file__).parent / "fixtures" / "run-new-subjects.nq"
+
+# The three runs the two tests below build one store out of, oldest first, and
+# the instant of the one they drop. Three and not two, so that dropping the
+# newest leaves TWO run graphs behind and a rebuild has to choose between
+# them: the 18:00 sweep declined sw:metric:classes on its cost ceiling, so its
+# seven verdicts and one decline are a different answer from the 16:00 sweep's
+# eight verdicts, and a rebuild that reached for the oldest run rather than the
+# newest surviving one would be visible.
+DROPPED_SWEEP = "2026-08-22T20:00:00Z"
 
 
 def test_a_store_path_with_nothing_at_it_is_refused(tmp_path, monkeypatch):
@@ -767,6 +778,89 @@ def test_a_store_with_run_graphs_and_no_current_is_refused_at_open(
     assert "urn:sparqlwatch:current" in message, "name the graph that is missing"
     assert "--rebuild" in message, "and name the command that builds it"
     assert str(path) in message
+
+
+def test_a_store_whose_pointer_names_a_dropped_run_is_refused_at_open(
+    tmp_path, monkeypatch
+):
+    """Dropping a bad run graph, which the design advertises, one step along.
+
+    One graph per run exists so a bad run can be removed wholesale, and
+    remove_graph is used in this suite today. Since stage 3-2 decided recency
+    once, in urn:sparqlwatch:current, the endpoints of a dropped run keep a
+    sw:currentRun naming a graph that is gone, and both read queries drop those
+    solutions on FILTER (BOUND(?generatedAt)). The index then says "no run in
+    this store has recorded a measurement or a decline for any endpoint" and
+    the endpoint page says "no run in this store has measured this endpoint",
+    out of a store whose older run graph still holds eight verdicts for each of
+    them.
+
+    Answering "nothing measured" out of a store that holds the measurements is
+    the failure the two refusals above exist to prevent, so this is refused the
+    same way, at the same place, and the message names the rebuild.
+
+    The single derivation is deliberate and stays: two derivations that can
+    disagree is what moving recency into current removed. So the store fails
+    loudly rather than falling back.
+    """
+    path = tmp_path / "dropped-run.db"
+    built = Store(str(path))
+    for fixture in (FIXTURE, DECLINED_FIXTURE, NEW_SUBJECTS_FIXTURE):
+        load_run(built, fixture.read_bytes())
+    built.remove_graph(NamedNode(SW + "run:" + DROPPED_SWEEP))
+    assert len(built) > 0, "the two older run graphs are still there"
+    del built
+    gc.collect()
+
+    monkeypatch.setenv(STORE_PATH_VARIABLE, str(path))
+    with pytest.raises(RuntimeError) as raised:
+        get_store()
+    message = str(raised.value)
+    assert SW + "run:" + DROPPED_SWEEP in message, "name the graph that is gone"
+    assert KADASTER in message, "name an endpoint it leaves lying"
+    assert "3" in message, "and say how many endpoints are affected"
+    assert "--rebuild" in message, "and name the command that repairs it"
+    assert str(path) in message
+
+
+def test_a_rebuild_returns_a_store_whose_run_was_dropped_to_service(
+    tmp_path, monkeypatch
+):
+    """The other half: the repair works, and it brings back the older run.
+
+    Without this the refusal above would be a dead end, and the operator who
+    dropped a bad run would have a store nothing can serve. current is derived
+    from the run graphs alone, so a rebuild after a drop points every endpoint
+    at the newest run that still measures it, which here is the 16:00 sweep.
+    """
+    path = tmp_path / "rebuilt.db"
+    built = Store(str(path))
+    for fixture in (FIXTURE, DECLINED_FIXTURE, NEW_SUBJECTS_FIXTURE):
+        load_run(built, fixture.read_bytes())
+    built.remove_graph(NamedNode(SW + "run:" + DROPPED_SWEEP))
+    rebuild_current(built)
+    del built
+    gc.collect()
+
+    monkeypatch.setenv(STORE_PATH_VARIABLE, str(path))
+    client = TestClient(app)
+    try:
+        response = get(client, KADASTER, accept="text/html")
+        assert response.status_code == 200, response.text
+        # Read back off the page's own attributes rather than out of the store,
+        # so this is a claim about what a reader is served. The 18:00 sweep is
+        # the newest that survives the drop, and it declined sw:metric:classes,
+        # so seven verdicts and one decline is its answer and not the 16:00
+        # sweep's eight verdicts.
+        assert DECLINING_SWEEP in response.text, (
+            "the newest surviving run is the one shown"
+        )
+        assert len(html_verdicts(response)) == 7, html_verdicts(response)
+        assert list(html_declined(response)) == [M + "classes"], html_declined(
+            response
+        )
+    finally:
+        client.close()
 
 
 def test_a_store_path_holding_a_store_is_opened(tmp_path, monkeypatch):

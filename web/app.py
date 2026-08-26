@@ -68,7 +68,7 @@ import verdict_encoding
 from endpoint_content import EndpointContent, endpoint_content
 from endpoint_index import endpoint_index
 from endpoint_measurements import EndpointMeasurements, endpoint_measurements
-from load_run import CURRENT_GRAPH
+from load_run import CURRENT_GRAPH, pointers_to_missing_runs
 from queries import read_query
 
 # ---------------------------------------------------------------------------
@@ -291,6 +291,24 @@ def _opened_store(path: str) -> Store:
     own length, once opened, catches both, at the cost of one open of a
     store that is about to be opened anyway. Failing on the first open
     reports the operator's mistake as the operator's mistake.
+
+    The last check is the same failure one step along, and it is not an
+    operator's typo. Dropping a bad run graph wholesale is what one graph per
+    run is for, and the spec advertises it. Since recency is decided once, in
+    current, the endpoints of a dropped run keep an sw:currentRun naming a
+    graph that is gone; index.rq and endpoint_measurements.rq both drop such a
+    solution on FILTER (BOUND(?generatedAt)), so the index says no run in this
+    store has recorded anything for any endpoint and each endpoint page says no
+    run has measured it, out of a store whose older run graph still holds every
+    verdict. That is the same wrong answer as the three above, out of a store
+    that does hold the measurements, so it is refused here rather than answered.
+
+    Refused, and deliberately not answered by falling back to the older run.
+    Deciding recency in two places is exactly what moving it into current
+    removed, and a fallback would put a second derivation back beside the one
+    the read queries use. The repair is a rebuild, which derives current from
+    the run graphs alone and so points every endpoint at the newest run that
+    still measures it, and the message names it.
     """
     directory = Path(path)
     if not directory.is_dir():
@@ -320,6 +338,21 @@ def _opened_store(path: str) -> Store:
             f"that does hold the measurements. Every store built before the "
             f"derived graph existed looks like this. Build it with "
             f"'python web/load_run.py --rebuild {path}'."
+        )
+    missing = pointers_to_missing_runs(store)
+    if missing:
+        endpoints = sorted({endpoint for endpoint, _, _ in missing})
+        runs = sorted({run for _, _, run in missing})
+        raise RuntimeError(
+            f"{STORE_PATH_VARIABLE} is {path!r}, in which {CURRENT_GRAPH.value} "
+            f"points {len(endpoints)} endpoint(s) at {len(runs)} run graph(s) "
+            f"this store does not hold: {runs}. "
+            f"{endpoints[0]} is one of them. All three read queries reach an "
+            f"endpoint's facts through that pointer, so each of those endpoints "
+            f"would be answered as though no run had ever measured it, while an "
+            f"older run graph in this same store may still hold every verdict "
+            f"for it. A run graph has been dropped since current was written. "
+            f"Rebuild with 'python web/load_run.py --rebuild {path}'."
         )
     return store
 

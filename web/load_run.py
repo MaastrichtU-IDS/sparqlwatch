@@ -553,6 +553,34 @@ def _drift_advice(drifted: list[str]) -> str:
     )
 
 
+def pointers_to_missing_runs(store: Store) -> list[tuple[str, str, str]]:
+    """Every (endpoint, pointer, run) in current whose run graph is not in the store.
+
+    A different question from _drifted, and it has a different caller. _drifted
+    asks whether the graph a pointer names still states this endpoint's facts,
+    and it is computed inside load_run, so it is only ever asked when something
+    is loaded. Dropping a run graph is an out-of-band store operation with no
+    load after it, so nothing computes _drifted and nothing notices. This asks
+    the cruder question a reader cannot recover from at all, whether the graph
+    is there, and it is cheap enough to ask when a server opens a store: one
+    query over current plus one contains_named_graph per distinct run named.
+
+    Both pointers are checked. endpoint_measurements.rq and index.rq read the
+    run sw:currentRun names and endpoint_content.rq reads the run
+    sw:currentSampleRun names, and each of them drops a solution whose run graph
+    is gone, so either pointer left dangling makes a page state a negative about
+    an endpoint the store still holds facts about.
+    """
+    held: dict[str, bool] = {}
+    missing = []
+    for (endpoint, pointer), (run, _instant) in _pointers(store).items():
+        if run not in held:
+            held[run] = store.contains_named_graph(NamedNode(run))
+        if not held[run]:
+            missing.append((endpoint, pointer, run))
+    return sorted(missing)
+
+
 def _maintain_current(
     store: Store, graph_names: set[NamedNode]
 ) -> tuple[list[str], list[str], list[str]]:
