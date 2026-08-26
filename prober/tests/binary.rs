@@ -241,17 +241,20 @@ fn overlapped(arrivals: &[&str]) -> bool {
 
 /// A bare `cargo run` in `prober/` has to be the sweeper.
 ///
-/// Two `[[bin]]` targets and no `default-run` key make `cargo run` an error
-/// instead of a sweep, and a bare `cargo run` is what `README.md:69`, `:1276`
-/// and `src/bin/seed-registry.rs:11` instruct. No test can invoke `cargo run`
-/// itself without running cargo inside cargo, so this asserts the manifest key
-/// those instructions depend on.
+/// THREE `[[bin]]` targets and no `default-run` key make `cargo run` an error
+/// instead of a sweep, and a bare `cargo run` is what `README.md:69`, `:1591`
+/// and `src/bin/seed-registry.rs:11` instruct. The third target is `dormancy`,
+/// the operator's override, added with stage 2's dormancy work; the assertion
+/// below did not have to change for it, but the count in this sentence is part
+/// of the wire between `Cargo.toml` and those instructions. No test can invoke
+/// `cargo run` itself without running cargo inside cargo, so this asserts the
+/// manifest key they depend on.
 #[test]
 fn a_bare_cargo_run_in_this_crate_is_the_sweeper() {
     let manifest = include_str!("../Cargo.toml");
     assert!(
         manifest.contains("\ndefault-run = \"sparqlwatch-prober\"\n"),
-        "prober/Cargo.toml has two [[bin]] targets, so it must name one as \
+        "prober/Cargo.toml has three [[bin]] targets, so it must name one as \
          default-run or `cargo run` is an error: {manifest}"
     );
 }
