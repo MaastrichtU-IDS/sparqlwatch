@@ -104,7 +104,7 @@ impl Default for Thresholds {
 /// `state = "dormant"`, so the file says which kind of hold it is in a word an
 /// operator reading it recognises.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "state", rename_all = "lowercase")]
+#[serde(tag = "state", rename_all = "lowercase", deny_unknown_fields)]
 pub enum Hold {
     /// `until` is `None` for a pinned wake. When present it is a full
     /// `YYYY-MM-DDTHH:MM:SSZ` instant, because the day helper parses it.
@@ -121,7 +121,13 @@ pub enum Hold {
 /// Every `Option` field is genuinely absent for a real endpoint at some point:
 /// a url in the registry that no sweep has reached yet has no `last_probed`,
 /// and an endpoint nobody has ever held has no `hold`.
+/// `deny_unknown_fields`, like `metrics.rs`, and for a sharper version of the
+/// same reason: `dormant_sicne = "..."` would otherwise parse, be dropped, and
+/// silently re-admit a relegated endpoint to full sweeps at 210 s a time. The
+/// header this file is written with promises hand editing is checked, and a
+/// silently ignored field is not checked.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EndpointState {
     pub url: String,
     /// Consecutive expensive silent sweeps as of `last_probed`.
@@ -153,12 +159,27 @@ pub struct EndpointState {
 
 /// The state file, whole.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct State {
     pub version: u32,
-    /// The newest sweep this file has seen. The slice divides by the gap
-    /// between it and `now`, so a weekly sweep probes a week's worth.
+    /// When this file was last written, by a sweep or by an operator command.
+    /// Advanced forward only, so a command carrying an older `--at` cannot move
+    /// the file's clock backwards.
     #[serde(default)]
     pub updated_at: Option<String>,
+    /// The newest SWEEP this file has seen, which is the only thing the slice
+    /// may divide by. `updated_at` cannot serve: `wake` and `sleep` write it
+    /// too, so an operator command between two weekly sweeps would shrink the
+    /// gap and with it every other endpoint's share of the probe budget. A wake
+    /// three days into a seven day gap would take the slice from 57 to 25.
+    ///
+    /// Written by `update` alone, and forward only. A state file from before
+    /// this field existed has none, so the first sweep after the upgrade sees a
+    /// gap of 1 and takes one small slice; the sweep after that has the field
+    /// and is correct. That is an accepted one-sweep cost, not a defect, and it
+    /// is why the field needs no version bump.
+    #[serde(default)]
+    pub last_sweep_at: Option<String>,
     #[serde(default)]
     pub endpoint: Vec<EndpointState>,
 }
@@ -181,7 +202,7 @@ const HEADER: &str = "\
 
 impl State {
     pub fn empty() -> State {
-        State { version: STATE_VERSION, updated_at: None, endpoint: Vec::new() }
+        State { version: STATE_VERSION, updated_at: None, last_sweep_at: None, endpoint: Vec::new() }
     }
 
     /// Parse a state file, validating the version and every instant-shaped
@@ -223,14 +244,24 @@ impl State {
         if let Some(updated_at) = &state.updated_at {
             day_of(updated_at, "updated_at")?;
         }
+        if let Some(last_sweep_at) = &state.last_sweep_at {
+            day_of(last_sweep_at, "last_sweep_at")?;
+        }
         let mut seen: HashSet<String> = HashSet::with_capacity(state.endpoint.len());
-        for entry in &state.endpoint {
-            if entry.url.trim().is_empty() {
-                anyhow::bail!(
-                    "an [[endpoint]] in the dormancy state has an empty url, so nothing can \
-                     say which endpoint it is about: give it the url as the sweep spells it, \
-                     or delete the entry"
-                );
+        for entry in &mut state.endpoint {
+            // Held to exactly the rules `wake` and `sleep` apply, because a
+            // hand-edited entry must not be able to say something no command
+            // could have written. A url carrying a stray space compares equal
+            // to nothing in the endpoint list, so the file would claim the
+            // endpoint is held while every sweep probes it, which is verbatim
+            // the failure `checked_url` exists to prevent.
+            entry.url = checked_url(&entry.url)?;
+            let context = format!("hold on {}", entry.url);
+            match &mut entry.hold {
+                Some(Hold::Awake { reason, .. }) | Some(Hold::Dormant { reason }) => {
+                    *reason = checked_reason(reason, &context)?;
+                }
+                None => {}
             }
             if !seen.insert(entry.url.clone()) {
                 anyhow::bail!(
@@ -264,7 +295,7 @@ impl State {
                 );
             }
         }
-        state.endpoint.sort_by(|a, b| a.url.cmp(&b.url));
+        state.sort();
         Ok(state)
     }
 
@@ -276,12 +307,18 @@ impl State {
             version: u32,
             #[serde(skip_serializing_if = "Option::is_none")]
             updated_at: Option<&'a String>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            last_sweep_at: Option<&'a String>,
             endpoint: Vec<&'a EndpointState>,
         }
         let mut endpoint: Vec<&EndpointState> = self.endpoint.iter().collect();
-        endpoint.sort_by(|a, b| a.url.cmp(&b.url));
-        let document =
-            Document { version: self.version, updated_at: self.updated_at.as_ref(), endpoint };
+        endpoint.sort_by(|a, b| by_url(a, b));
+        let document = Document {
+            version: self.version,
+            updated_at: self.updated_at.as_ref(),
+            last_sweep_at: self.last_sweep_at.as_ref(),
+            endpoint,
+        };
         // Infallible for this shape: every value is a string, an integer or a
         // table, and no map has a non-string key. An error here would mean the
         // types above changed, which is a bug and not a runtime condition.
@@ -292,6 +329,30 @@ impl State {
 
     pub fn get(&self, url: &str) -> Option<&EndpointState> {
         self.endpoint.iter().find(|entry| entry.url == url)
+    }
+
+    /// The file's one canonical order, applied everywhere an entry is added or
+    /// changed. Extracted because it was written out at six call sites, and a
+    /// new field on `State` is exactly the kind of thing that gets missed in the
+    /// sixth of six.
+    fn sort(&mut self) {
+        self.endpoint.sort_by(by_url);
+    }
+}
+
+fn by_url(a: &EndpointState, b: &EndpointState) -> std::cmp::Ordering {
+    a.url.cmp(&b.url)
+}
+
+/// Move a recorded instant forward, never backwards.
+///
+/// A string comparison, which is chronological for the one fixed instant form
+/// this module accepts. Backwards would mean a replayed older `--at`, or an
+/// operator command carrying one, rewriting the file's clock and so the next
+/// sweep's gap.
+fn advance(recorded: &mut Option<String>, now: &str) {
+    if recorded.as_deref().is_none_or(|current| current < now) {
+        *recorded = Some(now.to_string());
     }
 }
 
@@ -513,7 +574,7 @@ fn is_due(entry: &EndpointState, today: i64, thresholds: &Thresholds) -> anyhow:
 /// How many of the due dormant endpoints this sweep takes.
 ///
 /// ```text
-/// gap   = max(1, day(now) - day(state.updated_at))   // 1 when updated_at is absent
+/// gap   = max(1, day(now) - day(state.last_sweep_at))   // 1 when it is absent
 /// slice = clamp(ceil(governed * gap / cadence_days), 1, governed)
 /// ```
 ///
@@ -533,11 +594,15 @@ fn slice_size(
     if governed <= 0 {
         return Ok(0);
     }
-    let gap = match &state.updated_at {
-        Some(updated_at) => (today - day_of(updated_at, "updated_at")?).max(1),
+    // `last_sweep_at` and not `updated_at`: an operator command writes the file
+    // without being a sweep, and dividing by the gap to one would shrink every
+    // other endpoint's share of this sweep because somebody woke one endpoint.
+    let gap = match &state.last_sweep_at {
+        Some(last_sweep_at) => (today - day_of(last_sweep_at, "last_sweep_at")?).max(1),
         // No previous sweep to measure a gap against, so assume the smallest
         // one. Assuming a large gap here would put the whole dormant set into
-        // the first sweep after the file is created.
+        // the first sweep after the file is created, and into the first sweep
+        // after this field was added to an existing file.
         None => 1,
     };
     let cadence = thresholds.cadence_days.get() as i64;
@@ -626,14 +691,11 @@ pub fn update(
 
     // A, over every entry and not only the swept ones.
     for entry in &mut next.endpoint {
-        let lapsed = match &entry.hold {
-            Some(Hold::Awake { reason, until: Some(until) }) => {
-                if day_of(until, &format!("hold.until of {}", entry.url))? < today {
-                    Some(reason.clone())
-                } else {
-                    None
-                }
-            }
+        // Through `hold_effect`, not a second inline day comparison: rule 4's
+        // admission and rule F's suppression must not drift from this, and one
+        // rule living in two places is how that starts.
+        let lapsed = match (hold_effect(entry.hold.as_ref(), today, &entry.url)?, &entry.hold) {
+            (HoldEffect::LapsedAwake, Some(Hold::Awake { reason, .. })) => Some(reason.clone()),
             _ => None,
         };
         if let Some(reason) = lapsed {
@@ -723,13 +785,13 @@ pub fn update(
         }
     }
 
-    // The newest sweep the file has seen, never an older one: the slice divides
-    // by the gap to this instant, and letting a replayed older --at move it
-    // backwards would make the next sweep's gap, and so its slice, wrong.
-    if next.updated_at.as_deref().is_none_or(|updated_at| updated_at < now) {
-        next.updated_at = Some(now.to_string());
-    }
-    next.endpoint.sort_by(|a, b| a.url.cmp(&b.url));
+    // Both clocks, forward only. `last_sweep_at` is written here and nowhere
+    // else, because it is the divisor the slice depends on and only a sweep may
+    // move it: letting a replayed older --at move it backwards would make the
+    // next sweep's gap, and so its slice, wrong.
+    advance(&mut next.updated_at, now);
+    advance(&mut next.last_sweep_at, now);
+    next.sort();
     Ok(next)
 }
 
@@ -768,8 +830,10 @@ pub fn wake(
     entry.strikes_before_last = 0;
     entry.dormant_since = None;
     entry.lapsed_hold = None;
-    next.updated_at = Some(now.to_string());
-    next.endpoint.sort_by(|a, b| a.url.cmp(&b.url));
+    // The file's clock, forward only, and NOT `last_sweep_at`: a wake is not a
+    // sweep, and counting it as one would shrink the next sweep's slice.
+    advance(&mut next.updated_at, now);
+    next.sort();
     Ok(next)
 }
 
@@ -793,8 +857,9 @@ pub fn sleep(state: &State, url: &str, reason: &str, now: &str) -> anyhow::Resul
     if entry.dormant_since.is_none() {
         entry.dormant_since = Some(now.to_string());
     }
-    next.updated_at = Some(now.to_string());
-    next.endpoint.sort_by(|a, b| a.url.cmp(&b.url));
+    // Forward only, and not `last_sweep_at`. See `wake`.
+    advance(&mut next.updated_at, now);
+    next.sort();
     Ok(next)
 }
 
@@ -809,8 +874,16 @@ pub fn sleep(state: &State, url: &str, reason: &str, now: &str) -> anyhow::Resul
 pub fn prunable(state: &State, endpoints: &[String]) -> (Vec<String>, State) {
     let listed: HashSet<&str> = endpoints.iter().map(|url| url.as_str()).collect();
     let mut pruned = Vec::new();
-    let mut kept =
-        State { version: state.version, updated_at: state.updated_at.clone(), endpoint: Vec::new() };
+    // Field by field rather than a clone, so every field of `State` has to be
+    // named here. `last_sweep_at` in particular: dropping it would reset the
+    // slice's divisor, and the next weekly sweep would take a gap of 1 and
+    // probe 9 of 57 rather than 57.
+    let mut kept = State {
+        version: state.version,
+        updated_at: state.updated_at.clone(),
+        last_sweep_at: state.last_sweep_at.clone(),
+        endpoint: Vec::new(),
+    };
     for entry in &state.endpoint {
         if entry.hold.is_none() && !listed.contains(entry.url.as_str()) {
             pruned.push(entry.url.clone());
@@ -819,7 +892,7 @@ pub fn prunable(state: &State, endpoints: &[String]) -> (Vec<String>, State) {
         }
     }
     pruned.sort();
-    kept.endpoint.sort_by(|a, b| a.url.cmp(&b.url));
+    kept.sort();
     (pruned, kept)
 }
 
@@ -844,8 +917,8 @@ fn checked_url(url: &str) -> anyhow::Result<String> {
     let trimmed = url.trim();
     if trimmed.is_empty() {
         anyhow::bail!(
-            "a dormancy hold needs the endpoint url it applies to, and an empty one applies \
-             to nothing: pass the url exactly as endpoints.toml spells it"
+            "a dormancy entry needs the endpoint url it is about, and an empty one is about \
+             nothing: give it the url exactly as endpoints.toml spells it, or delete the entry"
         );
     }
     Ok(trimmed.to_string())
@@ -856,11 +929,11 @@ fn checked_url(url: &str) -> anyhow::Result<String> {
 /// The reason is the whole value of a hand hold to the next person: a state
 /// file saying an endpoint is asleep without saying why leaves them unable to
 /// decide whether waking it is safe.
-fn checked_reason(reason: &str, command: &str) -> anyhow::Result<String> {
+fn checked_reason(reason: &str, context: &str) -> anyhow::Result<String> {
     let trimmed = reason.trim();
     if trimmed.is_empty() {
         anyhow::bail!(
-            "a dormancy {command} needs a reason, and it is not decoration: it is what tells \
+            "a dormancy {context} needs a reason, and it is not decoration: it is what tells \
              the next operator, or you in six months, whether undoing this is safe. Say who \
              asked or what you saw, in a few words"
         );
@@ -1007,12 +1080,33 @@ fn day_of(instant: &str, field: &str) -> anyhow::Result<i64> {
 /// decides anything anyway.
 fn instant_plus_days(instant: &str, field: &str, days: u64) -> anyhow::Result<String> {
     let civil = parse_instant(instant, field)?;
-    let (year, month, day) = civil_from_days(days_from_civil(&civil) + days as i64);
-    Ok(format!(
+    let unwritable = |lands_on: &str| {
+        anyhow::anyhow!(
+            "grace_days = {days} puts this hold's expiry at {lands_on}, which is not an \
+             instant this build can write and then read back. Writing it anyway would fail \
+             every subsequent read of the state file, so one operator command would stop \
+             every later sweep and every later dormancy command: pass a grace_days whose \
+             expiry lands inside the years 0000 to 9999, or use a pin, which has no expiry"
+        )
+    };
+    // `checked_add` and not `+`: u64::MAX days casts to -1 and would silently
+    // write a hold that lapsed yesterday, which reads as a wake that did
+    // nothing and is worse than an error.
+    let target = i64::try_from(days)
+        .ok()
+        .and_then(|days| days_from_civil(&civil).checked_add(days))
+        .ok_or_else(|| unwritable("a date this arithmetic cannot represent"))?;
+    let (year, month, day) = civil_from_days(target);
+    let rendered = format!(
         "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
         civil.hour, civil.minute, civil.second
-    ))
+    );
+    // Round-tripped through the very parser every later read uses, rather than
+    // range-checked here: the two would then be two statements of one rule.
+    parse_instant(&rendered, field).map_err(|_| unwritable(&rendered))?;
+    Ok(rendered)
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1040,9 +1134,10 @@ mod tests {
     }
 
     /// `n` endpoints relegated together, every one last probed at `last_probed`.
-    fn dormant_fleet(n: usize, last_probed: &str, updated_at: &str) -> (State, Vec<String>) {
+    fn dormant_fleet(n: usize, last_probed: &str, last_sweep_at: &str) -> (State, Vec<String>) {
         let mut state = State::empty();
-        state.updated_at = Some(ep(updated_at));
+        state.updated_at = Some(ep(last_sweep_at));
+        state.last_sweep_at = Some(ep(last_sweep_at));
         let mut endpoints = Vec::new();
         for i in 0..n {
             let url = format!("http://e{i:03}.example/sparql");
@@ -1263,6 +1358,7 @@ mod tests {
         let t = Thresholds::default();
         let mut state = State::empty();
         state.updated_at = Some(ep("2026-08-23T00:00:00Z"));
+        state.last_sweep_at = Some(ep("2026-08-23T00:00:00Z"));
         let mut endpoints = Vec::new();
         for i in 0..6 {
             let url = format!("http://dormant{i:02}.example/s");
@@ -1410,6 +1506,7 @@ mod tests {
         let t = Thresholds::default();
         let mut state = State::empty();
         state.updated_at = Some(ep("2026-08-25T00:00:00Z"));
+        state.last_sweep_at = Some(ep("2026-08-25T00:00:00Z"));
         state.endpoint.push(EndpointState {
             url: ep("http://a.example/s"),
             strikes: 1,
@@ -1433,7 +1530,12 @@ mod tests {
         assert_eq!(
             after.updated_at.as_deref(),
             Some("2026-08-25T00:00:00Z"),
-            "the file's own instant is the newest sweep it has seen"
+            "the file's own instant is the newest write it has seen"
+        );
+        assert_eq!(
+            after.last_sweep_at.as_deref(),
+            Some("2026-08-25T00:00:00Z"),
+            "and the divisor is the newest sweep, which this is not"
         );
     }
 
@@ -1631,6 +1733,7 @@ mod tests {
         let state = State {
             version: STATE_VERSION,
             updated_at: Some(ep("2026-08-26T00:00:00Z")),
+            last_sweep_at: Some(ep("2026-08-25T00:00:00Z")),
             endpoint: vec![
                 EndpointState {
                     url: ep("http://a.example/s"),
@@ -1779,6 +1882,138 @@ mod tests {
     fn the_two_skip_reason_slugs_are_automatic_and_operator_hold() {
         assert_eq!(SkipReason::Automatic.slug(), "automatic");
         assert_eq!(SkipReason::OperatorHold.slug(), "operator-hold");
+    }
+
+
+    // --- the divisor: the gap between SWEEPS, not between file writes ---
+
+    #[test]
+    fn the_slice_divides_by_the_gap_between_sweeps_not_by_an_operator_command() {
+        // 57 dormant, the last sweep seven days back, and a wake three days ago
+        // on an unrelated endpoint. All 57 are due and all 57 must be probed. An
+        // operator command is not a sweep: dividing by the gap to it would take
+        // the slice to ceil(57 * 4 / 7) = 33 and leave 24 endpoints waiting
+        // another week because somebody woke a different one.
+        let t = Thresholds::default();
+        let (state, endpoints) = dormant_fleet(57, "2026-08-10T00:00:00Z", "2026-08-17T00:00:00Z");
+        let after_wake = wake(&state, "http://unrelated.example/s", "operator emailed",
+                              "2026-08-20T00:00:00Z", false, &t).unwrap();
+        assert_eq!(after_wake.updated_at.as_deref(), Some("2026-08-20T00:00:00Z"),
+                   "a wake does write the file");
+        assert_eq!(after_wake.last_sweep_at.as_deref(), Some("2026-08-17T00:00:00Z"),
+                   "but a wake is not a sweep");
+        assert_eq!(plan_sweep(&after_wake, &endpoints, "2026-08-24T00:00:00Z", &t).unwrap().probe.len(), 57);
+    }
+
+    #[test]
+    fn only_a_sweep_writes_last_sweep_at_and_only_forward() {
+        let t = Thresholds::default();
+        let endpoints = vec![ep("http://a.example/s")];
+        let swept = update(&State::empty(), &endpoints, &[expensive("http://a.example/s")],
+                           "2026-08-25T00:00:00Z", &t).unwrap();
+        assert_eq!(swept.last_sweep_at.as_deref(), Some("2026-08-25T00:00:00Z"));
+        let older = update(&swept, &endpoints, &[], "2026-08-24T00:00:00Z", &t).unwrap();
+        assert_eq!(older.last_sweep_at.as_deref(), Some("2026-08-25T00:00:00Z"),
+                   "a replayed older --at must not shrink the next sweep's gap");
+        let slept =
+            sleep(&swept, "http://a.example/s", "operator asked", "2026-08-26T00:00:00Z").unwrap();
+        assert_eq!(slept.last_sweep_at.as_deref(), Some("2026-08-25T00:00:00Z"));
+        let woken = wake(&swept, "http://a.example/s", "operator emailed",
+                         "2026-08-26T00:00:00Z", false, &t).unwrap();
+        assert_eq!(woken.last_sweep_at.as_deref(), Some("2026-08-25T00:00:00Z"));
+    }
+
+    #[test]
+    fn prunable_preserves_the_sweep_gap_divisor() {
+        // Losing it here resets the divisor to absent, and the next weekly sweep
+        // takes a gap of 1 and probes 9 of 57 rather than 57.
+        let (state, _) = dormant_fleet(2, "2026-08-10T00:00:00Z", "2026-08-17T00:00:00Z");
+        let (pruned, kept) = prunable(&state, &[]);
+        assert_eq!(pruned.len(), 2);
+        assert_eq!(kept.last_sweep_at.as_deref(), Some("2026-08-17T00:00:00Z"));
+        assert_eq!(kept.updated_at.as_deref(), Some("2026-08-17T00:00:00Z"));
+    }
+
+    #[test]
+    fn an_operator_command_does_not_move_the_files_clock_backwards() {
+        let t = Thresholds::default();
+        let mut state = State::empty();
+        state.updated_at = Some(ep("2026-08-25T00:00:00Z"));
+        let woken = wake(&state, "http://a.example/s", "operator emailed",
+                         "2026-08-24T00:00:00Z", false, &t).unwrap();
+        assert_eq!(woken.updated_at.as_deref(), Some("2026-08-25T00:00:00Z"));
+        let slept =
+            sleep(&state, "http://a.example/s", "operator asked", "2026-08-24T00:00:00Z").unwrap();
+        assert_eq!(slept.updated_at.as_deref(), Some("2026-08-25T00:00:00Z"));
+        let later = wake(&state, "http://a.example/s", "operator emailed",
+                         "2026-08-26T00:00:00Z", false, &t).unwrap();
+        assert_eq!(later.updated_at.as_deref(), Some("2026-08-26T00:00:00Z"), "forward still moves");
+    }
+
+    #[test]
+    fn a_grace_period_that_cannot_be_read_back_is_refused_naming_the_flag() {
+        // 3,000,000 days lands in the year 10240, which is 21 characters and
+        // which parse refuses, so this wake would write a file that every
+        // subsequent read fails on: one operator command stops every later
+        // sweep and every later dormancy command.
+        let huge =
+            Thresholds { grace_days: NonZeroU64::new(3_000_000).unwrap(), ..Default::default() };
+        let error = wake(&State::empty(), "http://a.example/s", "operator emailed",
+                         "2026-08-26T13:45:07Z", false, &huge).unwrap_err().to_string();
+        assert!(error.contains("grace_days"), "{error}");
+        // And u64::MAX must not wrap into a hold that lapsed yesterday.
+        let wrapping =
+            Thresholds { grace_days: NonZeroU64::new(u64::MAX).unwrap(), ..Default::default() };
+        let error = wake(&State::empty(), "http://a.example/s", "operator emailed",
+                         "2026-08-26T13:45:07Z", false, &wrapping).unwrap_err().to_string();
+        assert!(error.contains("grace_days"), "{error}");
+        // A pin has no expiry to overflow, whatever the flag says.
+        let pinned = wake(&State::empty(), "http://a.example/s", "operator pinned",
+                          "2026-08-26T13:45:07Z", true, &wrapping).unwrap();
+        assert!(matches!(
+            pinned.get("http://a.example/s").unwrap().hold,
+            Some(Hold::Awake { until: None, .. })
+        ));
+    }
+
+    #[test]
+    fn a_misspelled_field_is_refused_rather_than_dropped() {
+        // dormant_sicne parses, is dropped, and silently re-admits a relegated
+        // endpoint to full sweeps at 210 s. metrics.rs carries
+        // deny_unknown_fields for the same reason, and HEADER promises hand
+        // editing is checked.
+        let misspelled = "version = 1\n\n[[endpoint]]\nurl = \"http://a.example/s\"\n\
+                          last_probed = \"2026-08-25T00:00:00Z\"\n\
+                          dormant_sicne = \"2026-08-25T00:00:00Z\"\n";
+        let error = State::parse(misspelled).unwrap_err().to_string();
+        assert!(error.contains("dormant_sicne"), "{error}");
+        for stray in [
+            // A top-level key nobody reads.
+            "version = 1\nlast_sweep = \"2026-08-25T00:00:00Z\"\n",
+            // An expiry on a Dormant hold, which has none: a sleep is permanent
+            // until a human wakes it, and a file implying otherwise is a lie.
+            "version = 1\n\n[[endpoint]]\nurl = \"http://a.example/s\"\n\n\
+             [endpoint.hold]\nstate = \"dormant\"\nreason = \"operator asked\"\n\
+             until = \"2026-08-25T00:00:00Z\"\n",
+        ] {
+            assert!(State::parse(stray).is_err(), "parsed and dropped a field: {stray}");
+        }
+    }
+
+    #[test]
+    fn parse_holds_a_hand_edited_entry_to_the_same_rules_as_the_commands() {
+        // A url with a stray space compares equal to nothing in endpoints, so
+        // the file would claim the endpoint is held while every sweep probes it.
+        // wake and sleep trim, and so does this.
+        let padded = "version = 1\n\n[[endpoint]]\nurl = \" http://a.example/s \"\n";
+        assert_eq!(State::parse(padded).unwrap().endpoint[0].url, "http://a.example/s");
+        // A hold with no reason leaves the next operator unable to judge whether
+        // undoing it is safe.
+        let reasonless = "version = 1\n\n[[endpoint]]\nurl = \"http://a.example/s\"\n\n\
+                          [endpoint.hold]\nstate = \"awake\"\nreason = \"   \"\n";
+        let error = State::parse(reasonless).unwrap_err().to_string();
+        assert!(error.contains("reason"), "{error}");
+        assert!(error.contains("http://a.example/s"), "{error}");
     }
 
     // --- the instant helper, which owns the day arithmetic ---
