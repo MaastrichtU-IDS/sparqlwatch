@@ -673,8 +673,17 @@ returned a positive verdict (`verified` or `undeclared-but-verified`):
 
 So **57 endpoints are 90% of the sweep's entire serial cost and produce nothing**, while
 339 equally silent ones cost 0.05 h between them. The cost is not spread across the dead:
-it is concentrated in a set that accepts a connection and then never answers. 51 of the 57
-consumed the full 210s metric budget rather than failing.
+it is concentrated in a set that accepts a connection and then never answers. **48 of the 57 spent between
+210,010 and 210,021 ms**, an 11 ms spread across 48 endpoints, which is what seven cheap
+metrics each running out its 30 s `Budget::request` sums to: 348 of the 399 individual
+measurements sit at 30,000 ms and the median is 30,002. They are not failing fast, and they
+are not hitting the 60 s `Budget::metric` or the 600 s `Budget::endpoint`. They accept the
+connection and hold it open until each individual request is cancelled.
+
+One detail matters for any implementation. **Every one of those 399 measurements published an
+`elapsedMs`**, none was absent and none was zero, so the calibration contains no instance of
+the expired-metric-budget case that `emit.rs` represents as `None`. A cost rule must still
+handle it, but as a precaution rather than something this data measured.
 
 A single sweep cannot say whether that set is stable, so those 57 were re-probed alone on
 2026-08-26, 39 hours later. **56 of 57 were over 60s again**, the group cost 3.07 h against
@@ -715,8 +724,9 @@ what the stability data demands (98% would justify one) but it costs one extra p
 endpoint and it is exactly the `data.datahub.kr` case.
 
 **`dormant`, not `unresponsive`.** The evidence supports a claim about our schedule, not a
-claim about the endpoint. What is known is that it did not answer inside a 210 s budget
-twice; a client with a longer budget might. `unresponsive` would overclaim in the same way
+claim about the endpoint. What is known is that seven probes, each cancelled at 30 s, went
+unanswered on two occasions; a client waiting longer than 30 s per request might get an
+answer. `unresponsive` would overclaim in the same way
 the six-verdict vocabulary exists to prevent, and this project does not report a confident
 answer it cannot support. `dormant` describes where the endpoint sits in our rotation, which
 is a fact about us.
