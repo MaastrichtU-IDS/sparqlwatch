@@ -199,7 +199,23 @@ def endpoint_measurements(store: Store, endpoint: str) -> EndpointMeasurements:
     )
     if not rows:
         return EndpointMeasurements(endpoint=endpoint, assessed=False)
+    return measurements_from_rows(endpoint, rows)
 
+
+def measurements_from_rows(endpoint: str, rows: list) -> EndpointMeasurements:
+    """Turn one endpoint's solutions into one ``EndpointMeasurements``.
+
+    Split out of the function above so that web/endpoint_index.py can build the
+    same object from web/queries/index.rq's rows, which are the same columns
+    asked of every endpoint at once. The index and the endpoint page are two
+    renderings of one question, and this is the one place that decides what a
+    row means, so they cannot come to disagree about a verdict, about which run
+    a fact came from, or about whether that run finished.
+
+    ``rows`` must be non-empty and must all be about ``endpoint``: an empty list
+    is "not assessed", which is a different answer, and the caller is the one
+    that knows whether nothing came back or nothing was asked.
+    """
     runs = {row["run"].value for row in rows}
     if len(runs) > 1:
         raise ValueError(

@@ -29,13 +29,29 @@ touched at all.
 
 That closes the loss driven by the input, and nothing else. The replacement
 is NOT atomic. Dropping the graphs and inserting the quads are two separate
-store operations, because pyoxigraph 0.5.9's Store has no transaction API at
-all: it offers extend, bulk_extend and bulk_load, and nothing that groups
-them into one unit of work. So anything that stops the insert from
-completing (a full disk, an OOM kill, a power loss) leaves the graphs
-dropped and the new quads not inserted. Read the paragraph above as exactly
-what it says and no more: it is not a promise that the store can never be
-left half-updated, because it can be.
+store operations, so anything that stops the insert from completing (a full
+disk, an OOM kill, a power loss) leaves the graphs dropped and the new quads
+not inserted. Read the paragraph above as exactly what it says and no more: it
+is not a promise that the store can never be left half-updated, because it can
+be.
+
+An earlier version of this paragraph said the reason was that pyoxigraph 0.5.9
+has no transaction API at all. That was false, and it shaped this project's
+design from stage 2-1 onward. Store.update's own documentation says "Updates
+are applied in a transactional manner: either the full operation succeeds, or
+nothing is written to the database", and that holds across ';'-separated
+operations: running "DROP GRAPH <urn:g> ; DROP GRAPH <urn:missing>" raises on
+the second operation and leaves urn:g in place, so the first was rolled back.
+What pyoxigraph does not offer is an explicit transaction HANDLE, something
+that would let this module group its own remove_graph and extend calls. The
+real objection to writing the run-graph replacement as one update is the size
+of the INSERT DATA body it would need: a run of the 543-endpoint registry is
+27,194 quads, and serialising them into SPARQL text to be re-parsed is a
+different cost from handing parsed Quad objects to extend. So the window above
+stays, and is reported rather than hidden.
+
+The derived graph this module also maintains DOES use that transactionality,
+one update per endpoint. See "The derived urn:sparqlwatch:current graph" below.
 
 Two things make that bounded window acceptable rather than a hole in the
 design. First, the store is a derived artefact. The .nq files the prober
@@ -87,12 +103,96 @@ chunk was corrupted on purpose looks exactly like one a crash truncated, and
 its last chunk is dropped rather than the file refused. Nothing in the bytes
 distinguishes the two, and dropping one chunk of a file nobody should have
 edited is the cheaper error than refusing every run a real crash produces.
+
+THE DERIVED urn:sparqlwatch:current GRAPH
+=========================================
+
+Beside the run graphs, this module maintains one more named graph, and all
+three read queries read it instead of deciding recency themselves. The reason
+is measured. endpoint_measurements.rq deciding "the newest run that recorded
+anything for this endpoint" at query time cost 10.0 ms over one run graph of
+the 543-endpoint registry, 309.7 ms over seven and 5,801.8 ms over thirty, so
+one month of daily sweeps made the endpoint page a 5.8 second load.
+endpoint_content.rq is 6,488.5 ms and endpoint_description.rq, the whole RDF
+representation, is 11,704.3 ms at thirty runs once there is one content sample
+per endpoint per run. A flat scan of this graph over the same 30-run store is
+3.1 ms for all 3,801 rows.
+
+THE QUAD SHAPE, so a reader does not have to infer it. For each endpoint E
+whose facts current holds, in graph urn:sparqlwatch:current:
+
+  E sw:currentRun <run>          the newest run that recorded a measurement,
+                                 a decline or a sw:declarationsRead for E
+  E sw:currentSampleRun <run>    the newest run that published a
+                                 sw:metric:classes sample of E
+  E sw:declarationsRead <bool>   copied verbatim from sw:currentRun's graph
+  <measurement> ?p ?o            every quad of every dqv:QualityMeasurement
+                                 whose dqv:computedOn is E, copied verbatim
+                                 from sw:currentRun's graph
+  <notMeasured> ?p ?o            every quad of every sw:NotMeasured whose
+                                 sw:notMeasuredOn is E, copied verbatim
+
+and NOTHING ELSE. In particular:
+
+  - NO rdf:type prov:Activity and NO prov:generatedAtTime, ever. All three read
+    queries select their run as GRAPH ?run { ?a a prov:Activity ;
+    prov:generatedAtTime ?t } with no restriction on which graph, and the
+    newest-run aggregate is unrestricted too. A current graph holding a typed
+    activity with a timestamp therefore IS a run to every one of them, and the
+    newest run by construction, so both readers raise "runs tied as most
+    recent" and every page and every RDF representation becomes a 500. Measured
+    on a committed fixture.
+  - NO run-level fact. sw:emission, sw:finalised and sw:completedEndpoint are
+    properties of a RUN, and the readers reach them through the pointer, in one
+    hop into the named run's graph. Copying them onto the endpoint would put
+    triples in current that no run graph holds, which breaks the rule that
+    current is reconstructible from the run graphs alone, and it would force
+    endpoint_description.rq to publish <endpoint> sw:finalised true, a wrong
+    fact because finishing is something a run does.
+  - NO sample quads. The class sample stays in its run graph and is read through
+    sw:currentSampleRun, because the index reads current for verdicts and never
+    for sample values, so copying several hundred sw:sampledValue triples per
+    endpoint would grow the graph the index scans and buy nothing.
+
+NOT AN INPUT. A run file naming urn:sparqlwatch:current as its graph is
+refused, in _parsed_graphs, before any store is opened. Everything above says
+this graph is derived from the run graphs and reconstructible from them alone,
+and one hand-written line naming it used to wipe it, insert that line's own
+triples into it, and return a LoadResult with drifted=[]: the one detector for
+a broken current graph asks which pointers name a run that no longer states
+their facts, and an emptied graph holds no pointers to ask about.
+
+TWO POINTERS, which is the subtle half. The newest run that MEASURED an
+endpoint and the newest run that SAMPLED it are different runs the moment a
+cheap sweep declines sw:metric:classes, and that is the steady state: the
+543-endpoint registry sweep declined classes for every one of them. One pointer
+with one notion of recency loses the class sample outright.
+
+THE UPDATE RULE. For every endpoint the incoming run mentions, what current
+holds for that endpoint is replaced, in one store.update() so the endpoint is
+never half-updated. The advance is refused only when the run current already
+points at is STRICTLY newer, so re-loading the same run IRI does refresh, which
+is the documented recovery, while an out-of-order older run is still refused. A
+TIE between two different runs is refused rather than resolved by load order,
+naming both runs, because both readers refuse such a store and deciding it here
+would be an unannounced behaviour change.
+
+THREE CASES THE RULE CANNOT FIX, and they are detected rather than left to a
+reader. A run graph that SHRINKS (the full sweep, then the truncated file a
+crashed prober leaves under the same run IRI) and a run graph DROPPED wholesale
+both leave current attributing facts to a run that no longer states them; both
+are found by noticing an endpoint whose pointer names a run whose graph no
+longer mentions it, reported in LoadResult.drifted, and repaired by
+rebuild_current. The FINISHED/UNFINISHED flip needs nothing: the run-level
+facts are reached through the pointer, so a footer arriving changes what the
+page says without a quad of current moving.
 """
 
 from __future__ import annotations
 
 import sys
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 from pyoxigraph import DefaultGraph, NamedNode, RdfFormat, Store, parse
@@ -118,6 +218,699 @@ class LoadResult:
     replaced: list[str] = field(default_factory=list)
     quad_count: int = 0
     discarded_bytes: int = 0
+    advanced: list[str] = field(default_factory=list)
+    advanced_samples: list[str] = field(default_factory=list)
+    kept_newer: list[str] = field(default_factory=list)
+    drifted: list[str] = field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# The derived urn:sparqlwatch:current graph
+# ---------------------------------------------------------------------------
+CURRENT_GRAPH_IRI = "urn:sparqlwatch:current"
+CURRENT_GRAPH = NamedNode(CURRENT_GRAPH_IRI)
+
+# The predicates the three read queries and this module share. Spelled once,
+# because a rename on one side alone would leave the readers looking for a
+# pointer nothing writes and every page answering "we know nothing about this
+# endpoint".
+CURRENT_RUN = "urn:sparqlwatch:currentRun"
+CURRENT_SAMPLE_RUN = "urn:sparqlwatch:currentSampleRun"
+
+# Every update and query below is parameterised through pyoxigraph's
+# ``prefixes`` argument rather than by formatting an IRI into the text.
+# Store.query() also takes ``substitutions`` (SEP-0007) and the three .rq files
+# use it, but Store.update() in pyoxigraph 0.5.9 does NOT: its signature is
+# (update, base_iri, prefixes, custom_functions, custom_aggregate_functions),
+# and passing substitutions= raises TypeError. So the endpoint and the run
+# reach an update as prefix declarations, used as ``endpoint:`` and ``run:``
+# with an empty local name. pyoxigraph validates a prefix IRI before parsing
+# (a value holding '>' is refused as "Invalid prefix IRI ... Invalid IRI code
+# point"), so the value cannot escape into the query text the way an
+# interpolated string could.
+_ENDPOINT_PREFIX = "endpoint"
+_RUN_PREFIX = "run"
+
+_PREAMBLE = """
+PREFIX dqv: <http://www.w3.org/ns/dqv#>
+PREFIX prov: <http://www.w3.org/ns/prov#>
+PREFIX sw: <urn:sparqlwatch:>
+"""
+
+# The instant a run's activity carries. MAX rather than a plain binding so a
+# graph is one row whatever it holds, and the caller decides what an absent
+# instant means.
+_RUN_INSTANT = _PREAMBLE + """
+SELECT (MAX(?instant) AS ?newest) WHERE {
+  GRAPH run: { ?activity a prov:Activity ; prov:generatedAtTime ?instant }
+}
+"""
+
+# Which endpoints a run recorded a measurement, a decline or a declarations
+# fact for. This is the set sw:currentRun governs, and it is deliberately the
+# same three shapes endpoint_measurements.rq reads, plus sw:declarationsRead so
+# that fact is never left in current without a pointer to the run that stated
+# it.
+_MEASURED_ENDPOINTS = _PREAMBLE + """
+SELECT DISTINCT ?endpoint WHERE {
+  GRAPH run: {
+    { ?thing dqv:computedOn ?endpoint }
+    UNION
+    { ?thing sw:notMeasuredOn ?endpoint }
+    UNION
+    { ?endpoint sw:declarationsRead ?read }
+  }
+}
+"""
+
+# Which endpoints a run published a CLASS sample for. Pinned to
+# sw:metric:classes because endpoint_content.rq is: a sample from another
+# metric is not this endpoint's classes, and web/tests/fixtures/
+# run-properties-sample.nq exists to prove that pin holds.
+_SAMPLED_ENDPOINTS = _PREAMBLE + """
+SELECT DISTINCT ?endpoint WHERE {
+  GRAPH run: {
+    ?sample sw:sampledFrom ?endpoint ; sw:sampledBy sw:metric:classes .
+  }
+}
+"""
+
+# What current currently points each endpoint at, and when that run ran. One
+# query for the whole graph rather than one per endpoint: at 543 endpoints the
+# per-endpoint form is 543 round trips to answer a question one scan answers.
+# ?instant is OPTIONAL so a pointer naming a graph that has been dropped comes
+# back with the pointer and no instant, which is how the caller tells "older"
+# from "gone".
+_POINTERS = _PREAMBLE + """
+SELECT ?endpoint ?which ?run ?instant WHERE {
+  GRAPH sw:current { ?endpoint ?which ?run }
+  FILTER (?which = sw:currentRun || ?which = sw:currentSampleRun)
+  OPTIONAL {
+    GRAPH ?run { ?activity a prov:Activity ; prov:generatedAtTime ?instant }
+  }
+}
+"""
+
+# An endpoint whose pointer names a run whose graph no longer mentions it.
+# Two things produce it and neither is an ordering mistake the advance rule
+# could fix: a run graph that shrank (the full sweep, then the truncated file a
+# crashed prober left under the same run IRI) and a run graph dropped
+# wholesale, which the spec calls a feature of one graph per run.
+_DRIFTED_RUN_POINTERS = _PREAMBLE + """
+SELECT ?endpoint WHERE {
+  GRAPH sw:current { ?endpoint sw:currentRun ?run }
+  FILTER NOT EXISTS {
+    GRAPH ?run {
+      { ?thing dqv:computedOn ?endpoint }
+      UNION
+      { ?thing sw:notMeasuredOn ?endpoint }
+      UNION
+      { ?endpoint sw:declarationsRead ?read }
+    }
+  }
+}
+"""
+
+_DRIFTED_SAMPLE_POINTERS = _PREAMBLE + """
+SELECT ?endpoint WHERE {
+  GRAPH sw:current { ?endpoint sw:currentSampleRun ?run }
+  FILTER NOT EXISTS {
+    GRAPH ?run {
+      ?sample sw:sampledFrom ?endpoint ; sw:sampledBy sw:metric:classes .
+    }
+  }
+}
+"""
+
+# One endpoint's measurement, decline and declarations facts, replaced. Both
+# halves of the delete are needed and they cover different mistakes. Deleting
+# by endpoint clears what current holds ABOUT this endpoint. Deleting by the
+# incoming run's subjects clears any earlier use of those same subject IRIs,
+# which matters for a run written in the row-index subject scheme (stage
+# 1c-b3 replaced it with a scheme deriving the subject from the run, the
+# endpoint and the metric, so nothing the current prober writes can reuse a
+# subject for a different endpoint, but captured historical runs can). Without
+# it, a subject that was endpoint Y's in an older run and is endpoint X's in
+# this one would end up in current carrying both dqv:computedOn triples, which
+# is the self-contradicting graph load_run exists to prevent, one level up.
+#
+# The whole block is ONE store.update() call. Store.update is documented as
+# transactional ("either the full operation succeeds, or nothing is written")
+# and that holds across ';'-separated operations: verified by running
+# "DROP GRAPH <urn:g> ; DROP GRAPH <urn:missing>", which raises on the second
+# operation and leaves urn:g in place. So an endpoint is never half-updated:
+# never cleared without being rewritten, never two runs' facts at once.
+# Written without its own PREFIX prologue, because pyoxigraph 0.5.9 accepts a
+# prologue only before the FIRST operation of an update: "PREFIX a: <...>
+# INSERT DATA {...} ; PREFIX b: <...> INSERT DATA {...}" is refused with
+# "expected one of CREATE, DELETE, INSERT". So the two units below are bodies
+# and _update_text prepends one prologue for however many are combined.
+_REPLACE_MEASURED = """
+DELETE { GRAPH sw:current { ?thing ?p ?o } }
+WHERE  { GRAPH sw:current { ?thing dqv:computedOn endpoint: . ?thing ?p ?o } } ;
+DELETE { GRAPH sw:current { ?thing ?p ?o } }
+WHERE  { GRAPH sw:current { ?thing sw:notMeasuredOn endpoint: . ?thing ?p ?o } } ;
+DELETE { GRAPH sw:current { ?thing ?p ?o } }
+WHERE  {
+  GRAPH run: { ?thing dqv:computedOn endpoint: }
+  GRAPH sw:current { ?thing ?p ?o }
+} ;
+DELETE { GRAPH sw:current { ?thing ?p ?o } }
+WHERE  {
+  GRAPH run: { ?thing sw:notMeasuredOn endpoint: }
+  GRAPH sw:current { ?thing ?p ?o }
+} ;
+DELETE WHERE { GRAPH sw:current { endpoint: sw:declarationsRead ?read } } ;
+DELETE WHERE { GRAPH sw:current { endpoint: sw:currentRun ?run } } ;
+INSERT { GRAPH sw:current { ?thing ?p ?o } }
+WHERE  { GRAPH run: { ?thing dqv:computedOn endpoint: . ?thing ?p ?o } } ;
+INSERT { GRAPH sw:current { ?thing ?p ?o } }
+WHERE  { GRAPH run: { ?thing sw:notMeasuredOn endpoint: . ?thing ?p ?o } } ;
+INSERT { GRAPH sw:current { endpoint: sw:declarationsRead ?read } }
+WHERE  { GRAPH run: { endpoint: sw:declarationsRead ?read } } ;
+INSERT DATA { GRAPH sw:current { endpoint: sw:currentRun run: } }
+"""
+
+# One endpoint's class-sample pointer, replaced. The sample's own quads stay in
+# their run graph and are read through this pointer, because the index this
+# stage builds scans current for verdicts and never for sample values, so
+# copying several hundred sw:sampledValue triples per endpoint into current
+# would buy nothing and would grow the graph the index scans.
+_REPLACE_SAMPLED = """
+DELETE WHERE { GRAPH sw:current { endpoint: sw:currentSampleRun ?run } } ;
+INSERT DATA { GRAPH sw:current { endpoint: sw:currentSampleRun run: } }
+"""
+
+# What one graph says about one endpoint, in the exact shape the loader copies:
+# the quads of every measurement and every not-measured resource computed on
+# it, and its sw:declarationsRead fact. ONE template, read against current with
+# graph: bound to urn:sparqlwatch:current and against a run graph with graph:
+# bound to the run, so the check cannot compare two different shapes and call
+# the difference drift.
+_FACTS_FOR_ENDPOINT = _PREAMBLE + """
+SELECT ?thing ?p ?o WHERE {
+  GRAPH graph: {
+    {
+      { ?thing dqv:computedOn endpoint: }
+      UNION
+      { ?thing sw:notMeasuredOn endpoint: }
+      ?thing ?p ?o
+    }
+    UNION
+    {
+      endpoint: sw:declarationsRead ?o
+      BIND (endpoint: AS ?thing)
+      BIND (sw:declarationsRead AS ?p)
+    }
+  }
+}
+"""
+
+
+def _endpoint_run(endpoint: str, run: str) -> dict[str, str]:
+    return {_ENDPOINT_PREFIX: endpoint, _RUN_PREFIX: run}
+
+
+def _update_text(*bodies: str) -> str:
+    """One update out of one or more unit bodies, with a single prologue."""
+    return _PREAMBLE + " ;\n".join(bodies)
+
+
+def _instant(store: Store, run: str) -> str | None:
+    """The prov:generatedAtTime of ``run``'s activity, or None if it has none.
+
+    None means the graph is gone or holds no activity, which is not the same
+    thing as an older run and must not be compared as if it were.
+    """
+    for row in store.query(_RUN_INSTANT, prefixes={_RUN_PREFIX: run}):
+        return None if row["newest"] is None else row["newest"].value
+    return None
+
+
+def _as_datetime(instant: str) -> datetime:
+    """``instant`` as a datetime, for comparing two runs' recency.
+
+    Not a string comparison. endpoint_content.rq's header argues at length
+    that recency must be decided by the typed xsd:dateTime the data models and
+    not by ordering the run IRI as a string, because today's run IRIs happen to
+    embed an ISO-8601 instant so the two agree by coincidence. The same
+    argument applies here, so the lexical form is parsed rather than compared.
+    A form this cannot parse raises rather than silently mis-ordering two runs.
+    """
+    try:
+        return datetime.fromisoformat(instant)
+    except ValueError as error:
+        raise ValueError(
+            f"{instant!r} is not a parseable xsd:dateTime, so this run's "
+            f"recency cannot be compared: {error}"
+        ) from error
+
+
+def _run_endpoints(store: Store, run: str, query: str) -> set[str]:
+    return {
+        row["endpoint"].value
+        for row in store.query(query, prefixes={_RUN_PREFIX: run})
+    }
+
+
+def _pointers(store: Store) -> dict[tuple[str, str], tuple[str, str | None]]:
+    """What current points every endpoint at: (endpoint, pointer) -> (run, instant).
+
+    ``instant`` is None where the named run's graph holds no activity, which is
+    what a dropped run graph looks like from here.
+    """
+    found: dict[tuple[str, str], tuple[str, str | None]] = {}
+    for row in store.query(_POINTERS):
+        key = (row["endpoint"].value, row["which"].value)
+        instant = None if row["instant"] is None else row["instant"].value
+        found[key] = (row["run"].value, instant)
+    return found
+
+
+def _advance(
+    existing: tuple[str, str | None] | None, run: str, instant: str
+) -> bool:
+    """Whether ``run`` at ``instant`` may replace what ``existing`` names.
+
+    Five cases, and the wording of the rule is what keeps the monotone trap
+    shut. There is no existing pointer, so advance. The pointer already names
+    THIS run, so advance: re-loading a run is the documented recovery from a
+    current graph left wrong, and a rule that refused a tie would make the
+    recovery the one operation that cannot repair anything. The pointer names a
+    run with no instant, so it is gone or says nothing and cannot be compared;
+    advance, and the drift report says so. The pointer's run is strictly newer,
+    so keep it: an out-of-order older run must not move current backwards. And
+    a tie between two DIFFERENT runs is not resolved here at all; see
+    _tie_message.
+    """
+    if existing is None:
+        return True
+    existing_run, existing_instant = existing
+    if existing_run == run:
+        return True
+    if existing_instant is None:
+        return True
+    return _as_datetime(existing_instant) < _as_datetime(instant)
+
+
+def _tied(existing: tuple[str, str | None] | None, run: str, instant: str) -> bool:
+    """Whether ``existing`` and ``run`` are two different runs at one instant."""
+    if existing is None:
+        return False
+    existing_run, existing_instant = existing
+    if existing_run == run or existing_instant is None:
+        return False
+    return _as_datetime(existing_instant) == _as_datetime(instant)
+
+
+def _tie_message(endpoint: str, first: str, second: str, instant: str) -> str:
+    return (
+        f"{endpoint} has 2 runs tied as most recent ({sorted([first, second])}) "
+        f"at {instant}: two run graphs share a prov:generatedAtTime, so which "
+        f"of them urn:sparqlwatch:current should point at has no answer. Both "
+        f"read paths refuse such a store rather than blending two sweeps under "
+        f"one run's name, and advancing by load order would decide it silently. "
+        f"Drop one of the two run graphs, then rebuild with "
+        f"'python web/load_run.py --rebuild STORE_PATH'."
+    )
+
+
+def _drifted(store: Store) -> list[str]:
+    """Endpoints whose pointer names a run whose graph no longer mentions them."""
+    drifted = set()
+    for query in (_DRIFTED_RUN_POINTERS, _DRIFTED_SAMPLE_POINTERS):
+        drifted |= {row["endpoint"].value for row in store.query(query)}
+    return sorted(drifted)
+
+
+def _drift_advice(drifted: list[str], path: str) -> str:
+    """What an operator is told when a load leaves current attributing facts to
+    a run that no longer states them.
+
+    ``path`` is the store, so the command in the last sentence can be run as
+    printed rather than after a substitution.
+    """
+    return (
+        f"urn:sparqlwatch:current attributes facts to a run that no longer "
+        f"states them, for {len(drifted)} endpoint(s): {drifted}. A run graph "
+        f"has shrunk or been dropped since current was written, which no "
+        f"ordering rule can repair because the facts are gone rather than "
+        f"stale. Those endpoints are still publishing that run's verdicts, "
+        f"including any assertive 'verified' or 'absent' among them. Rebuild "
+        f"with 'python web/load_run.py --rebuild {path}'."
+    )
+
+
+def pointers_to_missing_runs(store: Store) -> list[tuple[str, str, str]]:
+    """Every (endpoint, pointer, run) in current whose run graph is not in the store.
+
+    A different question from _drifted, and it has a different caller. _drifted
+    asks whether the graph a pointer names still states this endpoint's facts,
+    and it is computed inside load_run, so it is only ever asked when something
+    is loaded. Dropping a run graph is an out-of-band store operation with no
+    load after it, so nothing computes _drifted and nothing notices. This asks
+    the cruder question a reader cannot recover from at all, whether the graph
+    is there, and it is cheap enough to ask when a server opens a store: one
+    query over current plus one contains_named_graph per distinct run named.
+
+    Both pointers are checked. endpoint_measurements.rq and index.rq read the
+    run sw:currentRun names and endpoint_content.rq reads the run
+    sw:currentSampleRun names, and each of them drops a solution whose run graph
+    is gone, so either pointer left dangling makes a page state a negative about
+    an endpoint the store still holds facts about.
+    """
+    held: dict[str, bool] = {}
+    missing = []
+    for (endpoint, pointer), (run, _instant) in _pointers(store).items():
+        if run not in held:
+            held[run] = store.contains_named_graph(NamedNode(run))
+        if not held[run]:
+            missing.append((endpoint, pointer, run))
+    return sorted(missing)
+
+
+def _maintain_current(
+    store: Store, graph_names: set[NamedNode]
+) -> tuple[list[str], list[str], list[str]]:
+    """Bring current up to date for every endpoint the loaded graphs mention.
+
+    The graphs are taken oldest first, so a file carrying two sweeps (which
+    web/tests/fixtures/run-two-sweeps.nq does) leaves current holding the newer
+    one's facts rather than whichever the iteration order reached last.
+
+    Every tie is found before anything is written. A tie is refused rather than
+    resolved, and refusing halfway through would leave current holding some
+    endpoints' new facts and some endpoints' old ones, which is the blend the
+    refusal exists to prevent.
+    """
+    # A graph with no activity instant is skipped rather than ordered by
+    # guesswork. It was already invisible to all three read queries, which
+    # require GRAPH ?run { ?a a prov:Activity ; prov:generatedAtTime ?t }, so
+    # skipping it here changes nothing about what a reader can see; putting it
+    # in current would.
+    runs: list[tuple[str, str]] = []
+    for graph in graph_names:
+        instant = _instant(store, graph.value)
+        if instant is not None:
+            runs.append((graph.value, instant))
+    runs.sort(key=lambda pair: _as_datetime(pair[1]))
+
+    work: list[tuple[str, str, set[str], set[str]]] = []
+    pointers = _pointers(store)
+    for run, instant in runs:
+        measured = _run_endpoints(store, run, _MEASURED_ENDPOINTS)
+        sampled = _run_endpoints(store, run, _SAMPLED_ENDPOINTS)
+        for endpoint in sorted(measured):
+            existing = pointers.get((endpoint, CURRENT_RUN))
+            if _tied(existing, run, instant):
+                raise ValueError(
+                    _tie_message(endpoint, existing[0], run, instant)
+                )
+        for endpoint in sorted(sampled):
+            existing = pointers.get((endpoint, CURRENT_SAMPLE_RUN))
+            if _tied(existing, run, instant):
+                raise ValueError(
+                    _tie_message(endpoint, existing[0], run, instant)
+                )
+        work.append((run, instant, measured, sampled))
+        # The pointers this run will move, so a second graph in the same file
+        # is compared against what the first one leaves behind.
+        for endpoint in measured:
+            if _advance(pointers.get((endpoint, CURRENT_RUN)), run, instant):
+                pointers[(endpoint, CURRENT_RUN)] = (run, instant)
+        for endpoint in sampled:
+            if _advance(pointers.get((endpoint, CURRENT_SAMPLE_RUN)), run, instant):
+                pointers[(endpoint, CURRENT_SAMPLE_RUN)] = (run, instant)
+
+    advanced: set[str] = set()
+    advanced_samples: set[str] = set()
+    kept_newer: set[str] = set()
+    # Read again rather than reusing the dict above: that one was advanced in
+    # simulation so a second graph in the same file could be checked for a tie
+    # against what the first one leaves, and the write loop needs the state the
+    # store is actually in.
+    live = _pointers(store)
+    for run, instant, measured, sampled in work:
+        for endpoint in sorted(measured | sampled):
+            bodies = []
+            if endpoint in measured:
+                if _advance(live.get((endpoint, CURRENT_RUN)), run, instant):
+                    bodies.append(_REPLACE_MEASURED)
+                    advanced.add(endpoint)
+                    live[(endpoint, CURRENT_RUN)] = (run, instant)
+                else:
+                    kept_newer.add(endpoint)
+            if endpoint in sampled:
+                if _advance(live.get((endpoint, CURRENT_SAMPLE_RUN)), run, instant):
+                    bodies.append(_REPLACE_SAMPLED)
+                    advanced_samples.add(endpoint)
+                    live[(endpoint, CURRENT_SAMPLE_RUN)] = (run, instant)
+                else:
+                    kept_newer.add(endpoint)
+            if bodies:
+                # One call, so this endpoint's measurements, declines,
+                # declarations fact and both pointers move together or not at
+                # all. See _REPLACE_MEASURED on why that is available.
+                store.update(
+                    _update_text(*bodies),
+                    prefixes=_endpoint_run(endpoint, run),
+                )
+
+    return sorted(advanced), sorted(advanced_samples), sorted(kept_newer)
+
+
+@dataclass
+class RebuildResult:
+    """What a rebuild of current did.
+
+    ``endpoints`` is how many endpoints it wrote, ``runs`` how many run graphs
+    it read to decide what to write.
+    """
+
+    endpoints: int = 0
+    runs: int = 0
+
+
+@dataclass
+class CheckResult:
+    """What a check of current found.
+
+    ``drifted`` maps an endpoint to the reasons current disagrees with the run
+    graphs about it, one string per reason. ``endpoints`` is how many endpoints
+    were compared, so "nothing drifted" can be told from "nothing was looked
+    at".
+    """
+
+    drifted: dict[str, list[str]] = field(default_factory=dict)
+    endpoints: int = 0
+
+    @property
+    def ok(self) -> bool:
+        return not self.drifted
+
+
+def _run_graphs(store: Store) -> list[tuple[str, str]]:
+    """Every run graph in the store with its instant, oldest first.
+
+    A run graph is a named graph other than current that holds an activity with
+    a prov:generatedAtTime. current holds no typed activity by construction, so
+    it cannot be mistaken for one here, and the assertion that it holds none is
+    tested (test_current_holds_no_typed_activity).
+    """
+    runs = []
+    for graph in store.named_graphs():
+        if graph == CURRENT_GRAPH:
+            continue
+        instant = _instant(store, graph.value)
+        if instant is not None:
+            runs.append((graph.value, instant))
+    runs.sort(key=lambda pair: _as_datetime(pair[1]))
+    return runs
+
+
+def _newest_per_endpoint(
+    store: Store, runs: list[tuple[str, str]]
+) -> tuple[dict[str, str], dict[str, str]]:
+    """The newest run that measured each endpoint, and that sampled each one.
+
+    This is the computation the three read queries used to do at query time,
+    and moving it here is what this stage is for: over a 30-run store of the
+    543-endpoint registry it cost 5,801.8 ms per page load, against 3.1 ms for
+    a flat scan of current. Done once per rebuild or check rather than once per
+    request.
+
+    Raises ValueError on a tie, naming both runs, for the same reason
+    _maintain_current does: two run graphs sharing a prov:generatedAtTime make
+    "the newest run" a question with no answer.
+    """
+    measured: dict[str, str] = {}
+    sampled: dict[str, str] = {}
+    instants: dict[str, str] = {}
+    for run, instant in runs:
+        for endpoint in _run_endpoints(store, run, _MEASURED_ENDPOINTS):
+            _keep_newest(measured, instants, endpoint, run, instant, CURRENT_RUN)
+        for endpoint in _run_endpoints(store, run, _SAMPLED_ENDPOINTS):
+            _keep_newest(
+                sampled, instants, endpoint, run, instant, CURRENT_SAMPLE_RUN
+            )
+    return measured, sampled
+
+
+def _keep_newest(
+    chosen: dict[str, str],
+    instants: dict[str, str],
+    endpoint: str,
+    run: str,
+    instant: str,
+    pointer: str,
+) -> None:
+    key = f"{pointer}\n{endpoint}"
+    held = chosen.get(endpoint)
+    if held is None:
+        chosen[endpoint] = run
+        instants[key] = instant
+        return
+    if _as_datetime(instants[key]) == _as_datetime(instant):
+        raise ValueError(_tie_message(endpoint, held, run, instant))
+    if _as_datetime(instants[key]) < _as_datetime(instant):
+        chosen[endpoint] = run
+        instants[key] = instant
+
+
+def rebuild_current(store: Store) -> RebuildResult:
+    """Rebuild current from the run graphs alone.
+
+    THE ALGORITHM, and why it is not one SPARQL update. Deriving the whole
+    graph in one update means every endpoint's recency is decided by scanning
+    the whole history, which is exactly the 5.8 second page this stage exists
+    to remove, run once for every endpoint: measured at 43.5 s over the 30-run
+    store of the 543-endpoint registry. So this walks the run graphs once,
+    oldest first, to learn the newest run that measured each endpoint and the
+    newest that sampled each one, and then writes each endpoint with the same
+    per-endpoint update the load path uses. That is O(run graphs) queries plus
+    exactly one update per endpoint, not one per endpoint per run, and it
+    shares its writing code with the maintenance path so the two cannot derive
+    different graphs.
+
+    current is dropped first, so an endpoint the run graphs no longer mention
+    is removed rather than left behind. Every write after that is one
+    transactional update, and the whole rebuild is re-runnable, which is what
+    makes an interrupted rebuild a state to repeat rather than a state to
+    diagnose.
+    """
+    runs = _run_graphs(store)
+    measured, sampled = _newest_per_endpoint(store, runs)
+
+    if store.contains_named_graph(CURRENT_GRAPH):
+        store.remove_graph(CURRENT_GRAPH)
+
+    for endpoint in sorted(set(measured) | set(sampled)):
+        # The two units can name different runs, which is the whole point of
+        # two pointers, so they cannot share one prefix binding and so they are
+        # two calls here rather than one. Each is transactional on its own, and
+        # a rebuild interrupted between them is repaired by running it again.
+        if endpoint in measured:
+            store.update(
+                _update_text(_REPLACE_MEASURED),
+                prefixes=_endpoint_run(endpoint, measured[endpoint]),
+            )
+        if endpoint in sampled:
+            store.update(
+                _update_text(_REPLACE_SAMPLED),
+                prefixes=_endpoint_run(endpoint, sampled[endpoint]),
+            )
+
+    return RebuildResult(
+        endpoints=len(set(measured) | set(sampled)), runs=len(runs)
+    )
+
+
+def _facts(store: Store, query: str, prefixes: dict[str, str]) -> set[tuple[str, str, str]]:
+    return {
+        (row["thing"].value, row["p"].value, str(row["o"]))
+        for row in store.query(query, prefixes=prefixes)
+    }
+
+
+def check_current(store: Store) -> CheckResult:
+    """Compare current against the run graphs and name every endpoint that drifted.
+
+    A derived graph that cannot be verified is a liability: the index this
+    stage builds asserts things over current that a reader cannot cross-check
+    by hand. So this recomputes, from the run graphs alone, which run each
+    endpoint's facts should come from and what those facts are, and reports
+    every disagreement with what current holds. It is deliberately a second
+    derivation and not a call into the writing path, because a check that used
+    the writer's own answer could only ever agree with it.
+
+    It is the expensive shape by design: it does the per-endpoint recency scan
+    the read queries no longer do. That is the cost of verifying, paid by an
+    operator running a check, not by a page load.
+    """
+    runs = _run_graphs(store)
+    measured, sampled = _newest_per_endpoint(store, runs)
+    reasons: dict[str, list[str]] = {}
+
+    def note(endpoint: str, reason: str) -> None:
+        reasons.setdefault(endpoint, []).append(reason)
+
+    pointers = _pointers(store)
+    expected = set(measured) | set(sampled)
+    for endpoint in sorted(expected):
+        if endpoint in measured:
+            held = pointers.get((endpoint, CURRENT_RUN))
+            if held is None:
+                note(endpoint, f"no sw:currentRun; expected {measured[endpoint]}")
+            elif held[0] != measured[endpoint]:
+                note(
+                    endpoint,
+                    f"sw:currentRun is {held[0]}, expected {measured[endpoint]}",
+                )
+            else:
+                in_current = _facts(
+                    store,
+                    _FACTS_FOR_ENDPOINT,
+                    {_ENDPOINT_PREFIX: endpoint, "graph": CURRENT_GRAPH_IRI},
+                )
+                in_run = _facts(
+                    store,
+                    _FACTS_FOR_ENDPOINT,
+                    {_ENDPOINT_PREFIX: endpoint, "graph": measured[endpoint]},
+                )
+                missing = in_run - in_current
+                extra = in_current - in_run
+                if missing:
+                    note(endpoint, f"{len(missing)} fact(s) missing from current")
+                if extra:
+                    note(endpoint, f"{len(extra)} fact(s) in current no run states")
+        elif (endpoint, CURRENT_RUN) in pointers:
+            note(endpoint, "sw:currentRun names a run that measured nothing here")
+        if endpoint in sampled:
+            held = pointers.get((endpoint, CURRENT_SAMPLE_RUN))
+            if held is None:
+                note(
+                    endpoint,
+                    f"no sw:currentSampleRun; expected {sampled[endpoint]}",
+                )
+            elif held[0] != sampled[endpoint]:
+                note(
+                    endpoint,
+                    f"sw:currentSampleRun is {held[0]}, expected "
+                    f"{sampled[endpoint]}",
+                )
+
+    for (endpoint, pointer), (run, _) in sorted(pointers.items()):
+        if endpoint not in expected:
+            note(endpoint, f"{pointer} names {run}, but no run graph mentions it")
+
+    # Every endpoint this compared, which is the run graphs' set PLUS the
+    # endpoints only current names. The union and not len(expected): the loop
+    # just above compares an endpoint the run graphs have stopped mentioning,
+    # and counting only the run graphs' set made "3 of 0 endpoints drifted" of a
+    # dropped run graph and "7 of 2" of a shrunk one, a numerator outside its own
+    # denominator.
+    compared = expected | {endpoint for endpoint, _ in pointers}
+    return CheckResult(drifted=reasons, endpoints=len(compared))
 
 
 def _stored_count(store: Store, graph_names: set[NamedNode]) -> int:
@@ -348,6 +1141,24 @@ def _parsed_graphs(nquads: bytes) -> tuple[list, set[NamedNode], int]:
     if not graph_names:
         raise ValueError("input names no graphs; nothing to load")
 
+    if CURRENT_GRAPH in graph_names:
+        # current is derived from the run graphs and reconstructible from them
+        # alone, which is the rule the whole second half of this module's
+        # docstring rests on. A file naming it as its graph breaks that rule and
+        # reports a clean load while doing it: load_run's remove_graph loop
+        # would wipe the graph all three read queries trust, insert the file's
+        # own triples into it, and return drifted=[] because _DRIFTED_RUN_
+        # POINTERS asks which pointers name a run that no longer states their
+        # facts and an emptied current graph holds no pointers to ask about.
+        raise ValueError(
+            f"input names {CURRENT_GRAPH_IRI} as a graph. That graph is derived "
+            f"from the run graphs by this module, not loaded from a file: "
+            f"accepting it would replace what every read query trusts with the "
+            f"file's own triples, and report a successful load. Name the run "
+            f"IRI the prober writes, or rebuild with "
+            f"'python web/load_run.py --rebuild STORE_PATH'."
+        )
+
     return quads, graph_names, discarded
 
 
@@ -404,15 +1215,90 @@ def load_run(store: Store, nquads: bytes) -> LoadResult:
     if stored != expected:
         raise RuntimeError(_incomplete_load(stored, expected, graph_names))
 
+    # The run graphs are in and immutable; now the derived graph the three read
+    # queries read. This happens after the insert and not before, because it
+    # reads the facts it copies out of the graphs that were just written.
+    advanced, advanced_samples, kept_newer = _maintain_current(store, graph_names)
+    drifted = _drifted(store)
+
     return LoadResult(
-        replaced=replaced, quad_count=len(quads), discarded_bytes=discarded
+        replaced=replaced,
+        quad_count=len(quads),
+        discarded_bytes=discarded,
+        advanced=advanced,
+        advanced_samples=advanced_samples,
+        kept_newer=kept_newer,
+        drifted=drifted,
     )
+
+
+_USAGE = (
+    "usage: load_run.py STORE_PATH RUN.nq [RUN.nq ...]\n"
+    "       load_run.py --rebuild STORE_PATH\n"
+    "       load_run.py --check STORE_PATH"
+)
+
+
+def _rebuild_mode(path: str) -> int:
+    """The repair path, and the migration path for a store built before current.
+
+    web/app.py refuses to serve a store that holds run graphs and no current
+    graph, and names this invocation, because such a store answers "we know
+    nothing about this endpoint" for every endpoint it fully describes.
+    """
+    result = rebuild_current(Store(path))
+    print(
+        f"{path}: rebuilt {CURRENT_GRAPH_IRI} from {result.runs} run graph(s): "
+        f"{result.endpoints} endpoints"
+    )
+    return 0
+
+
+def _check_mode(path: str) -> int:
+    """Compare current against the run graphs and name what disagrees.
+
+    Exits non-zero when anything drifted, so a cron job or a deploy step can
+    tell without reading the output.
+    """
+    result = check_current(Store(path))
+    if result.ok:
+        print(
+            f"{path}: {CURRENT_GRAPH_IRI} agrees with the run graphs for all "
+            f"{result.endpoints} endpoints, no endpoint drifted"
+        )
+        return 0
+    print(
+        f"{path}: {len(result.drifted)} of {result.endpoints} endpoints drifted "
+        f"from what the run graphs say. Rebuild with "
+        f"'python web/load_run.py --rebuild {path}'."
+    )
+    for endpoint, why in sorted(result.drifted.items()):
+        print(f"  {endpoint}: {'; '.join(why)}")
+    return 1
 
 
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
-    if len(args) < 2:
-        print("usage: load_run.py STORE_PATH RUN.nq [RUN.nq ...]", file=sys.stderr)
+    if len(args) == 2 and args[0] in ("--rebuild", "--check"):
+        # Both modes open an existing store and neither takes a run file, so
+        # the path is required to be a store already: Store() would create an
+        # empty RocksDB directory at a mistyped path and then rebuild current
+        # from no run graphs at all, which is the empty-store mistake
+        # web/app.py's _opened_store exists to refuse.
+        if not Path(args[1]).is_dir():
+            print(
+                f"{args[1]} is not an existing store directory; "
+                f"{args[0]} reads a store rather than creating one",
+                file=sys.stderr,
+            )
+            return 2
+        return (
+            _rebuild_mode(args[1])
+            if args[0] == "--rebuild"
+            else _check_mode(args[1])
+        )
+    if len(args) < 2 or args[0].startswith("--"):
+        print(_USAGE, file=sys.stderr)
         return 2
 
     run_paths = args[1:]
@@ -431,6 +1317,11 @@ def main(argv: list[str] | None = None) -> int:
         contents.append(data)
 
     store = Store(args[0])
+    # Whether any file left current attributing facts to a run that no longer
+    # states them. It decides the exit status, below, and it is deliberately
+    # sticky across the loop: a later clean file does not repair an earlier
+    # file's drift.
+    drifted = False
     for path, data in zip(run_paths, contents):
         result = load_run(store, data)
         # Reported from the result of the load, not from the validation pass
@@ -452,7 +1343,27 @@ def main(argv: list[str] | None = None) -> int:
                 f"{path}: loaded {result.quad_count} quads, "
                 f"no existing graph replaced{dropped}"
             )
-    return 0
+        if result.kept_newer:
+            # An out-of-order load: current already pointed at a strictly newer
+            # run, so the pointer was left alone and the site shows something
+            # other than the file just named. That is the right behaviour and it
+            # is not an error, so it is said and the exit status is unaffected;
+            # saying nothing left an operator believing they had just published
+            # this file.
+            print(
+                f"{path}: current already pointed at a newer run for "
+                f"{len(result.kept_newer)} endpoint(s), so what the site shows "
+                f"for them is unchanged by this file: {result.kept_newer}"
+            )
+        if result.drifted:
+            # The one case a load can report that the load cannot fix, and the
+            # reason --check exists. On stderr and non-zero because the store is
+            # now stating facts no run graph holds, which is the failure this
+            # whole module is written against; printing it on stdout at exit 0
+            # left it in a log nobody reads.
+            drifted = True
+            print(f"{path}: {_drift_advice(result.drifted, args[0])}", file=sys.stderr)
+    return 1 if drifted else 0
 
 
 if __name__ == "__main__":

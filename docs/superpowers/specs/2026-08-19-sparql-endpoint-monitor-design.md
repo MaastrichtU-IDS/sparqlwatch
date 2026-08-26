@@ -110,9 +110,39 @@ and it is squarely in the owner's research area.
 and the metric-definition revision used. Each run writes into **its own named graph**,
 which makes history immutable and lets a bad run be dropped wholesale.
 
-A derived `urn:sparqlwatch:current` graph holds the latest measurement per
-(endpoint, metric) so the UI's common queries stay cheap as history grows. It is
-rebuilt after each run, never hand-edited.
+A derived `urn:sparqlwatch:current` graph holds each endpoint's newest facts so the
+UI's common queries stay cheap as history grows. It is derived from the run graphs
+and never hand-edited.
+
+**Corrected 2026-08-25 (stage 3-2), after the graph was built and measured.** This
+paragraph used to say the graph holds "the latest measurement per (endpoint, metric)"
+and is "rebuilt after each run". Both halves are wrong, and this is a correction of
+the spec rather than a deviation from it.
+
+- **Per endpoint, not per (endpoint, metric).** `web/queries/endpoint_measurements.rq`
+  reasons that recency belongs to the endpoint: one sweep either measured an endpoint
+  or it did not, so the newest run that recorded anything for an endpoint supplies all
+  of that endpoint's facts. Taking each metric's own newest run instead builds a row
+  whose parts came from different sweeps, which is precisely the defect stage 3-1 was
+  fixed for: a 59-class sample attributed to a sweep that had declined `classes`. The
+  spec predicted the graph, and the code's reasoning about its granularity is better
+  than the spec's, so the spec is what changes.
+- **Incrementally maintained, not rebuilt after each run.** `web/load_run.py` updates
+  it as each run loads, in one transactional `store.update()` per endpoint, touching
+  only the endpoints that run mentions. A full rebuild is kept as a repair and
+  migration tool (`load_run.py --rebuild`) rather than the maintenance mechanism,
+  because it re-derives all 543 endpoints every time and measures seconds per run
+  (0.8 s to 3.2 s over a 30-run store) where the read it protects is milliseconds: at
+  30 runs the endpoint page went from 5,801.8 ms to 0.79 ms and its RDF representation
+  from 11,704.3 ms to 20.75 ms.
+
+The graph carries **two** pointers per endpoint, `sw:currentRun` and
+`sw:currentSampleRun`, because the newest run that measured an endpoint and the newest
+that sampled its classes are routinely different runs: a sweep at the default cost
+ceiling declines `sw:metric:classes`. It carries no `prov:Activity` and no run-level
+fact, so it states nothing a run graph does not. `web/README.md` holds the shape, the
+measurement tables, the load cost this buys the read with, and the one rebuild pass an
+existing store needs.
 
 **Raw evidence** (request, response headers, timing, truncated body) is retained per
 measurement, because "why did this endpoint score badly" is the first question a
@@ -410,7 +440,7 @@ that each end in something demonstrable, and each gets its own plan.
 | **1d. Registry seeding** | Ingest LOD Cloud + YummyData candidates, resolve front-ends to real endpoints, probe with politeness, admit responders. **PARTLY DELIVERED 2026-08-24** (stage 1d-a): ingest from LOD Cloud alone, plus the first registry-scale sweep. `seed::candidates` turns the 2026-06-15 dump (1683 datasets, 725 `access_url` entries, 548 distinct URLs) into **543 seeded candidates**, refusing 5 with a count per reason, and `seed-registry` writes `prober/registry/lod-cloud.toml` beside a parseable provenance file naming the dump, its SHA-256 (which the tool computes itself, refusing to write if `--sha256` disagrees) and every count. Endpoint-list policy has one implementation, because the seeder calls `registry.rs`, and the two refusals added there are split by the question each answers: `without_unroutable_hosts` in the seeder alone, since an operator may legitimately probe their own machine and this suite does so through wiremock, while `without_reserved_names` and `without_unpublishable_iris` are wired into `load_endpoints` so they hold whoever supplied the list. The dump's own `status` field gates nothing and a test pins that. The sweep: 543 candidates, cheap ceiling, `--concurrency 4`, **1h26m21s**, 3801 measurements, 0 failed endpoints, 6.3 MB, `finalised=true`, so 1c-b4's incremental protocol held at registry scale; 57 of 543 answered a query where the survey found 65 of 548, and **26** published a parseable service description (`service-description` `verified`; 30 returned some parseable RDF to the queryless GET, which is the weaker `declarationsRead` claim). Among the living, 24 of the 57 carry a description, 42.1%, against the survey's 28 of 65, 43.1%, so this sweep is slightly lower on both. Of the 26, **23 are at level 1, 2 at level 2 and one at level 4**, which is the survey's Virtuoso-stub finding reproduced by the graded metric. **Not built: front-end resolution, YummyData's list, and the admission policy**, so nothing yet stops the dead being re-probed and the registry is **not operable on a daily cadence**. The three deferrals with their reasons, the two items the measurement retired, and an answer to each of the four questions this row used to ask are under [Endpoint registry](#endpoint-registry). | stage 1c-b4 |
 | **2. Scoring as queries** | Score computation as pure SPARQL/functions over stored measurements, with recomputation over history proven. **PARTLY DELIVERED 2026-08-22** (stage 2-1): Storage in Oxigraph is in place, and one read query (`endpoint_content.rq`) is implemented and tested. Score computation is not built. | stage 1b |
 | **2b. Content metadata + examples** | Tiered VoID extraction, SIB example ingestion, `/.well-known/sparql-examples` discovery. **PARTLY DELIVERED 2026-08-22** (stage 2b-1): distinct classes are sampled and published as a `ContentSample` fact, deliberately not as VoID; see the tier-2 status note under [1b](#1b-content-metadata-extraction-tiered). Properties per class, counts, SIB ingestion, and example discovery are not built. | stage 1d |
-| **3. Web read tier** | Faceted search, browse, endpoint pages, metric pages, charts, content negotiation, read-only public SPARQL endpoint. **PARTLY DELIVERED 2026-08-23** (stage 3-1): One endpoint resource served at `GET /endpoint?url=...` with content negotiation returning HTML or any of four RDF serialisations (Turtle, N-Triples, RDF/XML, JSON-LD), the HTML and the RDF agreeing on every verdict the run recorded. Leaderboard, per-metric pages, history, evidence per measurement, faceted search, embedded query editor, and read-only public SPARQL endpoint are not built. | stage 2, 2b |
+| **3. Web read tier** | Faceted search, browse, endpoint pages, metric pages, charts, content negotiation, read-only public SPARQL endpoint. **PARTLY DELIVERED 2026-08-23** (stage 3-1): One endpoint resource served at `GET /endpoint?url=...` with content negotiation returning HTML or any of four RDF serialisations (Turtle, N-Triples, RDF/XML, JSON-LD), the HTML and the RDF agreeing on every verdict the run recorded. **MORE DELIVERED 2026-08-25** (stage 3-2): an index at `GET /` listing all 543 endpoints in one page of 424.6 KiB, grouped by the availability verdict's own values with a denominator on every count; `GET /about`, the page the prober's `User-Agent` points at, saying who is querying, how often, how politely, why that endpoint, and how to ask to be left alone; and all three read paths moved onto the derived `urn:sparqlwatch:current` graph, which is what makes a whole-registry page a flat scan. All three resources negotiate. Leaderboard, per-metric pages, history, evidence per measurement, embedded query editor, and read-only public SPARQL endpoint are still not built. **Faceted search is blocked rather than unbuilt**: faceting by vocabulary or class needs content data, and stage 2b has produced no vocabulary or property data and one class sample per endpoint at best, since `sw:metric:classes` is declined at the default cost ceiling. | stage 2, 2b |
 | **3b. Embedded editor** | `@sib-swiss/sparql-editor` per endpoint, fed autocomplete metadata from our origin | stage 2b, 3 |
 | **4. ids3 deployment** | `sparqlwatch-dev` project-env: prober CronJob, web, Oxigraph, ingress, egress policy | stage 3 |
 | **5. Submissions and moderation** | Public submission with endpoint validation, moderation queue, rate limiting; example contribution shares this path | stage 4 |
@@ -647,9 +677,14 @@ neither direction.
 3. ~~**Public domain name**~~ **Decided:** `https://sparqlwatch.dev.k8s.semanticscience.org`.
    It sits under the institutional domain, and the `dev` label matches the
    `sparqlwatch-dev` project-env in stage 4. Two consequences: the prober's
-   `User-Agent` points at `/about` on that host, so **stage 3 owes an `/about`
+   `User-Agent` points at `/about` on that host, so **stage 3 owed an `/about`
    page** explaining who is probing and how to ask us to stop, and stage 4's
-   ingress host is fixed rather than open.
+   ingress host is fixed rather than open. The page was **delivered 2026-08-25**
+   (stage 3-2), with every figure on it read out of the prober's own source by a
+   test. Two things it cannot say yet, recorded under known gaps in
+   `web/README.md`: no person or institution is named as the operator, and no
+   repository URL exists anywhere in this project, so the page's invitation to
+   check the public exclusion list names no place to check it.
 
 ## Appendix A: why not umakadata
 

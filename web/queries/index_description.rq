@@ -1,0 +1,187 @@
+# Everything this service currently knows about every endpoint, as RDF rather
+# than as rows. This is the machine-readable representation of the index
+# resource (see web/app.py); web/queries/index.rq answers the same question as
+# SELECT rows for the HTML representation.
+#
+# This is web/queries/endpoint_description.rq with the ?endpoint substitution
+# taken out, minus its class-sample branch, and the two files have to move
+# together for the reason that one gives: the index and the endpoint page are
+# two views of one set of facts, and a resource whose representations selected
+# their runs differently would have two notions of "newest".
+#
+# Why a CONSTRUCT and not the SELECT beside it, in one sentence rather than the
+# five endpoint_description.rq spends on it: every triple in the template below
+# also appears, verbatim, in some run graph in this store, so this document
+# cannot assert anything the graph does not already say. Assembling it in Python
+# from web/queries/index.rq's bindings would make the two representations two
+# independent re-derivations of the same facts, and the RDF one would be free to
+# state a verdict some code chose to write rather than one the prober published.
+#
+# WHAT IS NOT HERE, and why it is a smaller document than the union of 543
+# endpoint descriptions:
+#
+#   * No class sample. endpoint_description.rq's third branch reads
+#     sw:currentSampleRun and emits the sample's values, its size, its
+#     truncation flag and its own activity. The index draws no sample and says
+#     nothing about one, so emitting several hundred sw:sampledValue triples per
+#     endpoint would publish, in the index's name, facts no row of the index
+#     stands behind. An endpoint's own resource is where its sample is served,
+#     and every endpoint here is named, so a consumer that wants one knows where
+#     to ask.
+#   * No triple about the index itself. There is no sw:Index resource, no
+#     rdfs:member list and no count. Every one of those would be a triple no run
+#     graph holds, invented here to describe the document rather than the
+#     endpoints, and this query's whole guarantee is that it invents nothing. The
+#     membership of the index IS the set of endpoints that appear as a
+#     dqv:computedOn or sw:notMeasuredOn object below, which is exactly the set
+#     the HTML lists.
+#
+# Measured on this machine over the 543-endpoint registry sweep: 26,103 triples
+# serialised to about 2.2 MB of Turtle in 130 ms. The byte count moves by a few
+# tens of KB between runs while the triple count does not, because a CONSTRUCT's
+# solution order is not specified and the Turtle writer collapses adjacent
+# triples that share a subject. That is a bulk representation and it is meant to
+# be one; the HTML representation of the same resource is the one with a size
+# budget.
+
+PREFIX dqv: <http://www.w3.org/ns/dqv#>
+PREFIX prov: <http://www.w3.org/ns/prov#>
+PREFIX sw: <urn:sparqlwatch:>
+
+CONSTRUCT {
+  ?measurement a ?measurementType ;
+               dqv:computedOn ?endpoint ;
+               dqv:isMeasurementOf ?metric ;
+               dqv:value ?verdict ;
+               prov:wasGeneratedBy ?activity ;
+               sw:level ?level ;
+               sw:elapsedMs ?elapsedMs .
+  ?notMeasured a ?notMeasuredType ;
+               sw:notMeasuredOn ?endpoint ;
+               sw:notMeasuredMetric ?declinedMetric ;
+               sw:notMeasuredReason ?reason ;
+               prov:wasGeneratedBy ?declineActivity .
+  # Whether the run a row's facts came from said how it was written, and whether
+  # it said it finished. Written against both activity variables because exactly
+  # one of them is bound per solution, and an unbound subject drops its triple.
+  ?activity a prov:Activity ;
+            prov:generatedAtTime ?generatedAt ;
+            sw:emission ?emission ;
+            sw:finalised ?finalised ;
+            sw:completedEndpoint ?completedEndpoint .
+  ?declineActivity a prov:Activity ;
+                   prov:generatedAtTime ?generatedAt ;
+                   sw:emission ?emission ;
+                   sw:finalised ?finalised ;
+                   sw:completedEndpoint ?completedEndpoint .
+  # The newest activity in the store, with the three run-level facts stage
+  # 1c-b4 writes. What is emitted is the INPUTS to "a newer run stopped before
+  # it reached this endpoint" and never that conclusion: both conclusions rest
+  # partly on an absence, a CONSTRUCT emits only presence, so a derived flag
+  # could be built for the HTML representation and not for this one and the two
+  # would disagree about exactly the run this branch exists for.
+  ?newestActivity a prov:Activity ;
+                  prov:generatedAtTime ?newestGeneratedAt ;
+                  sw:emission ?newestEmission ;
+                  sw:finalised ?newestFinalised ;
+                  sw:completedEndpoint ?newestCompleted .
+}
+WHERE {
+  {
+    GRAPH sw:current {
+      # The pointer inside each branch, and the type pattern as a bound variable
+      # plus a FILTER. Both shapes are measured, in web/queries/index.rq's
+      # header and in endpoint_measurements.rq's.
+      ?endpoint sw:currentRun ?run .
+      ?measurement dqv:computedOn ?endpoint ;
+                   dqv:isMeasurementOf ?metric ;
+                   dqv:value ?verdict ;
+                   prov:wasGeneratedBy ?activity ;
+                   a ?measurementType .
+      FILTER (?measurementType = dqv:QualityMeasurement)
+      OPTIONAL { ?measurement sw:level ?level }
+      OPTIONAL { ?measurement sw:elapsedMs ?elapsedMs }
+    }
+    OPTIONAL {
+      GRAPH ?run {
+        ?activity a prov:Activity ;
+                  prov:generatedAtTime ?generatedAt .
+        OPTIONAL { ?activity sw:emission ?emission }
+        OPTIONAL { ?activity sw:finalised ?finalised }
+      }
+    }
+    FILTER (BOUND(?generatedAt))
+    # The completion marker for THIS row's endpoint, in its own OPTIONAL rather
+    # than nested inside the branch above. See web/queries/index.rq's note on
+    # the same split: an OPTIONAL group is left-joined on the variables it
+    # shares, so a group that binds ?endpoint narrows to the endpoints the run
+    # completed, and nesting it here would take the run's timestamp down with it
+    # and drop the whole solution at the FILTER above. On this query that would
+    # silently omit an endpoint from the document rather than mis-state a fact
+    # about it, which is harder to notice and no better.
+    OPTIONAL {
+      GRAPH ?run { ?activity sw:completedEndpoint ?endpoint }
+      BIND (?endpoint AS ?completedEndpoint)
+    }
+  }
+  UNION
+  {
+    GRAPH sw:current {
+      ?endpoint sw:currentRun ?declineRun .
+      ?notMeasured sw:notMeasuredOn ?endpoint ;
+                   sw:notMeasuredMetric ?declinedMetric ;
+                   sw:notMeasuredReason ?reason ;
+                   prov:wasGeneratedBy ?declineActivity ;
+                   a ?notMeasuredType .
+      FILTER (?notMeasuredType = sw:NotMeasured)
+    }
+    OPTIONAL {
+      GRAPH ?declineRun {
+        ?declineActivity a prov:Activity ;
+                         prov:generatedAtTime ?generatedAt .
+        OPTIONAL { ?declineActivity sw:emission ?emission }
+        OPTIONAL { ?declineActivity sw:finalised ?finalised }
+      }
+    }
+    FILTER (BOUND(?generatedAt))
+    # The completion marker for THIS row's endpoint, in its own OPTIONAL rather
+    # than nested inside the branch above. See web/queries/index.rq's note on
+    # the same split: an OPTIONAL group is left-joined on the variables it
+    # shares, so a group that binds ?endpoint narrows to the endpoints the run
+    # completed, and nesting it here would take the run's timestamp down with it
+    # and drop the whole solution at the FILTER above. On this query that would
+    # silently omit an endpoint from the document rather than mis-state a fact
+    # about it, which is harder to notice and no better.
+    OPTIONAL {
+      GRAPH ?declineRun { ?declineActivity sw:completedEndpoint ?endpoint }
+      BIND (?endpoint AS ?completedEndpoint)
+    }
+  }
+  UNION
+  {
+    # The newest activity in the store, selected with the same aggregate
+    # subquery as web/queries/index.rq and endpoint_measurements.rq, because the
+    # three have to agree about which run is newest.
+    #
+    # Its sw:completedEndpoint is emitted for EVERY endpoint it names here,
+    # unlike in endpoint_description.rq where it is scoped to the one endpoint
+    # that document describes. That is not a widening of what is claimed: this
+    # document describes every endpoint in the index, so every completion marker
+    # of that run is a fact about a resource it describes.
+    {
+      SELECT (MAX(?anyGeneratedAt) AS ?newestGeneratedAt) WHERE {
+        GRAPH ?anyRun {
+          ?anyActivity a prov:Activity ;
+                       prov:generatedAtTime ?anyGeneratedAt .
+        }
+      }
+    }
+    GRAPH ?newestRun {
+      ?newestActivity a prov:Activity ;
+                      prov:generatedAtTime ?newestGeneratedAt .
+      OPTIONAL { ?newestActivity sw:emission ?newestEmission }
+      OPTIONAL { ?newestActivity sw:finalised ?newestFinalised }
+      OPTIONAL { ?newestActivity sw:completedEndpoint ?newestCompleted }
+    }
+  }
+}

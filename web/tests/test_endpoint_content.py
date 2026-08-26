@@ -9,6 +9,7 @@ import pytest
 from pyoxigraph import NamedNode, RdfFormat, Store
 
 from endpoint_content import endpoint_content
+from load_run import check_current, load_run, rebuild_current
 
 # run-truncated.nq: the only endpoint in that synthetic run.
 TRUNCATED_ENDPOINT = "https://truncated.example/sparql"
@@ -101,22 +102,38 @@ def test_the_answer_names_the_run_it_came_from(store_two_sweeps):
 
 def test_the_run_chosen_is_the_newest_that_sampled_THIS_endpoint(store_two_sweeps):
     """Not the newest run in the store. Derived in-test rather than as a fourth
-    fixture: drop kadaster's sample from the current run, leaving a store whose
-    newest run sampled only the other endpoints. The obvious implementation
-    (ORDER BY DESC(?generatedAt) LIMIT 1 in a subquery) returns NOTHING here,
-    because the substituted endpoint does not reach inside a subquery's own
-    projection, so the subquery picks the newest run overall and then fails to
-    join. An endpoint that stopped responding would silently lose the last
-    answer anyone had about it."""
+    fixture: drop kadaster's sample from the newest run, leaving a store whose
+    newest run sampled only the other endpoints.
+
+    The recency this exercises is now decided once per load and written into
+    urn:sparqlwatch:current, not decided per request, so this hand-edit is the
+    one case the update rule cannot fix: a run graph that shrank after current
+    was written. Both halves are asserted. The check must NOTICE it, because
+    current is then attributing a sample to a run that no longer holds one, and
+    a rebuild must repair it by choosing the 14:00 run.
+
+    The property being pinned is unchanged and is why a rebuild cannot take a
+    shortcut: recency is per endpoint. Picking the newest run in the store and
+    then looking for this endpoint's sample in it returns NOTHING here, and an
+    endpoint that stopped responding would silently lose the last answer anyone
+    had about it.
+    """
     current_sample = NamedNode("urn:sparqlwatch:content-sample:2026-08-22T16:00:00Z:0")
     removed = list(store_two_sweeps.quads_for_pattern(current_sample, None, None, None))
-    assert removed, "fixture changed: the current run's kadaster sample is gone"
+    assert removed, "fixture changed: the newest run's kadaster sample is gone"
     for quad in removed:
         store_two_sweeps.remove(quad)
 
+    drifted = check_current(store_two_sweeps)
+    assert REPEATED_ENDPOINT in drifted.drifted, (
+        "current still attributes a sample to a run that no longer holds one"
+    )
+
+    rebuild_current(store_two_sweeps)
     r = endpoint_content(store_two_sweeps, REPEATED_ENDPOINT)
     assert r.run == "urn:sparqlwatch:run:2026-08-22T14:00:00Z"
     assert STALE_ONLY_CLASS in r.classes, "the 14:00 run is now the newest that sampled it"
+    assert check_current(store_two_sweeps).ok, "and the rebuild leaves no drift"
 
 
 def test_a_sample_that_found_nothing_still_reports_itself(store_zero_classes):
@@ -176,19 +193,58 @@ def _tied_runs() -> bytes:
 
 
 def test_two_runs_tied_as_most_recent_are_refused_not_blended(tmp_path):
-    """Neither run is newer, so 'the most recent run that sampled this
-    endpoint' has no answer. Without the guard the caller gets one run's IRI
-    beside the UNION of both runs' classes, under one run's size and one run's
-    truncation flag: a blended answer presented as a single sample's, which is
-    the read-path twin of the two-verdict measurement the loader exists to
-    prevent. Refusing is the only honest option, so it needs a test rather than
-    a comment: deleting the raise leaves every other test in this suite
-    green."""
+    """Neither run is newer, so "the most recent run that sampled this endpoint"
+    has no answer.
+
+    The refusal now happens where the choice is made, which is the loader:
+    current holds one sw:currentSampleRun per endpoint, so advancing it past a
+    tie would decide by load order which of two sweeps the page attributes the
+    sample to. That is a behaviour change nobody asked for, and silently
+    resolving it is worse than the blend it replaces, because the blend was at
+    least visible as two runs in one answer.
+
+    Without the refusal the caller gets one run's IRI beside one run's classes,
+    under the other run's size and truncation flag, depending on which file was
+    loaded second: a single sweep's answer that is not any sweep's answer.
+    Deleting the raise leaves every other test in this suite green, so it needs
+    this test.
+    """
+    store = Store(str(tmp_path / "s"))
+    with pytest.raises(ValueError, match="2 runs tied as most recent") as raised:
+        load_run(store, _tied_runs())
+    message = str(raised.value)
+    assert "urn:sparqlwatch:test:run:a" in message, "name both runs, so the store is fixable"
+    assert "urn:sparqlwatch:test:run:b" in message
+    assert "--rebuild" in message, "and say what to do once one of them is dropped"
+
+
+def test_a_current_graph_naming_two_sample_runs_is_refused_not_blended(tmp_path):
+    """The reader's own guard, which the loader's refusal does not replace.
+
+    load_run refuses to write two sw:currentSampleRun quads for one endpoint, so
+    this state is unreachable through it, and the store here is built by hand
+    for that reason: the two run graphs are inserted raw and the doubled pointer
+    is written straight into current. That is not a hypothetical shape. current
+    is a derived graph and an operator repairing one edits it, and a doubled
+    pointer makes this query return two runs' samples in one result set, which
+    a caller would publish as the union of both class lists under one run's size
+    and truncation flag. So the reader still refuses, and this test is what
+    keeps that guard from becoming dead code once the loader took over the
+    choice.
+    """
     store = Store(str(tmp_path / "s"))
     store.load(_tied_runs(), format=RdfFormat.N_QUADS)
+    store.update(
+        f"""
+        INSERT DATA {{ GRAPH <urn:sparqlwatch:current> {{
+          <{TIED_ENDPOINT}> <urn:sparqlwatch:currentSampleRun>
+            <urn:sparqlwatch:test:run:a> ,
+            <urn:sparqlwatch:test:run:b> .
+        }} }}"""
+    )
 
     with pytest.raises(ValueError, match="2 runs tied as most recent") as raised:
         endpoint_content(store, TIED_ENDPOINT)
     message = str(raised.value)
-    assert "urn:sparqlwatch:test:run:a" in message, "name both runs, so the store is fixable"
+    assert "urn:sparqlwatch:test:run:a" in message
     assert "urn:sparqlwatch:test:run:b" in message

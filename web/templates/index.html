@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sparqlwatch</title>
+<style>
+  /* Blue dark (blueprint), the default theme, from design/Main.dc.html, which
+     is the authority for layout, typography, spacing and these tokens. It is
+     NOT the authority for the verdict encoding: docs/design/verdict-encoding.md
+     is, and the .enc- rules at the bottom are generated from it. */
+  :root {
+    --bg: #0a1929; --bg-secondary: #112a3f; --bg-hover: #1a3952; --bg-deep: #061320;
+    --border: #2a5580; --text: #d0e4f5; --text-bright: #ffffff; --text-muted: #7fa5c8;
+    --text-dim: #5c7c9c; --accent: #4fc3f7; --on-accent: #0a1929; --accent-blue: #81d4fa;
+    --good: #66bb6a; --warn: #ffb74d; --crit: #ef5350; --overlay: rgba(255,255,255,0.05);
+    --radius: 6px; --radius-sm: 4px;
+    --mono: ui-monospace, 'Cascadia Code', 'Source Code Pro', monospace;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.5 system-ui, -apple-system, 'Segoe UI', sans-serif; }
+  a { color: var(--accent-blue); text-decoration: none; }
+  a:hover { color: var(--accent); text-decoration: underline; }
+  header { display: flex; align-items: center; gap: 12px; padding: 14px 24px;
+           background: var(--bg-secondary); border-bottom: 1px solid var(--border); }
+  .logo { display: flex; align-items: center; gap: 9px; font-weight: 600; color: var(--text-bright); }
+  .run { margin-left: auto; font-family: var(--mono); font-size: 12px; color: var(--text-dim); }
+  main { padding: 22px 24px; max-width: 1120px; }
+  h1 { margin: 0; font-size: 18px; font-weight: 600; color: var(--text-bright);
+       letter-spacing: -0.01em; }
+  .sub { margin: 6px 0 18px; font-size: 13px; color: var(--text-muted); max-width: 860px; }
+  h2 { font-size: 12px; font-weight: 600; color: var(--text-dim); text-transform: uppercase;
+       letter-spacing: 0.05em; margin: 0 0 12px; }
+  section + section { margin-top: 22px; }
+  .panel { border: 1px solid var(--border); border-radius: var(--radius);
+           background: var(--bg-secondary); padding: 14px 16px; }
+  .note { margin: 11px 0 0; font-size: 12.5px; color: var(--text-muted); max-width: 860px; }
+  /* A sentence about the sweep rather than about an endpoint, drawn in the same
+     token the endpoint page uses for the same kind of claim: what you are
+     reading is bounded in a way the rows do not show. It is a colour on text
+     that is already there, and it reads identically with no styling at all. */
+  .warn-note { color: var(--warn); }
+
+  /* The filter. It is one input and one line of text, and the page does not
+     depend on the script that drives it: with JavaScript off every row is
+     still here and only the filtering is missing. */
+  .tools { display: flex; gap: 10px; align-items: center; margin-bottom: 18px; }
+  .tools input { flex-grow: 1; max-width: 520px; height: 34px; padding: 0 12px;
+    border-radius: var(--radius); border: 1px solid var(--border);
+    background: var(--bg-secondary); color: var(--text); font: inherit; outline: none; }
+  .shown { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+
+  /* The metric key. Every chip on this page carries an abbreviation, so this is
+     where the abbreviation is written out in full. */
+  ul.mkey { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+            gap: 5px 22px; list-style: none; margin: 0; padding: 0; }
+  ul.mkey li { display: flex; align-items: center; gap: 9px; font-size: 12.5px; color: var(--text); }
+  .mabbr { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
+    width: {{ chip_width }}px; height: {{ chip_height }}px; border-radius: var(--radius-sm);
+    border: 1px solid var(--border); font-family: var(--mono); font-size: 10px;
+    font-weight: 700; color: var(--text-muted); }
+
+  .group { margin-top: 26px; }
+  .g-head { display: flex; align-items: center; gap: 9px; margin: 0 0 4px;
+            font-size: 13px; font-weight: 600; color: var(--text-bright);
+            text-transform: none; letter-spacing: 0; }
+  .g-head .swatch { flex-shrink: 0; display: inline-block; width: 20px; height: 15px;
+                    border-radius: 3px; }
+  .g-note { margin: 0 0 10px; font-size: 12.5px; color: var(--text-muted); }
+  /* The rows and their links are selected by position rather than by a class on
+     each one: a class attribute on the row and one on its link is 23 bytes on
+     every one of 543 rows for something the parent element already says. */
+  ul.rows { list-style: none; margin: 0; padding: 0; }
+  ul.rows > li { display: flex; align-items: center; gap: 12px; padding: 8px 12px;
+         border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  ul.rows > li:first-child { border-top: 1px solid var(--border); }
+  ul.rows > li:hover { background: var(--overlay); }
+  ul.rows > li[hidden] { display: none; }
+  ul.rows > li > a { flex-grow: 1; min-width: 240px; font-family: var(--mono);
+        font-size: 12.5px; word-break: break-all; }
+  /* The chips, and their geometry comes from the container rather than from a
+     class on every one of them: 543 rows times eight chips is the one place on
+     this page where twelve bytes of repeated markup is worth avoiding. The
+     colour, the border and the fill still come from the generated .enc- class,
+     which is the only thing that decides how a state is drawn.
+
+     A chip carries text here, unlike on the endpoint page, because there is no
+     room to name the metric beside it: the text is the metric's abbreviation
+     and the metric key above says what each abbreviation is. */
+  .cells { display: flex; gap: 5px; flex-shrink: 0; }
+  .cells > span { flex-shrink: 0; display: inline-flex; align-items: center;
+    justify-content: center; width: {{ chip_width }}px; height: {{ chip_height }}px;
+    border-radius: var(--radius-sm); font-family: var(--mono); font-size: 10px;
+    font-weight: 700; color: var(--text-muted); }
+  /* A metric this row's run recorded nothing about. Drawn as a dot rather than
+     as an empty box, because an empty box is exactly how "absent" is drawn and
+     a gap in what we hold is not a finding that nothing was there. */
+  .cells > span.gap { border: none; background: none; color: var(--text-dim); }
+  .qual { font-size: 11.5px; color: var(--warn); border: 1px dashed var(--warn);
+          border-radius: 3px; padding: 1px 7px; white-space: nowrap; }
+
+  .legend { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+            gap: 7px 26px; list-style: none; margin: 0; padding: 0; }
+  .legend li { display: grid; grid-template-columns: 20px minmax(112px, auto) 1fr 3ch;
+               align-items: center; gap: 9px; font-size: 12.5px; color: var(--text-muted); }
+  .legend .swatch { display: inline-block; width: 20px; height: 15px; border-radius: 3px; }
+  .legend .l-label { color: var(--text); }
+  .legend .l-count { text-align: right; font-variant-numeric: tabular-nums; color: var(--text-dim); }
+
+  /* Generated from docs/design/verdict-encoding.md's table by
+     verdict_encoding.css_rules(), the same call the endpoint page makes, so a
+     chip here and a chip there are the same drawing of the same state.
+
+     Marked safe because this is CSS this repository generates from a closed
+     table in verdict_encoding.py, not a value from a measured endpoint: no part
+     of it comes from the store or from the request. Autoescaping it instead
+     would turn a quote in a future token value into &#34; inside a stylesheet,
+     which is a silent drawing bug rather than an escape. */
+{{ encoding_css | safe }}
+</style>
+</head>
+<body>
+<header>
+  <span class="logo">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)"
+         stroke-width="2" stroke-linecap="round" aria-hidden="true">
+      <circle cx="11" cy="11" r="6"/><path d="M15.5 15.5 21 21"/><path d="M8 11h6"/></svg>
+    sparqlwatch
+  </span>
+  <span class="run">{% if newest_generated_at %}newest sweep {{ newest_generated_at }}{% else %}no measurement sweep{% endif %}</span>
+</header>
+<main>
+  <h1>Public SPARQL endpoints this service has measured</h1>
+  <p class="sub" data-endpoint-count="{{ endpoint_count }}" data-metric-count="{{ metric_count }}">
+    {% if endpoint_count %}
+      {{ endpoint_count }} endpoint{{ "" if endpoint_count == 1 else "s" }}, and
+      {{ metric_count }} metric{{ "" if metric_count == 1 else "s" }} measured across
+      them. No score and no ranking: each endpoint carries one verdict per metric,
+      and the groups below are the availability verdict's own values rather than a
+      judgement about which of them is better. Follow a row to see every verdict
+      written out in words.
+    {% else %}
+      No run in this store has recorded a measurement or a decline for any
+      endpoint, so there is nothing to list. That is a fact about this store and
+      not about any endpoint.
+    {% endif %}
+  </p>
+  {% if newest_sweep_note %}
+  <p class="note warn-note" data-newest-sweep-unfinished="true">{{ newest_sweep_note }}</p>
+  {% endif %}
+
+  <div class="tools">
+    <input id="q" type="search" autocomplete="off"
+           placeholder="Filter by endpoint URL or host" aria-label="Filter by endpoint URL or host">
+    <span class="shown" id="shown"></span>
+  </div>
+
+  {% if metrics %}
+  <section class="panel">
+    <h2>The metrics, and what each chip's letters mean</h2>
+    <ul class="mkey">
+      {% for metric in metrics %}
+      <li data-metric-column="{{ metric.name }}" data-abbr="{{ metric.abbr }}">
+        <span class="mabbr">{{ metric.abbr }}</span>{{ metric.name }}
+      </li>
+      {% endfor %}
+    </ul>
+    <p class="note">{{ empty_cell_text }}</p>
+  </section>
+  {% endif %}
+
+  {% for group in groups %}
+  <section class="group" data-availability="{{ group.availability }}">
+    <h2 class="g-head" data-group-heading="true" data-group-label="{{ group.label }}"
+        data-group-count="{{ group.count }}" data-group-of="{{ group.of }}">
+      <span class="swatch {{ group.css_class }}" aria-hidden="true"></span>{{ group.heading }}<span class="g-shown"></span>
+    </h2>
+    <p class="g-note" data-group-note="{{ group.availability }}">{{ group.meaning }}</p>
+    <ul class="rows">
+      {% for row in group.rows %}
+{# ONE LINE PER ROW, AND EVERY BYTE OF IT IS COUNTED. 543 rows times eight
+   cells is where this page's size lives: it is 90 percent of the document, so
+   the row is not indented, it carries no class attribute that a descendant
+   selector can replace, and a chip states each thing about itself exactly once.
+
+   In particular a chip does NOT carry its metric in an attribute. Its text IS
+   the metric's abbreviation, the abbreviation is unique, and the metric key
+   above writes each one out in full, so the row is still self-describing rather
+   than positional: nothing here depends on which column a chip is in. Carrying
+   the same two letters again as data-abbr, and the metric's name a third time as
+   data-metric, cost 165 KB of the 610 KB this page measured before they came
+   out, and bought a second and third spelling of one fact. A machine that wants
+   the metric IRI itself asks this resource for RDF, which is what the
+   negotiation is for. #}
+      <li data-endpoint="{{ row.endpoint }}"{% if row.run_unfinished %} data-run-unfinished="true"{% endif %}{% if row.never_reached %} data-newer-run-unfinished="true"{% endif %}><a href="{{ row.href }}">{{ row.endpoint }}</a>{% if row.run_unfinished %}<span class="qual">{{ row_unfinished_text }}</span>{% endif %}{% if row.never_reached %}<span class="qual">{{ row_never_reached_text }}</span>{% endif %}<span class="cells">{% for cell in row.cells %}{% if cell.present %}<span class="{{ cell.css_class }}"{% if cell.verdict is not none %} data-verdict="{{ cell.verdict }}"{% else %} data-declined="{{ cell.reason }}"{% endif %}>{{ cell.abbr }}</span>{% else %}<span class="gap" data-gap="true">&#183;</span>{% endif %}{% endfor %}</span></li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endfor %}
+
+  <section class="panel">
+    <h2>What the drawing means</h2>
+    <ul class="legend">
+      {% for state in legend %}
+      <li data-state="{{ state.slug }}">
+        <span class="swatch {{ state.css_class }}" aria-hidden="true"></span>
+        <span class="l-label">{{ state.label }}</span>
+        <span>{{ state.meaning }}</span>
+        <span class="l-count">{{ state.count }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    <p class="note">
+      The drawing never rests on colour: a filled chip means we have positive
+      evidence the capability works; a dashed border means no declaration was
+      seen for it; a heavier border means something is actively wrong rather than
+      merely missing; a dotted border means we did not look; and no border at all
+      means nothing was there. The count beside each state is how many chips on
+      this page are in it.
+    </p>
+    <p class="note">
+      A chip on this page carries no words, so this is the one page where a state
+      is drawn and not written out. Every row links to that endpoint's own page,
+      where each verdict is named in words beside the metric it belongs to.
+    </p>
+  </section>
+
+  <section class="panel">
+    <h2>What a marked row means</h2>
+    <p class="note" style="margin-top: 0">
+      <span class="qual">{{ row_unfinished_text }}</span>
+      The sweep this row's facts came from recorded that it was being written one
+      endpoint at a time and never recorded that it was complete. This endpoint's
+      own chunk was written whole, which is how its facts got here, so what the
+      row says is what that sweep had written for it when it stopped.
+    </p>
+    <p class="note">
+      <span class="qual">{{ row_never_reached_text }}</span>
+      A later sweep exists, stopped, and never recorded finishing this endpoint,
+      so none of this row comes from it. Everything in the row is still the
+      newest this service holds for the endpoint, and the sweep that recorded it
+      may well have finished; what is not true is that this row reports the
+      latest sweep.
+    </p>
+  </section>
+</main>
+<script>
+/* The filter, and the page does not depend on it. Every row is in the document
+   already: this hides the ones that do not match and keeps the counts honest
+   while it does, which is the only reason it is more than three lines. A group
+   heading reading "4 of 10 endpoints" beside two visible rows would be a wrong
+   number of exactly the kind this page is built to avoid, so filtering appends
+   what is shown rather than editing what was counted.
+
+   Inline rather than a file because it is the only script on the page and it is
+   smaller than the request that would fetch it. web/README.md notes that a
+   content security policy may later require a nonce or a static file. */
+(function () {
+  var box = document.getElementById("q");
+  var shown = document.getElementById("shown");
+  if (!box) { return; }
+  var groups = [].slice.call(document.querySelectorAll("[data-availability]"));
+  var total = document.querySelectorAll("[data-endpoint]").length;
+  function apply() {
+    var q = box.value.trim().toLowerCase();
+    var matched = 0;
+    groups.forEach(function (group) {
+      var here = 0;
+      [].slice.call(group.querySelectorAll("[data-endpoint]")).forEach(function (row) {
+        var hit = !q || row.getAttribute("data-endpoint").toLowerCase().indexOf(q) >= 0;
+        row.hidden = !hit;
+        if (hit) { here += 1; }
+      });
+      matched += here;
+      group.hidden = q && here === 0;
+      var note = group.querySelector(".g-shown");
+      if (note) { note.textContent = q ? ", " + here + " shown" : ""; }
+    });
+    shown.textContent = q ? "showing " + matched + " of " + total + " endpoints" : "";
+  }
+  box.addEventListener("input", apply);
+  apply();
+})();
+</script>
+</body>
+</html>

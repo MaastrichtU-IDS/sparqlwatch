@@ -5,7 +5,7 @@ use sparqlwatch_prober::{
     emit::{RunFooter, RunHeader, RunId},
     metrics::{definitions_revision, load_metrics, within_cost, Cost},
     politeness::{Politeness, DEFAULT_MIN_GAP, DEFAULT_RETRY_AFTER_CAP},
-    registry::load_endpoints,
+    registry::{load_endpoints, read_exclusions},
     run_sweep,
     write::{partial_path, RunWriter},
     Sweep,
@@ -19,6 +19,13 @@ use std::time::Duration;
 struct Args {
     #[arg(long, default_value = "endpoints.toml")]
     endpoints: String,
+    /// The exclusion list: the hosts somebody asked this project not to probe.
+    /// Read from disk at every run, so an entry takes effect at the next sweep
+    /// rather than at the next build. The sweep does not start if this file
+    /// cannot be read, because the alternative to stopping is probing hosts
+    /// that asked not to be probed.
+    #[arg(long, default_value = sparqlwatch_prober::registry::DEFAULT_EXCLUSIONS)]
+    exclusions: String,
     #[arg(long, default_value = "metrics.toml")]
     metrics: String,
     #[arg(long, default_value = "run.nq")]
@@ -216,7 +223,12 @@ async fn main() -> anyhow::Result<()> {
     // Deduplicated by the loader: one URL listed twice would otherwise be
     // probed twice and publish two `declarationsRead` facts about one endpoint
     // IRI in one run graph, which can and do disagree.
-    let endpoints = load_endpoints(&std::fs::read_to_string(&args.endpoints)?)?;
+    // Read before the endpoint list, so a sweep that cannot tell which hosts
+    // asked to be left alone stops before it has looked at what to probe. An
+    // unreadable or malformed list is an error and not an empty one: see
+    // `registry::read_exclusions`.
+    let excluded = read_exclusions(Path::new(&args.exclusions))?;
+    let endpoints = load_endpoints(&std::fs::read_to_string(&args.endpoints)?, &excluded)?;
     let defs = load_metrics(&std::fs::read_to_string(&args.metrics)?)?;
     // The real settings, from flags a reader can see. `Politeness::unlimited()`
     // exists for tests and must never appear here.

@@ -63,16 +63,29 @@ result = load_run(store, run_bytes)
 print(f"Loaded {result.quad_count} quads; replaced graphs: {result.replaced}")
 ```
 
-`LoadResult` has exactly those two fields: `quad_count`, and `replaced`, the
-list of graph IRIs that were already in the store and were dropped to make
-room for this file's quads. An empty `replaced` means every graph the file
-names was new.
+`LoadResult` reports what the load did. `quad_count` is how many quads it
+parsed; `replaced` lists the graph IRIs that were already in the store and were
+dropped to make room for this file's quads, so an empty `replaced` means every
+graph the file names was new; `discarded_bytes` is how many trailing bytes were
+cut off as an incomplete final section. The remaining four are about the derived
+`urn:sparqlwatch:current` graph (below): `advanced` and `advanced_samples` name
+the endpoints whose verdicts and whose class sample this load moved forward,
+`kept_newer` names those left alone because `current` already pointed at a newer
+run, and `drifted` names those whose pointer now names a run that no longer
+mentions them.
 
 The same thing from the command line, for one or more files at once:
 
 ```bash
 web/.venv/bin/python web/load_run.py path/to/sparqlwatch.db path/to/run.nq
 ```
+
+It prints one line per file, and two more when there is something to say. It
+names the endpoints `current` already pointed at a newer run for, so an
+out-of-order load cannot look like a publication; and it names the endpoints
+that **drifted**, on stderr, and **exits 1**. Drift is the one thing a load can
+report that the load cannot fix (see below), so it exits the way `--check` does
+on the same condition, and a deploy step that reads the status hears about it.
 
 ### The server has to be stopped first
 
@@ -105,9 +118,22 @@ means a malformed file is rejected with the store intact.
 
 That covers a bad file and nothing else. **The replacement is not atomic.**
 Dropping the graphs and inserting the quads are two separate store operations,
-because pyoxigraph 0.5.9's `Store` has no transaction API to group them in. An
-insert that cannot complete (a full disk, an OOM kill, a power loss) leaves the
-graphs dropped and the new quads not inserted.
+so an insert that cannot complete (a full disk, an OOM kill, a power loss)
+leaves the graphs dropped and the new quads not inserted.
+
+An earlier version of this section said the reason was that pyoxigraph 0.5.9's
+`Store` has no transaction API. **That was false.** `Store.update()` is
+documented as transactional ("either the full operation succeeds, or nothing is
+written to the database") and that holds across `;`-separated operations:
+`DROP GRAPH <urn:g> ; DROP GRAPH <urn:missing>` raises on the second and leaves
+`urn:g` in place. What pyoxigraph does not offer is an explicit transaction
+**handle**, something that could group this module's own `remove_graph` and
+`extend` calls. The real objection to writing the replacement as one update is
+the size of the `INSERT DATA` body it would need: one run of the 543-endpoint
+registry is 27,194 quads, and serialising them into SPARQL text to be re-parsed
+is a different cost from handing parsed `Quad` objects to `extend`. So the
+window stays, and is reported rather than hidden. The derived graph below does
+use that transactionality, one update per endpoint.
 
 The design can live with that window because **the store is a derived
 artefact**. The prober's `.nq` files are the source of truth and a run graph is
@@ -141,6 +167,237 @@ Two different runs coexist in one store (they have different IRIs, separate
 named graphs, and can be loaded one after another without collision). It is
 re-loading a graph name the store already holds that triggers replacement.
 
+## The derived `urn:sparqlwatch:current` graph
+
+Beside the run graphs, `load_run()` maintains one more named graph, and all
+three read queries read it instead of deciding for themselves which run is the
+newest. The reason is measured, over one real 543-endpoint registry sweep
+replayed under 1, 7 and 30 run IRIs with the run instant rewritten everywhere it
+appears. **The store shape matters as much as the number of runs, so each table
+below says which store it was taken on.**
+
+Deciding recency at query time, over a store holding no class sample at all,
+which is what a sweep at the default cost ceiling produces:
+
+| history | run quads | `endpoint_measurements.rq` | `endpoint_content.rq` | `endpoint_description.rq` |
+| --- | --- | --- | --- | --- |
+| 1 run | 27,194 | 10.0 ms | 0.10 ms | 2.0 ms |
+| 7 runs | 190,358 | 309.7 ms | 0.15 ms | 13.4 ms |
+| 30 runs | 815,820 | 5,801.8 ms | 0.17 ms | 78.9 ms |
+
+The content column there is a query matching nothing: the registry sweep
+declined `sw:metric:classes` for all 543 endpoints, so those three figures
+measure the absence of a sample rather than the cost of reading one. Replayed
+with a class sample per endpoint per run, which is what an expensive ceiling
+produces today and what spec stage 2b exists to produce more of, the same two
+queries are:
+
+| history | `endpoint_content.rq` | `endpoint_description.rq` |
+| --- | --- | --- |
+| 1 run | 1.2 ms | 3.3 ms |
+| 7 runs | 115.6 ms | 200.0 ms |
+| 30 runs (4,171,560 quads) | 6,488.5 ms | 11,704.3 ms |
+
+So one month of daily sweeps made the endpoint page a 5.8 second load and its
+RDF representation an 11.7 second one. Reading `current` instead, over those
+same two 30-run stores:
+
+| 30-run store | `endpoint_measurements.rq` | `endpoint_content.rq` | `endpoint_description.rq` |
+| --- | --- | --- | --- |
+| no samples (815,820 quads) | 0.79 ms | 0.18 ms | 1.52 ms |
+| 200 classes per endpoint per run (4,171,560 quads) | 1.10 ms | 2.25 ms | 20.75 ms |
+
+The query shape was not the mistake: per-endpoint recency has to be written as
+`FILTER NOT EXISTS`, because a value substituted for `?endpoint` does not reach
+inside a subquery's own projection. Deciding recency **at query time** was the
+mistake, and it is now decided once per load.
+
+**The property that matters is the shape, not the ratio.** `current` stays about
+27,000 quads whether the store holds one run or thirty, because it is
+`O(endpoints)` and not `O(history)`, so every one of those read paths is now flat
+rather than growing. A ratio taken at 30 runs is only the ratio at 30 runs; the
+flatness is what still holds at 300.
+
+### What it costs, which is load time
+
+Loading got slower, and that is where the whole cost of this went. Loading 30 runs
+takes **86.5 s without samples and 173.3 s with them**, about 3 to 6 s per run,
+which is what 543 atomic per-endpoint updates cost. Paying that once per sweep to
+take 5.8 s off every page view is the right side of the trade, and it is a trade
+rather than a free win: a deployment that loaded far more often than it served
+would be on the wrong side of it. This one sweeps by hand and serves every page
+from the result, so it is not.
+
+### Why the earlier measurement looked reassuring
+
+`endpoint_measurements.rq` and `endpoint_description.rq` carry an older
+measurement of the same question, taken over the committed fixtures plus N
+**activity-only** run graphs: 402 of them, then 1002. Whole requests came out at
+217 ms and 106 ms there, which read as comfortable, and the 5.8 second page above
+is the same query on a store of 30 graphs.
+
+The reason the small number was not evidence is that **the cost tracks quad
+count, not graph count.** 402 activity-only graphs are a few thousand quads; 30
+real run graphs are 815,820, and 4,171,560 once every run carries a class sample.
+Counting run graphs is counting the wrong thing, and it is why a measurement that
+looked fine did not catch a 5.8 second page. Those older figures are not withdrawn:
+they still say what they measured, and what they measured is the newest-run
+aggregate discussed under "When a run did not finish" below, which is the one
+selection `current` cannot absorb.
+
+### What it holds
+
+For each endpoint, in graph `urn:sparqlwatch:current`:
+
+- `<endpoint> sw:currentRun <run>`, the newest run that recorded a measurement,
+  a decline or a `sw:declarationsRead` for it
+- `<endpoint> sw:currentSampleRun <run>`, the newest run that published a
+  `sw:metric:classes` sample of it
+- that endpoint's `sw:declarationsRead` quad, and every quad of every
+  `dqv:QualityMeasurement` and every `sw:NotMeasured` about it, copied verbatim
+  out of the run `sw:currentRun` names
+
+and nothing else. In particular **no `rdf:type prov:Activity` and no
+`prov:generatedAtTime`, ever**: all three read queries select their run as
+`GRAPH ?run { ?a a prov:Activity ; prov:generatedAtTime ?t }` with no
+restriction on which graph, so a `current` graph carrying a typed activity would
+be a run to every one of them, and the newest by construction, and both readers
+would raise "runs tied as most recent" on every page. No run-level fact either:
+`sw:emission`, `sw:finalised` and `sw:completedEndpoint` belong to a run, and
+the readers reach them in one hop through the pointer, so nothing in `current`
+states anything a run graph does not.
+
+**And no sample quads.** The class sample itself was deliberately not copied: only
+its pointer moved, and `endpoint_content.rq` and `endpoint_description.rq` reach
+the `sw:sampledValue` triples in one hop into the graph `sw:currentSampleRun`
+names. The reason is that the index reads `current` for verdicts and never for
+sample values, so copying several hundred values per endpoint would grow the graph
+the index scans and buy nothing. Two consequences, both real:
+
+- the reads do not scan history, because the hop is into a graph the pointer names
+  rather than a search across graphs, but **the store still grows with history**,
+  since every run keeps its own sample of every endpoint it sampled: 4,171,560
+  quads at 30 sampled runs against 815,820 unsampled ones
+- the RDF representation is the one read whose timing moves with the sample at all:
+  20.75 ms on the 30-run sampled store against 1.52 ms on the 30-run unsampled one.
+  That is the endpoint resource's most expensive read, and it is milliseconds where
+  it was 11.7 seconds
+
+**And not an input.** A run file naming `urn:sparqlwatch:current` as its graph is
+refused before any store is opened. One hand-written line naming it used to wipe
+the graph, insert that line's own triples into it, and report a clean load with
+nothing drifted, because the drift check asks which pointers name a run that no
+longer states their facts and an emptied graph holds no pointers to ask about.
+
+**Two pointers, not one.** The newest run that measured an endpoint and the
+newest run that sampled it are different runs the moment a cheap sweep declines
+`sw:metric:classes`, and that is the steady state: the registry sweep declined
+`classes` for all 543 endpoints. One pointer loses the class sample outright.
+
+### How it is updated, and what it cannot follow
+
+For every endpoint the incoming run mentions, `load_run()` replaces what
+`current` holds for that endpoint in **one `store.update()`**, so an endpoint is
+never half-updated. It refuses to advance only when the run `current` already
+points at is **strictly newer**, so re-loading the same run IRI does refresh
+(which is the documented recovery) while an out-of-order older run is still
+refused. A **tie** between two different runs at the same instant is refused
+rather than resolved by load order, naming both runs, because both readers
+refuse such a store and deciding it silently would be a behaviour change.
+
+Three things the rule cannot fix:
+
+- a run graph that **shrinks**, which is the full sweep followed by the
+  truncated file a crashed prober leaves under the same run IRI
+- a run graph **dropped** wholesale, which is the whole reason the design keeps
+  one graph per run
+- the **finished/unfinished flip**, which needs nothing: the run-level facts are
+  read through the pointer, so a footer arriving changes what the page says
+  without a quad of `current` moving
+
+The first two are detected, not left to a reader. An endpoint whose pointer
+names a run whose graph no longer mentions it comes back in
+`LoadResult.drifted`, which `load_run.py` prints and which makes the load exit
+non-zero, and the fix is a rebuild.
+
+`drifted` is computed inside a load, though, and dropping a run graph is not a
+load. So the dropped case is caught a second time, where nothing has to be run
+for it to be noticed: **the server refuses to open a store in which any pointer
+names a run graph the store does not hold**, names an affected endpoint and the
+count and the run, and names the rebuild. Answering "no run in this store has
+measured this endpoint" out of a store whose older run graph holds every verdict
+for it is the same wrong answer the two refusals beside it exist to prevent.
+
+**So dropping a run graph is a two-step operation.** Drop it, then rebuild:
+
+```bash
+web/.venv/bin/python web/load_run.py --rebuild path/to/sparqlwatch.db
+```
+
+Nothing falls back at read time, deliberately. Recency is decided in one place,
+which is what moving it into `current` bought, and a reader that fell back to an
+older run would put a second derivation beside the one the three read queries
+use. A rebuild derives `current` from the run graphs alone, so it points every
+endpoint at the newest run that still measures it, which after a drop is the
+newest survivor.
+
+### Check and rebuild
+
+```bash
+web/.venv/bin/python web/load_run.py --check   path/to/sparqlwatch.db
+web/.venv/bin/python web/load_run.py --rebuild path/to/sparqlwatch.db
+```
+
+`--check` recomputes, from the run graphs alone, which run each endpoint's facts
+should come from and what those facts are, and names every endpoint that
+disagrees with `current`. It exits non-zero when anything drifted. It is
+deliberately a second derivation rather than a call into the writing path,
+because a check that used the writer's own answer could only ever agree with it,
+and it is deliberately the expensive shape: it does the per-endpoint recency scan
+the read queries no longer do, paid by an operator running a check rather than by
+a page load.
+
+`--rebuild` derives `current` from the run graphs alone. **The algorithm:** walk
+the run graphs once, oldest first, to learn the newest run that measured each
+endpoint and the newest that sampled each one, drop `current`, then write each
+endpoint with the same per-endpoint update the load path uses. That is
+`O(run graphs)` queries plus one update per endpoint, not one per endpoint per
+run, and it shares its writing code with the load path so the two cannot derive
+different graphs. **Measured: 0.8 s to 3.2 s** over the 30-run stores above.
+
+That is not the figure this stage was planned against. Deriving the whole graph in
+one SPARQL update instead measures **43.5 s** over the 30-run store, because every
+endpoint's recency is then decided by scanning the whole history, which is the 5.8
+second page again, once per endpoint. The plan took that shape's 43.5 s for the
+cost of a rebuild and concluded a rebuild could not be the maintenance mechanism.
+The conclusion still holds, for a smaller reason: an incremental update touches
+only the endpoints one run mentions, while even a 3.2 s rebuild re-derives all 543.
+So rebuild is a repair tool and a migration tool, and it is cheap enough to run
+whenever an operator has a doubt.
+
+### The migration: one rebuild pass
+
+A store built before this graph existed holds run graphs and no `current`
+graph, and every endpoint would then answer as though no sweep had ever
+measured it. `app.py`'s `_opened_store` refuses to serve such a store and names
+the `--rebuild` invocation, for the same reason it refuses a missing or empty
+one: answering "nothing measured" out of a store that does hold the
+measurements is the failure to prevent.
+
+**Upgrading an existing store is one pass, and it is the rebuild:**
+
+```bash
+web/.venv/bin/python web/load_run.py --rebuild path/to/sparqlwatch.db
+```
+
+Stop the server first, the way every write to the store needs it stopped. Nothing
+else has to change: the run graphs are untouched, the `.nq` files do not have to
+be re-loaded, and the pass costs the 0.8 s to 3.2 s measured above rather than a
+re-load's 86.5 s to 173.3 s. Run `--check` afterwards if you want a second
+derivation to agree with it. From then on every load maintains `current` itself,
+and a store that has never been through either is refused rather than served
+wrong.
+
 ## Query the store
 
 The first read query is `endpoint_content()`, which answers "what is in this
@@ -160,8 +417,10 @@ print(f"Classes: {r.classes}")
 ```
 
 The query uses the **most recent run that sampled the requested endpoint**,
-decided by comparing `prov:generatedAtTime` values (typed `xsd:dateTime`), not
-by string-ordering the run IRI. This matters because today's run IRIs embed
+read from that endpoint's `sw:currentSampleRun` pointer in the derived
+`urn:sparqlwatch:current` graph (above). The loader decides which run that is by
+comparing `prov:generatedAtTime` values (typed `xsd:dateTime`), not by
+string-ordering the run IRI. This matters because today's run IRIs embed
 ISO-8601 timestamps, so naive string ordering would agree; but the day that
 shape changes, string ordering would start returning a stale run silently.
 
@@ -224,10 +483,24 @@ so a typo used to produce a server whose every response was a 404 saying the
 store held nothing about the endpoint. That was true of the empty store it had
 just created and indistinguishable from a registry nobody has swept.
 
-The single HTTP resource is the current state of a monitored endpoint:
+There are three HTTP resources. The index is every endpoint this service holds
+facts for, and it is the way in:
+
+```
+GET /
+```
+
+the current state of one monitored endpoint:
 
 ```
 GET /endpoint?url=<percent-encoded endpoint URL>
+```
+
+and the page the prober's `User-Agent` points at, which says who is querying a
+stranger's endpoint and how to make it stop:
+
+```
+GET /about
 ```
 
 The endpoint URL must be percent-encoded. For example, `https://data.kkg.kadaster.nl/query`
@@ -236,6 +509,103 @@ becomes `https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery`:
 ```bash
 curl 'http://localhost:8000/endpoint?url=https%3A%2F%2Fdata.kkg.kadaster.nl%2Fquery'
 ```
+
+### The index
+
+`GET /` lists one row per endpoint the store holds facts for, with one chip per
+metric, grouped by the availability verdict's own value. There is no pagination,
+because the derived `urn:sparqlwatch:current` graph makes the whole registry a
+flat scan: the 543-endpoint sweep is 4,344 rows in about 60 ms of query and
+about 85 ms end to end, and neither number grows as sweeps accumulate.
+
+The groups are the availability verdict's values, one per value present, in the
+order of the table in `web/verdict_encoding.py`, followed by one group for
+endpoints whose newest run recorded no availability verdict at all. They are not
+"up" and "down", and there is no "did not answer" heading, because `absent` and
+`indeterminate` are not one fact: `absent` means the host answered with
+something that was not a SPARQL result (one of the four in the 543-endpoint
+sweep is a `.ttl` file on raw.githubusercontent.com), while `indeterminate`
+covers a timeout, a transport error, a DNS failure and an HTML front end.
+Collapsing them would turn "we could not determine this" into a determined
+negative.
+
+Each chip reads two letters, the metric's abbreviation, and the metric key at
+the top of the page writes every abbreviation out in full. The abbreviations are
+generated from the metric names the store holds, so they change with the metric
+set rather than being a list in the template. That is the page's size budget at
+work: 543 rows carrying full metric names, or the metric repeated in an
+attribute beside each chip, measured 610 KB against the 500 KB the page is
+allowed. It is 434,193 bytes as it stands, which is 424.0 KiB and 434 KB. An earlier
+sentence here said 424.6 KiB, which is 434,790 bytes and no measurement anyone
+took.
+
+**The row filter is an inline `<script>`, and the page does not depend on it.**
+Every row is in the document as served; with JavaScript off or blocked, all of
+them are visible and only the filtering is missing. The spec's risk table flags
+the `ids3` content security policy for a later stage's editor bundle, and this
+script raises the same question one stage early: under a policy that forbids
+inline script it will need a nonce or to become a static file, and nothing about
+what the page says changes either way.
+
+### `/about`, and how somebody asks to be left alone
+
+`GET /about` is the page the prober's `User-Agent` points at: `client.rs` sends
+`sparqlwatch/0.1.0 (+https://sparqlwatch.dev.k8s.semanticscience.org/about)` with
+every request, so this page is where a sysadmin arrives after finding an
+unfamiliar agent in their own log. It answers, in that order,
+who is querying, how often, how politely, why this endpoint, and how to stop it.
+
+**It takes no store dependency.** `about_resource` has no `store` parameter, and
+that absence is deliberate: the one page a stranger needs is the one page that must
+not be able to fail because a database is missing, locked by a load, or empty. It
+negotiates through the same `choose_representation` as the other two resources, so
+an operator's tooling can read the contact address and the request rate as RDF
+rather than parsing English. The RDF representation mints its own predicates under
+`urn:sparqlwatch:about:`, which is the opposite of the rule the other two follow
+("a CONSTRUCT here may only emit triples some run graph already holds"), and the
+difference is what the document is about: a triple about an endpoint must come from
+a measurement, and there is no measurement of who we are.
+
+**Every number on it comes from the prober's own source, and a test enforces it.**
+`web/tests/test_about.py` reads `prober/src/politeness.rs`, `prober/src/main.rs`,
+`prober/src/budget.rs`, `prober/metrics.toml`, `prober/registry/lod-cloud.toml`, its
+provenance file, `prober/src/client.rs`, `prober/Cargo.toml` and, for the one measured
+sweep duration, `prober/README.md`, and fails on a mismatch. So the page states 2 s minimum between requests to one host, 4 hosts in
+flight, a 20 s cap on an honoured `Retry-After`, budgets of 30 s per request, 60 s
+per metric and 600 s per endpoint, 7 requests per endpoint at the default cost
+ceiling, 543 endpoints from one LOD Cloud dump, and one full sweep of 1h26m21s,
+because those files say so. The politeness chain is pinned at both ends: one test
+asserts the constants in `politeness.rs`, a second asserts that `main.rs`'s
+`default_value_t` still names them, so the page cannot drift from either the
+constant or the flag that uses it.
+
+**How a request to be excluded is handled.** Email the address the page names (one
+constant, `CONTACT_ADDRESS` in `app.py`), naming the host. A person then adds an
+entry to `prober/registry/exclusions.toml`:
+
+```toml
+[[exclusion]]
+host = "sparql.example.org"
+reason = "A person asked, 2026-08-25"
+```
+
+Both fields are required, `host` is a bare host and not a URL, and a malformed or
+unreadable list **fails the run** rather than being treated as empty. The entry is
+effective **at the next sweep**: both binaries read the file from disk at every run,
+so no rebuild and no redeployment stands in between, and a sweep already in flight
+finishes under the list it started with. It is applied in `load_endpoints` and in
+`seed::candidates`, so a re-seed of the registry from the public dump cannot put the
+host back.
+
+The limits are documented rather than implied, on the page and at length under
+"Asking not to be probed" in `prober/README.md`: nothing watches the mailbox, so a
+person has to make the edit; nothing already published is retracted, because a run
+graph is written once and the endpoint URL is part of the identity of every fact
+about it; one entry covers one whole host and nothing below it; no alias is resolved;
+and the entry itself is public. The page also says the thing a sysadmin most needs
+to hear, which is that blocking our requests does not stop them: a refusing endpoint
+is recorded as unreachable and asked again on the next sweep, because nothing yet
+drops an endpoint from the list for failing.
 
 ### Why a query parameter instead of a path
 
@@ -258,7 +628,14 @@ parameter is the right choice.
 
 ### Content negotiation
 
-The same endpoint resource is served in two representations, chosen by the `Accept` header:
+All three resources are served in two kinds of representation, chosen by the
+`Accept` header and by the same code. The index's RDF representation is every
+endpoint's measurements and declines, which is 2.2 MB of Turtle for the
+543-endpoint sweep: a bulk representation, deliberately, and it carries no class
+samples and no triple about the index itself, because a CONSTRUCT here may only
+emit triples some run graph already holds.
+
+The endpoint resource is served in two representations, chosen by the `Accept` header:
 
 - `text/html` returns an HTML page with metrics, verdicts, and sampled classes
 - `text/turtle`, `application/rdf+xml`, `application/n-triples`, `application/ld+json`
@@ -306,10 +683,11 @@ that is not tied to one metric belongs to spec stage 2b, where properties sampli
 ### Which sweep saw what
 
 The two questions this resource answers are answered by two independent run selections:
-`endpoint_measurements.rq` picks the newest run that measured or declined anything for the
-endpoint, and `endpoint_content.rq` picks the newest run that published a class sample for
-it. Those are different runs whenever the newest sweep declined `sw:metric:classes`, which
-the prober does at its default cost ceiling, so it is the ordinary case rather than an odd
+`endpoint_measurements.rq` reads the endpoint's `sw:currentRun`, the newest run that measured
+or declined anything for it, and `endpoint_content.rq` reads its `sw:currentSampleRun`, the
+newest run that published a class sample for it. Those are different runs whenever the newest
+sweep declined `sw:metric:classes`, which the prober does at its default cost ceiling, so it
+is the ordinary case rather than an odd one, and it is why there are two pointers rather than
 one.
 
 Both facts are kept, and each is attributed to the sweep that observed it. When the two runs
@@ -353,9 +731,25 @@ The page derives two separate statements from them, and they say different thing
 
 The second needs **the newest activity in the whole store**, so it is the one selection
 in `endpoint_measurements.rq` and `endpoint_description.rq` that is not scoped to one
-endpoint. Both queries say so in their headers, and both select it with the same
-aggregate subquery: the "no run is newer" form of the same question cost 1.9 s and
-2.2 s per request at 402 run graphs, against 217 ms and 106 ms for the subquery.
+endpoint. It is therefore the one selection the derived `current` graph cannot absorb:
+`current` holds no typed activity and no `prov:generatedAtTime`, on purpose, so this
+question is still asked of the run graphs. Both queries say so in their headers, and
+both select it with the same aggregate subquery, rather than as `FILTER NOT EXISTS`
+("no run is newer"), which compares every run against every other run once per row.
+
+The figures behind that choice need reading with care, and they are the useful lesson
+of this whole stage. They were taken over the committed fixtures plus 402 and then
+1002 **activity-only** run graphs. At 402 graphs, whole requests came out at 217 ms
+and 106 ms with the aggregate, against 1.9 s and 2.2 s with `FILTER NOT EXISTS`; at
+1002 graphs the aggregate form was 1,288 ms and 682 ms, while the aggregate on its own
+is 0.4 ms at 402 graphs and 1.0 ms at 1002, so finding the maximum is not what either
+form costs. That comparison is still valid, and it is why the shape here stays an
+aggregate. What those numbers were not is
+evidence that the request was fast: **the cost tracks quad count, not graph count**,
+and 1002 activity-only graphs hold a few thousand quads where 30 real run graphs hold
+815,820. The same request, on 30 real runs, was the 5.8 second page the section on the
+derived graph above measures and removes. A measurement over a store shaped nothing
+like production looked reassuring for two stages and hid a page that took 5.8 seconds.
 
 A run carrying **none** of the three facts makes no claim about finishing either way,
 which is what a run from before the incremental write looks like. It promised nothing,
@@ -411,15 +805,45 @@ theme tokens; they are not authoritative for verdict encoding.
 
 ### What does not exist
 
-The design spec lists four read paths and several write features. This slice delivers one.
+The design spec lists four read paths and several write features. This slice delivers
+three resources: the index, the endpoint page, and `/about`.
 
 **Not built:**
-- Leaderboard (filterable, sortable by dimension)
+- Leaderboard (sortable by dimension; the index has one text filter and no sorts)
 - Per-metric pages (definition, computation method, which endpoints fail it)
 - History (per-endpoint measurement history)
 - Evidence (request, response headers, timing for each measurement)
-- Faceted search
 - Embedded query editor (`@sib-swiss/sparql-editor`)
 - Read-only public SPARQL endpoint
 
-All of these are in the spec under stages 3 onwards and remain future work.
+**Blocked rather than merely unbuilt:** faceted search. Faceting endpoints by the
+vocabularies and the classes they hold is the part that needs content data, and the
+store holds no vocabulary or property data at all and one class sample per endpoint at
+best, since `sw:metric:classes` is expensive and declined at the default cost ceiling.
+The spec's stage 3 row already depends on stage 2b for exactly this reason, so these
+facets wait on 2b producing something to facet on rather than on UI work. Grouping by
+verdict does exist: the index groups by the availability verdict's own values.
+
+### Known gaps in what this service tells a stranger
+
+Both of these are gaps in the project rather than in a page, and both matter because
+`/about` invites a reader to act on what it says. They are recorded here rather than
+argued away, because a gap nobody wrote down is a gap the next reader has to
+rediscover.
+
+- **Nothing in this repository states who operates the service.** No person and no
+  institution is named anywhere: `/about` carries one contact address, and the
+  operator is whatever a reader infers from its domain. A page that asks a stranger
+  to trust a request rate and a removal promise is a page that should say who is
+  making the promise, and naming an institution is not a decision this stage took.
+- **No repository URL exists anywhere in the project.** `/about` tells a reader that
+  the exclusion list is "committed to this project's public source repository", and
+  that is true and not actionable, because nothing on the page or in these files says
+  where that repository is. The claim a reader is invited to check is the one claim
+  they cannot currently reach.
+
+Two smaller ones, stated on `/about` itself rather than here: nothing watches the
+contact mailbox, and there is no channel for disputing a measurement.
+
+The rest of the read tier is in the spec under stages 3 onwards and remains future
+work.

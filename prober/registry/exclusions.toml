@@ -1,0 +1,52 @@
+# Hosts this project does not probe, because somebody asked to be left alone.
+#
+# NOT generated, unlike everything else in this directory. `seed-registry`
+# writes `lod-cloud.toml` and `lod-cloud.provenance.toml` and overwrites a hand
+# edit to either; this file is the opposite. The seeder never writes it, never
+# reads a flag naming it, and a re-seed leaves it exactly as it is. That is the
+# point: deleting a URL from the seeded registry by hand is undone by the next
+# re-seed, and an entry here is not.
+#
+# Read from disk at every run, by both binaries, through `--exclusions`, whose
+# default is this path relative to the working directory. `registry.rs` applies
+# it in `load_endpoints` and in the seeder both. So an entry takes effect AT THE
+# NEXT SWEEP: no rebuild and no redeploy stands between adding a host here and
+# the host being left alone.
+#
+# If the file cannot be read or does not parse, neither binary runs. That is
+# deliberate: a missing list is not an empty one, and a process that does not
+# know what it was asked to leave alone must not probe anything. A prober
+# started from a directory other than `prober/` hits exactly that, and the
+# error names the path it tried.
+#
+# One table per exclusion, both fields required:
+#
+#   host    the host to leave alone: no scheme, no port, no path. Every URL on
+#           that name is dropped, whatever its scheme, port or path. A value
+#           carrying `/`, `:` or `@` is a load error rather than an exclusion
+#           that quietly matches nothing.
+#   reason  why this host is here. "A person asked, 2026-08-25" is a perfectly
+#           good reason. A missing or blank one is a load error, so an
+#           exclusion cannot be anonymous and somebody reading this file in a
+#           year can tell why a host is on it.
+#
+# Name no person here. This file is public and the reason is copied into a
+# warning whenever the rule fires, so a date and the fact that a request was
+# made is enough; an address or a name would be published by writing it down.
+# The host itself is published by an entry, which is unavoidable: a hashed
+# entry could not be checked by the person who asked or diagnosed by anybody.
+#
+# NOTHING WATCHES A MAILBOX. An exclusion becomes real when a person adds it
+# here and commits it. There is no automation between a request and this file.
+#
+# Two things to do after adding an entry, both of which a test will otherwise
+# tell you about. If the host appears in `lod-cloud.toml`, re-seed, or
+# `the_shipped_registry_is_a_fixed_point_of_write_then_read` fails because the
+# loader no longer reads back what that file holds. If it appears in
+# `calibration-sample.toml`, that sample's own count test fails and the sample
+# has to be re-cut, because its measured costs then describe a population that
+# no longer includes the host.
+
+[[exclusion]]
+host = "sparqlwatch-exclusion-worked-example"
+reason = "Nobody asked for this one. It is the file's worked example, and it keeps the shipped file's own checks honest: every_shipped_exclusion_names_a_host_and_a_reason in registry.rs asserts the list is not empty, because an empty list satisfies every other assertion about it vacuously. A single-label host is refused by no other rule in registry.rs and cannot resolve publicly, so nobody is affected by it. Keep it, and add real entries beside it."

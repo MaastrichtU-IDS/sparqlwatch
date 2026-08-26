@@ -20,6 +20,7 @@ datasets_with_entries = 713
 entries = 725
 distinct = 548
 refused_credentials = 0
+refused_excluded = 0
 refused_unroutable = 1
 refused_reserved = 2
 refused_unpublishable = 2

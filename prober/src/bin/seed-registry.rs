@@ -50,6 +50,11 @@ struct Args {
     /// dump can be fetched long after it was published.
     #[arg(long, value_parser = clap::builder::NonEmptyStringValueParser::new())]
     downloaded: String,
+    /// The exclusion list to apply: the hosts somebody asked this project not
+    /// to probe. Read at run time and never written, so a re-seed leaves it as
+    /// it is. Nothing is written if it cannot be read.
+    #[arg(long, default_value = sparqlwatch_prober::registry::DEFAULT_EXCLUSIONS)]
+    exclusions: String,
     #[arg(long, default_value = "registry/lod-cloud.toml")]
     out: String,
     #[arg(long, default_value = "registry/lod-cloud.provenance.toml")]
@@ -97,7 +102,7 @@ struct Extraction {
 ///
 /// `seeded` is stated rather than left implied so this file can be checked
 /// against the list beside it without re-running anything, and against its own
-/// arithmetic: `distinct` minus the four refusals.
+/// arithmetic: `distinct` minus the five refusals.
 #[derive(Serialize, Deserialize)]
 struct CountsRecord {
     datasets: usize,
@@ -105,6 +110,7 @@ struct CountsRecord {
     entries: usize,
     distinct: usize,
     refused_credentials: usize,
+    refused_excluded: usize,
     refused_unroutable: usize,
     refused_reserved: usize,
     refused_unpublishable: usize,
@@ -330,6 +336,7 @@ fn provenance_of(args: &Args, dump: &[u8], digest: &str, counts: &seed::Counts) 
             entries: counts.entries,
             distinct: counts.distinct,
             refused_credentials: counts.refused_credentials,
+            refused_excluded: counts.refused_excluded,
             refused_unroutable: counts.refused_unroutable,
             refused_reserved: counts.refused_reserved,
             refused_unpublishable: counts.refused_unpublishable,
@@ -346,7 +353,12 @@ fn main() -> anyhow::Result<()> {
     let digest = sha256_hex(&dump);
     check_digest(&args.dump, &digest, &args.sha256)?;
 
-    let seeded = seed::candidates(&dump)?;
+    // Read before anything is written, and an error here stops the run: a
+    // registry written without the exclusion list applied cannot be told
+    // afterwards from one written with it, and it is committed and public.
+    let excluded =
+        sparqlwatch_prober::registry::read_exclusions(std::path::Path::new(&args.exclusions))?;
+    let seeded = seed::candidates(&dump, &excluded)?;
     check_counts(&seeded)?;
 
     let counts = &seeded.counts;
@@ -359,11 +371,13 @@ fn main() -> anyhow::Result<()> {
     tracing::info!(
         out = %args.out,
         provenance = %args.provenance,
+        exclusions = %args.exclusions,
         datasets = counts.datasets,
         datasets_with_entries = counts.datasets_with_entries,
         entries = counts.entries,
         distinct = counts.distinct,
         refused_credentials = counts.refused_credentials,
+        refused_excluded = counts.refused_excluded,
         refused_unroutable = counts.refused_unroutable,
         refused_reserved = counts.refused_reserved,
         refused_unpublishable = counts.refused_unpublishable,
@@ -419,6 +433,19 @@ mod tests {
     const CALIBRATION_SAMPLE: &str = include_str!("../../registry/calibration-sample.toml");
     const SHIPPED_PROVENANCE: &str = include_str!("../../registry/lod-cloud.provenance.toml");
 
+    /// The shipped exclusion list, which is what these tests load the shipped
+    /// registry under.
+    ///
+    /// Not `&[]`: the fixed-point test below has to red when an exclusion lands
+    /// on a host `lod-cloud.toml` still names, because the file then has to be
+    /// re-seeded. Loading it under no exclusions at all would make that red
+    /// disappear and leave the excluded host in a committed, public list.
+    fn shipped_exclusions() -> Vec<registry::Exclusion> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(registry::DEFAULT_EXCLUSIONS);
+        registry::read_exclusions(&path).expect("the shipped exclusion list must be readable")
+    }
+
     fn shipped_provenance() -> Provenance {
         toml::from_str(SHIPPED_PROVENANCE).expect("the provenance file must parse")
     }
@@ -446,11 +473,11 @@ mod tests {
     /// nothing.
     #[test]
     fn the_shipped_registry_is_a_fixed_point_of_write_then_read() {
-        let loaded = registry::load_endpoints(SHIPPED_REGISTRY).unwrap();
+        let loaded = registry::load_endpoints(SHIPPED_REGISTRY, &shipped_exclusions()).unwrap();
         assert!(!loaded.is_empty(), "an empty list round trips trivially");
         let rendered = registry_toml(&loaded);
         assert_eq!(
-            registry::load_endpoints(&rendered).unwrap(),
+            registry::load_endpoints(&rendered, &shipped_exclusions()).unwrap(),
             loaded,
             "the loader must read back exactly what this binary writes"
         );
@@ -478,7 +505,7 @@ mod tests {
         .map(|s| s.to_string())
         .collect();
         let rendered = registry_toml(&tricky);
-        assert_eq!(registry::load_endpoints(&rendered).unwrap(), tricky);
+        assert_eq!(registry::load_endpoints(&rendered, &shipped_exclusions()).unwrap(), tricky);
     }
 
     /// The provenance parses, and it agrees with the list beside it: its
@@ -492,7 +519,7 @@ mod tests {
     #[test]
     fn the_shipped_provenance_agrees_with_the_registry_beside_it() {
         let prov = shipped_provenance();
-        let loaded = registry::load_endpoints(SHIPPED_REGISTRY).unwrap();
+        let loaded = registry::load_endpoints(SHIPPED_REGISTRY, &shipped_exclusions()).unwrap();
         assert!(!loaded.is_empty(), "0 == 0 would agree with anything");
         assert_eq!(
             prov.counts.seeded,
@@ -504,6 +531,7 @@ mod tests {
             c.seeded,
             c.distinct
                 - c.refused_credentials
+                - c.refused_excluded
                 - c.refused_unroutable
                 - c.refused_reserved
                 - c.refused_unpublishable,
@@ -528,8 +556,8 @@ mod tests {
     /// here so a silently truncated file cannot pass the subset check trivially.
     #[test]
     fn every_calibration_endpoint_is_still_in_the_registry_it_was_cut_from() {
-        let seeded = registry::load_endpoints(SHIPPED_REGISTRY).unwrap();
-        let sample = registry::load_endpoints(CALIBRATION_SAMPLE).unwrap();
+        let seeded = registry::load_endpoints(SHIPPED_REGISTRY, &shipped_exclusions()).unwrap();
+        let sample = registry::load_endpoints(CALIBRATION_SAMPLE, &shipped_exclusions()).unwrap();
         assert_eq!(
             sample.len(),
             54,
@@ -679,10 +707,11 @@ mod tests {
             source: "https://lod-cloud.net/versions/2026-06-15/lod-data.json".to_string(),
             dump_version: "2026-06-15".to_string(),
             downloaded: "2026-08-19".to_string(),
+            exclusions: sparqlwatch_prober::registry::DEFAULT_EXCLUSIONS.to_string(),
             out: "registry/lod-cloud.toml".to_string(),
             provenance: "registry/lod-cloud.provenance.toml".to_string(),
         };
-        let seeded = seed::candidates(dump).unwrap();
+        let seeded = seed::candidates(dump, &shipped_exclusions()).unwrap();
         let record = provenance_of(&args, dump, &digest, &seeded.counts);
 
         assert_eq!(record.dump.bytes, dump.len(), "the bytes read, not a constant");

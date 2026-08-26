@@ -11,11 +11,20 @@ from pathlib import Path
 import pytest
 from pyoxigraph import DefaultGraph, NamedNode, RdfFormat, Store, parse
 
-from load_run import _TERMINATOR_PREDICATES, LoadResult, load_run, main
+from conftest import run_graph_names, run_quad_count
+from endpoint_content import endpoint_content
+from endpoint_measurements import endpoint_measurements
+from load_run import (
+    _TERMINATOR_PREDICATES,
+    LoadResult,
+    check_current,
+    load_run,
+    main,
+    rebuild_current,
+)
 
 FIXTURE = Path(__file__).parent / "fixtures" / "run-with-samples.nq"
 TWO_SWEEPS_FIXTURE = Path(__file__).parent / "fixtures" / "run-two-sweeps.nq"
-
 
 def test_loading_the_same_run_twice_leaves_one_graph(tmp_path):
     store = Store(str(tmp_path / "s"))
@@ -23,7 +32,7 @@ def test_loading_the_same_run_twice_leaves_one_graph(tmp_path):
     first = len(store)
     load_run(store, FIXTURE.read_bytes())
     assert len(store) == first
-    assert len(list(store.named_graphs())) == 1
+    assert len(run_graph_names(store)) == 1
 
 
 def test_a_changed_rerun_replaces_rather_than_merges(tmp_path):
@@ -59,7 +68,7 @@ def test_two_different_runs_coexist(tmp_path):
     load_run(store, FIXTURE.read_bytes())
     other = FIXTURE.read_text().replace("2026-08-22T16:00:00Z", "2026-08-22T17:00:00Z")
     load_run(store, other.encode())
-    assert len(list(store.named_graphs())) == 2
+    assert len(run_graph_names(store)) == 2
 
 
 def test_a_malformed_file_leaves_an_existing_run_untouched(tmp_path):
@@ -123,11 +132,11 @@ def test_several_named_graphs_are_all_replaced_and_nothing_else_is(tmp_path):
 
     first = load_run(store, TWO_SWEEPS_FIXTURE.read_bytes())
     assert first.replaced == [], "neither sweep graph existed yet"
-    assert len(list(store.named_graphs())) == 3, "the unrelated graph plus both sweep graphs"
+    assert len(run_graph_names(store)) == 3, "the unrelated graph plus both sweep graphs"
 
     second = load_run(store, TWO_SWEEPS_FIXTURE.read_bytes())
     assert len(second.replaced) == 2, "both named graphs were replaced"
-    assert len(list(store.named_graphs())) == 3, "no graph was added or lost"
+    assert len(run_graph_names(store)) == 3, "no graph was added or lost"
     assert len(list(store.quads_for_pattern(None, None, None, other_graph))) == other_count, (
         "the unrelated graph must be untouched by a load that does not name it"
     )
@@ -141,16 +150,27 @@ def test_load_result_reports_the_quad_count(tmp_path):
 
 
 def test_an_interrupted_insert_says_what_the_store_is_left_holding(tmp_path, monkeypatch):
-    """The window web/load_run.py admits it cannot close. remove_graph and extend
-    are two store operations and pyoxigraph 0.5.9 has no transaction API, so an
-    insert stopped by a full disk or an OOM kill leaves the graphs dropped and
-    nothing inserted: measured at 278 quads going to zero. It cannot be made
-    atomic, so it must be loud instead. The count is what makes it actionable,
-    because the .nq file is the source of truth and a run graph is immutable: an
-    operator told '0 of 278' re-runs the load and gets the run back exactly, as
-    the end of this test does."""
+    """The window web/load_run.py admits it cannot close.
+
+    remove_graph and extend are two store operations, so an insert stopped by a
+    full disk or an OOM kill leaves the graphs dropped and nothing inserted:
+    measured at 278 quads going to zero. Store.update IS transactional (see
+    load_run's module docstring), and the reason the run-graph replacement is
+    not written as one update is the size of the INSERT DATA body it would
+    need, not the absence of a transaction. So this window is loud instead of
+    closed. The count is what makes it actionable, because the .nq file is the
+    source of truth and a run graph is immutable: an operator told '0 of 278'
+    re-runs the load and gets the run back exactly, as the end of this test
+    does.
+
+    urn:sparqlwatch:current outlives the dropped run graph, which is the second
+    thing this state needs saying about it: current then attributes facts to a
+    run the store no longer holds, and that is exactly what the drift check
+    reports. Re-loading clears it.
+    """
     store = Store(str(tmp_path / "s"))
     load_run(store, FIXTURE.read_bytes())
+    run = NamedNode("urn:sparqlwatch:run:2026-08-22T16:00:00Z")
 
     def full_disk(self, quads):
         raise OSError("simulated full disk during insert")
@@ -161,12 +181,20 @@ def test_an_interrupted_insert_says_what_the_store_is_left_holding(tmp_path, mon
     assert isinstance(raised.value.__cause__, OSError), (
         "the underlying failure must still be reachable, not swallowed"
     )
-    assert len(store) == 0, "the window is real: the run is gone until it is re-loaded"
+    assert run_quad_count(store) == 0, (
+        "the window is real: the run is gone until it is re-loaded"
+    )
+    assert not check_current(store).ok, (
+        "and current still names the run that was dropped"
+    )
 
     monkeypatch.undo()
     again = load_run(store, FIXTURE.read_bytes())
     assert again.quad_count == 278
-    assert len(store) == 278, "re-loading the same file restores the run exactly"
+    assert run_quad_count(store) == 278, (
+        "re-loading the same file restores the run exactly"
+    )
+    assert check_current(store).ok, "and clears the drift it left behind"
     assert bool(store.query(
         'ASK { GRAPH ?g { ?m <http://www.w3.org/ns/dqv#value> "verified" } }'
     )), "and restores its content, not merely its quad count"
@@ -612,3 +640,633 @@ def test_the_loader_recognises_exactly_the_documented_terminators():
         f"the loader recognises {sorted(_TERMINATOR_PREDICATES)}, "
         f"{WIRE_FORMAT.name} names {sorted(table.values())}"
     )
+
+
+# ---------------------------------------------------------------------------
+# The derived urn:sparqlwatch:current graph
+# ---------------------------------------------------------------------------
+# Everything below is about the graph load_run maintains beside the run
+# graphs, and the three read queries read instead of computing recency at
+# query time. See web/load_run.py's module docstring for the quad shape and
+# the measurement that made it necessary.
+NEW_SUBJECTS_FIXTURE = Path(__file__).parent / "fixtures" / "run-new-subjects.nq"
+DECLINED_FIXTURE = Path(__file__).parent / "fixtures" / "run-declined.nq"
+CRASHED_FIXTURE = Path(__file__).parent / "fixtures" / "run-crashed-partway.nq"
+ZERO_CLASSES_FIXTURE = Path(__file__).parent / "fixtures" / "run-zero-classes.nq"
+PROPERTIES_FIXTURE = Path(__file__).parent / "fixtures" / "run-properties-sample.nq"
+
+NEW_SUBJECTS_INSTANT = "2026-08-22T20:00:00Z"
+KADASTER = "https://data.kkg.kadaster.nl/query"
+QLEVER = "https://qlever.dev/api/osm-planet"
+ONTOP = "https://ontop.certain.ai.ustp.at/sparql"
+
+PROV = "http://www.w3.org/ns/prov#"
+DQV = "http://www.w3.org/ns/dqv#"
+SW = "urn:sparqlwatch:"
+
+
+def _replayed(nquads: bytes, source: str, target: str) -> bytes:
+    """``nquads`` with the run instant ``source`` rewritten to ``target``.
+
+    A byte rewrite of the instant, not of the graph name alone, because
+    prober/src/emit.rs derives the graph IRI, the activity IRI, every
+    measurement and not-measured subject and the prov:generatedAtTime literal
+    from the one --at value. Rewriting all of them together is what makes the
+    result a run the prober could have written, and rewriting only the graph
+    name would leave two graphs claiming one activity.
+    """
+    return nquads.replace(source.encode(), target.encode())
+
+
+def _current(store: Store) -> set[tuple[str, str, str]]:
+    """The urn:sparqlwatch:current graph, as comparable triples."""
+    return {
+        (quad.subject.value, quad.predicate.value, str(quad.object))
+        for quad in store.quads_for_pattern(
+            None, None, None, NamedNode(SW + "current")
+        )
+    }
+
+
+def _pointer(store: Store, endpoint: str, predicate: str) -> str | None:
+    """What ``endpoint``'s ``predicate`` pointer in current names, or None."""
+    found = [
+        quad.object.value
+        for quad in store.quads_for_pattern(
+            NamedNode(endpoint),
+            NamedNode(SW + predicate),
+            None,
+            NamedNode(SW + "current"),
+        )
+    ]
+    assert len(found) <= 1, f"{endpoint} has {len(found)} {predicate} pointers"
+    return found[0] if found else None
+
+
+def _verdict_in_current(store: Store, endpoint: str, metric: str) -> list[str]:
+    """``endpoint``'s dqv:value for ``metric``, read out of current alone."""
+    return sorted(
+        row["v"].value
+        for row in store.query(
+            f"""
+            SELECT ?v WHERE {{ GRAPH <{SW}current> {{
+              ?m <{DQV}computedOn> <{endpoint}> ;
+                 <{DQV}isMeasurementOf> <{SW}metric:{metric}> ;
+                 <{DQV}value> ?v .
+            }} }}"""
+        )
+    )
+
+
+def test_current_holds_no_typed_activity(tmp_path):
+    """The defect that 500s every page, guarded first.
+
+    All three read queries select their run as
+    GRAPH ?run { ?activity a prov:Activity ; prov:generatedAtTime ?t } with no
+    restriction on which graph, and the newest-run aggregate is unrestricted
+    too. So a current graph holding a typed activity with a timestamp IS a run
+    to every one of them, and it carries the newest timestamp by construction:
+    both readers then raise "runs tied as most recent" and every page and every
+    RDF representation becomes a 500.
+
+    A store, not a fixture, so this holds for the shape the loader actually
+    writes. The non-emptiness assertion is half the test: a current graph that
+    stayed empty would satisfy the absence trivially.
+    """
+    store = Store(str(tmp_path / "s"))
+    load_run(store, FIXTURE.read_bytes())
+    assert _current(store), "current must not be empty"
+    assert not bool(store.query(
+        f"ASK {{ GRAPH <{SW}current> {{ ?a a <{PROV}Activity> }} }}"
+    )), "current may hold no rdf:type prov:Activity triple, ever"
+    assert not bool(store.query(
+        f"ASK {{ GRAPH <{SW}current> {{ ?a <{PROV}generatedAtTime> ?t }} }}"
+    )), (
+        "and no prov:generatedAtTime either. The aggregate needs both the type "
+        "and the timestamp, so the type's absence alone already excludes "
+        "current from it; keeping the timestamp out too means no question about "
+        "activities, present or future, can reach into this graph by accident"
+    )
+
+
+def test_current_holds_the_newest_runs_facts_for_each_endpoint(tmp_path):
+    """Two runs where a verdict CHANGES, so counting rows cannot pass this.
+
+    The later run is the earlier one replayed at a later instant with
+    kadaster's availability rewritten from "verified" to "absent". Both runs
+    hold the same number of quads for the same three endpoints, so a current
+    graph that kept the older run's facts, or merged the two, has the same size
+    as the right one.
+    """
+    store = Store(str(tmp_path / "s"))
+    earlier = NEW_SUBJECTS_FIXTURE.read_bytes()
+    load_run(store, earlier)
+    assert _verdict_in_current(store, KADASTER, "availability") == ["verified"]
+
+    later_instant = "2026-08-26T00:00:00Z"
+    later = _replayed(earlier, NEW_SUBJECTS_INSTANT, later_instant).replace(
+        b'availability> <http://www.w3.org/ns/dqv#value> "verified"',
+        b'availability> <http://www.w3.org/ns/dqv#value> "absent"',
+    )
+    assert later != _replayed(earlier, NEW_SUBJECTS_INSTANT, later_instant), (
+        "the replay must really have changed a verdict"
+    )
+    result = load_run(store, later)
+
+    assert _verdict_in_current(store, KADASTER, "availability") == ["absent"], (
+        "current must hold the newer run's verdict and only it"
+    )
+    assert _pointer(store, KADASTER, "currentRun") == (
+        f"{SW}run:{later_instant}"
+    )
+    assert sorted(result.advanced) == sorted([KADASTER, ONTOP, QLEVER])
+
+
+def test_an_endpoint_only_in_the_older_run_keeps_its_facts(tmp_path):
+    """Why current is per-endpoint rather than per-store.
+
+    run-crashed-partway.nq wrote kadaster's chunk and died before it reached
+    the other two endpoints. A sweep that never got to an endpoint must not
+    erase what the last one learned about it, and at 543 endpoints that is
+    every endpoint after the one a crash died on.
+    """
+    store = Store(str(tmp_path / "s"))
+    load_run(store, FIXTURE.read_bytes())
+    result = load_run(store, CRASHED_FIXTURE.read_bytes())
+
+    crashed_run = f"{SW}run:2026-08-23T04:00:00Z"
+    assert _pointer(store, KADASTER, "currentRun") == crashed_run
+    assert result.advanced == [KADASTER], (
+        "only the endpoint the crashed run reached may advance"
+    )
+    for endpoint in (QLEVER, ONTOP):
+        assert _pointer(store, endpoint, "currentRun") == (
+            f"{SW}run:2026-08-22T16:00:00Z"
+        ), f"{endpoint} keeps the last run that recorded anything for it"
+        assert _verdict_in_current(store, endpoint, "availability"), (
+            f"{endpoint}'s verdicts must still be in current"
+        )
+
+
+def test_reloading_the_same_run_refreshes_current(tmp_path):
+    """The monotone trap, which the first draft of this design walked into.
+
+    Under a "newer or equal is refused" rule a re-load of the same run IRI is a
+    tie and does nothing, so the documented recovery from a half-written
+    current graph is precisely the operation that cannot repair it. The rule is
+    "refuse only a strictly newer current", so this refreshes.
+
+    Mutating current by hand first is what makes the test bite: without it,
+    a loader that skipped the whole second load would leave current already
+    correct and pass.
+    """
+    store = Store(str(tmp_path / "s"))
+    load_run(store, NEW_SUBJECTS_FIXTURE.read_bytes())
+    expected = _current(store)
+
+    store.update(f"""
+        DELETE WHERE {{ GRAPH <{SW}current> {{
+          ?m <{DQV}value> ?v
+        }} }}""")
+    assert _current(store) != expected, "the hand mutation must have changed current"
+
+    result = load_run(store, NEW_SUBJECTS_FIXTURE.read_bytes())
+    assert _current(store) == expected, (
+        "re-loading the same run must restore what current holds for it"
+    )
+    assert sorted(result.advanced) == sorted([KADASTER, ONTOP, QLEVER])
+
+
+def test_loading_an_older_run_does_not_move_current_backwards(tmp_path):
+    """The other direction of the same rule, and the two pointers moving apart.
+
+    run-declined.nq is the 18:00 sweep that measured all three endpoints and
+    declined sw:metric:classes, so it published no sample. run-with-samples.nq
+    is the 16:00 sweep that measured them and sampled two of them. Loading them
+    in that order leaves the measurement pointer on 18:00, because 16:00 is
+    older, and moves the sample pointer to 16:00, because no run had sampled
+    anything yet. One notion of recency cannot express that, which is why there
+    are two pointers.
+    """
+    store = Store(str(tmp_path / "s"))
+    load_run(store, DECLINED_FIXTURE.read_bytes())
+    result = load_run(store, FIXTURE.read_bytes())
+
+    declined_run = f"{SW}run:2026-08-22T18:00:00Z"
+    samples_run = f"{SW}run:2026-08-22T16:00:00Z"
+    assert _pointer(store, KADASTER, "currentRun") == declined_run, (
+        "an older run may not move the measurement pointer backwards"
+    )
+    assert _pointer(store, KADASTER, "currentSampleRun") == samples_run, (
+        "and the sample pointer moves on its own, because 18:00 sampled nothing"
+    )
+    assert sorted(result.kept_newer) == sorted([KADASTER, ONTOP, QLEVER])
+    assert result.advanced == [], "no endpoint's measurements may have advanced"
+    assert sorted(result.advanced_samples) == sorted([KADASTER, ONTOP])
+    assert _verdict_in_current(store, KADASTER, "classes") == [], (
+        "the 18:00 sweep declined classes, so current holds no verdict for it"
+    )
+
+
+def test_a_newer_sweep_that_declined_classes_keeps_the_older_sample(tmp_path):
+    """Stage 3-1's Critical, pinned at the loader and at both readers.
+
+    The registry sweep declined sw:metric:classes for all 543 endpoints, so
+    "the newest run that measured this endpoint" and "the newest run that
+    sampled it" being different runs is the steady state and not an edge case.
+    A single pointer with a single notion of recency loses the sample outright.
+    """
+    store = Store(str(tmp_path / "s"))
+    load_run(store, FIXTURE.read_bytes())
+    load_run(store, DECLINED_FIXTURE.read_bytes())
+
+    assert _pointer(store, KADASTER, "currentRun") == f"{SW}run:2026-08-22T18:00:00Z"
+    assert _pointer(store, KADASTER, "currentSampleRun") == (
+        f"{SW}run:2026-08-22T16:00:00Z"
+    )
+
+    content = endpoint_content(store, KADASTER)
+    assert content.sampled is True, "the class sample must survive the newer sweep"
+    assert len(content.classes) == 59, "all 59 classes, not a truncated list"
+    assert content.run == f"{SW}run:2026-08-22T16:00:00Z", (
+        "and it must be attributed to the sweep that took it"
+    )
+    measurements = endpoint_measurements(store, KADASTER)
+    assert measurements.run == f"{SW}run:2026-08-22T18:00:00Z"
+    assert measurements.generated_at == "2026-08-22T18:00:00Z", (
+        "the run-level facts are reached through the pointer, not copied"
+    )
+
+
+def _shrunk(nquads: bytes, *drop: str) -> bytes:
+    """``nquads`` with every line naming one of ``drop`` removed.
+
+    What a crashed prober leaves is a prefix of the file, and the endpoints
+    after the crash point are simply absent from it. Dropping their lines
+    produces the same graph under the same run IRI, which is the shape that
+    matters: a re-load replaces the run graph, so current is left attributing
+    facts to a run that no longer states them.
+    """
+    kept = [
+        line
+        for line in nquads.splitlines(keepends=True)
+        if not any(name.encode() in line for name in drop)
+    ]
+    return b"".join(kept)
+
+
+def test_a_run_graph_that_shrinks_is_detected_and_named(tmp_path):
+    """The first case the update rule cannot fix, so it must be reported.
+
+    Load the full sweep, then the truncated file a crashed prober left under
+    the same run IRI. The endpoints the truncated file dropped keep a
+    sw:currentRun naming a run whose graph no longer mentions them, and no
+    ordering rule can repair that: the run is not older, and the facts are
+    simply gone. So the loader says which endpoints, and says to rebuild.
+    """
+    store = Store(str(tmp_path / "s"))
+    load_run(store, NEW_SUBJECTS_FIXTURE.read_bytes())
+    result = load_run(
+        store, _shrunk(NEW_SUBJECTS_FIXTURE.read_bytes(), "qlever", "ontop")
+    )
+
+    assert sorted(result.drifted) == sorted([ONTOP, QLEVER]), (
+        "the two endpoints the truncated file dropped must be named"
+    )
+    assert KADASTER not in result.drifted, "kadaster is still in the run"
+    assert result.advanced == [KADASTER]
+
+
+def test_a_dropped_run_graph_is_detected(tmp_path):
+    """The second case, and the spec calls dropping a bad run a feature.
+
+    One graph per run exists so that a bad run can be removed wholesale, and
+    remove_graph is used in this suite today. Doing it leaves current pointing
+    every endpoint of that run at a graph that is gone.
+    """
+    store = Store(str(tmp_path / "s"))
+    load_run(store, NEW_SUBJECTS_FIXTURE.read_bytes())
+    store.remove_graph(NamedNode(f"{SW}run:{NEW_SUBJECTS_INSTANT}"))
+
+    checked = check_current(store)
+    assert sorted(checked.drifted) == sorted([KADASTER, ONTOP, QLEVER]), (
+        "every endpoint of the dropped run must be named"
+    )
+    assert not checked.ok
+
+    # And a later load of an unrelated run reports it too, so an operator who
+    # never runs the check still hears about it.
+    result = load_run(store, ZERO_CLASSES_FIXTURE.read_bytes())
+    assert sorted(result.drifted) == sorted([KADASTER, ONTOP, QLEVER])
+
+
+def test_the_unfinished_flip_refreshes(tmp_path):
+    """The third case: a run that did not finish, then the same run finished.
+
+    This is the case the pointer design answers for free, and the test says so
+    rather than asserting a copy. current names the run and the readers join to
+    that run's graph for sw:emission and sw:finalised, so the footer arriving
+    changes what the page says without a single quad of current moving. Copying
+    those run-level facts onto the endpoint would have needed a refresh here,
+    and would have put a triple in current that no run graph holds.
+    """
+    store = Store(str(tmp_path / "s"))
+    crashed = CRASHED_FIXTURE.read_bytes()
+    load_run(store, crashed)
+    before = endpoint_measurements(store, KADASTER)
+    assert before.run_did_not_finish is True, "the crashed run wrote no footer"
+
+    activity = f"<{SW}activity:2026-08-23T04:00:00Z>"
+    run = f"<{SW}run:2026-08-23T04:00:00Z>"
+    footer = (
+        f'{activity} <{SW}finalised> "true"^^'
+        f"<http://www.w3.org/2001/XMLSchema#boolean> {run} .\n"
+    ).encode()
+    load_run(store, crashed + footer)
+
+    after = endpoint_measurements(store, KADASTER)
+    assert after.run_did_not_finish is False, (
+        "the page must stop saying the sweep did not finish"
+    )
+    assert after.run == before.run, "and it is still the same run"
+
+
+def _tied_measuring_runs() -> bytes:
+    """Two run graphs measuring the same endpoint at the SAME instant.
+
+    Hand-built rather than a fixture pair, because --at is both the run IRI and
+    the timestamp, so no two files the prober writes can tie.
+    """
+    lines = []
+    for run in ("a", "b"):
+        graph = f"<{SW}test:run:{run}>"
+        activity = f"<{SW}test:activity:{run}>"
+        measurement = f"<{SW}test:measurement:{run}>"
+        lines += [
+            f"{activity} <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> "
+            f"<{PROV}Activity> {graph} .",
+            f"{activity} <{PROV}generatedAtTime> "
+            f'"2026-08-27T00:00:00Z"^^'
+            f"<http://www.w3.org/2001/XMLSchema#dateTime> {graph} .",
+            f"{measurement} <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> "
+            f"<{DQV}QualityMeasurement> {graph} .",
+            f"{measurement} <{DQV}computedOn> <https://tied.example/sparql> {graph} .",
+            f"{measurement} <{DQV}isMeasurementOf> <{SW}metric:availability> {graph} .",
+            f'{measurement} <{DQV}value> "verified" {graph} .',
+            f"{measurement} <{PROV}wasGeneratedBy> {activity} {graph} .",
+        ]
+    return ("\n".join(lines) + "\n").encode()
+
+
+def test_the_loader_refuses_to_advance_current_past_a_tie(tmp_path):
+    """Where the readers' tied-run refusal goes.
+
+    Both readers refuse a store with two runs tied as most recent, because
+    picking one silently publishes a blend of two sweeps under one run's name.
+    A "strictly newer" advance rule resolves such a tie by load order instead,
+    which is a behaviour change nobody asked for. So the loader refuses, and
+    names both runs, so the condition is still reported rather than decided by
+    whichever file happened to be second.
+    """
+    store = Store(str(tmp_path / "s"))
+    with pytest.raises(ValueError, match="tied as most recent") as raised:
+        load_run(store, _tied_measuring_runs())
+    message = str(raised.value)
+    assert f"{SW}test:run:a" in message, "name both runs, so the store is fixable"
+    assert f"{SW}test:run:b" in message
+    assert "https://tied.example/sparql" in message, "and name the endpoint"
+
+
+def test_a_rebuild_from_the_run_graphs_alone_reproduces_current(tmp_path):
+    """current is derived, so it must be reconstructible from the run graphs.
+
+    Mutated by hand first, in both directions: a fact removed and a fact
+    invented. A rebuild that only inserted what was missing would pass on the
+    first half alone.
+    """
+    store = Store(str(tmp_path / "s"))
+    load_run(store, FIXTURE.read_bytes())
+    load_run(store, DECLINED_FIXTURE.read_bytes())
+    load_run(store, ZERO_CLASSES_FIXTURE.read_bytes())
+    expected = _current(store)
+    assert expected, "there must be something to rebuild"
+
+    store.update(f"""
+        DELETE {{ GRAPH <{SW}current> {{ <{KADASTER}> <{SW}currentSampleRun> ?r }} }}
+        WHERE  {{ GRAPH <{SW}current> {{ <{KADASTER}> <{SW}currentSampleRun> ?r }} }} ;
+        INSERT DATA {{ GRAPH <{SW}current> {{
+          <{QLEVER}> <{DQV}value> "invented"
+        }} }}""")
+    assert _current(store) != expected
+
+    rebuilt = rebuild_current(store)
+    assert _current(store) == expected, (
+        "a rebuild must reproduce current exactly, from the run graphs alone"
+    )
+    assert rebuilt.endpoints == 4, (
+        "three endpoints from the sweeps plus the zero-classes one, "
+        f"rebuilt {rebuilt.endpoints}"
+    )
+    assert rebuilt.runs == 3
+
+
+def test_the_check_names_every_endpoint_that_drifted_and_no_others(tmp_path):
+    """A derived graph that cannot be verified is a liability.
+
+    The index this stage builds asserts things over current that a reader
+    cannot cross-check by hand, so there has to be a mode that compares current
+    against the run graphs and names what disagrees. Both halves are asserted:
+    a clean store must come back clean, or a check that named everything would
+    pass the first half.
+    """
+    store = Store(str(tmp_path / "s"))
+    load_run(store, FIXTURE.read_bytes())
+    load_run(store, DECLINED_FIXTURE.read_bytes())
+
+    clean = check_current(store)
+    assert clean.ok, f"a freshly loaded store must be clean, got {clean.drifted}"
+    assert clean.endpoints == 3
+
+    store.update(f"""
+        DELETE {{ GRAPH <{SW}current> {{ ?m <{DQV}value> ?v }} }}
+        WHERE  {{ GRAPH <{SW}current> {{
+          ?m <{DQV}computedOn> <{QLEVER}> ; <{DQV}value> ?v
+        }} }} ;
+        DELETE {{ GRAPH <{SW}current> {{ <{ONTOP}> <{SW}currentSampleRun> ?r }} }}
+        WHERE  {{ GRAPH <{SW}current> {{ <{ONTOP}> <{SW}currentSampleRun> ?r }} }}""")
+
+    drifted = check_current(store)
+    assert sorted(drifted.drifted) == sorted([ONTOP, QLEVER]), (
+        f"expected exactly those two, got {sorted(drifted.drifted)}"
+    )
+    assert not drifted.ok
+    for endpoint in (ONTOP, QLEVER):
+        assert drifted.drifted[endpoint], f"{endpoint} must be told what drifted"
+
+
+def test_the_rebuild_and_the_check_are_reachable_from_the_command_line(
+    tmp_path, capsys
+):
+    """Both modes get a test, because a repair path nobody can run is not one.
+
+    The migration this stage needs is exactly this invocation: a store built
+    before current existed holds run graphs and no current graph, and
+    web/app.py refuses to open it until this has been run.
+    """
+    path = str(tmp_path / "s")
+    store = Store(path)
+    load_run(store, FIXTURE.read_bytes())
+    store.remove_graph(NamedNode(f"{SW}current"))
+    assert not store.contains_named_graph(NamedNode(f"{SW}current"))
+    del store
+
+    assert main(["--rebuild", path]) == 0
+    out = capsys.readouterr().out
+    assert "3 endpoints" in out, f"the rebuild must say what it did, said {out!r}"
+
+    store = Store(path)
+    assert store.contains_named_graph(NamedNode(f"{SW}current"))
+    del store
+
+    assert main(["--check", path]) == 0
+    assert "no endpoint" in capsys.readouterr().out.lower()
+
+    store = Store(path)
+    store.update(f"""
+        DELETE {{ GRAPH <{SW}current> {{ <{QLEVER}> <{SW}currentRun> ?r }} }}
+        WHERE  {{ GRAPH <{SW}current> {{ <{QLEVER}> <{SW}currentRun> ?r }} }}""")
+    del store
+
+    assert main(["--check", path]) == 1, "a drifted store must exit non-zero"
+    assert QLEVER in capsys.readouterr().out
+
+
+def test_a_run_file_naming_the_derived_graph_is_refused(tmp_path):
+    """current is derived and reconstructible from the run graphs alone, so it
+    is never an input.
+
+    One hand-written line naming urn:sparqlwatch:current as its graph used to
+    be accepted: _parsed_graphs collected that IRI like any other, load_run
+    called remove_graph on it, and the file's own triples landed in the graph
+    all three read queries trust. The load then reported success with an EMPTY
+    drifted list, because drifted asks which pointers name a run that no longer
+    states their facts and an emptied current graph holds no pointers at all.
+    So the one detector for a broken current graph reported nothing about the
+    one input that breaks it.
+
+    Refused in _parsed_graphs, which is where main() validates every file
+    before Store() is opened, so the refusal happens before the store exists.
+    """
+    store = Store(str(tmp_path / "s"))
+    load_run(store, FIXTURE.read_bytes())
+    before = _current(store)
+    assert before, "the derived graph must be there to be attacked"
+
+    injection = (
+        b"<https://evil.example/sparql> <http://www.w3.org/ns/dqv#computedOn> "
+        b"<https://evil.example/sparql> <urn:sparqlwatch:current> .\n"
+    )
+    with pytest.raises(ValueError, match="urn:sparqlwatch:current"):
+        load_run(store, injection)
+
+    assert _current(store) == before, "a refused load must not touch current"
+
+    # And from the command line, before the store directory is created at all.
+    store_path = tmp_path / "fresh"
+    run_path = tmp_path / "inject.nq"
+    run_path.write_bytes(injection)
+    with pytest.raises(ValueError, match="urn:sparqlwatch:current"):
+        main([str(store_path), str(run_path)])
+    assert not store_path.exists(), (
+        "the refusal must come before Store() creates the directory"
+    )
+
+
+def test_the_command_line_reports_drift_and_exits_non_zero(tmp_path, capsys):
+    """LoadResult.drifted reaches the operator, or it may as well not exist.
+
+    load_run() computes drifted correctly and 41 tests exercise it, and main()
+    used to print the quad count, the replaced graphs and the discarded bytes
+    and nothing else, at exit 0. So loading the truncated file a crashed prober
+    leaves under the same run IRI printed one cheerful line while the endpoints
+    that file dropped went on publishing verdicts attributed to a run that no
+    longer states them, including the two ASSERTIVE values, "verified" and
+    "absent". Only a separate --check found it, and nothing told anyone to run
+    one.
+
+    Non-zero, and not merely printed. The load itself succeeded, but the store
+    it leaves cannot be served as it stands: the facts on the site are
+    attributed to a run that no longer states them, and --check exits 1 on
+    exactly this condition. A deploy step that reads the exit status is the
+    reader this is for.
+    """
+    path = str(tmp_path / "s")
+    full = tmp_path / "full.nq"
+    full.write_bytes(NEW_SUBJECTS_FIXTURE.read_bytes())
+    shrunk = tmp_path / "shrunk.nq"
+    shrunk.write_bytes(_shrunk(NEW_SUBJECTS_FIXTURE.read_bytes(), "qlever", "ontop"))
+
+    assert main([path, str(full)]) == 0
+    assert "drifted" not in capsys.readouterr().out.lower(), (
+        "a clean load must not mention drift"
+    )
+
+    assert main([path, str(shrunk)]) == 1, (
+        "a load that leaves current attributing facts to a run that no longer "
+        "states them must not exit 0"
+    )
+    printed = capsys.readouterr()
+    said = printed.out + printed.err
+    for endpoint in (ONTOP, QLEVER):
+        assert endpoint in said, f"{endpoint} drifted and was not named"
+    assert KADASTER not in said, "kadaster is still in the run"
+    assert "--rebuild" in said, "and the repair must be named"
+
+
+def test_the_command_line_says_when_it_refused_to_move_current_backwards(
+    tmp_path, capsys
+):
+    """kept_newer, the other field main() threw away.
+
+    An out-of-order load is a real operator mistake: the runs are files in a
+    directory and a shell glob orders them by name, so a re-load of an older
+    run after a newer one refuses to move the pointer and used to say nothing
+    at all about having refused. Printed, but exit 0: the store is correct,
+    nothing needs repairing, and the operator only needs to know that the file
+    they just named is not what the site is showing.
+    """
+    path = str(tmp_path / "s")
+    older = tmp_path / "older.nq"
+    older.write_bytes(FIXTURE.read_bytes())
+    newer = tmp_path / "newer.nq"
+    newer.write_bytes(NEW_SUBJECTS_FIXTURE.read_bytes())
+
+    assert main([path, str(newer)]) == 0
+    capsys.readouterr()
+    assert main([path, str(older)]) == 0, "refusing to go backwards is not a failure"
+    said = capsys.readouterr().out
+    assert KADASTER in said, "the endpoint whose pointer was left alone"
+    assert "newer" in said.lower(), f"say why it was left alone, said {said!r}"
+
+
+def test_the_check_counts_the_endpoints_it_actually_compared(tmp_path):
+    """The denominator has to be a number the numerator can sit inside.
+
+    CheckResult.endpoints used to be the count the RUN GRAPHS expect, and the
+    drifted set includes endpoints only current knows about, so a dropped run
+    graph made --check print "3 of 0 endpoints drifted" and a shrunk one "7 of
+    2". Its own docstring says the field is how many endpoints were compared, so
+    "nothing drifted" can be told from "nothing was looked at", and an endpoint
+    whose pointer is dangling was compared: that is how it came to be named.
+    """
+    store = Store(str(tmp_path / "s"))
+    load_run(store, NEW_SUBJECTS_FIXTURE.read_bytes())
+    store.remove_graph(NamedNode(f"{SW}run:{NEW_SUBJECTS_INSTANT}"))
+
+    checked = check_current(store)
+    assert len(checked.drifted) == 3, sorted(checked.drifted)
+    assert checked.endpoints == 3, (
+        "no run graph mentions any of them any more, and all three were "
+        "compared and named"
+    )
+    assert len(checked.drifted) <= checked.endpoints

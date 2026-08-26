@@ -7,10 +7,11 @@ run-with-samples.nq, web/tests/test_fixture.py) for its provenance.
 """
 
 import pytest
-from pyoxigraph import NamedNode, RdfFormat, Store
+from pyoxigraph import NamedNode, Store
 
 from conftest import RUN_WITH_SAMPLES
 from endpoint_content import endpoint_content
+from load_run import check_current, load_run, rebuild_current
 from endpoint_measurements import EndpointMeasurements, endpoint_measurements
 
 KADASTER = "https://data.kkg.kadaster.nl/query"
@@ -152,8 +153,20 @@ def test_the_old_scheme_run_is_still_reachable_once_the_newer_one_is_gone(store_
     depended on the new derived subject shape rather than on predicates
     alone, the old row-index subjects would already be invisible to it and
     removing the newer run would surface nothing rather than the old run's
-    real values."""
+    real values.
+
+    Dropping a run graph is one of the two things urn:sparqlwatch:current
+    cannot follow on its own, and the spec's whole reason for one graph per run
+    is that a bad run can be dropped wholesale. So the drop is followed by the
+    rebuild that is its documented repair, and the check is asserted on both
+    sides of it: current names a graph that is gone, and afterwards it does
+    not."""
     store_new_subjects.remove_graph(NamedNode(NEW_RUN))
+    assert not check_current(store_new_subjects).ok, (
+        "current still names the run that was dropped"
+    )
+    rebuild_current(store_new_subjects)
+    assert check_current(store_new_subjects).ok
 
     m = endpoint_measurements(store_new_subjects, KADASTER)
     assert m.run == OLD_RUN
@@ -462,10 +475,22 @@ def _two_activities_tied_as_newest() -> bytes:
     endpoint facts, and the SAME prov:generatedAtTime, later than any fixture's.
 
     Hand-built rather than a fixture pair, because --at is both the run IRI and
-    the timestamp, so no two run files the prober writes can tie. Inserted
-    straight into the store rather than through load_run, which refuses a file
-    of this shape on its own account: see
-    test_a_header_cut_short_of_its_terminator_is_refused.
+    the timestamp, so no two run files the prober writes can tie.
+
+    It goes through load_run() like every other store in this suite. An
+    earlier version of this comment said load_run refuses a file of this shape
+    (activity metadata, no endpoint facts, no terminator) and inserted the
+    bytes raw instead. That was wrong about these bytes: load_run's
+    _holds_endpoint_facts test asks whether any subject falls outside the
+    urn:sparqlwatch:activity: prefix, and these activities are
+    urn:sparqlwatch:test:activity:a and :b, so the file reads as one that does
+    hold endpoint facts and loads whole. The refusal it named is real for a
+    file the prober wrote; it never applied here.
+
+    Neither graph names an endpoint, so loading them advances no endpoint's
+    pointer in urn:sparqlwatch:current and the tie stays where this test wants
+    it: in the store-wide newest-run aggregate, which is still a query over
+    the run graphs.
     """
     lines = []
     for run in ("a", "b"):
@@ -494,8 +519,8 @@ def test_two_runs_tied_as_the_newest_in_the_store_are_refused(tmp_path):
     `if False` leaves the rest of this suite green.
     """
     store = Store(str(tmp_path / "s"))
-    store.load(RUN_WITH_SAMPLES.read_bytes(), format=RdfFormat.N_QUADS)
-    store.load(_two_activities_tied_as_newest(), format=RdfFormat.N_QUADS)
+    load_run(store, RUN_WITH_SAMPLES.read_bytes())
+    load_run(store, _two_activities_tied_as_newest())
 
     with pytest.raises(ValueError, match="2 runs tie as the newest") as raised:
         endpoint_measurements(store, KADASTER)

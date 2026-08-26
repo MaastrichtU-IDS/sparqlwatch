@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
 use std::time::{Duration, Instant};
 
 use sparqlwatch_prober::politeness::Politeness;
+use sparqlwatch_prober::registry;
 
 // The timeout every probe below runs under is shared with the other test files
 // that drive a `Client`, because a reentrancy mistake hangs whichever of them
@@ -566,4 +567,87 @@ async fn a_beyond_cap_retry_after_still_defers_the_host() {
     without_deadlocking(c.cors(&url, "ASK{}")).await;
     assert!(t1.elapsed() >= Duration::from_millis(750),
             "the host was still deferred for the next probe, took {:?}", t1.elapsed());
+}
+
+// ---------------------------------------------------------------------------
+// What the key really is, on the shipped list
+// ---------------------------------------------------------------------------
+/// The shipped registry and the shipped exclusion list, loaded the way a sweep
+/// loads them, so what follows is a claim about the endpoints a sweep really
+/// reads and not about two URLs written here.
+const SHIPPED_REGISTRY: &str = include_str!("../registry/lod-cloud.toml");
+
+fn shipped_endpoints() -> Vec<String> {
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(registry::DEFAULT_EXCLUSIONS);
+    let excluded = registry::read_exclusions(&path).expect("the shipped exclusion list must read");
+    registry::load_endpoints(SHIPPED_REGISTRY, &excluded).expect("the shipped registry must load")
+}
+
+/// The bare host of a URL, port dropped. `politeness::host_key` deliberately
+/// keeps a non-default port, so this is the coarser thing the key is NOT: it is
+/// what "one machine" means to the operator reading `/about`.
+fn bare_host(url: &str) -> String {
+    let host_port = sparqlwatch_prober::politeness::authority(url).host_port;
+    match host_port.strip_prefix('[') {
+        Some(rest) => rest.split(']').next().unwrap_or(rest).to_string(),
+        None => match host_port.rsplit_once(':') {
+            Some((host, _port)) => host.to_string(),
+            None => host_port,
+        },
+    }
+}
+
+/// Two endpoints on ONE machine behind different ports, off the shipped list,
+/// and the gate does not serialise them.
+///
+/// `web/templates/about.html` promises a minimum gap between requests to "one
+/// host and port" and says in as many words that two endpoints on one server
+/// behind different ports are treated as two. That sentence used to say "one
+/// host", full stop, which is false of exactly the reader it was written for: a
+/// server operator who runs two engines on one machine. This is the pin behind
+/// the wording, and it is deliberately over the real registry, because the
+/// promise is only worth checking where it can be broken.
+///
+/// The keying is the gate's own reasoned choice (see `host_key`'s doc comment
+/// and the `assert_ne!` on two ports in its unit tests), and it is not what
+/// changed. What changed is the page.
+#[tokio::test]
+async fn two_shipped_endpoints_on_one_machine_behind_different_ports_run_together() {
+    let endpoints = shipped_endpoints();
+    let mut pair: Option<(String, String)> = None;
+    for (i, a) in endpoints.iter().enumerate() {
+        for b in &endpoints[i + 1..] {
+            if bare_host(a) == bare_host(b)
+                && sparqlwatch_prober::politeness::host_key(a)
+                    != sparqlwatch_prober::politeness::host_key(b)
+            {
+                pair = Some((a.clone(), b.clone()));
+            }
+        }
+    }
+    let (a, b) = pair.expect(
+        "the shipped registry must still carry two endpoints on one host behind \
+         different ports, or /about's paragraph about that case has nothing to be \
+         checked against and the wording has to be revisited",
+    );
+
+    // A gap far longer than this assertion's bound, so a pass cannot be the gap
+    // having elapsed: if the two shared a bucket the second would wait 30
+    // seconds. Under `without_deadlocking` because two guards taken on ONE key
+    // and both held is the gate waiting for itself, so a key that stopped
+    // distinguishing the ports would HANG this test rather than fail it, which
+    // is the failure `tests/common` exists to convert into a named one. Measured
+    // that way: keying `acquire` on the bare host left this test running past 60
+    // seconds and printing nothing.
+    let p = Politeness::new(Duration::from_secs(30));
+    let t0 = Instant::now();
+    let (_first, _second) =
+        without_deadlocking(async { tokio::join!(p.acquire(&a), p.acquire(&b)) }).await;
+    assert!(
+        t0.elapsed() < Duration::from_secs(1),
+        "{a} and {b} are one machine, and the gate ran them together in {:?}: \
+         that is what /about has to say",
+        t0.elapsed()
+    );
 }

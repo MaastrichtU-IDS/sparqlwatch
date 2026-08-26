@@ -110,11 +110,39 @@ Fixture provenance:
   and sample come back" is testable regardless of which subject scheme either
   run uses. See the comment at the top of that file for the exact
   construction.
+
+- ``fixtures/run-registry-sample.nq`` is SYNTHETIC and DERIVED, and it is
+  derived by CUTTING rather than by rewriting: it is a strict line subset of
+  ``~/code/sparqlwatch-runs/run-2026-08-24T19-45-03Z-lod-cloud-543.nq``, the
+  project's first registry-scale sweep, in that file's own order. Nothing was
+  rewritten, so the run IRI, the prov:generatedAtTime, the verdicts and the
+  elapsed times are the real sweep's and every quad here appears verbatim in
+  it. What was dropped is 534 of its 543 endpoint chunks. The whole sweep is
+  6.3 MB and is deliberately not in git (``~/code/sparqlwatch-runs/README.md``
+  says why), and the index this fixture exists for needs nine rows rather than
+  543 to be testable.
+
+  The nine were chosen to cover every verdict value that sweep produced.
+  Their availability verdicts, which is what the index groups by, are three
+  "verified", four "indeterminate" and two "absent", and two of the sweep's
+  only four "absent" endpoints are here on purpose: one of them is a .ttl file
+  on raw.githubusercontent.com, so the host answered with something that was
+  not a SPARQL result, which is what that verdict means and why it is not the
+  same fact as "indeterminate". Their other metrics carry "verified",
+  "undeclared-but-verified", "declared-but-wrong", "indeterminate" and
+  "absent"; "declared-only" appears nowhere, in this file or in the 543 it was
+  cut from. Every one of the nine also carries a "cost-ceiling" decline of
+  sw:metric:classes, because the sweep ran at the cheap ceiling, so there is
+  no content sample anywhere in it. See the comment at the top of the file for
+  which nine and what each one is for.
 """
 
 from pathlib import Path
 
-from pyoxigraph import RdfFormat, Store
+from pyoxigraph import NamedNode, Store
+
+from conftest import run_graph_names, run_graph_query, run_quad_count
+from load_run import load_run
 
 FIXTURE = Path(__file__).parent / "fixtures" / "run-with-samples.nq"
 TRUNCATED_FIXTURE = Path(__file__).parent / "fixtures" / "run-truncated.nq"
@@ -132,6 +160,12 @@ PROBER_FAILED_FIXTURE = (
 CRASHED_PARTWAY_FIXTURE = (
     Path(__file__).parent / "fixtures" / "run-crashed-partway.nq"
 )
+REGISTRY_SAMPLE_FIXTURE = (
+    Path(__file__).parent / "fixtures" / "run-registry-sample.nq"
+)
+NO_AVAILABILITY_FIXTURE = (
+    Path(__file__).parent / "fixtures" / "run-no-availability.nq"
+)
 
 
 def test_the_fixture_loads_and_reopens(tmp_path):
@@ -139,12 +173,16 @@ def test_the_fixture_loads_and_reopens(tmp_path):
     this suite and be useless to a web tier that opens the store in a
     different process."""
     store = Store(str(tmp_path / "s"))
-    store.load(FIXTURE.read_bytes(), format=RdfFormat.N_QUADS)
-    loaded = len(store)
+    load_run(store, FIXTURE.read_bytes())
+    loaded = run_quad_count(store)
     assert loaded == 278, f"the fixture is 278 quads, got {loaded}"
-    assert len(list(store.named_graphs())) == 1, "one run, one named graph"
+    assert len(run_graph_names(store)) == 1, "one run, one named graph"
     del store
-    assert len(Store(str(tmp_path / "s"))) == loaded, "reopening must see the same quads"
+    reopened = Store(str(tmp_path / "s"))
+    assert run_quad_count(reopened) == loaded, "reopening must see the same quads"
+    assert reopened.contains_named_graph(NamedNode("urn:sparqlwatch:current")), (
+        "and the derived graph the read queries read must persist too"
+    )
 
 
 def test_the_truncated_fixture_is_the_shape_it_claims(tmp_path):
@@ -153,9 +191,9 @@ def test_the_truncated_fixture_is_the_shape_it_claims(tmp_path):
     a fixture that silently lost content would still pass every query test
     built on it, and quietly stop testing what it claims to test."""
     store = Store(str(tmp_path / "s"))
-    store.load(TRUNCATED_FIXTURE.read_bytes(), format=RdfFormat.N_QUADS)
-    assert len(store) == 12, f"the truncated fixture is 12 quads, got {len(store)}"
-    assert len(list(store.named_graphs())) == 1
+    load_run(store, TRUNCATED_FIXTURE.read_bytes())
+    assert run_quad_count(store) == 12, f"the truncated fixture is 12 quads, got {run_quad_count(store)}"
+    assert len(run_graph_names(store)) == 1
 
 
 def test_the_two_sweeps_fixture_is_the_shape_it_claims(tmp_path):
@@ -163,9 +201,9 @@ def test_the_two_sweeps_fixture_is_the_shape_it_claims(tmp_path):
     top of that file): the real run plus a rewritten, altered copy of it, so
     two runs of the same endpoint coexist with different values."""
     store = Store(str(tmp_path / "s"))
-    store.load(TWO_SWEEPS_FIXTURE.read_bytes(), format=RdfFormat.N_QUADS)
-    assert len(store) == 556, f"the two-sweeps fixture is 556 quads, got {len(store)}"
-    assert len(list(store.named_graphs())) == 2, "two sweeps, two named graphs"
+    load_run(store, TWO_SWEEPS_FIXTURE.read_bytes())
+    assert run_quad_count(store) == 556, f"the two-sweeps fixture is 556 quads, got {run_quad_count(store)}"
+    assert len(run_graph_names(store)) == 2, "two sweeps, two named graphs"
 
 
 def test_the_zero_classes_fixture_is_the_shape_it_claims(tmp_path):
@@ -174,10 +212,10 @@ def test_the_zero_classes_fixture_is_the_shape_it_claims(tmp_path):
     fixture that quietly gained a value would keep passing while no longer
     testing the OPTIONAL it exists for."""
     store = Store(str(tmp_path / "s"))
-    store.load(ZERO_CLASSES_FIXTURE.read_bytes(), format=RdfFormat.N_QUADS)
-    assert len(store) == 9, f"the zero-classes fixture is 9 quads, got {len(store)}"
-    assert len(list(store.named_graphs())) == 1
-    assert not bool(store.query(
+    load_run(store, ZERO_CLASSES_FIXTURE.read_bytes())
+    assert run_quad_count(store) == 9, f"the zero-classes fixture is 9 quads, got {run_quad_count(store)}"
+    assert len(run_graph_names(store)) == 1
+    assert not bool(run_graph_query(store, 
         "ASK { GRAPH ?g { ?s <urn:sparqlwatch:sampledValue> ?v } }"
     )), "the sample must list no values at all"
 
@@ -188,13 +226,13 @@ def test_the_properties_fixture_samples_no_classes(tmp_path):
     metric:classes, which is the only reason the fixture tells the query's
     metric pin from its absence."""
     store = Store(str(tmp_path / "s"))
-    store.load(PROPERTIES_FIXTURE.read_bytes(), format=RdfFormat.N_QUADS)
-    assert len(store) == 11, f"the properties fixture is 11 quads, got {len(store)}"
-    assert bool(store.query(
+    load_run(store, PROPERTIES_FIXTURE.read_bytes())
+    assert run_quad_count(store) == 11, f"the properties fixture is 11 quads, got {run_quad_count(store)}"
+    assert bool(run_graph_query(store, 
         "ASK { GRAPH ?g { ?s <urn:sparqlwatch:sampledBy> "
         "<urn:sparqlwatch:metric:properties> } }"
     )), "the sample must be sampledBy metric:properties"
-    assert not bool(store.query(
+    assert not bool(run_graph_query(store, 
         "ASK { GRAPH ?g { ?s <urn:sparqlwatch:sampledBy> "
         "<urn:sparqlwatch:metric:classes> } }"
     )), "nothing here may be sampledBy metric:classes"
@@ -206,17 +244,49 @@ def test_the_classes_absent_fixture_measures_absent_and_samples_nothing(tmp_path
     sw:ContentSample anywhere, because the prober writes no sample beside
     that verdict. A fixture that gained one would stop testing the case."""
     store = Store(str(tmp_path / "s"))
-    store.load(CLASSES_ABSENT_FIXTURE.read_bytes(), format=RdfFormat.N_QUADS)
-    assert len(store) == 16, f"this fixture is 16 quads, got {len(store)}"
-    assert len(list(store.named_graphs())) == 1
-    assert bool(store.query(
+    load_run(store, CLASSES_ABSENT_FIXTURE.read_bytes())
+    assert run_quad_count(store) == 16, f"this fixture is 16 quads, got {run_quad_count(store)}"
+    assert len(run_graph_names(store)) == 1
+    assert bool(run_graph_query(store, 
         "ASK { GRAPH ?g { ?m <http://www.w3.org/ns/dqv#isMeasurementOf> "
         "<urn:sparqlwatch:metric:classes> ; "
         "<http://www.w3.org/ns/dqv#value> 'absent' } }"
     )), "the classes metric must read absent"
-    assert not bool(store.query(
+    assert not bool(run_graph_query(store, 
         "ASK { GRAPH ?g { ?s <urn:sparqlwatch:sampledFrom> ?e } }"
     )), "there must be no content sample at all"
+
+
+def test_the_no_availability_fixture_measures_one_metric_and_not_availability(
+    tmp_path,
+):
+    """run-no-availability.nq is hand-built (see its header), and the whole
+    fixture is the ABSENCE of two quads rather than the presence of one.
+
+    So both halves are asserted, and the second is the one that matters: there
+    must be no availability fact of EITHER kind. A fixture that gained a decline
+    would land in the index's final group for the ordinary reason and stop being
+    the second way to get there; one that gained a measurement would leave the
+    group altogether."""
+    store = Store(str(tmp_path / "s"))
+    load_run(store, NO_AVAILABILITY_FIXTURE.read_bytes())
+    assert run_quad_count(store) == 10, (
+        f"this fixture is 10 quads, got {run_quad_count(store)}"
+    )
+    assert len(run_graph_names(store)) == 1
+    assert bool(run_graph_query(store,
+        "ASK { GRAPH ?g { ?m <http://www.w3.org/ns/dqv#isMeasurementOf> "
+        "<urn:sparqlwatch:metric:classes> ; "
+        "<http://www.w3.org/ns/dqv#value> 'absent' } }"
+    )), "one metric must be measured, or the run recorded nothing at all"
+    assert not bool(run_graph_query(store,
+        "ASK { GRAPH ?g { ?m <http://www.w3.org/ns/dqv#isMeasurementOf> "
+        "<urn:sparqlwatch:metric:availability> } }"
+    )), "availability must not be measured"
+    assert not bool(run_graph_query(store,
+        "ASK { GRAPH ?g { ?n <urn:sparqlwatch:notMeasuredMetric> "
+        "<urn:sparqlwatch:metric:availability> } }"
+    )), "and it must not be declined either: that is the whole fixture"
 
 
 NEW_SUBJECTS_RUN = "2026-08-22T20:00:00Z"
@@ -272,7 +342,7 @@ def _derived_subjects(store, run: str) -> dict[str, str]:
     it should be, derived from that subject's own two facts."""
     expected = {}
     for kind, on, of in _DERIVED_FROM:
-        rows = store.query(
+        rows = run_graph_query(store, 
             "SELECT ?s ?e ?m WHERE { GRAPH ?g { "
             f"?s <{on}> ?e ; <{of}> ?m" + " } }"
         )
@@ -298,10 +368,10 @@ def test_the_new_subjects_fixture_is_the_shape_it_claims(tmp_path):
     ``...:1`` through ``...:23`` would have passed.
     """
     store = Store(str(tmp_path / "s"))
-    store.load(NEW_SUBJECTS_FIXTURE.read_bytes(), format=RdfFormat.N_QUADS)
-    assert len(store) == 278, f"the new-subjects fixture is 278 quads, got {len(store)}"
-    assert len(list(store.named_graphs())) == 1, "one run, one named graph"
-    assert bool(store.query(
+    load_run(store, NEW_SUBJECTS_FIXTURE.read_bytes())
+    assert run_quad_count(store) == 278, f"the new-subjects fixture is 278 quads, got {run_quad_count(store)}"
+    assert len(run_graph_names(store)) == 1, "one run, one named graph"
+    assert bool(run_graph_query(store, 
         "ASK { GRAPH ?g { ?s <urn:sparqlwatch:sampledValue> "
         "<urn:sparqlwatch:test:new-scheme-only-class> } }"
     )), "the hand-swapped class must be present"
@@ -341,9 +411,9 @@ def test_the_prober_failed_fixture_is_the_shape_it_claims(tmp_path):
     terminator on purpose.
     """
     store = Store(str(tmp_path / "s"))
-    store.load(PROBER_FAILED_FIXTURE.read_bytes(), format=RdfFormat.N_QUADS)
-    assert len(store) == 51, f"this fixture is 51 quads, got {len(store)}"
-    assert len(list(store.named_graphs())) == 1, "one run, one named graph"
+    load_run(store, PROBER_FAILED_FIXTURE.read_bytes())
+    assert run_quad_count(store) == 51, f"this fixture is 51 quads, got {run_quad_count(store)}"
+    assert len(run_graph_names(store)) == 1, "one run, one named graph"
 
     # A complete run: the header's terminator, one chunk terminator naming the
     # one endpoint, and the footer's. A fixture missing any of the three would
@@ -358,8 +428,8 @@ def test_the_prober_failed_fixture_is_the_shape_it_claims(tmp_path):
         ('?a <urn:sparqlwatch:finalised> true',
          "the footer says the run finished"),
     ):
-        assert bool(store.query(f"ASK {{ GRAPH ?g {{ {ask} }} }}")), why
-    markers = list(store.query(
+        assert bool(run_graph_query(store, f"ASK {{ GRAPH ?g {{ {ask} }} }}")), why
+    markers = list(run_graph_query(store, 
         "SELECT ?e WHERE { GRAPH ?g { ?a "
         "<urn:sparqlwatch:completedEndpoint> ?e } }"
     ))
@@ -369,7 +439,7 @@ def test_the_prober_failed_fixture_is_the_shape_it_claims(tmp_path):
 
     reasons = [
         row["r"].value
-        for row in store.query(
+        for row in run_graph_query(store, 
             "SELECT ?r WHERE { GRAPH ?g { ?s "
             "<urn:sparqlwatch:notMeasuredReason> ?r } }"
         )
@@ -381,11 +451,11 @@ def test_the_prober_failed_fixture_is_the_shape_it_claims(tmp_path):
         "<http://www.w3.org/ns/dqv#value>",
         "<urn:sparqlwatch:sampledFrom>",
     ):
-        assert not bool(store.query(
+        assert not bool(run_graph_query(store, 
             f"ASK {{ GRAPH ?g {{ ?s {predicate} ?o }} }}"
         )), f"a failed endpoint has no {predicate}"
 
-    assert bool(store.query(
+    assert bool(run_graph_query(store, 
         "ASK { GRAPH ?g { ?a <urn:sparqlwatch:failedEndpoints> "
         '1 } }'
     )), "the run must say how many endpoints it failed on"
@@ -400,7 +470,7 @@ def test_the_prober_failed_fixture_is_the_shape_it_claims(tmp_path):
     )
     subjects = {
         row["s"].value
-        for row in store.query(
+        for row in run_graph_query(store, 
             "SELECT DISTINCT ?s WHERE { GRAPH ?g { ?s "
             "<urn:sparqlwatch:notMeasuredOn> ?e } }"
         )
@@ -416,9 +486,9 @@ def test_the_later_sample_fixture_samples_without_measuring(tmp_path):
     is what makes the run invisible to endpoint_measurements.rq and so
     produces the two-run skew it exists for."""
     store = Store(str(tmp_path / "s"))
-    store.load(LATER_SAMPLE_FIXTURE.read_bytes(), format=RdfFormat.N_QUADS)
-    assert len(store) == 12, f"this fixture is 12 quads, got {len(store)}"
-    assert bool(store.query(
+    load_run(store, LATER_SAMPLE_FIXTURE.read_bytes())
+    assert run_quad_count(store) == 12, f"this fixture is 12 quads, got {run_quad_count(store)}"
+    assert bool(run_graph_query(store, 
         "ASK { GRAPH ?g { ?s <urn:sparqlwatch:sampledFrom> "
         "<https://data.kkg.kadaster.nl/query> ; "
         "<urn:sparqlwatch:sampledBy> <urn:sparqlwatch:metric:classes> } }"
@@ -427,7 +497,7 @@ def test_the_later_sample_fixture_samples_without_measuring(tmp_path):
         "<http://www.w3.org/ns/dqv#computedOn>",
         "<urn:sparqlwatch:notMeasuredOn>",
     ):
-        assert not bool(store.query(
+        assert not bool(run_graph_query(store, 
             f"ASK {{ GRAPH ?g {{ ?s {predicate} ?e }} }}"
         )), f"this run must record no {predicate}"
 
@@ -449,9 +519,9 @@ def test_the_crashed_partway_fixture_stops_before_its_footer(tmp_path):
     inference from the presence of its measurements.
     """
     store = Store(str(tmp_path / "s"))
-    store.load(CRASHED_PARTWAY_FIXTURE.read_bytes(), format=RdfFormat.N_QUADS)
-    assert len(store) == 67, f"this fixture is 67 quads, got {len(store)}"
-    assert len(list(store.named_graphs())) == 1, "one run, one named graph"
+    load_run(store, CRASHED_PARTWAY_FIXTURE.read_bytes())
+    assert run_quad_count(store) == 67, f"this fixture is 67 quads, got {run_quad_count(store)}"
+    assert len(run_graph_names(store)) == 1, "one run, one named graph"
 
     for ask, why in (
         ('?a <urn:sparqlwatch:emission> "incremental"',
@@ -460,17 +530,17 @@ def test_the_crashed_partway_fixture_stops_before_its_footer(tmp_path):
          "<https://data.kkg.kadaster.nl/query>",
          "the one chunk says the run finished that endpoint"),
     ):
-        assert bool(store.query(f"ASK {{ GRAPH ?g {{ {ask} }} }}")), why
+        assert bool(run_graph_query(store, f"ASK {{ GRAPH ?g {{ {ask} }} }}")), why
 
     for predicate in (
         "<urn:sparqlwatch:finalised>",
         "<urn:sparqlwatch:failedEndpoints>",
     ):
-        assert not bool(store.query(
+        assert not bool(run_graph_query(store, 
             f"ASK {{ GRAPH ?g {{ ?a {predicate} ?o }} }}"
         )), f"no footer was written, so there is no {predicate}"
 
-    markers = list(store.query(
+    markers = list(run_graph_query(store, 
         "SELECT ?e WHERE { GRAPH ?g { ?a "
         "<urn:sparqlwatch:completedEndpoint> ?e } }"
     ))
@@ -498,3 +568,95 @@ def test_the_crashed_partway_fixture_stops_before_its_footer(tmp_path):
     )
     wrong = {s: want for s, want in expected.items() if s != want}
     assert not wrong, f"these subjects are not what the scheme derives: {wrong}"
+
+
+def test_the_registry_sample_fixture_is_the_shape_it_claims(tmp_path):
+    """run-registry-sample.nq is nine endpoint chunks cut out of the real
+    543-endpoint sweep (see its header and the provenance list above).
+
+    THE ENDPOINT COUNT ASSERTED IS THE FIXTURE'S OWN NINE, not the sweep's 543.
+    Asserting 543 here would be a claim about a file that is not in git, and it
+    would pass for as long as nobody looked: every test built on this fixture
+    would then be quietly measuring nine rows while saying 543.
+
+    The rest is the shape the index's tests depend on, and each part of it is
+    something a careless re-cut would lose: three availability verdicts across
+    the nine rather than one, the two "absent" endpoints that make the grouping
+    more than a boolean, and the eight metrics per endpoint made of seven
+    measurements and one cost-ceiling decline.
+    """
+    store = Store(str(tmp_path / "s"))
+    load_run(store, REGISTRY_SAMPLE_FIXTURE.read_bytes())
+    assert run_quad_count(store) == 462, (
+        f"the registry sample is 462 quads, got {run_quad_count(store)}"
+    )
+    assert len(run_graph_names(store)) == 1, "one sweep, one named graph"
+
+    endpoints = {
+        row["endpoint"].value
+        for row in run_graph_query(
+            store,
+            "SELECT DISTINCT ?endpoint WHERE { GRAPH ?g { "
+            "?m <http://www.w3.org/ns/dqv#computedOn> ?endpoint } }",
+        )
+    }
+    assert len(endpoints) == 9, f"nine endpoints, got {len(endpoints)}"
+
+    availability = sorted(
+        row["verdict"].value
+        for row in run_graph_query(
+            store,
+            "SELECT ?verdict WHERE { GRAPH ?g { "
+            "?m <http://www.w3.org/ns/dqv#isMeasurementOf> "
+            "<urn:sparqlwatch:metric:availability> ; "
+            "<http://www.w3.org/ns/dqv#value> ?verdict } }",
+        )
+    )
+    assert availability == [
+        "absent",
+        "absent",
+        "indeterminate",
+        "indeterminate",
+        "indeterminate",
+        "indeterminate",
+        "verified",
+        "verified",
+        "verified",
+    ], availability
+
+    verdicts = {
+        row["verdict"].value
+        for row in run_graph_query(
+            store,
+            "SELECT ?verdict WHERE { GRAPH ?g { "
+            "?m <http://www.w3.org/ns/dqv#value> ?verdict } }",
+        )
+    }
+    assert verdicts == {
+        "absent",
+        "declared-but-wrong",
+        "indeterminate",
+        "undeclared-but-verified",
+        "verified",
+    }, verdicts
+
+    declines = sorted(
+        row["reason"].value
+        for row in run_graph_query(
+            store,
+            "SELECT ?reason WHERE { GRAPH ?g { "
+            "?n <urn:sparqlwatch:notMeasuredReason> ?reason } }",
+        )
+    )
+    assert declines == ["cost-ceiling"] * 9, declines
+    assert not bool(
+        run_graph_query(
+            store, "ASK { GRAPH ?g { ?s <urn:sparqlwatch:sampledValue> ?v } }"
+        )
+    ), "the cheap ceiling declined the classes metric, so there is no sample"
+    assert bool(
+        run_graph_query(
+            store,
+            "ASK { GRAPH ?g { ?a <urn:sparqlwatch:finalised> ?f } }",
+        )
+    ), "the sweep finished, and its footer has to be here to say so"

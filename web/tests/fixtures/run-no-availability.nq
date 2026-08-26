@@ -1,0 +1,42 @@
+# SYNTHETIC fixture. Not a captured sweep, and it is the one shape no captured
+# sweep can be: a run that MEASURED a metric and recorded nothing at all about
+# availability. Every real sweep runs the whole metric set against an endpoint
+# and records a measurement or a decline for each, so the only way an endpoint's
+# newest run holds no availability fact of either kind is a store whose runs
+# were emitted at different metric revisions, which is the case
+# web/queries/index.rq's own header designs for: "a store holding two runs at
+# different metric revisions has two different metric sets in it at once".
+#
+# It exists for the index's final group. That group holds every endpoint whose
+# newest run recorded no availability verdict, and the two ways to be in it are
+# opposite claims: a run that DECLINED availability said so, and a run that
+# recorded nothing about it said nothing. run-prober-failed.nq is the first,
+# and this file is the second, so loading the two together puts one of each in
+# one group and the group's sentence has to be true of both.
+#
+# Derived from run-classes-absent.nq by dropping its availability measurement
+# and rewriting the endpoint and the instant, so what is left is one metric
+# measured and no availability fact in either direction. No section terminator,
+# for the same reason run-classes-absent.nq has none: this is not current
+# emitter output, and a fixture claiming a terminator it was not emitted with
+# would be claiming provenance it does not have.
+#
+# The instant is later than run-prober-failed.nq's 2026-08-23T02:00:00Z on
+# purpose, so this run is the newest activity in the store the two build, and no
+# terminator means no sw:emission, which is what keeps both endpoints' rows
+# unqualified: EndpointMeasurements.newer_run_did_not_reach_this_endpoint
+# requires newest_emission to be bound.
+#
+# 10 quads, one run graph (urn:sparqlwatch:run:2026-08-23T08:00:00Z), one
+# endpoint, one dqv:QualityMeasurement (sw:metric:classes, "absent"), no
+# sw:NotMeasured and no sw:ContentSample.
+<urn:sparqlwatch:activity:2026-08-23T08:00:00Z> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/prov#Activity> <urn:sparqlwatch:run:2026-08-23T08:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-23T08:00:00Z> <http://www.w3.org/ns/prov#generatedAtTime> "2026-08-23T08:00:00Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <urn:sparqlwatch:run:2026-08-23T08:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-23T08:00:00Z> <urn:sparqlwatch:proberVersion> "0.1.0" <urn:sparqlwatch:run:2026-08-23T08:00:00Z> .
+<https://no-availability.example/sparql> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dcat#DataService> <urn:sparqlwatch:run:2026-08-23T08:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T08:00:00Z:0> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> <urn:sparqlwatch:run:2026-08-23T08:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T08:00:00Z:0> <http://www.w3.org/ns/dqv#computedOn> <https://no-availability.example/sparql> <urn:sparqlwatch:run:2026-08-23T08:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T08:00:00Z:0> <http://www.w3.org/ns/dqv#isMeasurementOf> <urn:sparqlwatch:metric:classes> <urn:sparqlwatch:run:2026-08-23T08:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T08:00:00Z:0> <http://www.w3.org/ns/dqv#value> "absent" <urn:sparqlwatch:run:2026-08-23T08:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T08:00:00Z:0> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-08-23T08:00:00Z> <urn:sparqlwatch:run:2026-08-23T08:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-23T08:00:00Z:0> <urn:sparqlwatch:elapsedMs> "42"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-23T08:00:00Z> .

@@ -16,6 +16,14 @@
 //! publishing somebody else's confidence as its own. It is recorded as
 //! provenance and it gates nothing.
 //!
+//! It does not regenerate `registry/exclusions.toml`, and it never writes it.
+//! It reads the path `--exclusions` names, at every run.
+//! That file is the only thing here that survives a re-seed: a host deleted
+//! from the seeded registry by hand is back in it at the next seed, and an
+//! entry in the exclusion list is not. The list is applied, so an excluded host
+//! is absent from a freshly seeded registry rather than merely skipped by a
+//! sweep. See `registry::without_excluded`.
+//!
 //! It does not decide whether an endpoint WORKS. That question needs a probe
 //! and is a later slice. Every refusal here is decidable from the string with
 //! nobody contacted, which is what makes it honest to apply before a sweep
@@ -50,6 +58,8 @@ pub struct Counts {
     pub distinct: usize,
     /// Dropped because the authority carried userinfo.
     pub refused_credentials: usize,
+    /// Dropped because somebody asked this project not to probe the host.
+    pub refused_excluded: usize,
     /// Dropped because the host names the local machine or a private network,
     /// which an operator may target but a third-party dump may not nominate.
     pub refused_unroutable: usize,
@@ -71,6 +81,7 @@ impl Counts {
     pub fn seeded(&self) -> usize {
         self.distinct
             - self.refused_credentials
+            - self.refused_excluded
             - self.refused_unroutable
             - self.refused_reserved
             - self.refused_unpublishable
@@ -97,7 +108,14 @@ impl Counts {
 /// first. Credentials come first so that nothing after them can log a password,
 /// which is the same reason `registry::without_unpublishable_iris` documents for
 /// its own position.
-pub fn candidates(dump: &[u8]) -> anyhow::Result<Seeded> {
+/// The exclusion list comes second, for the same reason `load_endpoints` puts it
+/// early: a host somebody asked us to leave alone is counted as excluded rather
+/// than as an unroutable or unpublishable one, so `refused_excluded` in the
+/// provenance file is the number of candidates a request removed. It is also the
+/// only refusal here that can change between two seeds of the SAME dump, which
+/// is what makes counting it separately the difference between an attributable
+/// diff and a guess.
+pub fn candidates(dump: &[u8], excluded: &[registry::Exclusion]) -> anyhow::Result<Seeded> {
     let parsed: serde_json::Value = serde_json::from_slice(dump)
         .map_err(|e| anyhow::anyhow!("the dump is not valid JSON: {e}"))?;
     let datasets = parsed.as_object().ok_or_else(|| {
@@ -135,10 +153,19 @@ pub fn candidates(dump: &[u8]) -> anyhow::Result<Seeded> {
     let named = registry::without_credentials(&distinct);
     counts.refused_credentials = distinct.len() - named.len();
 
+    // Applied here as well as in `load_endpoints`, and not because a sweep
+    // could otherwise reach the host: because this list is written to a file
+    // that is committed and public, and a re-seed regenerates it, so a host
+    // deleted by hand comes back. See `registry::without_excluded`. An error
+    // stops the seed: a registry written without the exclusion list applied
+    // would be indistinguishable afterwards from one written with it.
+    let wanted = registry::without_excluded(&named, excluded);
+    counts.refused_excluded = named.len() - wanted.len();
+
     // Seeder-only, and the one refusal that is not in `load_endpoints`. See
     // `registry::without_unroutable_hosts` for why the two live apart.
-    let routable = registry::without_unroutable_hosts(&named);
-    counts.refused_unroutable = named.len() - routable.len();
+    let routable = registry::without_unroutable_hosts(&wanted);
+    counts.refused_unroutable = wanted.len() - routable.len();
 
     let unreserved = registry::without_reserved_names(&routable);
     counts.refused_reserved = routable.len() - unreserved.len();
@@ -163,7 +190,7 @@ mod tests {
     /// which shape each dataset was chosen for.
     #[test]
     fn the_sample_dump_yields_the_candidates_it_names() {
-        let seeded = candidates(SAMPLE).unwrap();
+        let seeded = candidates(SAMPLE, &[]).unwrap();
         assert_eq!(
             seeded.endpoints,
             vec![
@@ -184,7 +211,7 @@ mod tests {
     /// shape the dump never contains.
     #[test]
     fn a_dataset_whose_sparql_array_is_empty_contributes_nothing() {
-        let seeded = candidates(SAMPLE).unwrap();
+        let seeded = candidates(SAMPLE, &[]).unwrap();
         assert_eq!(seeded.counts.datasets, 9);
         assert_eq!(
             seeded.counts.datasets_with_entries, 8,
@@ -204,7 +231,7 @@ mod tests {
     /// says the registry contained a URL, which is a fact about nothing.
     #[test]
     fn an_empty_access_url_is_not_an_entry() {
-        let seeded = candidates(SAMPLE).unwrap();
+        let seeded = candidates(SAMPLE, &[]).unwrap();
         assert_eq!(seeded.counts.entries, 9, "the empty value is not a tenth entry");
         assert_eq!(
             seeded.counts.refused_unpublishable, 1,
@@ -221,7 +248,7 @@ mod tests {
     /// rather than an edge.
     #[test]
     fn two_datasets_naming_one_endpoint_yield_one_candidate() {
-        let seeded = candidates(SAMPLE).unwrap();
+        let seeded = candidates(SAMPLE, &[]).unwrap();
         assert_eq!(seeded.counts.entries, 9);
         assert_eq!(seeded.counts.distinct, 8);
         assert_eq!(
@@ -235,7 +262,7 @@ mod tests {
     /// a candidate, and `dbpedia-ja` in the fixture is one.
     #[test]
     fn the_dumps_own_status_field_does_not_gate_a_candidate() {
-        let seeded = candidates(SAMPLE).unwrap();
+        let seeded = candidates(SAMPLE, &[]).unwrap();
         let failed = "http://ja.dbpedia.org/sparql";
         assert!(
             seeded.endpoints.iter().any(|e| e == failed),
@@ -249,8 +276,12 @@ mod tests {
     /// difference between two seeds unattributable.
     #[test]
     fn every_refusal_is_counted_under_its_own_reason() {
-        let counts = candidates(SAMPLE).unwrap().counts;
+        let counts = candidates(SAMPLE, &[]).unwrap().counts;
         assert_eq!(counts.refused_credentials, 1, "the hand-added one");
+        assert_eq!(
+            counts.refused_excluded, 0,
+            "the sample dump names no host on the exclusion list"
+        );
         assert_eq!(counts.refused_unroutable, 1, "localhost:3030, from the real dump");
         assert_eq!(counts.refused_reserved, 1, "example.org, from the real dump");
         assert_eq!(counts.refused_unpublishable, 1, "the {{SPARQL}} placeholder");
@@ -261,20 +292,59 @@ mod tests {
     /// produced.
     #[test]
     fn the_counts_add_up_to_the_list() {
-        let seeded = candidates(SAMPLE).unwrap();
+        let seeded = candidates(SAMPLE, &[]).unwrap();
         assert_eq!(seeded.counts.seeded(), seeded.endpoints.len());
         assert_eq!(seeded.endpoints.len(), 4);
     }
 
     #[test]
     fn malformed_json_is_an_error_naming_the_problem() {
-        let error = candidates(b"{not json").unwrap_err().to_string();
+        let error = candidates(b"{not json", &[]).unwrap_err().to_string();
         assert!(error.contains("not valid JSON"), "unhelpful: {error}");
     }
 
     #[test]
     fn a_dump_that_is_not_an_object_of_datasets_is_an_error() {
-        let error = candidates(b"[]").unwrap_err().to_string();
+        let error = candidates(b"[]", &[]).unwrap_err().to_string();
         assert!(error.contains("names none"), "unhelpful: {error}");
+    }
+
+    /// An excluded host is absent from a FRESHLY SEEDED registry, not merely
+    /// absent from a sweep.
+    ///
+    /// This is the half `load_endpoints` cannot deliver. Deleting a URL from
+    /// `registry/lod-cloud.toml` by hand is undone by the next re-seed, so
+    /// without this the committed artefact would keep naming a host that asked
+    /// to be left alone, and anyone reading the file would have no way to know
+    /// the sweep skips it.
+    ///
+    /// An inline dump rather than the shared fixture: the fixture's counts are
+    /// asserted by five other tests here, and this one needs a dataset the
+    /// exclusion list actually names. Dataset keys are in ascending order, so
+    /// `asked` precedes `kept`.
+    #[test]
+    fn an_excluded_host_is_absent_from_a_fresh_seed_and_counted_as_excluded() {
+        let dump = br#"{
+          "asked": {"sparql": [{"access_url": "https://sparqlwatch-exclusion-worked-example/sparql"}]},
+          "kept": {"sparql": [{"access_url": "https://kept.test-host/sparql"}]}
+        }"#;
+        let excluded = registry::parse_exclusions(
+            "[[exclusion]]\nhost = \"sparqlwatch-exclusion-worked-example\"\nreason = \"a \
+             person asked, 2026-08-25\"\n",
+        )
+        .unwrap();
+        let seeded = candidates(dump, &excluded).unwrap();
+        assert_eq!(
+            seeded.endpoints,
+            vec!["https://kept.test-host/sparql".to_string()],
+            "an excluded host may not be written into the registry"
+        );
+        assert_eq!(seeded.counts.distinct, 2, "both were candidates before the refusals");
+        assert_eq!(
+            seeded.counts.refused_excluded, 1,
+            "counted under its own reason, because an exclusion is the one refusal that can \
+             change between two seeds of the SAME dump"
+        );
+        assert_eq!(seeded.counts.seeded(), seeded.endpoints.len());
     }
 }

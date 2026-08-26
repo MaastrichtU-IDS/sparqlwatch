@@ -1,12 +1,17 @@
-"""The HTTP surface: one endpoint resource, served as HTML or as RDF.
+"""The HTTP surface: three resources, each served as HTML or as RDF.
 
-This is the first thing this project serves over HTTP. It exposes exactly
-one resource, the current state of one monitored SPARQL endpoint, in two
-representations chosen by the request's Accept header. The design spec
+This is what this project serves over HTTP: one endpoint's current state, an
+index of every endpoint, and `/about`. Each is offered in two kinds of
+representation chosen by the request's Accept header. The design spec
 requires content negotiation on every resource ("a quality-measurement
 service that is not itself machine-readable would be self-defeating"), so
 the HTML and the RDF are two representations of one resource rather than two
 resources.
+
+`/about` is the odd one, and the section at the bottom of this file says why:
+it takes no store dependency and its RDF is assembled here rather than
+serialised out of the store, because it describes this service rather than
+anything a sweep measured.
 
 The two representations are derived differently on purpose, and that is
 worth stating plainly because it is a hazard as well as a design:
@@ -42,16 +47,28 @@ from __future__ import annotations
 import html
 import os
 import re
+from collections import Counter
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, Query, Request, Response
 from jinja2 import Environment, FileSystemLoader, select_autoescape
-from pyoxigraph import NamedNode, RdfFormat, Store, Variable, serialize
+from pyoxigraph import (
+    Literal,
+    NamedNode,
+    RdfFormat,
+    Store,
+    Triple,
+    Variable,
+    serialize,
+)
 
 import verdict_encoding
 from endpoint_content import EndpointContent, endpoint_content
+from endpoint_index import endpoint_index
 from endpoint_measurements import EndpointMeasurements, endpoint_measurements
+from load_run import CURRENT_GRAPH, pointers_to_missing_runs
 from queries import read_query
 
 # ---------------------------------------------------------------------------
@@ -87,6 +104,18 @@ from queries import read_query
 # behaviour and not a cost. Losing the endpoint URL is a correctness bug;
 # an unpretty IRI is a matter of taste, so the taste loses.
 ENDPOINT_PATH = "/endpoint"
+
+# The index lives at the root, because it is the way in: before it there was
+# one route and reaching it meant knowing an endpoint URL and percent-encoding
+# it by hand.
+INDEX_PATH = "/"
+
+# This path is not a choice. Every request the prober makes carries
+# `sparqlwatch/<version> (+https://<host>/about)` in its User-Agent
+# (prober/src/client.rs), so the URL is already published, in somebody else's
+# server log, before this route exists. Renaming it would break the one
+# promise this project has made to every host it has contacted.
+ABOUT_PATH = "/about"
 
 # ---------------------------------------------------------------------------
 # Representations
@@ -262,6 +291,24 @@ def _opened_store(path: str) -> Store:
     own length, once opened, catches both, at the cost of one open of a
     store that is about to be opened anyway. Failing on the first open
     reports the operator's mistake as the operator's mistake.
+
+    The last check is the same failure one step along, and it is not an
+    operator's typo. Dropping a bad run graph wholesale is what one graph per
+    run is for, and the spec advertises it. Since recency is decided once, in
+    current, the endpoints of a dropped run keep an sw:currentRun naming a
+    graph that is gone; index.rq and endpoint_measurements.rq both drop such a
+    solution on FILTER (BOUND(?generatedAt)), so the index says no run in this
+    store has recorded anything for any endpoint and each endpoint page says no
+    run has measured it, out of a store whose older run graph still holds every
+    verdict. That is the same wrong answer as the three above, out of a store
+    that does hold the measurements, so it is refused here rather than answered.
+
+    Refused, and deliberately not answered by falling back to the older run.
+    Deciding recency in two places is exactly what moving it into current
+    removed, and a fallback would put a second derivation back beside the one
+    the read queries use. The repair is a rebuild, which derives current from
+    the run graphs alone and so points every endpoint at the newest run that
+    still measures it, and the message names it.
     """
     directory = Path(path)
     if not directory.is_dir():
@@ -281,6 +328,35 @@ def _opened_store(path: str) -> Store:
             f"rather than its first). Every endpoint would answer 404 as "
             f"though no sweep had ever run. Build the store first with "
             f"web/load_run.py."
+        )
+    if not store.contains_named_graph(CURRENT_GRAPH):
+        raise RuntimeError(
+            f"{STORE_PATH_VARIABLE} is {path!r}, which holds run graphs and "
+            f"no {CURRENT_GRAPH.value} graph. All three read paths read that "
+            f"graph, so every endpoint would answer as though no sweep had "
+            f"ever measured it, which is the same wrong answer out of a store "
+            f"that does hold the measurements. Every store built before the "
+            f"derived graph existed looks like this. Build it with "
+            f"'python web/load_run.py --rebuild {path}'."
+        )
+    missing = pointers_to_missing_runs(store)
+    if missing:
+        endpoints = sorted({endpoint for endpoint, _, _ in missing})
+        runs = sorted({run for _, _, run in missing})
+        raise RuntimeError(
+            f"{STORE_PATH_VARIABLE} is {path!r}, in which {CURRENT_GRAPH.value} "
+            f"points {len(endpoints)} endpoint(s) at {len(runs)} run graph(s) "
+            f"this store does not hold: {runs}. "
+            f"{endpoints[0]} is one of them. index.rq and "
+            f"endpoint_measurements.rq reach an endpoint's verdicts through "
+            f"sw:currentRun and endpoint_content.rq reaches its class sample "
+            f"through sw:currentSampleRun, and each drops a solution whose run "
+            f"graph is gone, so those endpoints would be answered as though no "
+            f"run had ever measured them, while an older run graph in this same "
+            f"store may still hold every verdict for them. A run graph has been "
+            f"dropped from this store since current was written, which is the "
+            f"operation one graph per run exists to make possible. Rebuild with "
+            f"'python web/load_run.py --rebuild {path}'."
         )
     return store
 
@@ -306,6 +382,7 @@ def get_store() -> Store:
 # The resource
 # ---------------------------------------------------------------------------
 _DESCRIPTION_QUERY = read_query("endpoint_description")
+_INDEX_DESCRIPTION_QUERY = read_query("index_description")
 _ENDPOINT_VARIABLE = Variable("endpoint")
 
 app = FastAPI(
@@ -875,3 +952,721 @@ def endpoint_resource(
         content=_endpoint_rdf(store, url, media_type),
         media_type=media_type,
     )
+
+
+
+# ---------------------------------------------------------------------------
+# The index
+# ---------------------------------------------------------------------------
+#
+# One row per endpoint the store holds facts for, grouped by the availability
+# verdict's own value. Four things about it are load-bearing rather than
+# cosmetic, and each is a mistake this project has written down.
+#
+# GROUPED BY THE VERDICT'S OWN VALUE, one group per value present, in
+# verdict_encoding.STATES' order, plus one final group for endpoints whose
+# newest run recorded no availability verdict at all. Not a boolean, and no
+# "did not answer" heading over the last three: "absent" means the host
+# answered with something that was not a SPARQL result (in the 543-endpoint
+# sweep one of the four is a .ttl file on raw.githubusercontent.com) while
+# "indeterminate" covers a timeout, a transport error, a DNS failure and an
+# HTML front end. Collapsing those turns "we could not determine this" into a
+# determined negative, which is the one thing the conformance model exists to
+# prevent.
+#
+# THE METRIC COLUMNS COME FROM THE ROWS, not from a list of eight. See
+# web/queries/index.rq's header: a store holding two runs at different metric
+# revisions holds two metric sets at once, and a page built around today's
+# eight draws chips no measurement stands behind the first time
+# prober/metrics.toml changes.
+#
+# EVERY COUNT CARRIES ITS DENOMINATOR. Stage 1d-a published a wrong number by
+# conflating three quantities that were each true of something else, and the
+# correction was to state each distinctly.
+#
+# EVERY ROW WHOSE FACTS ARE NOT CURRENT SAYS SO, with the same two conditions
+# the endpoint page states and for the same reason: 543 rows of a crashed
+# sweep's facts presented as current is the same wrong answer 543 times.
+
+# The metric the page groups by. Named rather than spelled at the call site so
+# that the one place the index turns a verdict into a heading is traceable, the
+# same way _CLASSES_METRIC is for the sample.
+_AVAILABILITY_METRIC = _METRIC_PREFIX + "availability"
+
+# The two words a qualified row carries, and they are words rather than a
+# colour or a title attribute: a marker only a mouse can find qualifies
+# nothing. Each is explained in a full sentence in the page's key, which is
+# where the reasoning that will not fit in three words lives.
+ROW_UNFINISHED_TEXT = "from a sweep that stopped"
+ROW_NEVER_REACHED_TEXT = "a later sweep never got here"
+
+# What an empty cell in a metric's column means. It is NOT one of the seven
+# states and it is deliberately not drawn as one: a metric this endpoint's
+# newest run recorded neither a measurement nor a decline for is a gap in what
+# the store holds, and drawing it as "not measured" would claim the run said so.
+EMPTY_CELL_TEXT = (
+    "A cell holding only a dot means this endpoint's newest run recorded "
+    "nothing at all about that metric, neither a measurement nor a decline. It "
+    "is a gap in what this service holds, not a verdict about the endpoint, "
+    "which is why it is not drawn as one of the states below."
+)
+
+
+def _abbreviation(name: str, width: int) -> str:
+    """One metric's abbreviation: ``width`` letters of its first word, then the
+    initial of each word after it."""
+    words = name.split("-")
+    return (words[0][:width] + "".join(word[:1] for word in words[1:])).upper()
+
+
+def metric_abbreviations(metrics: list[str]) -> dict[str, str]:
+    """An abbreviation per metric, unique across the ones given.
+
+    The chips on this page carry an abbreviation rather than the metric's name,
+    which is what design/Main.dc.html does (``c.abbr``) and what the size budget
+    requires: 543 rows times a full metric name is a third of the budget spent
+    on repeating eight words. The endpoint page's chips carry no text at all
+    because the metric is named beside them; here there is no room to name it
+    beside them, so the abbreviation is the only thing identifying the column
+    and it has to be unique and it has to be written out somewhere. The metric
+    key on the page is where it is written out.
+
+    A single-word metric gets two letters and a hyphenated one gets the initials
+    of its words, which is what keeps "classes" (CL) apart from "cors" (CO) and
+    both apart from "cors-preflight" (CP). Where that is still not enough the
+    first word lengthens by a letter at a time, and if two metrics cannot be
+    told apart that way at all they fall back to their whole names, which are
+    unique because they are the metrics' own ids.
+    """
+    ordered = list(dict.fromkeys(metrics))
+    names = {metric: _metric_name(metric) for metric in ordered}
+    widths = {
+        metric: (2 if "-" not in names[metric] else 1) for metric in ordered
+    }
+
+    while True:
+        abbreviations = {
+            metric: _abbreviation(names[metric], widths[metric])
+            for metric in ordered
+        }
+        counts = Counter(abbreviations.values())
+        colliding = [
+            metric for metric in ordered if counts[abbreviations[metric]] > 1
+        ]
+        if not colliding:
+            return abbreviations
+        grew = False
+        for metric in colliding:
+            first_word = names[metric].split("-")[0]
+            if widths[metric] < len(first_word):
+                widths[metric] += 1
+                grew = True
+        if not grew:
+            # Two metrics whose names cannot produce distinct abbreviations,
+            # which takes a metric id that is a prefix-free duplicate of
+            # another's. The name itself is the abbreviation then: long, and
+            # unique, and the page stays readable rather than showing two
+            # different metrics under one label.
+            return {
+                metric: (
+                    abbreviations[metric]
+                    if counts[abbreviations[metric]] == 1
+                    else names[metric].upper()
+                )
+                for metric in ordered
+            }
+
+
+def _index_metrics(entries: list[EndpointMeasurements]) -> list[dict]:
+    """Every metric any row has a fact for, in metric id order.
+
+    Sorted rather than left in the order the store returned them, for the same
+    reason EndpointMeasurements sorts its verdicts: SPARQL solution order is
+    not specified, and columns that moved between two identical requests would
+    look like the metric set had changed.
+    """
+    metrics = sorted(
+        {verdict.metric for entry in entries for verdict in entry.verdicts}
+        | {declined.metric for entry in entries for declined in entry.declined}
+    )
+    abbreviations = metric_abbreviations(metrics)
+    return [
+        {
+            "metric": metric,
+            "name": _metric_name(metric),
+            "abbr": abbreviations[metric],
+        }
+        for metric in metrics
+    ]
+
+
+def _index_chips(entry: EndpointMeasurements, metrics: list[dict]) -> list[dict]:
+    """One cell per metric column, in the page's column order.
+
+    A cell is a chip when this endpoint's newest run recorded something about
+    that metric and an empty placeholder when it did not, so the columns line
+    up across rows without a gap being drawn as one of the seven states. See
+    EMPTY_CELL_TEXT.
+    """
+    verdicts = {verdict.metric: verdict for verdict in entry.verdicts}
+    declined = {decline.metric: decline for decline in entry.declined}
+
+    cells = []
+    for column in metrics:
+        metric = column["metric"]
+        if metric in verdicts:
+            state = verdict_encoding.presentation(verdicts[metric].verdict)
+            cells.append(
+                {
+                    "present": True,
+                    "name": column["name"],
+                    "abbr": column["abbr"],
+                    # The value the store holds, verbatim, including a value
+                    # this build has no encoding for: relabelling it would hide
+                    # which value the store actually holds.
+                    "verdict": verdicts[metric].verdict,
+                    "reason": None,
+                    "css_class": verdict_encoding.css_class(state.slug),
+                    "slug": state.slug,
+                }
+            )
+        elif metric in declined:
+            state = verdict_encoding.presentation(verdict_encoding.NOT_MEASURED)
+            cells.append(
+                {
+                    "present": True,
+                    "name": column["name"],
+                    "abbr": column["abbr"],
+                    # No verdict at all, which is the point: the run said it did
+                    # not look. The reason travels instead, so a reader and a
+                    # test can tell "we priced it out" from "our own probe
+                    # died".
+                    "verdict": None,
+                    "reason": declined[metric].reason,
+                    "css_class": verdict_encoding.css_class(state.slug),
+                    "slug": state.slug,
+                }
+            )
+        else:
+            cells.append({"present": False})
+    return cells
+
+
+def _index_row(entry: EndpointMeasurements, metrics: list[dict]) -> dict:
+    """One row: the endpoint, its link, its cells, and any qualification.
+
+    The link is percent-encoded with nothing left safe, because the endpoint
+    resource names its endpoint in a url query parameter and a query string is
+    unquoted exactly once: an endpoint URL holding a '&' or a '#' left bare
+    would arrive truncated, and one holding a percent sequence of its own would
+    arrive as a different URL. See "The URL shape" at the top of this file.
+    """
+    return {
+        "endpoint": entry.endpoint,
+        "href": ENDPOINT_PATH + "?url=" + quote(entry.endpoint, safe=""),
+        "cells": _index_chips(entry, metrics),
+        "run_unfinished": entry.run_did_not_finish,
+        "never_reached": entry.newer_run_did_not_reach_this_endpoint,
+    }
+
+
+def _index_groups(
+    entries: list[EndpointMeasurements], metrics: list[dict]
+) -> list[dict]:
+    """The rows, grouped by the availability verdict's own value.
+
+    One group per value PRESENT, in verdict_encoding.STATES' order, then any
+    value this build has no encoding for, then one final group for endpoints
+    whose newest run recorded no availability verdict at all.
+
+    The order is the encoding table's and not any notion of better or worse.
+    Ranking the groups would be this service's opinion about the endpoints; the
+    table's order is a fact about the vocabulary.
+
+    The final group is merged with nothing, and its key is not a verdict value:
+    an endpoint whose run declined every metric it applied has no availability
+    verdict, and web/tests/fixtures/run-prober-failed.nq is a whole run of
+    exactly that shape, which stage 1c-b3 makes the normal outcome for a host
+    group whose probe task panicked. Merging it into "absent" would turn
+    "nobody looked" into "we established nothing was there"; merging it into
+    "indeterminate" would claim a measurement nobody took.
+    """
+    availability: dict[str | None, list[EndpointMeasurements]] = {}
+    for entry in entries:
+        verdict = next(
+            (
+                measured.verdict
+                for measured in entry.verdicts
+                if measured.metric == _AVAILABILITY_METRIC
+            ),
+            None,
+        )
+        availability.setdefault(verdict, []).append(entry)
+
+    order = {state.slug: index for index, state in enumerate(verdict_encoding.STATES)}
+    # A value the table has no entry for sorts after every value it has, and
+    # ties among such values are broken by the value itself so the page is
+    # stable. None sorts last of all, and it is not a value: see the docstring.
+    values = sorted(
+        (value for value in availability if value is not None),
+        key=lambda value: (order.get(value, len(order)), value),
+    )
+    if None in availability:
+        values.append(None)
+
+    total = len(entries)
+    groups = []
+    for value in values:
+        rows = availability[value]
+        if value is None:
+            state = verdict_encoding.presentation(verdict_encoding.NOT_MEASURED)
+            label = state.label
+            # What the grouping criterion IS, and not one of the two ways of
+            # meeting it. There are two, they are opposite claims, and both are
+            # reachable: a run that DECLINED availability recorded an
+            # sw:NotMeasured fact naming the metric and a reason, and a run at a
+            # different metric revision recorded nothing about availability in
+            # either direction. Saying every metric was declined rather than
+            # measured is false of the second on both counts, and it contradicts
+            # EMPTY_CELL_TEXT above, which says a metric a run recorded nothing
+            # about is a gap in what this service holds and not a verdict. So the
+            # sentence says which two cases are here and sends a reader to the
+            # row, where the availability column is a chip in the first case and
+            # a gap in the second.
+            meaning = (
+                "The newest run for these endpoints recorded no availability "
+                "verdict at all: either it declined the metric, or it recorded "
+                "nothing about it. Each row's availability column says which, a "
+                "chip for a decline and a dot for a gap. Neither is a verdict "
+                "about the endpoint, and neither is merged with one."
+            )
+        else:
+            state = verdict_encoding.presentation(value)
+            recognised = state is not verdict_encoding.UNRECOGNISED
+            # An unrecognised value is shown verbatim in the heading, the same
+            # way the endpoint page shows it in a row's state text.
+            label = state.label if recognised else value
+            # What the group IS, and deliberately not what the state means in
+            # general. verdict_encoding's meanings are written for a metric that
+            # can be declared ("works, and the endpoint declares it"), which is
+            # true of cors and of the service description and is not true of
+            # availability: nothing declares that it answers queries. Printing
+            # that generic gloss under an availability heading would explain the
+            # group with a sentence about a different metric. The legend at the
+            # foot of the page explains the drawing, which is what it is for.
+            meaning = (
+                f"These are the endpoints whose availability metric read "
+                f"\"{value}\" in the newest run that measured them. Nothing "
+                f"about their other metrics follows from it: every metric "
+                f"carries its own verdict, and the rows are where those are."
+            )
+        groups.append(
+            {
+                # Empty for the final group, so that a group keyed on a verdict
+                # and the group keyed on no verdict stay distinguishable to a
+                # reader of the markup even where a store carried the literal
+                # value "not-measured" as a dqv:value.
+                "availability": "" if value is None else value,
+                "label": label,
+                "meaning": meaning,
+                "css_class": verdict_encoding.css_class(state.slug),
+                "count": len(rows),
+                "of": total,
+                # The heading a reader sees. It names the metric, because
+                # "verified: 3 of 9" on a page of eight metrics does not say
+                # verified at what, and it carries the denominator, because
+                # "verified 3" invites the question stage 1d-a got wrong.
+                "heading": (
+                    f"availability {label}: {len(rows)} of {total} endpoints"
+                ),
+                "rows": [_index_row(entry, metrics) for entry in rows],
+            }
+        )
+    return groups
+
+
+def _newest_sweep_note(entries: list[EndpointMeasurements]) -> str | None:
+    """The sentence for a store whose newest sweep did not finish.
+
+    Said once, at the top, because it is one fact about the store rather than
+    543 facts about endpoints: the rows below say which of them it leaves
+    qualified and how. Both halves of the condition are required for the reason
+    EndpointMeasurements.run_did_not_finish gives: a run from before stage
+    1c-b4 promised nothing about finishing, so its missing sw:finalised says
+    nothing either.
+    """
+    if not entries:
+        return None
+    first = entries[0]
+    if first.newest_emission is None or first.newest_finalised:
+        return None
+    return (
+        f"The newest sweep in this store, at {first.newest_generated_at}, did "
+        f"not finish: it recorded that it was being written one endpoint at a "
+        f"time and never recorded that it was complete. Every row below says "
+        f"whether that leaves it qualified, and how."
+    )
+
+
+def _index_context(entries: list[EndpointMeasurements]) -> dict:
+    """Everything the index template renders, decided here rather than in the
+    page.
+
+    The template loops and formats. What a group is, what order the groups come
+    in, what a missing metric means and how a state is drawn are all decisions
+    with a right answer, and they belong where they can be tested.
+    """
+    metrics = _index_metrics(entries)
+    groups = _index_groups(entries, metrics)
+    # The legend counts the chips on this page, and it is built by the same
+    # function as the endpoint page's legend from the same table, so the two
+    # pages cannot explain the encoding differently. A cell that is a gap
+    # rather than a chip is not counted: it is not one of the states.
+    drawn = [
+        {"slug": cell["slug"]}
+        for group in groups
+        for row in group["rows"]
+        for cell in row["cells"]
+        if cell["present"]
+    ]
+    return {
+        "endpoint_count": len(entries),
+        "metrics": metrics,
+        "metric_count": len(metrics),
+        "groups": groups,
+        "newest_generated_at": (
+            entries[0].newest_generated_at if entries else None
+        ),
+        "newest_sweep_note": _newest_sweep_note(entries),
+        "row_unfinished_text": ROW_UNFINISHED_TEXT,
+        "row_never_reached_text": ROW_NEVER_REACHED_TEXT,
+        "empty_cell_text": EMPTY_CELL_TEXT,
+        "legend": _legend(drawn),
+        "chip_width": verdict_encoding.CHIP_WIDTH_PX,
+        "chip_height": verdict_encoding.CHIP_HEIGHT_PX,
+        "encoding_css": verdict_encoding.css_rules(),
+    }
+
+
+def _index_html(entries: list[EndpointMeasurements]) -> str:
+    """The index, rendered."""
+    return _TEMPLATES.get_template("index.html").render(**_index_context(entries))
+
+
+def _index_rdf(store: Store, media_type: str) -> bytes:
+    """Serialise every endpoint's facts, straight from the store."""
+    triples = store.query(_INDEX_DESCRIPTION_QUERY)
+    return serialize(triples, format=RdfFormat.from_media_type(media_type))
+
+
+@app.get(INDEX_PATH)
+def index_resource(
+    request: Request,
+    store: Store = Depends(get_store),
+) -> Response:
+    """Every endpoint this service knows about, in one representation or the
+    other.
+
+    Negotiated the same way and by the same function as the endpoint resource,
+    because the design spec requires content negotiation of every resource: an
+    index a person can read and a machine cannot would make the fleet the one
+    thing this service will not publish as data.
+
+    There is no 404 branch. This resource exists whatever the store holds: an
+    index of no endpoints is an answer, and _opened_store already refuses a
+    store that holds no quads or no derived graph, which is the mistake a 404
+    here would be reporting as an empty registry.
+    """
+    media_type = choose_representation(request.headers.get("accept"))
+    if media_type is None:
+        return Response(
+            content=(
+                "none of the requested media types can be served; this "
+                "resource offers " + ", ".join(OFFERED_MEDIA_TYPES) + "\n"
+            ),
+            status_code=406,
+            media_type="text/plain; charset=utf-8",
+        )
+
+    if media_type == HTML_MEDIA_TYPE:
+        return Response(
+            content=_index_html(endpoint_index(store)),
+            media_type="text/html; charset=utf-8",
+        )
+    return Response(
+        content=_index_rdf(store, media_type),
+        media_type=media_type,
+    )
+
+
+# ---------------------------------------------------------------------------
+# /about: the page our User-Agent points at
+# ---------------------------------------------------------------------------
+#
+# Every request the prober makes tells the server it is querying where to
+# find out who we are. That makes this the one page in this service whose
+# reader did not come looking for it: they found an unfamiliar agent in a log
+# and followed the URL. Three consequences are built into the code below.
+#
+# It takes NO store dependency. get_store raises on a missing store, an empty
+# one, and one holding run graphs but no derived current graph. Every one of
+# those is a mistake on our side, and none of them is a reason to fail the
+# request of somebody asking why we contacted them. The index and the
+# endpoint page are representations of measurements and are right to require
+# a store; this page is a representation of this service, and a service can
+# describe itself with no data loaded.
+#
+# Its numbers come from named constants below, each one carrying the file and
+# constant in prober/ that decides it, and web/tests/test_about.py reads those
+# files and compares. A politeness figure on this page is a promise made to
+# somebody else's server, so a page saying "two seconds" while
+# DEFAULT_MIN_GAP said otherwise would be a confident wrong answer about this
+# project's own behaviour. The test is the only thing that keeps the two
+# together, because nothing at run time can see the Rust source.
+#
+# Its RDF is assembled HERE, in Python, and it is the only representation in
+# this file that is. endpoint_description.rq and index_description.rq are
+# CONSTRUCTs precisely so that neither can state anything the store does not
+# hold; that argument does not apply to a document about this service, because
+# no run graph holds a triple about who we are or how fast we probe. The
+# hazard the CONSTRUCTs avoid is still real here, so it is closed the other
+# way: both representations read the same constants, and
+# test_the_rdf_and_the_html_state_the_same_numbers_and_the_same_address
+# compares them field by field.
+
+# Supplied by the user for this purpose. It is published deliberately: the
+# page's whole reason to exist is to give a stranger a way to reach a person,
+# and an address nobody can see is not one. Exactly one address, and no form,
+# alias or ticket queue beside it, because each of those would be a channel a
+# reader would use and nobody would read.
+CONTACT_ADDRESS = "michel.dumontier@maastrichtuniversity.nl"
+
+# The string a reader searched their logs for, built by
+# prober/src/client.rs's `.user_agent(concat!(...))` out of
+# env!("CARGO_PKG_VERSION"). Quoted in full rather than described, because
+# matching it against the line in front of them is how a reader confirms this
+# page is about the agent they came here for. The version is part of the
+# quote, so test_the_user_agent_shown_is_the_one_the_prober_sends reds on a
+# version bump and this constant has to move with it.
+PROBER_USER_AGENT = (
+    "sparqlwatch/0.1.0 (+https://sparqlwatch.dev.k8s.semanticscience.org/about)"
+)
+
+# prober/src/client.rs's MAX_REDIRECT_HOPS: how long a redirect chain the
+# prober follows before it gives up. On the page because "follows a redirect
+# from it if there is one, and stops" understated what a server's log will
+# show, and the bullet about requests per endpoint already concedes the plural
+# ("plus one more for each redirect followed"). web/tests/test_about.py reads
+# the constant.
+MAX_REDIRECT_HOPS = 5
+
+# prober/src/registry.rs's DEFAULT_EXCLUSIONS: the file both binaries read at
+# every run, relative to their working directory. Named on the page because it
+# is checkable from outside: a reader can look and see whether their host is
+# on it, which is the only way this promise can be verified by the person it
+# was made to.
+EXCLUSION_FILE = "registry/exclusions.toml"
+
+# How politely the prober behaves, as the prober's own defaults.
+#
+#   min-gap-seconds          politeness.rs DEFAULT_MIN_GAP, the default of
+#                            main.rs's --min-gap-ms
+#   hosts-in-flight          main.rs DEFAULT_CONCURRENCY, the default of
+#                            --concurrency. HOSTS, not endpoints
+#   requests-per-second      hosts-in-flight / min-gap-seconds, which is the
+#                            aggregate rate main.rs's own comment on
+#                            DEFAULT_CONCURRENCY derives
+#   retry-after-cap-seconds  politeness.rs DEFAULT_RETRY_AFTER_CAP, the
+#                            default of --retry-after-cap-s
+#   *-budget-seconds         budget.rs's impl Default for Budget
+#   requests-per-endpoint    one per metric that is cheap at the default cost
+#                            ceiling (main.rs defaults --max-cost to
+#                            Cost::Cheap), counted from prober/metrics.toml
+#
+# Written out as literals rather than computed, because nothing in this
+# process can read Rust. web/tests/test_about.py reads every one of those
+# files and fails on a mismatch, which is what makes these numbers a
+# statement about the prober rather than about this dictionary.
+POLITENESS = {
+    "min-gap-seconds": 2,
+    "hosts-in-flight": 4,
+    "requests-per-second": 2,
+    "retry-after-cap-seconds": 20,
+    "request-budget-seconds": 30,
+    "metric-budget-seconds": 60,
+    "endpoint-budget-seconds": 600,
+    "requests-per-endpoint": 7,
+}
+
+# Two endpoints of prober/registry/lod-cloud.toml on ONE machine behind
+# different ports, in the order the page names them.
+#
+# On the page because the politeness figures above are keyed on a host AND a
+# port. prober/src/politeness.rs's host_key folds a scheme-default port and
+# keeps every other one, deliberately (its own doc comment and the assert_ne! on
+# two ports in its unit tests say why), and prober/src/lib.rs groups endpoints
+# on that same key. So the gap and the concurrency bound are per host-and-port,
+# and the page said "one host" full stop, which is false for exactly the reader
+# it is written for: a server operator running two engines on one machine.
+#
+# Named rather than described, because a promise about somebody's server has to
+# be checkable by them. prober/tests/politeness.rs runs the pair through the
+# real gate and web/tests/test_about.py checks both are still on the shipped
+# list and still share a host and differ in port.
+SAME_HOST_DIFFERENT_PORTS = (
+    "http://eculture2.cs.vu.nl:8890/sparql",
+    "http://eculture2.cs.vu.nl:5020/sparql/",
+)
+
+# Where the list of endpoints came from. Every value is in
+# prober/registry/lod-cloud.provenance.toml, which the seeder writes beside
+# the registry it generated, except endpoint-count, which is the length of
+# prober/registry/lod-cloud.toml itself.
+#
+# On the page because it answers the reader's second question. The first is
+# "who are you"; the second is "why me", and the answer is that a public dump
+# of dataset metadata listed their endpoint and nobody asked them. That is
+# also the whole reason the exclusion mechanism has to exist.
+REGISTRY = {
+    "endpoint-count": 543,
+    "dump": "https://lod-cloud.net/versions/2026-06-15/lod-data.json",
+    "dump-version": "2026-06-15",
+    "entries": 725,
+    "distinct": 548,
+}
+
+# The one full sweep of that registry this project has run, from
+# prober/README.md under Sweep cost. Quoted rather than rounded because it is
+# a measurement and the README is where it is recorded; the same section says
+# every other figure there is an estimate.
+FULL_SWEEP_DURATION = "1h26m21s"
+
+# The lead sentence, in one place because both representations state it. A
+# machine that asks this resource for RDF gets the same sentence a person
+# reads, rather than a document that describes the page without saying what
+# the service does.
+SUMMARY = (
+    "sparqlwatch measures public SPARQL endpoints and publishes what it "
+    "measured: it sends a few small read-only queries to each endpoint on a "
+    "public list, and records what came back, per endpoint and per check."
+)
+
+# The subject of the RDF representation, and the namespace its predicates sit
+# in. urn:sparqlwatch: is the scheme every IRI this project mints already
+# uses (sw:metric:..., sw:activity:...), so sw:service and sw:about:... are
+# that convention continued rather than a second one.
+#
+# These predicates are minted here and appear in no run graph, which is the
+# opposite of the rule endpoint_description.rq and index_description.rq
+# follow. The difference is what the document is about: a triple about an
+# endpoint must come from a measurement, and there is no measurement of who we
+# are. Kept deliberately few, and each one is pinned by the test that pins the
+# prose beside it.
+_SERVICE = NamedNode("urn:sparqlwatch:service")
+_ABOUT = "urn:sparqlwatch:about:"
+_XSD_INTEGER = NamedNode("http://www.w3.org/2001/XMLSchema#integer")
+
+
+def _about_context() -> dict:
+    """Everything web/templates/about.html renders, and nothing derived.
+
+    The template writes the prose; this hands it the numbers and the strings
+    that have to agree with something outside the template.
+    """
+    return {
+        "summary": SUMMARY,
+        "contact": CONTACT_ADDRESS,
+        "user_agent": PROBER_USER_AGENT,
+        "exclusion_file": EXCLUSION_FILE,
+        "max_redirect_hops": MAX_REDIRECT_HOPS,
+        "politeness": POLITENESS,
+        "same_host_different_ports": SAME_HOST_DIFFERENT_PORTS,
+        "registry": REGISTRY,
+        "full_sweep": FULL_SWEEP_DURATION,
+        "index_path": INDEX_PATH,
+        "endpoint_path": ENDPOINT_PATH,
+    }
+
+
+def _about_html() -> str:
+    """The page, rendered."""
+    return _TEMPLATES.get_template("about.html").render(**_about_context())
+
+
+def _about_rdf(media_type: str) -> bytes:
+    """The same statements, for a machine.
+
+    A crawler or an operator's tooling wants two things from this resource:
+    where to complain, and what rate to expect. Both are here as data, so
+    neither has to be read out of prose. The politeness figures are typed
+    xsd:integer in seconds and in counts, which is what the flags they come
+    from are.
+    """
+    triples = [
+        Triple(_SERVICE, NamedNode(_ABOUT + "summary"), Literal(SUMMARY)),
+        Triple(
+            _SERVICE,
+            NamedNode(_ABOUT + "contact"),
+            NamedNode("mailto:" + CONTACT_ADDRESS),
+        ),
+        Triple(
+            _SERVICE,
+            NamedNode(_ABOUT + "user-agent"),
+            Literal(PROBER_USER_AGENT),
+        ),
+        Triple(
+            _SERVICE,
+            NamedNode(_ABOUT + "exclusion-list"),
+            Literal(EXCLUSION_FILE),
+        ),
+        Triple(
+            _SERVICE,
+            NamedNode(_ABOUT + "registry-endpoint-count"),
+            Literal(str(REGISTRY["endpoint-count"]), datatype=_XSD_INTEGER),
+        ),
+        Triple(
+            _SERVICE,
+            NamedNode(_ABOUT + "registry-source"),
+            NamedNode(REGISTRY["dump"]),
+        ),
+    ]
+    triples.extend(
+        Triple(
+            _SERVICE,
+            NamedNode(_ABOUT + name),
+            Literal(str(value), datatype=_XSD_INTEGER),
+        )
+        for name, value in POLITENESS.items()
+    )
+    return serialize(iter(triples), format=RdfFormat.from_media_type(media_type))
+
+
+@app.get(ABOUT_PATH)
+def about_resource(request: Request) -> Response:
+    """Who is querying your endpoint, how often, and how to make it stop.
+
+    No store parameter, and that absence is the feature. See the section
+    comment above.
+
+    Negotiated by the same function as the other two resources, because the
+    design spec requires content negotiation of every resource and this one is
+    no exception: an operator's tooling should be able to read our contact
+    address and our rate without parsing English.
+    """
+    media_type = choose_representation(request.headers.get("accept"))
+    if media_type is None:
+        return Response(
+            content=(
+                "none of the requested media types can be served; this "
+                "resource offers " + ", ".join(OFFERED_MEDIA_TYPES) + "\n"
+            ),
+            status_code=406,
+            media_type="text/plain; charset=utf-8",
+        )
+
+    if media_type == HTML_MEDIA_TYPE:
+        return Response(
+            content=_about_html(),
+            media_type="text/html; charset=utf-8",
+        )
+    return Response(content=_about_rdf(media_type), media_type=media_type)

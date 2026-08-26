@@ -157,7 +157,13 @@ impl Client {
             .redirect(reqwest::redirect::Policy::none())
             // Every request we make to a stranger's endpoint carries this, so
             // the URL has to resolve to a page explaining who we are and how to
-            // ask us to stop. Stage 3 owes /about for exactly that reason.
+            // ask us to stop. Stage 3-2 built that page, and it takes the
+            // politeness numbers it quotes from `politeness.rs` and `main.rs`
+            // with a test pinning them, so this promise and those defaults
+            // cannot drift apart. What the URL still needs is stage 4: the host
+            // does not resolve yet, so the promise is unkept rather than
+            // broken, and until then a reader who finds this line has nowhere
+            // to go.
             .user_agent(concat!(
                 "sparqlwatch/", env!("CARGO_PKG_VERSION"),
                 " (+https://sparqlwatch.dev.k8s.semanticscience.org/about)"

@@ -13,7 +13,9 @@ what they claimed to check.
 from pathlib import Path
 
 import pytest
-from pyoxigraph import RdfFormat, Store
+from pyoxigraph import NamedNode, Store
+
+from load_run import load_run
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -29,6 +31,49 @@ RUN_HOSTILE_LITERALS = FIXTURES / "run-hostile-literals.nq"
 RUN_NEW_SUBJECTS = FIXTURES / "run-new-subjects.nq"
 RUN_PROBER_FAILED = FIXTURES / "run-prober-failed.nq"
 RUN_CRASHED_PARTWAY = FIXTURES / "run-crashed-partway.nq"
+RUN_REGISTRY_SAMPLE = FIXTURES / "run-registry-sample.nq"
+RUN_NO_AVAILABILITY = FIXTURES / "run-no-availability.nq"
+
+
+CURRENT_GRAPH = NamedNode("urn:sparqlwatch:current")
+
+
+def run_graph_names(store: Store) -> list[NamedNode]:
+    """The store's run graphs: every named graph except the derived one.
+
+    load_run maintains urn:sparqlwatch:current beside the run graphs, so
+    counting named_graphs() directly would count it as a run. It is not one: it
+    holds no rdf:type prov:Activity triple at all, which is what
+    test_current_holds_no_typed_activity pins and what keeps the newest-run
+    aggregate in the read queries a question about runs.
+    """
+    return [graph for graph in store.named_graphs() if graph != CURRENT_GRAPH]
+
+
+def run_quad_count(store: Store) -> int:
+    """How many quads the store holds in its run graphs.
+
+    Everything a run file states lands in a run graph, so this is what a
+    fixture's quad count is a claim about. current holds copies of some of
+    those quads, and counting those copies again would turn every fixture's
+    count into a statement about the loader rather than about the file.
+    """
+    return sum(
+        len(list(store.quads_for_pattern(None, None, None, graph)))
+        for graph in run_graph_names(store)
+    )
+
+
+def run_graph_query(store: Store, query: str):
+    """Ask ``query`` of the store's run graphs alone.
+
+    Every assertion in web/tests/test_fixture.py is a claim about what a run
+    FILE holds, and its queries match GRAPH ?g. current holds copies of some of
+    those quads, so without this restriction a claim like "eight declines, one
+    of them cost-ceiling" would count each of them twice and a fixture that
+    really did lose a decline could still satisfy the count.
+    """
+    return store.query(query, named_graphs=run_graph_names(store))
 
 
 def _loaded_store(tmp_path: Path, name: str, *fixtures: Path) -> Store:
@@ -37,10 +82,17 @@ def _loaded_store(tmp_path: Path, name: str, *fixtures: Path) -> Store:
     More than one is the normal case for a real deployment: a store that has
     been swept twice holds two run graphs. Two fixtures in one store is how
     the "different runs answer different questions" cases below are built.
+
+    Built through load_run() and not through Store.load(), because load_run()
+    is the only way a run reaches a real store and it writes more than the run
+    graph: it maintains the derived urn:sparqlwatch:current graph the three
+    read queries read. A fixture built with a raw load holds run graphs and no
+    current graph, which is a store shape the deployment never has, so every
+    test over it would be testing a store that cannot exist.
     """
     store = Store(str(tmp_path / name))
     for fixture in fixtures:
-        store.load(fixture.read_bytes(), format=RdfFormat.N_QUADS)
+        load_run(store, fixture.read_bytes())
     return store
 
 
@@ -184,4 +236,76 @@ def store_crashed_partway(tmp_path):
     """
     return _loaded_store(
         tmp_path, "store-crashed-partway", RUN_WITH_SAMPLES, RUN_CRASHED_PARTWAY
+    )
+
+
+@pytest.fixture
+def store_registry_sample(tmp_path):
+    """Nine endpoints of the real 543-endpoint registry sweep, cut from it line
+    by line: three whose availability verdict is "verified", four
+    "indeterminate" and two "absent", and every verdict value that sweep
+    produced somewhere among their other metrics. See the comment in
+    web/tests/fixtures/run-registry-sample.nq for which nine and why."""
+    return _loaded_store(tmp_path, "store-registry-sample", RUN_REGISTRY_SAMPLE)
+
+
+@pytest.fixture
+def store_registry_and_failure(tmp_path):
+    """The nine-endpoint sample beside run-prober-failed.nq, whose one endpoint
+    has no availability verdict at all: every metric it applies was declined,
+    seven as "prober-failed" and one on the cost ceiling.
+
+    Ten endpoints in one store, and the tenth is the one the index cannot draw
+    a verdict for, because the run recorded none for it. The two files are
+    loaded together rather than merged into one because they are two runs: the
+    registry sweep is 2026-08-24T19:45:03Z and the failed run is
+    2026-08-23T02:00:00Z, and they name different endpoints, so each endpoint's
+    sw:currentRun is its own run's and neither hides the other.
+    """
+    return _loaded_store(
+        tmp_path,
+        "store-registry-and-failure",
+        RUN_REGISTRY_SAMPLE,
+        RUN_PROBER_FAILED,
+    )
+
+
+@pytest.fixture
+def store_two_metric_sets(tmp_path):
+    """Two runs whose metric sets differ, which is what a store holds for as
+    long as prober/metrics.toml can change.
+
+    The registry sweep measured seven metrics and declined one on all nine of
+    its endpoints; run-classes-absent.nq recorded two metrics, availability and
+    classes, on one endpoint and nothing else. So the index's columns are the
+    union of the two, eight, and no-classes.example has a fact for two of them
+    and no fact at all for the other six.
+
+    That is not a verdict about that endpoint and it must not be drawn as one:
+    "this run recorded nothing about that metric" is a gap in what this service
+    holds, and the six states it could be mistaken for are all findings.
+    """
+    return _loaded_store(
+        tmp_path, "store-two-metric-sets", RUN_REGISTRY_SAMPLE, RUN_CLASSES_ABSENT
+    )
+
+
+@pytest.fixture
+def store_no_availability_two_ways(tmp_path):
+    """The two opposite ways an endpoint can have no availability verdict, in
+    one store, so the index's final group holds one of each.
+
+    run-prober-failed.nq DECLINED availability: it recorded an sw:NotMeasured
+    fact naming the metric and a reason. run-no-availability.nq recorded nothing
+    about it at all, in either direction, while measuring sw:metric:classes. The
+    group they land in is keyed on the absence of a verdict, so it holds both,
+    and a sentence saying every metric was declined rather than measured is
+    false of the second: a metric was measured, and no run said it declined
+    availability.
+    """
+    return _loaded_store(
+        tmp_path,
+        "store-no-availability-two-ways",
+        RUN_PROBER_FAILED,
+        RUN_NO_AVAILABILITY,
     )
