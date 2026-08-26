@@ -1,19 +1,21 @@
 //! How one run's graph is written, and what a reader of an unfinished run may
-//! rely on. Stated here because three functions in this module have to agree on
-//! it and `web/load_run.py` has to agree with all three.
+//! rely on. Stated here because four functions in this module have to agree on
+//! it and `web/load_run.py` has to agree with all four.
 //!
-//! A run is written as a header of run-level facts, one self-contained chunk per
-//! endpoint, and a footer. A crash leaves a prefix of that sequence, ending at a
-//! line boundary in a document that still parses, so the danger is never an
-//! unreadable file: it is a readable file whose lines contradict each other. Two
-//! rules keep that from happening.
+//! A run is written as a header of run-level facts, the endpoints the sweep
+//! declined to ask, one self-contained chunk per endpoint, and a footer. A crash
+//! leaves a prefix of that sequence, ending at a line boundary in a document
+//! that still parses, so the danger is never an unreadable file: it is a
+//! readable file whose lines contradict each other. Two rules keep that from
+//! happening.
 //!
 //! 1. **Every section ends with its terminator.** `sw:emission` closes the
-//!    header, `sw:completedEndpoint` closes a chunk, `sw:finalised` closes the
-//!    footer. A reader holding a terminator holds the whole section; a reader
-//!    that does not holds a fragment and may drop it. Those three spellings are
-//!    a wire format shared with the loader, so neither side is free to change
-//!    them alone.
+//!    header, `sw:dormantCount` closes the dormancy section,
+//!    `sw:completedEndpoint` closes a chunk, `sw:finalised` closes the footer. A
+//!    reader holding a terminator holds the whole section; a reader that does
+//!    not holds a fragment and may drop it. Those four spellings are a wire
+//!    format shared with the loader, so neither side is free to change them
+//!    alone.
 //! 2. **No fact family publishes its own summary before the things it
 //!    summarises.** A cut inside a list has to lose the list, never leave a
 //!    count standing beside three of the two hundred values it counted, which a
@@ -21,6 +23,7 @@
 //!    and `sw:sampleTruncated` come after the last `sw:sampledValue`, and why
 //!    `sw:failedEndpoints` sits in the footer: it summarises the chunks.
 
+use crate::dormancy::SkipReason;
 use crate::metrics::Cost;
 use crate::verdict::{Level, Verdict};
 use oxrdf::vocab::{rdf, xsd};
@@ -39,6 +42,16 @@ use std::num::NonZeroUsize;
 /// here alone reds this crate's suite instead of silently discarding every
 /// endpoint a crash preserved.
 pub const HEADER_TERMINATOR: &str = "urn:sparqlwatch:emission";
+/// The predicate that closes the dormancy section, `emit_dormancy`'s last quad.
+///
+/// The COUNT, `sw:dormantCount`, and deliberately not the per-endpoint
+/// `sw:dormantEndpoint` one character away from it. Exactly one of the two is a
+/// section terminator, and the convention already points both ways, since
+/// `sw:completedEndpoint` is singular, per-endpoint AND a terminator. Reading
+/// the per-endpoint spelling as a boundary would make every dormancy line a cut
+/// point, so a truncation would land in the middle of the section instead of
+/// after it.
+pub const DORMANCY_TERMINATOR: &str = "urn:sparqlwatch:dormantCount";
 /// The predicate that closes one endpoint's chunk, `emit_endpoint`'s last quad.
 pub const CHUNK_TERMINATOR: &str = "urn:sparqlwatch:completedEndpoint";
 /// The predicate that closes the footer, `emit_footer`'s last quad.
@@ -382,12 +395,183 @@ pub struct RunHeader<'a> {
     /// How many hosts the sweep talked to at once; see `RunEmission` for what a
     /// consumer may and may not conclude from it.
     pub concurrency: NonZeroUsize,
+    /// The endpoints this sweep declined to ask, and why.
+    ///
+    /// Carried on the HEADER rather than handed to a writer method of its own,
+    /// and that is the whole design of this section. A `RunWriter::dormancy`
+    /// call would be a rule to enforce: `write_endpoint` and `finish` would have
+    /// to refuse a file whose section was missing, and "missing" would be a
+    /// representable state of a half-written run. Here it is a product of
+    /// construction. Every existing construction site passes a `RunHeader`, so
+    /// each one gains this field with an empty slice, and a run file with no
+    /// dormancy section cannot be built.
+    ///
+    /// The quads themselves are NOT in the header section. They have endpoint
+    /// subjects, and `load_run._holds_endpoint_facts` decides whether to take a
+    /// file with no terminator anywhere, which is a fragment cut inside the
+    /// header, by asking whether every subject is the activity. So
+    /// `emit_dormancy` writes them AFTER `sw:emission`, and `write::RunWriter`
+    /// is what puts the two sections out back to back.
+    pub dormant: &'a [DormancyFact],
+}
+
+/// One endpoint a sweep declined to ask, as the run graph publishes it.
+///
+/// Built in `main.rs` from `dormancy::Skipped`, and kept as its own type rather
+/// than emitting `Skipped` directly because `Skipped` is the policy's answer and
+/// this is the published fact: the policy is free to grow a field the graph does
+/// not carry, and the graph is free to carry one the policy computes elsewhere.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DormancyFact {
+    pub endpoint: String,
+    /// When the endpoint was relegated, as the state holds it and not as this
+    /// run computed it, so the graph publishes the instant it actually happened.
+    /// `None` for an operator hold, which has no relegation instant, and for an
+    /// entry a hand edit left without one; no quad is then written, because a
+    /// zero or an empty literal would be a claim about a date nobody recorded.
+    pub dormant_since: Option<String>,
+    pub reason: SkipReason,
+}
+
+/// The predicate that names one declined endpoint on the run's activity.
+///
+/// Required, and it mirrors `sw:completedEndpoint`. Without it the endpoint's
+/// dormancy triples hang off nothing an activity reaches: no CONSTRUCT could
+/// date them without inventing a triple, which is the defect
+/// `web/queries/endpoint_description.rq` records for the class sample ("a
+/// document that named one activity and left the sample hanging off nothing
+/// would invite a consumer to date the sample to the sweep that declined to take
+/// it"), and it is the join any reader has to make to reach these facts at all.
+/// No `.rq` file in `web/queries/` joins it yet; a later stage's page is what
+/// will, and this is the quad that makes it possible.
+const DORMANT_ENDPOINT: &str = "urn:sparqlwatch:dormantEndpoint";
+/// Why, as `SkipReason::slug` spells it. A slug and not a sentence, because a
+/// page renders it and the loader parses it.
+const DORMANCY_REASON: &str = "urn:sparqlwatch:dormancyReason";
+/// When, typed as `xsd:dateTime`. Omitted when the fact carries no instant.
+const DORMANT_SINCE: &str = "urn:sparqlwatch:dormantSince";
+
+/// One declined endpoint's quads: the naming quad on the activity, the type, the
+/// reason, and the instant when there is one.
+///
+/// The endpoint is typed HERE, because `emit_endpoint` types every endpoint in
+/// its own chunk so a truncated reader never holds an untyped endpoint, and an
+/// endpoint the sweep declined has no chunk to be typed in.
+///
+/// An endpoint that is not a well-formed IRI yields no quads and is logged,
+/// which is what every other fact family in this module does with one: a run
+/// graph is never rewritten, so a fact that cannot be published is dropped
+/// rather than published wrongly. `emit_dormancy` counts what it published, so
+/// the count a consumer reads always matches the quads beside it.
+pub fn dormancy_quads(fact: &DormancyFact, run: &RunId) -> anyhow::Result<Vec<Quad>> {
+    let (graph, activity) = graph_and_activity(run)?;
+    let endpoint = match NamedNode::new(&fact.endpoint) {
+        Ok(node) => node,
+        Err(error) => {
+            tracing::warn!(
+                endpoint = %fact.endpoint,
+                error = %error,
+                "dropping a dormancy fact: the endpoint is not a valid IRI, so nothing in the \
+                 graph can name it"
+            );
+            return Ok(Vec::new());
+        }
+    };
+    let mut quads = vec![
+        Quad::new(
+            NamedOrBlankNode::NamedNode(activity),
+            nn(DORMANT_ENDPOINT)?,
+            Term::NamedNode(endpoint.clone()),
+            graph.clone(),
+        ),
+        Quad::new(
+            NamedOrBlankNode::NamedNode(endpoint.clone()),
+            rdf::TYPE.into_owned(),
+            Term::NamedNode(nn(&format!("{DCAT}DataService"))?),
+            graph.clone(),
+        ),
+        Quad::new(
+            NamedOrBlankNode::NamedNode(endpoint.clone()),
+            nn(DORMANCY_REASON)?,
+            Term::Literal(Literal::new_simple_literal(fact.reason.slug())),
+            graph.clone(),
+        ),
+    ];
+    if let Some(since) = &fact.dormant_since {
+        quads.push(Quad::new(
+            NamedOrBlankNode::NamedNode(endpoint),
+            nn(DORMANT_SINCE)?,
+            Term::Literal(Literal::new_typed_literal(since.as_str(), xsd::DATE_TIME)),
+            graph,
+        ));
+    }
+    Ok(quads)
+}
+
+/// Write the dormancy section: one group per declined endpoint, then the count
+/// that closes it.
+///
+/// **Why it exists at all.** A sweep that probes 486 of 543 endpoints and
+/// publishes a run graph naming only those 486 leaves a consumer to read silence
+/// about the other 57 as a claim that nothing was found there. Dormancy is not a
+/// verdict and never becomes one, so the run says the weaker, true thing: this
+/// sweep declined to ask, and here is why.
+///
+/// **Ordered by endpoint**, so two runs that declined the same set produce the
+/// same bytes here and a diff by eye shows only what changed. The caller's order
+/// is not evidence about anything, unlike a content sample's, so there is
+/// nothing to preserve.
+///
+/// **The count is last and is published even at zero.** Last, because rule 2 of
+/// the section protocol forbids a fact family summarising itself before the
+/// things it summarises: a cut inside the section has to lose the section, never
+/// leave a count standing beside two of the 48 endpoints it counted. At zero,
+/// because `sw:failedEndpoints` is published at zero for the same reason, and
+/// because a reader distinguishing "this sweep declined nothing" from "this run
+/// predates dormancy" needs the fact present rather than absent. Its subject is
+/// the run's activity, which `load_run._is_terminator_line` requires as a second
+/// anchor beside the predicate.
+///
+/// **Nothing reads the count.** It is for a reader of the n-quads, and the
+/// `RunHeader` field is what makes the section's absence impossible rather than
+/// merely detectable.
+pub fn emit_dormancy(run: &RunId, dormant: &[DormancyFact]) -> anyhow::Result<String> {
+    let (graph, activity) = graph_and_activity(run)?;
+    let mut ordered: Vec<&DormancyFact> = dormant.iter().collect();
+    ordered.sort_by(|a, b| a.endpoint.cmp(&b.endpoint));
+    let mut quads: Vec<Quad> = Vec::new();
+    // Counted from what was published rather than from `dormant.len()`, so an
+    // endpoint whose IRI cannot be written does not leave the count one above
+    // the groups beside it. Same rule as `sw:sampleSize`.
+    let mut published = 0usize;
+    for fact in ordered {
+        let group = dormancy_quads(fact, run)?;
+        if group.is_empty() {
+            continue;
+        }
+        published += 1;
+        quads.extend(group);
+    }
+    quads.push(Quad::new(
+        NamedOrBlankNode::NamedNode(activity),
+        nn(DORMANCY_TERMINATOR)?,
+        Term::Literal(Literal::new_typed_literal(published.to_string(), xsd::INTEGER)),
+        graph,
+    ));
+    serialize(&quads)
 }
 
 /// Write the header, ending with the terminator that says a reader should
 /// expect chunks after it.
+///
+/// `RunHeader::dormant` is deliberately NOT written here: its quads have
+/// endpoint subjects and this section must have none (see the field's own
+/// comment). `emit_dormancy` writes them, and `write::RunWriter::start` is what
+/// calls both in order. `RunWriter` is the only production writer of a run file,
+/// so there is exactly one place that pairing can go wrong.
 pub fn emit_header(header: RunHeader) -> anyhow::Result<String> {
-    let RunHeader { run, generated_at, metric_revision, max_cost, concurrency } = header;
+    let RunHeader { run, generated_at, metric_revision, max_cost, concurrency, dormant: _ } =
+        header;
     let (graph, activity) = graph_and_activity(run)?;
     let mut quads: Vec<Quad> = Vec::new();
 
@@ -448,8 +632,12 @@ pub fn emit_header(header: RunHeader) -> anyhow::Result<String> {
     // never rewritten requires: it is not a promise about the future that a
     // later chunk would have to retract.
     //
-    // Its section structure is what `emit_nquads` output has too, so the fact
-    // is true of a whole-run document as well as of one written chunk by chunk.
+    // Its section structure is ALMOST what `emit_nquads` output has: that
+    // function omits the dormancy section, so a document it produced carries
+    // this quad and no `sw:dormantCount`. It has no production caller, so no
+    // published run has that shape, but the two are no longer the same document
+    // and this comment used to say they were.
+    //
     // The stronger reading, that the file reached disk incrementally, becomes
     // true when `run_sweep` writes the sections as they finish; no run emitted
     // before that is published.
@@ -1231,8 +1419,23 @@ pub fn emit_nquads(input: RunEmission) -> anyhow::Result<String> {
         concurrency,
         failed_endpoints,
     } = input;
-    let mut out =
-        emit_header(RunHeader { run, generated_at, metric_revision, max_cost, concurrency })?;
+    // No dormancy section, deliberately, and this is the one place the claim
+    // above (that this function's section structure is the same as a
+    // chunk-by-chunk run's) stops being true. This function has no production
+    // caller: `main.rs` writes through `RunWriter`, which is what pairs the
+    // header with `emit_dormancy`. What the omission buys is both frozen
+    // baselines below staying green, and what it costs is that a caller who
+    // brought this function back into production would publish a run that says
+    // nothing about what it declined to ask. Such a caller has to write the
+    // section, which means taking the facts as a parameter.
+    let mut out = emit_header(RunHeader {
+        run,
+        generated_at,
+        metric_revision,
+        max_cost,
+        concurrency,
+        dormant: &[],
+    })?;
     let mut state = EmitState::new();
     for endpoint in endpoint_order(rows, not_measured, content_samples, declarations_read) {
         // The four flat lists carry no endpoint grouping this function can rely
@@ -1718,20 +1921,21 @@ mod tests {
 
     /// The Rust half of the wire format.
     ///
-    /// The three spellings are written here and recognised in
+    /// The four spellings are written here and recognised in
     /// `web/load_run.py`, with nothing in either language connecting them:
     /// renaming one here alone used to leave both suites green while every
     /// partial run cut back to its header, discarding every endpoint the crash
     /// preserved. `docs/design/section-terminators.md` is the one file both
     /// sides read, and `web/tests/test_load_run.py` checks the loader's set
-    /// against the same table. The whole table is compared, so a fourth
-    /// terminator added on one side alone reds this too.
+    /// against the same table. The whole table is compared, in order, so a
+    /// fifth terminator added on one side alone reds this too.
     #[test]
-    fn the_emitter_writes_the_terminators_the_shared_wire_format_names() {
+    fn the_four_terminators_are_the_four_the_design_doc_names() {
         assert_eq!(
             wire_format_table(),
             vec![
                 ("header".to_string(), HEADER_TERMINATOR.to_string()),
+                ("dormancy".to_string(), DORMANCY_TERMINATOR.to_string()),
                 ("chunk".to_string(), CHUNK_TERMINATOR.to_string()),
                 ("footer".to_string(), FOOTER_TERMINATOR.to_string()),
             ],
@@ -1763,6 +1967,7 @@ mod tests {
             metric_revision: REV,
             max_cost: Cost::Cheap,
             concurrency: NonZeroUsize::new(1).unwrap(),
+            dormant: &[],
         })
         .unwrap();
         assert!(
@@ -1790,11 +1995,280 @@ mod tests {
             "a chunk must end with its terminator: {chunk}"
         );
 
+        let dormancy = emit_dormancy(
+            &RunId("r1".into()),
+            &[DormancyFact {
+                endpoint: "https://slow.example/sparql".into(),
+                dormant_since: Some("2026-08-13T08:00:00Z".into()),
+                reason: SkipReason::Automatic,
+            }],
+        )
+        .unwrap();
+        assert!(
+            dormancy.trim_end().lines().next_back().unwrap().contains(&in_predicate_position(DORMANCY_TERMINATOR)),
+            "the dormancy section must end with its terminator: {dormancy}"
+        );
+
         let footer = emit_footer(RunFooter { run: &RunId("r1".into()), failed_endpoints: 0 }).unwrap();
         assert!(
             footer.trim_end().lines().next_back().unwrap().contains(&in_predicate_position(FOOTER_TERMINATOR)),
             "the footer must end with its terminator: {footer}"
         );
+    }
+
+    // --- The dormancy section ------------------------------------------------
+    //
+    // The fourth section, between the header's terminator and the first chunk.
+    // It is what makes a narrowed sweep honest: a run graph naming 486 of 543
+    // endpoints and saying nothing about the other 57 leaves a consumer to read
+    // silence about an endpoint as a claim that nothing was found there.
+
+    /// Two facts, one relegated by the machine and one held by an operator, so
+    /// a test over them covers both slugs `SkipReason` can produce.
+    fn dormancy_facts() -> Vec<DormancyFact> {
+        vec![
+            DormancyFact {
+                endpoint: "https://slow.example/sparql".into(),
+                dormant_since: Some("2026-08-13T08:00:00Z".into()),
+                reason: SkipReason::Automatic,
+            },
+            DormancyFact {
+                endpoint: "https://held.example/sparql".into(),
+                dormant_since: None,
+                reason: SkipReason::OperatorHold,
+            },
+        ]
+    }
+
+    /// A sink whose bytes stay readable after the writer that owns it is gone.
+    /// Same shape as `write.rs`'s own test sink, and duplicated rather than
+    /// shared because a `#[cfg(test)]` item is not visible across modules.
+    #[derive(Clone)]
+    struct Shared(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Shared {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// One whole run written the way production writes it.
+    ///
+    /// Through `RunWriter` and not by concatenating the emitters here, because
+    /// the order of the header and the dormancy section is `RunWriter`'s
+    /// decision: a test that called `emit_dormancy` on its own could not see
+    /// that order at all, which is the thing two of the tests below are about.
+    fn run_document(dormant: &[DormancyFact]) -> String {
+        let run = RunId("r1".into());
+        let sink = Shared(std::sync::Arc::new(std::sync::Mutex::new(Vec::new())));
+        let bytes = std::sync::Arc::clone(&sink.0);
+        let mut writer = crate::write::RunWriter::with_writer(
+            sink,
+            RunHeader {
+                run: &run,
+                generated_at: AT,
+                metric_revision: REV,
+                max_cost: Cost::Cheap,
+                concurrency: NonZeroUsize::new(1).unwrap(),
+                dormant,
+            },
+        )
+        .unwrap();
+        writer
+            .write_endpoint(EndpointFacts {
+                run: &run,
+                endpoint: "https://probed.example/sparql",
+                rows: &[row("https://probed.example/sparql", "cors", Verdict::Verified)],
+                declarations_read: &[],
+                not_measured: &[],
+                content_samples: &[],
+            })
+            .unwrap();
+        writer.finish(RunFooter { run: &run, failed_endpoints: 0 }).unwrap();
+        let written = bytes.lock().unwrap().clone();
+        String::from_utf8(written).unwrap()
+    }
+
+    #[test]
+    fn a_dormancy_fact_types_the_endpoint_and_names_it_on_the_activity() {
+        // Three things, each of them a rule the codebase already states. The
+        // `sw:dormantEndpoint` quad on the activity mirrors
+        // `sw:completedEndpoint`: without it an endpoint's dormancy triples
+        // hang off nothing an activity reaches, so no CONSTRUCT can date them
+        // without inventing a triple and both read queries lose their join. The
+        // `dcat:DataService` type is here because `emit_endpoint` types every
+        // endpoint in its own chunk so a truncated reader never holds an untyped
+        // endpoint, and a skipped endpoint has no chunk. And the reason is the
+        // slug `SkipReason` publishes rather than a sentence, because a page
+        // renders it.
+        let out = emit_dormancy(&RunId("r1".into()), &dormancy_facts()).unwrap();
+        let qs = quads_of(&out);
+        assert_eq!(
+            objects(&qs, "urn:sparqlwatch:dormantEndpoint")
+                .iter()
+                .map(|t| t.to_string())
+                .collect::<Vec<_>>(),
+            vec!["<https://held.example/sparql>", "<https://slow.example/sparql>"],
+            "the activity names every endpoint the sweep declined, ordered by endpoint: {out}"
+        );
+        for q in qs.iter().filter(|q| q.predicate.as_str() == "urn:sparqlwatch:dormantEndpoint") {
+            assert_eq!(
+                q.subject.to_string(),
+                "<urn:sparqlwatch:activity:r1>",
+                "the naming quad's subject is the activity, like sw:completedEndpoint's"
+            );
+        }
+        assert_eq!(
+            typed_in(&qs),
+            dormancy_facts().iter().map(|f| f.endpoint.clone()).collect::<BTreeSet<String>>(),
+            "every endpoint the section names is typed in it: {out}"
+        );
+        let reasons: BTreeSet<String> = qs
+            .iter()
+            .filter(|q| q.predicate.as_str() == "urn:sparqlwatch:dormancyReason")
+            .map(|q| format!("{} {}", q.subject, q.object))
+            .collect();
+        assert_eq!(
+            reasons,
+            BTreeSet::from([
+                "<https://held.example/sparql> \"operator-hold\"".to_string(),
+                "<https://slow.example/sparql> \"automatic\"".to_string(),
+            ]),
+            "the reason is a slug on the endpoint: {out}"
+        );
+        assert_eq!(
+            objects(&qs, "urn:sparqlwatch:dormantSince")
+                .iter()
+                .map(|t| t.to_string())
+                .collect::<Vec<_>>(),
+            vec!["\"2026-08-13T08:00:00Z\"^^<http://www.w3.org/2001/XMLSchema#dateTime>"],
+            "the instant is published as the state holds it, typed: {out}"
+        );
+    }
+
+    #[test]
+    fn a_fact_with_no_instant_emits_no_dormant_since_triple() {
+        // An operator hold carries no relegation instant, and neither does an
+        // entry a hand edit left without one. A zero or an empty literal would
+        // be a claim about a date nobody recorded, which is the same reason
+        // `elapsed_ms: None` publishes no quad rather than a 0.
+        let out = emit_dormancy(
+            &RunId("r1".into()),
+            &[DormancyFact {
+                endpoint: "https://held.example/sparql".into(),
+                dormant_since: None,
+                reason: SkipReason::OperatorHold,
+            }],
+        )
+        .unwrap();
+        let qs = quads_of(&out);
+        assert!(
+            objects(&qs, "urn:sparqlwatch:dormantSince").is_empty(),
+            "no instant means no quad, never an empty or zero one: {out}"
+        );
+        assert_eq!(
+            objects(&qs, "urn:sparqlwatch:dormantEndpoint").len(),
+            1,
+            "the endpoint is still named and still typed: {out}"
+        );
+    }
+
+    #[test]
+    fn the_section_sits_between_the_header_terminator_and_the_first_chunk() {
+        let out = run_document(&dormancy_facts());
+        let header_end =
+            out.find(&in_predicate_position(HEADER_TERMINATOR)).expect("the header's terminator");
+        let count = out
+            .find(&in_predicate_position(DORMANCY_TERMINATOR))
+            .expect("the dormancy section's terminator");
+        let first_chunk =
+            out.find(&in_predicate_position(CHUNK_TERMINATOR)).expect("a chunk's terminator");
+        let first_dormancy = out
+            .find(&in_predicate_position("urn:sparqlwatch:dormantEndpoint"))
+            .expect("a dormancy fact");
+        assert!(
+            header_end < first_dormancy && first_dormancy < count && count < first_chunk,
+            "the header, then the dormancy section, then the chunks: {out}"
+        );
+    }
+
+    #[test]
+    fn the_count_is_the_sections_last_line_and_its_subject_is_the_activity() {
+        // Last, because this module's rule 2 forbids a fact family summarising
+        // itself before the things it summarises: a cut inside the section has
+        // to lose the section, never leave a count standing beside two of the
+        // 48 endpoints it counted. On the activity, because
+        // `load_run._is_terminator_line` anchors on that subject as well as on
+        // the predicate, and a terminator on any other subject is not a section
+        // boundary this writer put there.
+        let out = emit_dormancy(&RunId("r1".into()), &dormancy_facts()).unwrap();
+        let last = out.trim_end().lines().next_back().unwrap();
+        assert!(
+            last.contains(&in_predicate_position(DORMANCY_TERMINATOR)),
+            "the count closes the section: {out}"
+        );
+        assert!(
+            last.starts_with("<urn:sparqlwatch:activity:r1>"),
+            "and its subject is the activity: {last}"
+        );
+        assert_eq!(
+            objects(&quads_of(&out), DORMANCY_TERMINATOR)
+                .iter()
+                .map(|t| t.to_string())
+                .collect::<Vec<_>>(),
+            vec!["\"2\"^^<http://www.w3.org/2001/XMLSchema#integer>"],
+            "and it counts the groups published beside it: {out}"
+        );
+    }
+
+    #[test]
+    fn a_run_that_skipped_nothing_still_publishes_a_zero_count() {
+        // A reader has to be able to tell "this sweep declined nothing" from
+        // "this run predates dormancy", and an absent quad says both at once.
+        // Same rule as `sw:failedEndpoints`, published at 0 for this reason.
+        let out = emit_dormancy(&RunId("r1".into()), &[]).unwrap();
+        assert_eq!(
+            objects(&quads_of(&out), DORMANCY_TERMINATOR)
+                .iter()
+                .map(|t| t.to_string())
+                .collect::<Vec<_>>(),
+            vec!["\"0\"^^<http://www.w3.org/2001/XMLSchema#integer>"],
+            "the count is published even at zero: {out}"
+        );
+        assert_eq!(quads_of(&out).len(), 1, "and nothing else is: {out}");
+    }
+
+    #[test]
+    fn a_header_truncated_file_still_holds_no_endpoint_facts() {
+        // The property `load_run._holds_endpoint_facts` rests on, asserted from
+        // this side so an edit that moves a dormancy quad up into the header
+        // reds here rather than silently in Python. A file cut inside its
+        // header carries no terminator at all, and the loader then decides
+        // whether to take it by asking whether every subject is the activity:
+        // an endpoint-subject quad before `sw:emission` would make such a
+        // fragment load whole, win the newest-run aggregate with no
+        // `sw:emission` beside it, and silence unfinished-run detection for
+        // every endpoint on the site.
+        let out = run_document(&dormancy_facts());
+        let terminator = in_predicate_position(HEADER_TERMINATOR);
+        let header: String = out
+            .lines()
+            .take_while(|line| !line.contains(&terminator))
+            .map(|line| format!("{line}\n"))
+            .collect();
+        assert!(!header.is_empty(), "the header has lines before its terminator: {out}");
+        for q in quads_of(&header) {
+            assert!(
+                q.subject.to_string().starts_with("<urn:sparqlwatch:activity:"),
+                "a header-truncated file must carry the activity's metadata and nothing about \
+                 an endpoint, found {q}"
+            );
+        }
     }
 
     #[test]

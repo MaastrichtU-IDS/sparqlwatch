@@ -61,6 +61,12 @@ pub fn discarding() -> RunWriter<io::Sink> {
             metric_revision: "test-revision",
             max_cost: Cost::Cheap,
             concurrency: NonZeroUsize::new(1).unwrap(),
+            // Nothing declined. These 38 tests are about what a sweep MEASURES,
+            // and the sweeps they drive are handed their endpoint list directly
+            // rather than through `dormancy::plan_sweep`, so there is nothing
+            // for a dormancy section to hold. It is still written, carrying its
+            // zero count, into the sink these bytes go to.
+            dormant: &[],
         },
     )
     .expect("a header written to a sink cannot fail")

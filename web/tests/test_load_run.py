@@ -598,7 +598,7 @@ def test_a_truncated_header_cannot_silence_the_newest_run_detection(tmp_path):
 # ---------------------------------------------------------------------------
 # The wire format, pinned to one checked-in file
 # ---------------------------------------------------------------------------
-# The three terminator predicates are written in Rust and recognised here, and
+# The four terminator predicates are written in Rust and recognised here, and
 # nothing in either language connects the two spellings. docs/design/
 # section-terminators.md is the single source of truth both sides read:
 # prober/src/emit.rs's tests assert the emitter's constants against it, and the
@@ -630,11 +630,11 @@ def test_the_loader_recognises_exactly_the_documented_terminators():
     A rename on either side used to leave both suites green while every
     partial run cut back to its header, discarding every endpoint the crash
     preserved. Both sets are asserted whole rather than by membership, so a
-    fourth predicate added on one side alone reds this too.
+    fifth predicate added on one side alone reds this too.
     """
     table = _wire_format_table()
-    assert set(table) == {"header", "chunk", "footer"}, (
-        f"the three sections emit.rs writes, found {sorted(table)}"
+    assert set(table) == {"header", "dormancy", "chunk", "footer"}, (
+        f"the four sections emit.rs writes, found {sorted(table)}"
     )
     assert _TERMINATOR_PREDICATES == frozenset(table.values()), (
         f"the loader recognises {sorted(_TERMINATOR_PREDICATES)}, "

@@ -65,11 +65,12 @@ one left with a silently empty graph does not know there is anything to
 re-run.
 
 One tolerance sits on top of that, for the file a crashed prober actually
-leaves. prober/src/emit.rs writes a run as a header, one self-contained
-chunk per endpoint, and a footer, each section ending in a terminator quad:
-sw:emission closes the header, sw:completedEndpoint closes a chunk,
-sw:finalised closes the footer. A crash leaves a prefix of that sequence, so
-the last section in the file may be a fragment. Refusing the whole file then
+leaves. prober/src/emit.rs writes a run as a header, the endpoints the sweep
+declined to ask, one self-contained chunk per endpoint, and a footer, each
+section ending in a terminator quad: sw:emission closes the header,
+sw:dormantCount closes the dormancy section, sw:completedEndpoint closes a
+chunk, sw:finalised closes the footer. A crash leaves a prefix of that
+sequence, so the last section in the file may be a fragment. Refusing the whole file then
 loses every endpoint that did finish, which is the case the incremental
 write exists for; loading it whole publishes a fragment of a section as a
 whole one. So the bytes are cut back to the end of the last terminator line
@@ -932,22 +933,31 @@ def _incomplete_load(stored: int, expected: int, graph_names: set[NamedNode]) ->
     )
 
 
-# The three predicates that close a section, read off prober/src/emit.rs:
-# sw:emission is the last quad emit_header writes, sw:completedEndpoint the
-# last quad emit_endpoint writes, sw:finalised the last quad emit_footer
-# writes. All three are needed. A complete run ends at sw:finalised, a run
-# killed between endpoints ends at sw:completedEndpoint, and a run killed
-# before its first endpoint ends at sw:emission, so a set missing any one of
-# them would truncate away a section that was written whole. Leaving out
-# sw:finalised is the worst of the three: every complete run would lose its
-# footer, and a reader testing for the footer would then report that no sweep
-# this project publishes ever finished.
+# The four predicates that close a section, read off prober/src/emit.rs:
+# sw:emission is the last quad emit_header writes, sw:dormantCount the last
+# quad emit_dormancy writes, sw:completedEndpoint the last quad emit_endpoint
+# writes, sw:finalised the last quad emit_footer writes. All four are needed. A
+# complete run ends at sw:finalised, a run killed between endpoints ends at
+# sw:completedEndpoint, a run killed before its first endpoint ends at
+# sw:dormantCount, and a run killed inside the dormancy section ends at
+# sw:emission, so a set missing any one of them would truncate away a section
+# that was written whole. Leaving out sw:finalised is the worst of the four:
+# every complete run would lose its footer, and a reader testing for the footer
+# would then report that no sweep this project publishes ever finished.
+#
+# sw:dormantCount and NOT sw:dormantEndpoint, which is one character away from
+# it and is the per-endpoint predicate rather than the section's terminator.
+# The convention points both ways -- sw:completedEndpoint IS a terminator and
+# is singular -- so the trap is real: recognising the per-endpoint spelling
+# here would make every dormancy line a cut point, and a truncation would land
+# in the middle of the section rather than after it.
 #
 # These spellings are a wire format shared with the emitter (see emit.rs's
 # module docstring), so neither side may change them alone.
 _TERMINATOR_PREDICATES = frozenset(
     {
         "urn:sparqlwatch:emission",
+        "urn:sparqlwatch:dormantCount",
         "urn:sparqlwatch:completedEndpoint",
         "urn:sparqlwatch:finalised",
     }
@@ -1037,6 +1047,15 @@ def _holds_endpoint_facts(quads: list) -> bool:
     emit_header, emit_footer and emit_endpoint). So a document whose every
     subject is an activity carries the run's own metadata and no facts about
     any endpoint.
+
+    The dormancy section DOES carry endpoint subjects, and it is written after
+    the header's terminator for that reason: this function is only ever reached
+    by a file with no terminator anywhere, which is a fragment cut inside the
+    header, and a fragment holding endpoint facts would load whole, carry the
+    store's greatest prov:generatedAtTime with no sw:emission beside it, and
+    silence unfinished-run detection for every endpoint on the site.
+    emit.rs's a_header_truncated_file_still_holds_no_endpoint_facts pins that
+    from the writer's side.
     """
     return any(
         not quad.subject.value.startswith(_ACTIVITY_IRI_PREFIX) for quad in quads

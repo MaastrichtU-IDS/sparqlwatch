@@ -34,7 +34,8 @@
 //!    `BufWriter`'s 8 KB default.
 
 use crate::emit::{
-    emit_endpoint, emit_footer, emit_header, EmitState, EndpointFacts, RunFooter, RunHeader, RunId,
+    emit_dormancy, emit_endpoint, emit_footer, emit_header, EmitState, EndpointFacts, RunFooter,
+    RunHeader, RunId,
 };
 use std::collections::BTreeSet;
 use std::fs::File;
@@ -162,13 +163,31 @@ impl<W: Write> RunWriter<W> {
             written: BTreeSet::new(),
             rename,
         };
-        // The header goes out and is flushed before any probing starts, so a
-        // sweep killed before its first endpoint finished still leaves a file
-        // `load_run.py` can take: the header's terminator is the earliest of
-        // the three it cuts back to, and the run's activity is what the read
-        // queries join everything else onto.
+        // The header and the dormancy section go out and are flushed before any
+        // probing starts, so a sweep killed before its first endpoint finished
+        // still leaves a file `load_run.py` can take: the header's terminator is
+        // the earliest of the four it cuts back to, and the run's activity is
+        // what the read queries join everything else onto.
+        //
+        // In this order and in this one place. The dormancy quads have ENDPOINT
+        // subjects, so they must come after `sw:emission`: a file cut inside the
+        // header carries no terminator at all, and `load_run` decides whether to
+        // take such a fragment by asking whether every subject is the activity.
+        // Endpoint-subject quads before the header's terminator would make that
+        // fragment load whole, win the newest-run aggregate with no
+        // `sw:emission` beside it, and silence unfinished-run detection for
+        // every endpoint on the site.
+        //
+        // Built before `emit_header` consumes the header, and both written
+        // before the single flush: a reader must never see a run whose dormancy
+        // section is on disk without the header it hangs off, and a crash
+        // between two writes is exactly that. `RunWriter` is the only production
+        // writer of a run file, which is what makes this the only place the two
+        // sections can be paired wrongly.
+        let dormancy = emit_dormancy(header.run, header.dormant)?;
         let bytes = emit_header(header)?;
         writer.sink.write_all(bytes.as_bytes())?;
+        writer.sink.write_all(dormancy.as_bytes())?;
         writer.sink.flush()?;
         Ok(writer)
     }
@@ -263,6 +282,11 @@ mod tests {
             metric_revision: "test-revision",
             max_cost: Cost::Cheap,
             concurrency: NonZeroUsize::new(1).unwrap(),
+            // Nothing declined, which is what every test in this module is
+            // about: the file's sections and the order they reach disk in. The
+            // dormancy section is still written, carrying its zero count, and
+            // `emit.rs`'s own tests are where its contents are asserted.
+            dormant: &[],
         }
     }
 

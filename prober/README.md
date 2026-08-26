@@ -71,7 +71,7 @@ cargo run -- --at 2026-08-20T12:00:00Z --out run.nq
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
-| `--at` | *required* | The run instant, ISO-8601 with an explicit timezone |
+| `--at` | *required* | The run instant, exactly `YYYY-MM-DDTHH:MM:SSZ` |
 | `--endpoints` | `endpoints.toml` | Endpoint list to sweep |
 | `--metrics` | `metrics.toml` | Metric definitions to apply |
 | `--out` | `run.nq` | Where the finished N-Quads land. The run itself is written to `<out>.<at>.partial` and renamed onto this at the end |
@@ -79,12 +79,38 @@ cargo run -- --at 2026-08-20T12:00:00Z --out run.nq
 | `--min-gap-ms` | `2000` | Minimum pause between two consecutive requests to one host |
 | `--retry-after-cap-s` | `20` | Longest `Retry-After` waited out before one retry of a throttled request |
 | `--concurrency` | `4` | How many HOSTS to probe at once; one host is never asked two things at once |
+| `--state` | `state/dormancy.toml` | The dormancy state: which endpoints this sweep may decline to ask, and where this run's strikes and promotions are written back |
+| `--dormant-cost-ms` | `60000` | Summed per-metric `elapsedMs` for one endpoint above which a sweep that confirmed nothing is a strike. Refused below `30000`, one request budget |
+| `--dormant-strikes` | `2` | Consecutive expensive silent sweeps that relegate an endpoint |
+| `--dormant-every-days` | `7` | How often a relegated endpoint is probed anyway, in whole days |
+| `--dormant-grace-days` | `7` | How long a hand `dormancy wake` protects an endpoint from being relegated again |
+
+`prober/state/` is **git-ignored**, because the state file is machine-written and
+every sweep rewrites it. So a fresh checkout and a container image both need
+`dormancy init --state <path>` once before the first sweep, and a deployment that
+wants strikes to survive a restart mounts that directory. Nothing else creates
+the file: a sweep that created its own could not tell "first ever run" from "the
+volume holding the state did not get mounted", and the second of those quietly
+re-admits every relegated endpoint at roughly 210 s each. A state file that
+cannot be read stops the sweep rather than being treated as an empty one, for the
+same reason and the one `--exclusions` records.
 
 `--at` is required and is **not** read from the clock, deliberately. It names
 the run graph, it is published as the activity's `prov:generatedAtTime`, and a
 scheduled `CronJob` passes the scheduled instant, so a retry of a failed sweep
-lands in the same graph rather than inventing a second one. That also makes the
-run's IDENTIFIERS reproducible: same `--at`, same graph and same subjects. Not
+lands in the same graph rather than inventing a second one.
+
+It is accepted in exactly one spelling, `YYYY-MM-DDTHH:MM:SSZ`: UTC, no offset,
+no fractional second, no leap second. That is narrower than ISO-8601 on purpose.
+Dormancy recognises a retry by comparing `--at` against the state file's
+`last_probed` as STRINGS, so two spellings of one instant (`...00Z` beside
+`...00.000Z`, or `12:00:00Z` beside `14:00:00+02:00`) would give the retry a
+second run IRI and no replay match: it would strike an endpoint twice for one
+sweep and publish a run graph that disagrees with the first about what it
+skipped.
+
+That also makes the run's IDENTIFIERS reproducible: same `--at`, same graph and
+same subjects. Not
 its contents and not its bytes, because a sweep observes a changing world; see
 "Output is not byte-identical" below. It is validated before any probing starts,
 because it is interpolated into IRIs and published as an `xsd:dateTime`.
@@ -820,11 +846,13 @@ it was incomplete.
 
 ### How a run is written, and what a truncated one says
 
-A run is emitted as three kinds of section: a header of run-level facts, one
-self-contained chunk per endpoint, and a footer. Each section ends with its own
-terminator, `urn:sparqlwatch:emission "incremental"` for the header,
+A run is emitted as four kinds of section: a header of run-level facts, the
+endpoints the sweep declined to ask, one self-contained chunk per endpoint, and a
+footer. Each section ends with its own terminator,
+`urn:sparqlwatch:emission "incremental"` for the header,
+`urn:sparqlwatch:dormantCount "N"^^xsd:integer` for the dormancy section,
 `urn:sparqlwatch:completedEndpoint <endpoint>` for a chunk and
-`urn:sparqlwatch:finalised "true"^^xsd:boolean` for the footer, all three on the
+`urn:sparqlwatch:finalised "true"^^xsd:boolean` for the footer, all four on the
 run's activity. N-Quads has no prologue and every line ends in a newline, so any
 prefix of the file parses, which means a crash leaves a readable file whose only
 risk is that its lines contradict each other. The terminators are what remove
@@ -832,8 +860,9 @@ that risk: a reader that holds a section's terminator holds the whole section,
 and a reader that does not may drop the fragment.
 
 A consumer reads three cases off facts that were each true when they were
-written. `emission` with `finalised` is a complete run: every endpoint the sweep
-was given has a chunk, including the ones a panicked group lost, and
+written, and the fourth terminator adds a cut point rather than a case.
+`emission` with `finalised` is a complete run: every endpoint the sweep was
+given has a chunk, including the ones a panicked group lost, and
 `failedEndpoints` counts over all of them. `emission` without `finalised` is a
 run that did not finish, so an endpoint with no `completedEndpoint` marker was
 never reached rather than measured and found wanting, and there is no
@@ -842,11 +871,12 @@ summary of chunks is not published until the chunks are. Neither terminator is a
 run that makes no claim about sections either way: that is what a run emitted
 before this scheme existed looks like, and it promised nothing, so it must not be
 reported as unfinished. It is also what a run of THIS scheme cut inside its
-header looks like, since `emission` is the header's last quad, and no reader can
-tell the two apart from the bytes. `web/load_run.py` separates them on a fact the
-file does carry: a run from before this scheme still measured endpoints, so a file
-with no terminator and no endpoint fact at all is refused rather than admitted as
-the store's newest activity. `finalised` is a boolean rather than
+header, or inside the dormancy section that follows it, looks like, since
+`emission` is the header's last quad, and no reader can tell those apart from
+the bytes. `web/load_run.py` separates them on a fact the file does carry: a run
+from before this scheme still measured endpoints, so a file with no terminator
+and no endpoint fact at all is refused rather than admitted as the store's
+newest activity. `finalised` is a boolean rather than
 `prov:endedAtTime` because nothing in the prober can produce that instant
 soundly: `emit` reads no clock by design,
 `std` cannot format a `SystemTime` as `xsd:dateTime`, no date library is in the
@@ -864,6 +894,40 @@ the store ends up identical, so a re-load is always safe (the non-atomic window
 `load_run.py` documents is itself closed by re-running that same load). So a
 partial file is worth loading as soon as it appears, and nothing has to be undone
 when that run is later completed.
+
+**The dormancy section says what the sweep declined to ask**, one group per
+endpoint and then the count that closes it:
+
+```
+<activity> sw:dormantEndpoint <endpoint> <run> .
+<endpoint> rdf:type dcat:DataService <run> .
+<endpoint> sw:dormancyReason "automatic" <run> .
+<endpoint> sw:dormantSince "2026-08-13T08:00:00Z"^^xsd:dateTime <run> .
+<activity> sw:dormantCount "48"^^xsd:integer <run> .
+```
+
+It exists because silence is a positive claim. A sweep that probes 486 of 543
+endpoints and publishes a graph naming only those 486 leaves a consumer to read
+the absence of an endpoint as a finding about it. Dormancy is **not a verdict**
+and never becomes one, so the run says the weaker, true thing: this sweep
+declined to ask, and here is why. `sw:dormancyReason` is `automatic` or
+`operator-hold`. `sw:dormantSince` carries the instant the endpoint was actually
+relegated, as the state file holds it and not this run's instant, and is omitted
+entirely when there is none rather than published as an empty value.
+
+Four properties of that shape are load-bearing. The section sits **after** the
+header's terminator, because its quads have endpoint subjects and a file cut
+inside the header carries no terminator at all: `web/load_run.py` decides whether
+to take such a fragment by asking whether every subject is the activity, and an
+endpoint fact before `emission` would make it load whole and win the newest-run
+aggregate with no `emission` beside it. `sw:dormantEndpoint` on the activity is
+required, mirroring `sw:completedEndpoint`, or the dormancy triples hang off
+nothing an activity reaches and no query can date them. The endpoint is typed
+here because a skipped endpoint has no chunk to be typed in. And the count is
+last and is published **even at zero**, because a summary must not precede what
+it summarises and because a reader has to be able to tell "this sweep declined
+nothing" from "this run predates dormancy". Nothing in this project reads the
+count; it is for a reader of the n-quads.
 
 **A run in progress is written to `<out>.<at>.partial`, and renamed onto `--out`
 when it finishes.** Never to `--out` directly: that file is the source of truth

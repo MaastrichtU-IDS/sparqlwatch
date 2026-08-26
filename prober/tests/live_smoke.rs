@@ -34,6 +34,9 @@ async fn probes_three_real_endpoints() {
             metric_revision: "live-smoke",
             max_cost: Cost::Cheap,
             concurrency: NonZeroUsize::new(1).unwrap(),
+            // A live sweep run by hand asks every endpoint it is given, so
+            // nothing is declined here either.
+            dormant: &[],
         },
     )
     .unwrap();
