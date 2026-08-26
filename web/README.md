@@ -535,7 +535,9 @@ generated from the metric names the store holds, so they change with the metric
 set rather than being a list in the template. That is the page's size budget at
 work: 543 rows carrying full metric names, or the metric repeated in an
 attribute beside each chip, measured 610 KB against the 500 KB the page is
-allowed. It is 434 KB as it stands, which is the 424.6 KiB a byte count reports.
+allowed. It is 434,193 bytes as it stands, which is 424.0 KiB and 434 KB. An earlier
+sentence here said 424.6 KiB, which is 434,790 bytes and no measurement anyone
+took.
 
 **The row filter is an inline `<script>`, and the page does not depend on it.**
 Every row is in the document as served; with JavaScript off or blocked, all of

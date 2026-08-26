@@ -18,6 +18,27 @@ The absent endpoint in every store is part of the freeze, not filler: "no run
 mentions this one" is exactly what a reader over a missing ``current`` graph
 would say about every endpoint, so it has to stay the answer for this one and
 only this one.
+
+TWO HALVES, and only one of them is a pre-move freeze. Thirteen stores were
+captured at 88d602b, one commit BEFORE 807f198 moved the queries, so for those
+thirteen this file really does compare two derivations: what the readers said
+when they computed recency at query time against what they say off ``current``.
+The rest were captured after the move (``store_registry_sample``,
+``store_registry_and_failure`` and ``store_two_metric_sets`` at 6200432, and
+``store_no_availability_two_ways`` with stage 3-2's fix pass), so they are a
+forward regression baseline and nothing more: they record what the current
+readers answer, not what the old ones did. Do not read a pass over one of those
+as evidence that the move preserved anything.
+
+AND ONLY THE DATACLASS FIELDS. The comparison is over ``asdict()``, which walks
+fields and not properties, so EndpointMeasurements.run_did_not_finish and
+.newer_run_did_not_reach_this_endpoint are outside the freeze. Their INPUTS are
+inside it, since every field the two read is a frozen field, and the properties
+themselves are pinned conjunct by conjunct in
+web/tests/test_endpoint_measurements.py. So this is not a hole; it is a
+narrower claim than "all three readers' answers" sounds, and it is written down
+here so a later reader does not lean on it for the two sentences the page
+derives from those properties.
 """
 
 from __future__ import annotations
