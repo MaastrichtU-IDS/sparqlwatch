@@ -154,6 +154,14 @@ and NOTHING ELSE. In particular:
     for sample values, so copying several hundred sw:sampledValue triples per
     endpoint would grow the graph the index scans and buy nothing.
 
+NOT AN INPUT. A run file naming urn:sparqlwatch:current as its graph is
+refused, in _parsed_graphs, before any store is opened. Everything above says
+this graph is derived from the run graphs and reconstructible from them alone,
+and one hand-written line naming it used to wipe it, insert that line's own
+triples into it, and return a LoadResult with drifted=[]: the one detector for
+a broken current graph asks which pointers name a run that no longer states
+their facts, and an emptied graph holds no pointers to ask about.
+
 TWO POINTERS, which is the subtle half. The newest run that MEASURED an
 endpoint and the newest run that SAMPLED it are different runs the moment a
 cheap sweep declines sw:metric:classes, and that is the steady state: the
@@ -1089,6 +1097,24 @@ def _parsed_graphs(nquads: bytes) -> tuple[list, set[NamedNode], int]:
 
     if not graph_names:
         raise ValueError("input names no graphs; nothing to load")
+
+    if CURRENT_GRAPH in graph_names:
+        # current is derived from the run graphs and reconstructible from them
+        # alone, which is the rule the whole second half of this module's
+        # docstring rests on. A file naming it as its graph breaks that rule and
+        # reports a clean load while doing it: load_run's remove_graph loop
+        # would wipe the graph all three read queries trust, insert the file's
+        # own triples into it, and return drifted=[] because _DRIFTED_RUN_
+        # POINTERS asks which pointers name a run that no longer states their
+        # facts and an emptied current graph holds no pointers to ask about.
+        raise ValueError(
+            f"input names {CURRENT_GRAPH_IRI} as a graph. That graph is derived "
+            f"from the run graphs by this module, not loaded from a file: "
+            f"accepting it would replace what every read query trusts with the "
+            f"file's own triples, and report a successful load. Name the run "
+            f"IRI the prober writes, or rebuild with "
+            f"'python web/load_run.py --rebuild STORE_PATH'."
+        )
 
     return quads, graph_names, discarded
 

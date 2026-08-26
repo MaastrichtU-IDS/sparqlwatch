@@ -276,6 +276,12 @@ the index scans and buy nothing. Two consequences, both real:
   That is the endpoint resource's most expensive read, and it is milliseconds where
   it was 11.7 seconds
 
+**And not an input.** A run file naming `urn:sparqlwatch:current` as its graph is
+refused before any store is opened. One hand-written line naming it used to wipe
+the graph, insert that line's own triples into it, and report a clean load with
+nothing drifted, because the drift check asks which pointers name a run that no
+longer states their facts and an emptied graph holds no pointers to ask about.
+
 **Two pointers, not one.** The newest run that measured an endpoint and the
 newest run that sampled it are different runs the moment a cheap sweep declines
 `sw:metric:classes`, and that is the steady state: the registry sweep declined

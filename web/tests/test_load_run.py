@@ -1139,3 +1139,44 @@ def test_the_rebuild_and_the_check_are_reachable_from_the_command_line(
 
     assert main(["--check", path]) == 1, "a drifted store must exit non-zero"
     assert QLEVER in capsys.readouterr().out
+
+
+def test_a_run_file_naming_the_derived_graph_is_refused(tmp_path):
+    """current is derived and reconstructible from the run graphs alone, so it
+    is never an input.
+
+    One hand-written line naming urn:sparqlwatch:current as its graph used to
+    be accepted: _parsed_graphs collected that IRI like any other, load_run
+    called remove_graph on it, and the file's own triples landed in the graph
+    all three read queries trust. The load then reported success with an EMPTY
+    drifted list, because drifted asks which pointers name a run that no longer
+    states their facts and an emptied current graph holds no pointers at all.
+    So the one detector for a broken current graph reported nothing about the
+    one input that breaks it.
+
+    Refused in _parsed_graphs, which is where main() validates every file
+    before Store() is opened, so the refusal happens before the store exists.
+    """
+    store = Store(str(tmp_path / "s"))
+    load_run(store, FIXTURE.read_bytes())
+    before = _current(store)
+    assert before, "the derived graph must be there to be attacked"
+
+    injection = (
+        b"<https://evil.example/sparql> <http://www.w3.org/ns/dqv#computedOn> "
+        b"<https://evil.example/sparql> <urn:sparqlwatch:current> .\n"
+    )
+    with pytest.raises(ValueError, match="urn:sparqlwatch:current"):
+        load_run(store, injection)
+
+    assert _current(store) == before, "a refused load must not touch current"
+
+    # And from the command line, before the store directory is created at all.
+    store_path = tmp_path / "fresh"
+    run_path = tmp_path / "inject.nq"
+    run_path.write_bytes(injection)
+    with pytest.raises(ValueError, match="urn:sparqlwatch:current"):
+        main([str(store_path), str(run_path)])
+    assert not store_path.exists(), (
+        "the refusal must come before Store() creates the directory"
+    )
