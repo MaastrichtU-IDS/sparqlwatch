@@ -654,6 +654,86 @@ the same time a good **cost** predictor for one bucket, since its 43 timed-out c
 accounted for 66% of the sweep's serial cost. Both are true, and this project gates on the field in
 neither direction.
 
+### Admission policy: dormancy
+
+**Decided 2026-08-26, against two measured sweeps. Not built.** The deferral above asked
+for this policy to be written against real numbers rather than ahead of them, and the
+numbers that decide its shape are these.
+
+From the 2026-08-24 sweep of all 543 candidates, splitting endpoints by whether any metric
+returned a positive verdict (`verified` or `undeclared-but-verified`):
+
+| | endpoints | serial cost |
+|---|---|---|
+| answered something | 84 | 0.11 h |
+| silent, under 5s | 339 | 0.05 h |
+| silent, 5 to 30s | 59 | 0.14 h |
+| silent, 30 to 60s | 4 | 0.04 h |
+| **silent, over 60s** | **57** | **3.12 h** |
+
+So **57 endpoints are 90% of the sweep's entire serial cost and produce nothing**, while
+339 equally silent ones cost 0.05 h between them. The cost is not spread across the dead:
+it is concentrated in a set that accepts a connection and then never answers. 51 of the 57
+consumed the full 210s metric budget rather than failing.
+
+A single sweep cannot say whether that set is stable, so those 57 were re-probed alone on
+2026-08-26, 39 hours later. **56 of 57 were over 60s again**, the group cost 3.07 h against
+3.12 h, the median per-endpoint change was 0.0 s, and **not one produced a positive verdict
+in either sweep** (397 `indeterminate`, 2 `absent`). One endpoint recovered:
+`data.datahub.kr` went from 210.0s to 5.7s. The expensive set does not churn.
+
+**The policy this argues for is cost-weighted, not failure-weighted.** Relegating on
+failure would relegate 459 endpoints to save 0.34 h; relegating on cost saves 3.12 h by
+touching 57. The 339 free ones stay in every sweep, so an endpoint coming back to life is
+noticed on the day it happens rather than up to a week later, and watching them costs
+nothing worth naming.
+
+**Both conditions are required, and cost alone is not sufficient.** Three endpoints that do
+answer cost 61s, 67s and 89s. A cost-only rule relegates working endpoints; a rule
+requiring silence as well cannot, whatever the threshold.
+
+The rules:
+
+1. An endpoint becomes **dormant** when, in **two consecutive sweeps that probed it**, it
+   produced no positive verdict AND cost more than **60 s**. Both conditions in both
+   sweeps.
+2. A dormant endpoint is probed **once every seven days**, spread so that no single sweep
+   carries the whole dormant set.
+3. Any positive verdict **promotes it immediately**, on the sweep that produced it.
+4. An operator may **wake** or **sleep** an endpoint by hand. A wake clears its strikes and
+   makes it immune from automatic relegation for seven days; `--pin` makes that permanent.
+   A sleep is always permanent until a human wakes it, because an operator may sleep an
+   endpoint for reasons no verdict expresses.
+5. Dormancy is **published, not internal**. Every run graph records which endpoints it did
+   not probe and why, and every page showing a verdict says how old that verdict is.
+
+**Thresholds, and why they are not delicate.** 56 of the 57 also clear 30 s, so any
+threshold between 30 s and 180 s selects essentially the same set: 60 s is chosen because it
+sits clear of the three answering endpoints at 61-89 s by construction, and because keeping
+the 4 silent endpoints in the 30-60 s band costs 0.04 h. Two strikes rather than one is not
+what the stability data demands (98% would justify one) but it costs one extra probe per
+endpoint and it is exactly the `data.datahub.kr` case.
+
+**`dormant`, not `unresponsive`.** The evidence supports a claim about our schedule, not a
+claim about the endpoint. What is known is that it did not answer inside a 210 s budget
+twice; a client with a longer budget might. `unresponsive` would overclaim in the same way
+the six-verdict vocabulary exists to prevent, and this project does not report a confident
+answer it cannot support. `dormant` describes where the endpoint sits in our rotation, which
+is a fact about us.
+
+**Two limits of this evidence, stated because the policy rests on it.**
+
+1. **Churn was measured in one direction only.** The re-probe covered the 57 expensive
+   endpoints, so it establishes that expensive endpoints stay expensive. It says nothing
+   about how often a cheap endpoint turns expensive. Under these rules such an endpoint
+   costs one full budget to discover and two sweeps to confirm, which is the correct price,
+   but it means the dormant set grows sweep over sweep and the saving below is a
+   first-sweep figure, not a steady state.
+2. **The saving is serial-cost arithmetic, not a measured sweep.** 3.46 serial hours
+   becomes about 0.34 h for the 486 plus about 0.47 h for the rotating dormant slice, near
+   0.8 h, a 77% cut. At `--concurrency 4` the 2026-08-24 sweep's 3.46 serial hours ran in
+   1h26m21s; the policy has not been run, so no wall clock is claimed for it.
+
 ## Deliberately out of scope for v1
 
 - Offline dataset download and analysis (umakadata's TripleDataProfiler equivalent).
