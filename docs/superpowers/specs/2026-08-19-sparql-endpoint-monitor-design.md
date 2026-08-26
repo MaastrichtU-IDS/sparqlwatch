@@ -654,6 +654,60 @@ the same time a good **cost** predictor for one bucket, since its 43 timed-out c
 accounted for 66% of the sweep's serial cost. Both are true, and this project gates on the field in
 neither direction.
 
+### The named-graph branch: answered 2026-08-26
+
+**The deferral standing since stage 1c-a is retired, and the answer is that the branch is
+never exercised by this registry.**
+
+`classes` and `has-classes` both query
+`{ ?s a ?c } UNION { GRAPH ?anyg { ?s a ?c } }`, and the second half had never been shown to
+do anything. `prober/tests/live_smoke.rs:52-62` records why the smoke test cannot show it:
+kadaster behaves as a union-default-graph store, so its default graph answers both halves
+and that test passes with the `GRAPH` branch deleted.
+
+Two measurements, both on 2026-08-26, using the prober with purpose-built metric files.
+
+**First, the six candidates stage 1d-a nominated**, probed with the two halves of `classes`
+as separate expensive metrics. Five answered, and every one returned an **identical class
+set** from both halves: 50 and 50 for `data.cervantesvirtual.com`, 105 and 105 for
+`dati.camera.it`, 90 and 90 for `ldf.fi/warsa`, 86 and 86 for `ldf.fi/ww1lod`, 200 and 200
+for `dbpedia.org`. Four of those sets are complete rather than truncated at the 200 cap.
+`data.bnf.fr` was `indeterminate` on both.
+
+That reframes the question. **Stage 1d-a selected its candidates on the wrong criterion**: it
+looked for endpoints that USE named graphs, and the branch can only do work where the
+default graph does NOT SEE the named graphs, which is a different and much rarer property.
+
+**Second, the discriminating test across the 84 endpoints that answered anything in the
+2026-08-24 sweep**, using the two halves of `has-classes` as cheap metrics. An endpoint that
+needs the branch answers `absent` to the default half and a positive verdict to the named
+half.
+
+| default graph | named graphs | endpoints | what it means |
+|---|---|---|---|
+| `verified` | `verified` | 52 | union default graph; the branch adds nothing |
+| `verified` | `absent` | 4 | no named graphs at all; the branch adds nothing |
+| `indeterminate` | `indeterminate` | 27 | timed out on both halves; says nothing |
+| `verified` | `indeterminate` | 1 | says nothing |
+
+**Zero endpoints need the branch.** Of 57 conclusive results, 56 show it is unnecessary and
+one is half inconclusive.
+
+**The branch stays.** It costs a UNION on a `LIMIT 1` or `LIMIT 200` query, it is correct for
+a store whose default graph is empty, and stage 5 accepts public submissions from sources
+this dump does not cover. What changes is the honesty of the claim: the branch is **retained
+for correctness against a store type this registry does not contain**, and it is no longer
+described as unverified for want of trying.
+
+**One measurement error worth recording, because the codebase predicted it.** The first
+attempt at the second test defined both metrics as `kind = "AskData"` with `var = "o"` over
+`{ ?s ?p ?o }`. `AskData` routes through `Client::ask_literal`, which applies a literal
+guard, and `?o` usually binds an IRI, so 49 of 84 endpoints came back `absent` and appeared
+to hold no triples at all. `metrics.toml:97-102` documents exactly this trap on
+`has-classes` itself and is the reason that metric is `SelectIris`. Re-run with `SelectIris`,
+those 49 became `verified`. The lesson is in the comment already; this is a record that it
+was earned twice.
+
 ### Admission policy: dormancy
 
 **Decided 2026-08-26, against two measured sweeps. Not built.** The deferral above asked
