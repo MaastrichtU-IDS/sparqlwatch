@@ -99,8 +99,11 @@
     the query in the query string. Two of the checks are not queries at all:
     one <code>OPTIONS</code> preflight, to see whether a browser could reach
     the endpoint, and one plain <code>GET</code> asking for a service
-    description. It does not crawl. It asks the one URL on its list, follows a
-    redirect from it if there is one, and stops.
+    description. It does not crawl. It asks the one URL on
+    its list and follows the redirects it is given, up to
+    <b data-redirects="max-hops">{{ max_redirect_hops }}</b> in a chain, and
+    stops there. Every hop goes through the same gate and the same pause as any
+    other request, so a chain costs your server time and not extra load.
   </p>
   <p>
     What it measured is published here, as a page per endpoint and
@@ -133,16 +136,17 @@
     <ul class="facts">
       <li data-politeness="min-gap-seconds" data-value="{{ politeness['min-gap-seconds'] }}">
         <b>{{ politeness['min-gap-seconds'] }} seconds</b> at least between two
-        consecutive requests to one host, measured from the end of one to the
-        start of the next, so a slow answer never shortens the pause that
-        follows it.
+        consecutive requests to one host <em>and port</em>, measured from the
+        end of one to the start of the next, so a slow answer never shortens the
+        pause that follows it.
       </li>
       <li data-politeness="hosts-in-flight" data-value="{{ politeness['hosts-in-flight'] }}">
         <b>{{ politeness['hosts-in-flight'] }} hosts</b> at once, at most. That
-        counts hosts and not endpoints: endpoints are grouped by host, and one
-        request to one host is in flight at a time however many endpoints that
-        host serves. If you run several of the endpoints on the list, they are
-        probed one after another, not together.
+        counts hosts and not endpoints: endpoints are grouped by host and port,
+        and one request to one of those groups is in flight at a time however
+        many endpoints it holds. If you run several of the endpoints on the list
+        behind one host and port, they are probed one after another, not
+        together.
       </li>
       <li data-politeness="requests-per-second" data-value="{{ politeness['requests-per-second'] }}">
         <b>{{ politeness['requests-per-second'] }} requests per second</b> in
@@ -174,6 +178,21 @@
         keeps knocking.
       </li>
     </ul>
+    <p class="warn-note" data-politeness-caveat="host-and-port">
+      Both of the first two numbers count a host <em>and a port</em>, and not a
+      machine. Two endpoints on one server behind different ports are two as far
+      as the pause and the count go, so they can be probed at the same time with
+      no enforced gap between them. That is not hypothetical on this list: it
+      carries
+      <code data-caveat-endpoint="1">{{ same_host_different_ports[0] }}</code>
+      and
+      <code data-caveat-endpoint="2">{{ same_host_different_ports[1] }}</code>,
+      and those two are probed together. The reason is that two SPARQL engines
+      on one host are usually two services and serialising them would halve the
+      sweep's throughput for no politeness gain; the cost is that they are also
+      one machine's processor and one network link. If that is your machine, the
+      section below is the way to say so.
+    </p>
   </section>
 
   <section class="panel">
@@ -191,10 +210,15 @@
       <span data-registry="distinct" data-value="{{ registry['distinct'] }}">{{ registry['distinct'] }}</span>
       distinct URLs, of which
       <span data-registry="endpoint-count" data-value="{{ registry['endpoint-count'] }}">{{ registry['endpoint-count'] }}</span>
-      are on the list a sweep reads. The difference was dropped by rules this
-      project applies to any list it is given: a URL carrying credentials, a
-      reserved documentation name, a private or loopback address, or a string
-      that cannot be published as an identifier.
+      are on the list a sweep reads. The difference was dropped by rules that
+      refuse a URL carrying credentials, a reserved documentation name, or a
+      string that cannot be published as an identifier, and by one more that
+      runs only where the list is <em>generated</em>: an entry naming a private
+      or loopback address is dropped as the list is written, and one of the five
+      refusals recorded for this dump came from that rule. A list handed to a
+      sweep directly is not filtered for those addresses, which matters only to
+      whoever is running the prober, since such an address names their own
+      machine or a network reserved to receive nothing.
     </p>
     <p>
       So an endpoint on the list is one somebody registered as public, and
@@ -251,6 +275,14 @@
         <b>Nothing is resolved.</b> A second name for the same server, or an
         alias, is not covered unless it is listed too. Nothing asks a resolver
         what an entry points at, so two names for one machine are two entries.
+      </li>
+      <li class="limit" data-exclusion-limit="no-ipv6-literal">
+        <b>A host written as an IPv6 literal cannot be entered at all.</b> An
+        entry is a bare host name, and the file refuses anything carrying a
+        colon, so <code>[2001:db8::1]</code> has no spelling that would be
+        accepted. No endpoint on the list is written that way today, so this
+        excludes nobody now; it is here because the entry above says one entry
+        covers one whole host, and this is the one host it cannot.
       </li>
       <li class="limit" data-exclusion-limit="published">
         <b>An entry publishes the host it excludes.</b>

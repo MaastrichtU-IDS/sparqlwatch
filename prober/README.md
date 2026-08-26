@@ -1335,6 +1335,35 @@ The following are deferred deliberately, not oversights:
   a refusing endpoint is recorded as unreachable and asked again on the next
   sweep, because nothing yet drops an endpoint from the list for failing.
 
+- **Per-host politeness is per host AND port, which undercuts its own intent
+  where one machine serves two ports.** `host_key` folds a scheme-default port
+  and keeps every other one, and its unit tests pin that
+  (`assert_ne!(host_key("http://example.org:7878/x"), host_key("http://example.org:7879/x"))`),
+  so `lib.rs`'s grouping makes two endpoints on one machine behind two ports two
+  groups: two concurrent tasks and two independent minimum-gap clocks. The
+  reasoning is real and recorded on `host_key` itself: two SPARQL engines
+  commonly share a host on different ports, and serialising them would halve the
+  sweep's throughput for no politeness gain. **The counter-argument is equally
+  real, and it is the operator's:** two ports on one machine share that
+  machine's processor and its network link, so what the gate protects is a
+  listening socket rather than a server, and the gap the operator experiences is
+  half of the stated one.
+
+  This is not hypothetical on the shipped list. `registry/lod-cloud.toml` carries
+  `http://eculture2.cs.vu.nl:8890/sparql` and
+  `http://eculture2.cs.vu.nl:5020/sparql/`, one machine and two ports, and
+  `tests/politeness.rs`'s
+  `two_shipped_endpoints_on_one_machine_behind_different_ports_run_together`
+  drives that pair through a real gate and shows them running together.
+  `/about` says so in as many words, naming both URLs, so the promise made to
+  that operator is the one the gate keeps.
+
+  **Whether the key should be the bare host is a real question and it is not
+  answered here.** Deciding it changes probe behaviour, which is not something a
+  UI stage does; it is a politeness slice's call, and it has a measurable cost
+  (throughput on hosts that really do run two independent engines) to weigh
+  against a measurable benefit (one gap per machine).
+
 - **A cross-host redirect can wait at another endpoint's gate, and that wait is
   charged to the metric budget.** `--concurrency` groups endpoints by the host
   they name, but a redirect is gated on the host each hop actually touches (see

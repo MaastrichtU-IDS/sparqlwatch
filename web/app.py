@@ -1448,6 +1448,14 @@ PROBER_USER_AGENT = (
     "sparqlwatch/0.1.0 (+https://sparqlwatch.dev.k8s.semanticscience.org/about)"
 )
 
+# prober/src/client.rs's MAX_REDIRECT_HOPS: how long a redirect chain the
+# prober follows before it gives up. On the page because "follows a redirect
+# from it if there is one, and stops" understated what a server's log will
+# show, and the bullet about requests per endpoint already concedes the plural
+# ("plus one more for each redirect followed"). web/tests/test_about.py reads
+# the constant.
+MAX_REDIRECT_HOPS = 5
+
 # prober/src/registry.rs's DEFAULT_EXCLUSIONS: the file both binaries read at
 # every run, relative to their working directory. Named on the page because it
 # is checkable from outside: a reader can look and see whether their host is
@@ -1485,6 +1493,26 @@ POLITENESS = {
     "endpoint-budget-seconds": 600,
     "requests-per-endpoint": 7,
 }
+
+# Two endpoints of prober/registry/lod-cloud.toml on ONE machine behind
+# different ports, in the order the page names them.
+#
+# On the page because the politeness figures above are keyed on a host AND a
+# port. prober/src/politeness.rs's host_key folds a scheme-default port and
+# keeps every other one, deliberately (its own doc comment and the assert_ne! on
+# two ports in its unit tests say why), and prober/src/lib.rs groups endpoints
+# on that same key. So the gap and the concurrency bound are per host-and-port,
+# and the page said "one host" full stop, which is false for exactly the reader
+# it is written for: a server operator running two engines on one machine.
+#
+# Named rather than described, because a promise about somebody's server has to
+# be checkable by them. prober/tests/politeness.rs runs the pair through the
+# real gate and web/tests/test_about.py checks both are still on the shipped
+# list and still share a host and differ in port.
+SAME_HOST_DIFFERENT_PORTS = (
+    "http://eculture2.cs.vu.nl:8890/sparql",
+    "http://eculture2.cs.vu.nl:5020/sparql/",
+)
 
 # Where the list of endpoints came from. Every value is in
 # prober/registry/lod-cloud.provenance.toml, which the seeder writes beside
@@ -1546,7 +1574,9 @@ def _about_context() -> dict:
         "contact": CONTACT_ADDRESS,
         "user_agent": PROBER_USER_AGENT,
         "exclusion_file": EXCLUSION_FILE,
+        "max_redirect_hops": MAX_REDIRECT_HOPS,
         "politeness": POLITENESS,
+        "same_host_different_ports": SAME_HOST_DIFFERENT_PORTS,
         "registry": REGISTRY,
         "full_sweep": FULL_SWEEP_DURATION,
         "index_path": INDEX_PATH,

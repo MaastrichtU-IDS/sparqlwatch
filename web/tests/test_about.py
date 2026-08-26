@@ -44,6 +44,7 @@ from starlette.testclient import TestClient
 
 from app import (
     ABOUT_PATH,
+    SAME_HOST_DIFFERENT_PORTS,
     INDEX_PATH,
     OFFERED_MEDIA_TYPES,
     RDF_MEDIA_TYPES,
@@ -178,6 +179,25 @@ def registry_size() -> int:
     """How many endpoints `registry/lod-cloud.toml` actually lists."""
     text = (PROBER / "registry" / "lod-cloud.toml").read_text()
     return len(re.findall(r'^\s*"', text, re.M))
+
+
+def registry_endpoints() -> list[str]:
+    """Every endpoint `registry/lod-cloud.toml` lists, as written."""
+    text = (PROBER / "registry" / "lod-cloud.toml").read_text()
+    return re.findall(r'^\s*"([^"]+)",?\s*$', text, re.M)
+
+
+def _bare_host(url: str) -> str:
+    """A URL's host with its port dropped, which is what "one machine" means to
+    the operator reading this page. `politeness::host_key` deliberately keeps a
+    non-default port, so this is the coarser thing the key is NOT."""
+    authority = url.split("//", 1)[1].split("/", 1)[0]
+    return authority.rsplit(":", 1)[0] if ":" in authority else authority
+
+
+def _port_of(url: str) -> str:
+    authority = url.split("//", 1)[1].split("/", 1)[0]
+    return authority.rsplit(":", 1)[1] if ":" in authority else ""
 
 
 # ---------------------------------------------------------------------------
@@ -393,6 +413,89 @@ def test_the_page_says_concurrency_counts_hosts_and_not_endpoints(client):
     assert "one endpoint" in text or "one request" in text
 
 
+def test_the_page_says_the_gap_and_the_count_are_per_host_and_port(client):
+    """The politeness promise, pinned against the gate's actual key.
+
+    The gate does not key on the host. `politeness::host_key` folds a
+    scheme-default port and keeps every other one, its own unit tests assert
+    that two ports are two keys, and `lib.rs` groups endpoints on that same key,
+    so both the two-second gap and the four-at-once bound are per host AND port.
+    The page used to say "one host", full stop, and "if you run several of the
+    endpoints on the list, they are probed one after another, not together",
+    which is false for exactly the reader it was written for: an operator
+    running two engines on one machine behind two ports.
+
+    The keying is deliberate and it is not what changed. What is pinned here is
+    that the page says what the key is, that the pair it names to make the
+    statement checkable is really on the shipped list, and that the two really
+    are one machine and two ports.
+    """
+    html = page(client)
+    numbers = {
+        attrs["data-politeness"]: text
+        for attrs, text in zip(
+            with_attribute(html, "data-politeness"),
+            texts_with(html, "data-politeness"),
+        )
+    }
+    for key in ("min-gap-seconds", "hosts-in-flight"):
+        assert "port" in numbers[key], (
+            f"{key} is keyed on a port and the sentence does not say so: "
+            f"{numbers[key]!r}"
+        )
+    assert "several of the endpoints on the list, they are probed one after" not in (
+        " ".join(numbers.values())
+    ), "the unconditional promise is the false one"
+
+    caveat = texts_with(html, "data-politeness-caveat")
+    assert len(caveat) == 1, f"one caveat, got {len(caveat)}"
+    assert "at the same time" in caveat[0], caveat[0]
+
+    named = [
+        attrs["data-caveat-endpoint"] for attrs in with_attribute(html, "data-caveat-endpoint")
+    ]
+    assert named == ["1", "2"], "the page names two endpoints, in order"
+    first, second = SAME_HOST_DIFFERENT_PORTS
+    assert first in caveat[0] and second in caveat[0], caveat[0]
+
+    listed = registry_endpoints()
+    for endpoint in (first, second):
+        assert endpoint in listed, (
+            f"{endpoint} is not on registry/lod-cloud.toml any more, so the "
+            f"page names a case a reader cannot check"
+        )
+    assert _bare_host(first) == _bare_host(second), "they must be one machine"
+    assert _port_of(first) != _port_of(second), "and two ports"
+
+
+def test_the_gate_really_keys_on_the_port_the_page_names(client):
+    """The other side of the sentence above: the prober's own pins.
+
+    Two of them, and they are different claims. `host_key`'s unit tests assert
+    that two ports are two keys, which is where the behaviour is decided;
+    `tests/politeness.rs` drives the real pair from the shipped registry through
+    a real gate and asserts the two run together, which is where the page's
+    sentence is checked end to end. Read from the source here for the same
+    reason every other number on this page is: nothing in this process can run
+    Rust, and a page pinned to a constant nothing acts on pins nothing.
+    """
+    politeness = rust("politeness.rs")
+    assert re.search(
+        r'assert_ne!\(\s*host_key\("http://example\.org:7878/x"\),\s*'
+        r'host_key\("http://example\.org:7879/x"\)\s*\)',
+        politeness,
+    ), "host_key no longer asserts that two ports are two keys"
+    assert "host_key(ep)" in rust("lib.rs"), (
+        "the sweep no longer groups endpoints on host_key, so the page's "
+        "concurrency sentence is about something else"
+    )
+    driven = (PROBER / "tests" / "politeness.rs").read_text()
+    assert (
+        "two_shipped_endpoints_on_one_machine_behind_different_ports_run_together"
+        in driven
+    ), "the end-to-end pin behind this page's paragraph is gone"
+
+
 def test_the_user_agent_shown_is_the_one_the_prober_sends(client):
     """The string the reader searched their logs for, exactly.
 
@@ -498,6 +601,12 @@ EXCLUSION_LIMITS = {
     "no-resolution": ("name", "alias", "resolv"),
     # The entry itself is public.
     "published": ("public", "publish"),
+    # An IPv6 literal cannot be written as an entry: parse_exclusions refuses
+    # any host containing a colon, and an IPv6 literal is full of them. Latent
+    # rather than live (no endpoint on the shipped list is written that way),
+    # and on the page because "one entry covers one whole host" is the claim it
+    # is the exception to.
+    "no-ipv6-literal": ("ipv6",),
 }
 
 
@@ -534,6 +643,73 @@ def test_the_page_names_the_file_an_exclusion_lands_in(client):
     outside.
     """
     assert exclusions_path() in page(client)
+
+
+def test_the_ipv6_limit_the_page_states_is_the_one_the_parser_has(client):
+    """The seventh limit, read off the parser rather than remembered.
+
+    `parse_exclusions` refuses any host containing a colon, so an IPv6 literal
+    has no writable entry at all: `[2001:db8::1]` is refused as "names a URL
+    rather than a host". The page says so, and this test fails if the refusal
+    is ever widened to accept a bracketed literal, at which point the page has
+    to change rather than the caveat quietly becoming false in the other
+    direction.
+    """
+    registry = rust("registry.rs")
+    assert "host.contains(['/', ':', '@', ' '])" in registry, (
+        "parse_exclusions no longer refuses a host containing a colon, so the "
+        "page's IPv6 caveat may no longer be true"
+    )
+    limits = {
+        attrs["data-exclusion-limit"]: text.lower()
+        for attrs, text in zip(
+            with_attribute(page(client), "data-exclusion-limit"),
+            texts_with(page(client), "data-exclusion-limit"),
+        )
+    }
+    assert "colon" in limits["no-ipv6-literal"], limits["no-ipv6-literal"]
+
+
+def test_the_redirect_sentence_states_the_hop_limit_the_client_enforces(client):
+    """"follows a redirect from it if there is one, and stops" understated it.
+
+    `client.rs`'s MAX_REDIRECT_HOPS is 5, and a chain of up to five gated hops
+    is followed, so a log can show five requests where the page implied two. The
+    intent it was written for ("it does not crawl") is unchanged and still on the
+    page; the number is now the client's own.
+    """
+    found = re.search(r"const MAX_REDIRECT_HOPS:\s*usize\s*=\s*(\d+)", rust("client.rs"))
+    assert found, "client.rs no longer has a MAX_REDIRECT_HOPS constant"
+    shown = texts_with(page(client), "data-redirects")
+    assert shown == [found.group(1)], (
+        f"the page states {shown} redirect hops and the client enforces "
+        f"{found.group(1)}"
+    )
+
+
+def test_the_unroutable_rule_is_described_as_the_seeder_only_rule_it_is(client):
+    """`without_unroutable_hosts` is not wired into `load_endpoints`.
+
+    The page said the private-and-loopback rule was one "this project applies to
+    any list it is given", and it is not: it runs in the seeder, on the way to
+    writing `registry/lod-cloud.toml`, and wiring it into `load_endpoints` was
+    tried and reverted. One of the five refusals recorded for this dump came from
+    it, so the rule is real and its scope is not what the page said.
+    """
+    registry = rust("registry.rs")
+    body = registry[registry.index("pub fn load_endpoints") :]
+    body = body[: body.index("\n}")]
+    assert "without_unroutable_hosts" not in body, (
+        "load_endpoints now applies the unroutable rule too, so the page's "
+        "sentence about where it runs has to change back"
+    )
+    assert "pub fn without_unroutable_hosts" in registry, "the rule still exists"
+
+    said = " ".join(texts_with(page(client), "data-registry"))
+    whole = page(client)
+    assert "loopback" in whole
+    # The claim the page may no longer make: that this rule applies to any list.
+    assert "rules this project applies to any list it is given" not in whole
 
 
 def test_the_page_carries_one_contact_address_and_invents_no_other_channel(client):
