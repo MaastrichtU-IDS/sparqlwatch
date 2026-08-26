@@ -347,12 +347,16 @@ def _opened_store(path: str) -> Store:
             f"{STORE_PATH_VARIABLE} is {path!r}, in which {CURRENT_GRAPH.value} "
             f"points {len(endpoints)} endpoint(s) at {len(runs)} run graph(s) "
             f"this store does not hold: {runs}. "
-            f"{endpoints[0]} is one of them. All three read queries reach an "
-            f"endpoint's facts through that pointer, so each of those endpoints "
-            f"would be answered as though no run had ever measured it, while an "
-            f"older run graph in this same store may still hold every verdict "
-            f"for it. A run graph has been dropped since current was written. "
-            f"Rebuild with 'python web/load_run.py --rebuild {path}'."
+            f"{endpoints[0]} is one of them. index.rq and "
+            f"endpoint_measurements.rq reach an endpoint's verdicts through "
+            f"sw:currentRun and endpoint_content.rq reaches its class sample "
+            f"through sw:currentSampleRun, and each drops a solution whose run "
+            f"graph is gone, so those endpoints would be answered as though no "
+            f"run had ever measured them, while an older run graph in this same "
+            f"store may still hold every verdict for them. A run graph has been "
+            f"dropped from this store since current was written, which is the "
+            f"operation one graph per run exists to make possible. Rebuild with "
+            f"'python web/load_run.py --rebuild {path}'."
         )
     return store
 
