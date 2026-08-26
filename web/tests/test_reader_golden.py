@@ -66,6 +66,10 @@ STORES: dict[str, tuple[Path, ...]] = {
         conftest.RUN_REGISTRY_SAMPLE,
         conftest.RUN_CLASSES_ABSENT,
     ),
+    "store_no_availability_two_ways": (
+        conftest.RUN_PROBER_FAILED,
+        conftest.RUN_NO_AVAILABILITY,
+    ),
 }
 
 _DESCRIPTION = read_query("endpoint_description")

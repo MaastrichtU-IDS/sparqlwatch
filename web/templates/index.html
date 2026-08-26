@@ -177,7 +177,7 @@
         data-group-count="{{ group.count }}" data-group-of="{{ group.of }}">
       <span class="swatch {{ group.css_class }}" aria-hidden="true"></span>{{ group.heading }}<span class="g-shown"></span>
     </h2>
-    <p class="g-note">{{ group.meaning }}</p>
+    <p class="g-note" data-group-note="{{ group.availability }}">{{ group.meaning }}</p>
     <ul class="rows">
       {% for row in group.rows %}
 {# ONE LINE PER ROW, AND EVERY BYTE OF IT IS COUNTED. 543 rows times eight

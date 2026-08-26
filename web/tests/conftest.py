@@ -32,6 +32,7 @@ RUN_NEW_SUBJECTS = FIXTURES / "run-new-subjects.nq"
 RUN_PROBER_FAILED = FIXTURES / "run-prober-failed.nq"
 RUN_CRASHED_PARTWAY = FIXTURES / "run-crashed-partway.nq"
 RUN_REGISTRY_SAMPLE = FIXTURES / "run-registry-sample.nq"
+RUN_NO_AVAILABILITY = FIXTURES / "run-no-availability.nq"
 
 
 CURRENT_GRAPH = NamedNode("urn:sparqlwatch:current")
@@ -286,4 +287,25 @@ def store_two_metric_sets(tmp_path):
     """
     return _loaded_store(
         tmp_path, "store-two-metric-sets", RUN_REGISTRY_SAMPLE, RUN_CLASSES_ABSENT
+    )
+
+
+@pytest.fixture
+def store_no_availability_two_ways(tmp_path):
+    """The two opposite ways an endpoint can have no availability verdict, in
+    one store, so the index's final group holds one of each.
+
+    run-prober-failed.nq DECLINED availability: it recorded an sw:NotMeasured
+    fact naming the metric and a reason. run-no-availability.nq recorded nothing
+    about it at all, in either direction, while measuring sw:metric:classes. The
+    group they land in is keyed on the absence of a verdict, so it holds both,
+    and a sentence saying every metric was declined rather than measured is
+    false of the second: a metric was measured, and no run said it declined
+    availability.
+    """
+    return _loaded_store(
+        tmp_path,
+        "store-no-availability-two-ways",
+        RUN_PROBER_FAILED,
+        RUN_NO_AVAILABILITY,
     )

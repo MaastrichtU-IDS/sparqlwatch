@@ -163,6 +163,9 @@ CRASHED_PARTWAY_FIXTURE = (
 REGISTRY_SAMPLE_FIXTURE = (
     Path(__file__).parent / "fixtures" / "run-registry-sample.nq"
 )
+NO_AVAILABILITY_FIXTURE = (
+    Path(__file__).parent / "fixtures" / "run-no-availability.nq"
+)
 
 
 def test_the_fixture_loads_and_reopens(tmp_path):
@@ -252,6 +255,38 @@ def test_the_classes_absent_fixture_measures_absent_and_samples_nothing(tmp_path
     assert not bool(run_graph_query(store, 
         "ASK { GRAPH ?g { ?s <urn:sparqlwatch:sampledFrom> ?e } }"
     )), "there must be no content sample at all"
+
+
+def test_the_no_availability_fixture_measures_one_metric_and_not_availability(
+    tmp_path,
+):
+    """run-no-availability.nq is hand-built (see its header), and the whole
+    fixture is the ABSENCE of two quads rather than the presence of one.
+
+    So both halves are asserted, and the second is the one that matters: there
+    must be no availability fact of EITHER kind. A fixture that gained a decline
+    would land in the index's final group for the ordinary reason and stop being
+    the second way to get there; one that gained a measurement would leave the
+    group altogether."""
+    store = Store(str(tmp_path / "s"))
+    load_run(store, NO_AVAILABILITY_FIXTURE.read_bytes())
+    assert run_quad_count(store) == 10, (
+        f"this fixture is 10 quads, got {run_quad_count(store)}"
+    )
+    assert len(run_graph_names(store)) == 1
+    assert bool(run_graph_query(store,
+        "ASK { GRAPH ?g { ?m <http://www.w3.org/ns/dqv#isMeasurementOf> "
+        "<urn:sparqlwatch:metric:classes> ; "
+        "<http://www.w3.org/ns/dqv#value> 'absent' } }"
+    )), "one metric must be measured, or the run recorded nothing at all"
+    assert not bool(run_graph_query(store,
+        "ASK { GRAPH ?g { ?m <http://www.w3.org/ns/dqv#isMeasurementOf> "
+        "<urn:sparqlwatch:metric:availability> } }"
+    )), "availability must not be measured"
+    assert not bool(run_graph_query(store,
+        "ASK { GRAPH ?g { ?n <urn:sparqlwatch:notMeasuredMetric> "
+        "<urn:sparqlwatch:metric:availability> } }"
+    )), "and it must not be declined either: that is the whole fixture"
 
 
 NEW_SUBJECTS_RUN = "2026-08-22T20:00:00Z"

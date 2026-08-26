@@ -103,6 +103,11 @@ HOSTILE_VERDICT = '"><script>alert(1)</script>'
 # list.
 NO_CLASSES = "https://no-classes.example/sparql"
 
+# run-no-availability.nq's one endpoint. Its run measured sw:metric:classes and
+# recorded no availability fact of either kind, which is the second way into the
+# index's final group.
+NO_AVAILABILITY = "https://no-availability.example/sparql"
+
 
 @pytest.fixture
 def client_for():
@@ -325,6 +330,25 @@ def groups(text):
     return parser.groups
 
 
+def group_note(text, availability):
+    """One group's explanatory sentence, by the availability value it is keyed on.
+
+    Read off the element the template contracts to carry it rather than searched
+    for in the document, for the reason test_page's _Texts gives: a sentence
+    asserted to be "somewhere in the page" passes while it sits in the legend.
+    """
+    found = [
+        note
+        for attributes, note in zip(
+            with_attribute(text, "data-group-note"),
+            texts_with(text, "data-group-note"),
+        )
+        if attributes["data-group-note"] == availability
+    ]
+    assert len(found) == 1, f"{availability!r} has {len(found)} group notes"
+    return found[0]
+
+
 def metric_key(text):
     """{metric local name: abbreviation} as the page's metric key states it."""
     return {
@@ -522,6 +546,53 @@ def test_an_endpoint_with_no_availability_verdict_gets_its_own_group(
     assert len(rows(page)) == REGISTRY_SAMPLE_ENDPOINTS + 1
     assert KADASTER in listed(page)
     assert chip_verdicts(page, row_for(page, KADASTER)) == {}
+
+
+def test_the_final_groups_sentence_is_true_of_both_ways_into_it(
+    client_for, store_no_availability_two_ways
+):
+    """The group is keyed on the ABSENCE of an availability verdict, and there
+    are two opposite ways to have one.
+
+    run-prober-failed.nq's endpoint was declined availability: a run recorded an
+    sw:NotMeasured fact naming the metric and a reason. run-no-availability.nq's
+    endpoint has no availability fact in either direction, while a metric of its
+    own was measured. The group used to say "every metric it applied to them was
+    declined rather than measured", which is false of the second on both counts,
+    and it contradicted EMPTY_CELL_TEXT fifty lines above it in app.py, which
+    says a metric a run recorded nothing about "is a gap in what this service
+    holds, not a verdict about the endpoint".
+
+    So the sentence must state the criterion the grouping actually uses and send
+    a reader to the row for which of the two it is, and it must not claim a
+    decline of either endpoint.
+    """
+    page = index(client_for(store_no_availability_two_ways))
+    final = groups(page)[-1]
+
+    assert final["availability"] == "", "the group keyed on no verdict"
+    assert final["count"] == "2", "one endpoint of each kind is in it"
+    assert set(listed(page)) == {KADASTER, NO_AVAILABILITY}
+
+    said = group_note(page, "")
+    assert "declined" in said, "the declining case must still be named"
+    assert re.search(r"recorded nothing|nothing about it|no availability fact", said), (
+        f"the other case must be named too, said {said!r}"
+    )
+    assert "every metric" not in said, (
+        f"one of these endpoints had a metric measured, said {said!r}"
+    )
+
+    # And the rows are where a reader tells the two apart, which is what the
+    # sentence sends them to: the declined endpoint carries a chip for
+    # availability, the other carries a gap.
+    kadaster = row_for(page, KADASTER)
+    assert any(
+        chip.get("data-declined") for chip in kadaster["chips"]
+    ), "the declined endpoint's row must carry its decline"
+    assert chip_verdicts(page, row_for(page, NO_AVAILABILITY)) == {
+        "classes": "absent"
+    }, "and the other endpoint's row must carry the metric that WAS measured"
 
 
 def test_each_group_states_its_count_with_the_denominator(

@@ -1217,11 +1217,24 @@ def _index_groups(
         if value is None:
             state = verdict_encoding.presentation(verdict_encoding.NOT_MEASURED)
             label = state.label
+            # What the grouping criterion IS, and not one of the two ways of
+            # meeting it. There are two, they are opposite claims, and both are
+            # reachable: a run that DECLINED availability recorded an
+            # sw:NotMeasured fact naming the metric and a reason, and a run at a
+            # different metric revision recorded nothing about availability in
+            # either direction. Saying every metric was declined rather than
+            # measured is false of the second on both counts, and it contradicts
+            # EMPTY_CELL_TEXT above, which says a metric a run recorded nothing
+            # about is a gap in what this service holds and not a verdict. So the
+            # sentence says which two cases are here and sends a reader to the
+            # row, where the availability column is a chip in the first case and
+            # a gap in the second.
             meaning = (
                 "The newest run for these endpoints recorded no availability "
-                "verdict at all: every metric it applied to them was declined "
-                "rather than measured. That is not a verdict about the "
-                "endpoint, and it is not merged with one."
+                "verdict at all: either it declined the metric, or it recorded "
+                "nothing about it. Each row's availability column says which, a "
+                "chip for a decline and a dot for a gap. Neither is a verdict "
+                "about the endpoint, and neither is merged with one."
             )
         else:
             state = verdict_encoding.presentation(value)
