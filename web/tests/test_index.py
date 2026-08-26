@@ -87,6 +87,11 @@ KADASTER = "https://data.kkg.kadaster.nl/query"
 QLEVER = "https://qlever.dev/api/osm-planet"
 ONTOP = "https://ontop.certain.ai.ustp.at/sparql"
 
+# The instant of the run that died partway, off run-crashed-partway.nq. It is
+# the newest activity in store_crashed_partway, so it is the sweep the store
+# level note is about.
+CRASHED_SWEEP = "2026-08-23T04:00:00Z"
+
 # run-hostile-literals.nq's one endpoint and its dqv:value, verbatim. The value
 # opens with a double quote to close whatever attribute it lands in, then opens
 # an element.
@@ -611,6 +616,44 @@ def test_a_finished_sweep_qualifies_no_row(client_for, store_registry_sample):
 
     assert with_attribute(page, "data-run-unfinished") == []
     assert with_attribute(page, "data-newer-run-unfinished") == []
+
+
+def test_a_store_whose_newest_sweep_did_not_finish_says_so_once(
+    client_for, store_crashed_partway
+):
+    """The one store-level claim this page makes, pinned.
+
+    It is said once, at the top, because it is a fact about the store rather
+    than 543 facts about endpoints, and the rows below say which of them it
+    leaves qualified. Both halves are asserted: that the note is there, and that
+    it names the sweep it is about, since a sentence naming no instant leaves a
+    reader unable to tell which sweep stopped.
+    """
+    page = index(client_for(store_crashed_partway))
+    noted = texts_with(page, "data-newest-sweep-unfinished")
+
+    assert len(noted) == 1, (
+        f"one store, one note about the store, got {len(noted)}"
+    )
+    assert CRASHED_SWEEP in noted[0], noted[0]
+    assert "did not finish" in noted[0], noted[0]
+
+
+def test_a_store_whose_newest_sweep_finished_says_nothing_about_it(
+    client_for, store_registry_sample
+):
+    """The other direction, which is the half that catches a note always drawn.
+
+    The registry sweep recorded sw:finalised, so there is nothing to qualify
+    about it, and a page that carried the sentence anyway would be telling a
+    reader that a completed sweep stopped. Both halves are needed for the same
+    reason the row-level pair beside them is: the test above passes just as well
+    over a page that says this of every store.
+    """
+    page = index(client_for(store_registry_sample))
+
+    assert with_attribute(page, "data-newest-sweep-unfinished") == []
+    assert "did not finish" not in page
 
 
 # ---------------------------------------------------------------------------
