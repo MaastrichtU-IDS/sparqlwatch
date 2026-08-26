@@ -59,10 +59,11 @@ pub fn lock_path(path: &Path) -> PathBuf {
     sibling(path, LOCK_SUFFIX)
 }
 
-/// The partial file beside the state file at `path`. Public for the same reason
-/// as `lock_path`: a crash can leave one, and a message that cannot name it
-/// leaves the operator guessing.
-pub fn partial_path(path: &Path) -> PathBuf {
+/// The partial file beside the state file at `path`. Private, like the suffix
+/// it appends and for the same reason: nothing outside this module names it,
+/// because a leftover partial is truncated by the next merge rather than
+/// reported to anybody.
+fn partial_path(path: &Path) -> PathBuf {
     sibling(path, PARTIAL_SUFFIX)
 }
 
@@ -82,25 +83,45 @@ pub fn partial_path(path: &Path) -> PathBuf {
 /// wraps whatever comes back with the path, because a message about a field is
 /// no use to an operator who does not know which file it is in.
 ///
-/// The missing-file message names three things, and each is one mistake an
-/// operator actually makes: the path that was tried, that a relative path is
-/// resolved against the working directory, and `dormancy init` for the case
-/// where the file has simply never been created. Without the third, a fresh
-/// deployment reads like a broken one.
+/// The message names the path that was tried and says that a relative path is
+/// resolved against the working directory, because those are the two mistakes
+/// this shape of default invites and an operator cannot fix what the error does
+/// not name.
+///
+/// A MISSING file gets one sentence more, naming `dormancy init`: without it a
+/// fresh deployment reads like a broken one. A file that exists and cannot be
+/// read gets a different sentence, and the difference matters. `init_state`
+/// refuses a file that exists, so offering it for a directory in the way, a
+/// mode 000 file or bytes that are not UTF-8 would send the operator to a
+/// command whose refusal says "already exists" and says nothing at all about
+/// what is actually there.
 pub fn read_state(path: &Path) -> anyhow::Result<State> {
     let text = std::fs::read_to_string(path).map_err(|error| {
-        anyhow::anyhow!(
+        // The half of the message that holds whatever went wrong: what a failed
+        // read costs, and the working-directory rule.
+        let common = format!(
             "the dormancy state at {} could not be read ({error}), so nothing here knows \
              which endpoints were relegated or which ones an operator held, and treating it \
              as an empty state would re-probe every relegated endpoint and discard every \
              hold. A relative path is resolved against the working directory: pass --state an \
-             absolute path, or run from the directory holding {}. On a deployment that has \
-             never had a state file, `dormancy init --state {}` writes an empty one, and \
-             that is the only thing that may create it.",
+             absolute path, or run from the directory holding {}.",
             path.display(),
-            DEFAULT_STATE,
-            path.display()
-        )
+            DEFAULT_STATE
+        );
+        // Branched on the kind, the way `init_state` branches on it below.
+        match error.kind() {
+            std::io::ErrorKind::NotFound => anyhow::anyhow!(
+                "{common} On a deployment that has never had a state file, `dormancy init \
+                 --state {}` writes an empty one, and that is the only thing that may \
+                 create it.",
+                path.display()
+            ),
+            _ => anyhow::anyhow!(
+                "{common} Something IS at that path, so this is not a deployment waiting \
+                 to be initialised: check what is there, whether it is a file at all, and \
+                 what this process is allowed to read."
+            ),
+        }
     })?;
     State::parse(&text)
         .map_err(|error| anyhow::anyhow!("the dormancy state at {}: {error}", path.display()))
@@ -239,11 +260,15 @@ fn write_state(path: &Path, state: &State) -> anyhow::Result<()> {
     let written = (|| -> std::io::Result<()> {
         let mut file = std::fs::File::create(&partial)?;
         file.write_all(body.as_bytes())?;
-        // Before the rename, not after and not left to the drop: renaming a
-        // file whose bytes are still in the kernel's page cache is safe against
-        // a crashing process but not against a crashing machine, and the state
-        // file the machine would come back to is one this build refuses to
-        // parse. That refusal is safe by design, and it is still a sweep lost.
+        // What this buys and what it does not, because the difference is easy
+        // to overstate. It buys the partial file's BYTES: after it returns, the
+        // content the rename is about to publish is on the disk and not only in
+        // the page cache. It does not buy the DIRECTORY ENTRY the rename then
+        // creates, which would need the parent directory fsynced too, and that
+        // is deliberately not done here. So a power cut in the wrong
+        // microsecond costs this sweep's strikes and nothing more: the previous
+        // state file survives whole, and the recovery is a re-run of the same
+        // --at, which the policy makes exact rather than approximate.
         file.sync_all()
     })();
     if let Err(error) = written {
@@ -367,7 +392,14 @@ impl Drop for Lock {
 /// error message, and a body a human wrote by hand while debugging has to
 /// survive that too.
 fn lock_body(path: &Path) -> String {
-    let command: Vec<String> = std::env::args().collect();
+    // `args_os`, not `args`: `args` PANICS on an argument that is not valid
+    // Unicode, and it would do it here, after the lock file exists. The armed
+    // guard makes that safe in the sense that the lock is still released while
+    // the panic unwinds, but a backtrace out of the one module whose job is to
+    // fail in sentences is not an outcome worth keeping. Lossy is right for a
+    // string that is only ever read by a person.
+    let command: Vec<String> =
+        std::env::args_os().map(|arg| arg.to_string_lossy().into_owned()).collect();
     format!(
         "sparqlwatch dormancy state lock\nstate: {}\npid: {}\ncommand: {}\n",
         path.display(),
@@ -474,6 +506,36 @@ mod tests {
         assert!(
             message.contains(path.to_str().unwrap()),
             "the error names the file an operator has to fix: {message}"
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// `dormancy init` is advice for a file that has never existed. Offered for
+    /// a file that exists and cannot be read, it sends the operator to a command
+    /// that refuses with "already exists", which tells them nothing about the
+    /// mode 000 file or the directory actually in the way.
+    #[test]
+    fn a_path_that_exists_but_cannot_be_read_does_not_offer_the_bootstrap() {
+        let dir = scratch("unreadable");
+        let path = dir.join("dormancy.toml");
+        // A directory where the state file belongs: portable, and one of the
+        // real ways a deployment's mount goes wrong.
+        std::fs::create_dir_all(&path).unwrap();
+
+        let error = refused(read_state(&path), "a directory is not a state file");
+        let message = error.to_string();
+        assert!(
+            message.contains(path.to_str().unwrap()),
+            "the error names the path: {message}"
+        );
+        assert!(
+            message.contains("working directory"),
+            "and still names the mistake this shape of default invites: {message}"
+        );
+        assert!(
+            !message.contains("dormancy init"),
+            "but does not send the operator to a command that will refuse: {message}"
         );
 
         std::fs::remove_dir_all(&dir).unwrap();
@@ -638,6 +700,22 @@ mod tests {
 
         check_lock(&path).unwrap();
         assert!(!lock_path(&path).exists(), "a clean check takes the lock and gives it back");
+
+        // What `check_lock` writes while it holds the lock, which is the only
+        // thing that makes the report below name a run rather than a file. The
+        // two tests that quote a lock body hand-write their own, so nothing
+        // else here would notice `lock_body` returning an empty string.
+        let taken = Lock::take(&path).unwrap();
+        let written = std::fs::read_to_string(lock_path(&path)).unwrap();
+        assert!(
+            written.contains(&std::process::id().to_string()),
+            "the lock body names the process holding it: {written}"
+        );
+        assert!(
+            written.contains("command: "),
+            "and the command line, which is where --at is: {written}"
+        );
+        taken.release().unwrap();
 
         std::fs::write(lock_path(&path), "pid = 4242\n").unwrap();
         let error = refused(check_lock(&path), "a stale lock has to be reported at startup");
