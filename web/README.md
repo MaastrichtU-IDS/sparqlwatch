@@ -80,6 +80,13 @@ The same thing from the command line, for one or more files at once:
 web/.venv/bin/python web/load_run.py path/to/sparqlwatch.db path/to/run.nq
 ```
 
+It prints one line per file, and two more when there is something to say. It
+names the endpoints `current` already pointed at a newer run for, so an
+out-of-order load cannot look like a publication; and it names the endpoints
+that **drifted**, on stderr, and **exits 1**. Drift is the one thing a load can
+report that the load cannot fix (see below), so it exits the way `--check` does
+on the same condition, and a deploy step that reads the status hears about it.
+
 ### The server has to be stopped first
 
 An on-disk Oxigraph store is a RocksDB database and **only one process can hold

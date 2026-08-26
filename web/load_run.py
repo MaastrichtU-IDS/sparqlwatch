@@ -543,13 +543,21 @@ def _drifted(store: Store) -> list[str]:
     return sorted(drifted)
 
 
-def _drift_advice(drifted: list[str]) -> str:
+def _drift_advice(drifted: list[str], path: str) -> str:
+    """What an operator is told when a load leaves current attributing facts to
+    a run that no longer states them.
+
+    ``path`` is the store, so the command in the last sentence can be run as
+    printed rather than after a substitution.
+    """
     return (
         f"urn:sparqlwatch:current attributes facts to a run that no longer "
         f"states them, for {len(drifted)} endpoint(s): {drifted}. A run graph "
         f"has shrunk or been dropped since current was written, which no "
         f"ordering rule can repair because the facts are gone rather than "
-        f"stale. Rebuild with 'python web/load_run.py --rebuild STORE_PATH'."
+        f"stale. Those endpoints are still publishing that run's verdicts, "
+        f"including any assertive 'verified' or 'absent' among them. Rebuild "
+        f"with 'python web/load_run.py --rebuild {path}'."
     )
 
 
@@ -895,7 +903,14 @@ def check_current(store: Store) -> CheckResult:
         if endpoint not in expected:
             note(endpoint, f"{pointer} names {run}, but no run graph mentions it")
 
-    return CheckResult(drifted=reasons, endpoints=len(expected))
+    # Every endpoint this compared, which is the run graphs' set PLUS the
+    # endpoints only current names. The union and not len(expected): the loop
+    # just above compares an endpoint the run graphs have stopped mentioning,
+    # and counting only the run graphs' set made "3 of 0 endpoints drifted" of a
+    # dropped run graph and "7 of 2" of a shrunk one, a numerator outside its own
+    # denominator.
+    compared = expected | {endpoint for endpoint, _ in pointers}
+    return CheckResult(drifted=reasons, endpoints=len(compared))
 
 
 def _stored_count(store: Store, graph_names: set[NamedNode]) -> int:
@@ -1302,6 +1317,11 @@ def main(argv: list[str] | None = None) -> int:
         contents.append(data)
 
     store = Store(args[0])
+    # Whether any file left current attributing facts to a run that no longer
+    # states them. It decides the exit status, below, and it is deliberately
+    # sticky across the loop: a later clean file does not repair an earlier
+    # file's drift.
+    drifted = False
     for path, data in zip(run_paths, contents):
         result = load_run(store, data)
         # Reported from the result of the load, not from the validation pass
@@ -1323,7 +1343,27 @@ def main(argv: list[str] | None = None) -> int:
                 f"{path}: loaded {result.quad_count} quads, "
                 f"no existing graph replaced{dropped}"
             )
-    return 0
+        if result.kept_newer:
+            # An out-of-order load: current already pointed at a strictly newer
+            # run, so the pointer was left alone and the site shows something
+            # other than the file just named. That is the right behaviour and it
+            # is not an error, so it is said and the exit status is unaffected;
+            # saying nothing left an operator believing they had just published
+            # this file.
+            print(
+                f"{path}: current already pointed at a newer run for "
+                f"{len(result.kept_newer)} endpoint(s), so what the site shows "
+                f"for them is unchanged by this file: {result.kept_newer}"
+            )
+        if result.drifted:
+            # The one case a load can report that the load cannot fix, and the
+            # reason --check exists. On stderr and non-zero because the store is
+            # now stating facts no run graph holds, which is the failure this
+            # whole module is written against; printing it on stdout at exit 0
+            # left it in a log nobody reads.
+            drifted = True
+            print(f"{path}: {_drift_advice(result.drifted, args[0])}", file=sys.stderr)
+    return 1 if drifted else 0
 
 
 if __name__ == "__main__":

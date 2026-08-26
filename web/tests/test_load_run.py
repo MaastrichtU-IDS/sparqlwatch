@@ -1180,3 +1180,93 @@ def test_a_run_file_naming_the_derived_graph_is_refused(tmp_path):
     assert not store_path.exists(), (
         "the refusal must come before Store() creates the directory"
     )
+
+
+def test_the_command_line_reports_drift_and_exits_non_zero(tmp_path, capsys):
+    """LoadResult.drifted reaches the operator, or it may as well not exist.
+
+    load_run() computes drifted correctly and 41 tests exercise it, and main()
+    used to print the quad count, the replaced graphs and the discarded bytes
+    and nothing else, at exit 0. So loading the truncated file a crashed prober
+    leaves under the same run IRI printed one cheerful line while the endpoints
+    that file dropped went on publishing verdicts attributed to a run that no
+    longer states them, including the two ASSERTIVE values, "verified" and
+    "absent". Only a separate --check found it, and nothing told anyone to run
+    one.
+
+    Non-zero, and not merely printed. The load itself succeeded, but the store
+    it leaves cannot be served as it stands: the facts on the site are
+    attributed to a run that no longer states them, and --check exits 1 on
+    exactly this condition. A deploy step that reads the exit status is the
+    reader this is for.
+    """
+    path = str(tmp_path / "s")
+    full = tmp_path / "full.nq"
+    full.write_bytes(NEW_SUBJECTS_FIXTURE.read_bytes())
+    shrunk = tmp_path / "shrunk.nq"
+    shrunk.write_bytes(_shrunk(NEW_SUBJECTS_FIXTURE.read_bytes(), "qlever", "ontop"))
+
+    assert main([path, str(full)]) == 0
+    assert "drifted" not in capsys.readouterr().out.lower(), (
+        "a clean load must not mention drift"
+    )
+
+    assert main([path, str(shrunk)]) == 1, (
+        "a load that leaves current attributing facts to a run that no longer "
+        "states them must not exit 0"
+    )
+    printed = capsys.readouterr()
+    said = printed.out + printed.err
+    for endpoint in (ONTOP, QLEVER):
+        assert endpoint in said, f"{endpoint} drifted and was not named"
+    assert KADASTER not in said, "kadaster is still in the run"
+    assert "--rebuild" in said, "and the repair must be named"
+
+
+def test_the_command_line_says_when_it_refused_to_move_current_backwards(
+    tmp_path, capsys
+):
+    """kept_newer, the other field main() threw away.
+
+    An out-of-order load is a real operator mistake: the runs are files in a
+    directory and a shell glob orders them by name, so a re-load of an older
+    run after a newer one refuses to move the pointer and used to say nothing
+    at all about having refused. Printed, but exit 0: the store is correct,
+    nothing needs repairing, and the operator only needs to know that the file
+    they just named is not what the site is showing.
+    """
+    path = str(tmp_path / "s")
+    older = tmp_path / "older.nq"
+    older.write_bytes(FIXTURE.read_bytes())
+    newer = tmp_path / "newer.nq"
+    newer.write_bytes(NEW_SUBJECTS_FIXTURE.read_bytes())
+
+    assert main([path, str(newer)]) == 0
+    capsys.readouterr()
+    assert main([path, str(older)]) == 0, "refusing to go backwards is not a failure"
+    said = capsys.readouterr().out
+    assert KADASTER in said, "the endpoint whose pointer was left alone"
+    assert "newer" in said.lower(), f"say why it was left alone, said {said!r}"
+
+
+def test_the_check_counts_the_endpoints_it_actually_compared(tmp_path):
+    """The denominator has to be a number the numerator can sit inside.
+
+    CheckResult.endpoints used to be the count the RUN GRAPHS expect, and the
+    drifted set includes endpoints only current knows about, so a dropped run
+    graph made --check print "3 of 0 endpoints drifted" and a shrunk one "7 of
+    2". Its own docstring says the field is how many endpoints were compared, so
+    "nothing drifted" can be told from "nothing was looked at", and an endpoint
+    whose pointer is dangling was compared: that is how it came to be named.
+    """
+    store = Store(str(tmp_path / "s"))
+    load_run(store, NEW_SUBJECTS_FIXTURE.read_bytes())
+    store.remove_graph(NamedNode(f"{SW}run:{NEW_SUBJECTS_INSTANT}"))
+
+    checked = check_current(store)
+    assert len(checked.drifted) == 3, sorted(checked.drifted)
+    assert checked.endpoints == 3, (
+        "no run graph mentions any of them any more, and all three were "
+        "compared and named"
+    )
+    assert len(checked.drifted) <= checked.endpoints
