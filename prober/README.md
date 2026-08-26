@@ -110,10 +110,10 @@ sweep and publish a run graph that disagrees with the first about what it
 skipped.
 
 That also makes the run's IDENTIFIERS reproducible: same `--at`, same graph and
-same subjects. Not
-its contents and not its bytes, because a sweep observes a changing world; see
-"Output is not byte-identical" below. It is validated before any probing starts,
-because it is interpolated into IRIs and published as an `xsd:dateTime`.
+same subjects. Not its contents and not its bytes, because a sweep observes a
+changing world; see "Output is not byte-identical" below. It is validated before
+any probing starts, because it is interpolated into IRIs and published as an
+`xsd:dateTime`.
 
 A retry of a failed sweep therefore meets the partial file the failed attempt
 left, and it **refuses to start** rather than overwriting it, naming the file and

@@ -34,10 +34,10 @@ use std::num::NonZeroUsize;
 
 /// The predicate that closes the header, `emit_header`'s last quad.
 ///
-/// This and the two below are the wire format `web/load_run.py` cuts a
+/// This and the three below are the wire format `web/load_run.py` cuts a
 /// truncated run back to. Their canonical spellings are in
 /// `docs/design/section-terminators.md`, which the test at the bottom of this
-/// module asserts these three constants against, and which
+/// module asserts these four constants against, and which
 /// `web/tests/test_load_run.py` asserts the loader's set against. Renaming one
 /// here alone reds this crate's suite instead of silently discarding every
 /// endpoint a crash preserved.
@@ -624,8 +624,9 @@ pub fn emit_header(header: RunHeader) -> anyhow::Result<String> {
     ));
     // The header's terminator, and a fact about how this document is built
     // rather than about what the run found: it says the file is a header, then
-    // one chunk per endpoint, then a footer, each ending in its terminator. A
-    // reader holding it knows to expect chunks and a `finalised` footer; a
+    // the endpoints the sweep declined to ask, then one chunk per endpoint, then
+    // a footer, each section ending in its own terminator. A reader holding it
+    // knows to expect a dormancy count, chunks and a `finalised` footer; a
     // reader holding it without `finalised` knows the run did not finish; a
     // reader holding neither has a run from before this stage, which promised
     // nothing. True the moment it is written, which is what a graph that is

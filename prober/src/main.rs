@@ -37,7 +37,19 @@ struct Args {
     metrics: String,
     #[arg(long, default_value = "run.nq")]
     out: String,
-    /// ISO-8601 timestamp for the run. Passed in so runs are reproducible.
+    /// The run instant, spelled exactly `YYYY-MM-DDTHH:MM:SSZ`: UTC, with no
+    /// offset, no fractional second and no leap second. Passed in rather than
+    /// read from the clock so runs are reproducible.
+    ///
+    /// That form is narrower than ISO-8601 and it is enforced, so `--help` and
+    /// the parser agree. A retry of a failed sweep reuses its `--at` by design,
+    /// and the dormancy policy recognises that retry by comparing instants as
+    /// STRINGS, so two spellings of one instant (`...00Z` beside `...00.000Z`,
+    /// or `12:00:00Z` beside `14:00:00+02:00`) would give the retry a second run
+    /// IRI and no replay match: it would strike an endpoint twice for one sweep
+    /// and publish a run graph that disagrees with the first about what it
+    /// skipped. See `validate_instant`, which refuses anything else before a
+    /// request is sent.
     #[arg(long)]
     at: String,
     /// The most a single metric may cost the endpoint it points at. Metrics
@@ -244,15 +256,17 @@ fn validate_thresholds(thresholds: &Thresholds) -> anyhow::Result<()> {
 /// entry forward untouched.
 ///
 /// Collected through a map keyed on the url, so a duplicate in `probed` cannot
-/// produce two outcomes for one endpoint, and the result comes back in url order
-/// rather than in probe order. The order is nobody's business: `update` iterates
-/// its own endpoint list and looks each url up. It is sorted only so a test can
-/// assert on the whole vector. `update` refuses that shape outright
-/// (rule I: one of the two would decide a strike and the other would be lost),
-/// and refusing at the END of a 90 minute sweep would cost the whole run's
-/// state write. A row naming an endpoint that is not in `probed` is dropped for
-/// the same reason: `run_sweep` cannot produce one, and `update` would refuse an
-/// outcome whose url is outside the endpoint list it was handed.
+/// produce two outcomes for one endpoint. `update` refuses TWO OUTCOMES FOR ONE
+/// URL outright (rule I: one of the two would decide a strike and the other
+/// would be lost), and refusing at the END of a 90 minute sweep would cost the
+/// whole run's state write. A row naming an endpoint that is not in `probed` is
+/// dropped for the same reason: `run_sweep` cannot produce one, and `update`
+/// would refuse an outcome whose url is outside the endpoint list it was handed.
+///
+/// The result comes back in url order rather than in probe order, which is a
+/// consequence of the map and not a promise: `update` iterates its own endpoint
+/// list and looks each url up, so nothing reads this order. It is deterministic
+/// only so a test can assert on the whole vector.
 ///
 /// **`elapsed_ms: None` contributes zero.** It is three different things in
 /// `lib.rs` and only one of them spent any time: an expired ENDPOINT budget

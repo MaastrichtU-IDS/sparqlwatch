@@ -64,9 +64,12 @@ async fn ran_without_hanging(command: &mut Command) -> Output {
 /// sweep whose measured cost exceeds `dormancy::MIN_COST_MS`, and the cost this
 /// policy is calibrated against is wall-clock time, so no mock can produce a
 /// 30-second cost in less than 30 seconds. That test passes its own bound. Every
-/// other caller keeps `common::NO_DEADLOCK`, which is many times longer than
-/// anything a local `wiremock` server needs and so is only ever reached by a
-/// sweep that is never coming back.
+/// other caller keeps `common::NO_DEADLOCK`.
+///
+/// Delegates to `common::within` rather than calling `tokio::time::timeout`
+/// here, so the message a reader of a hung suite sees stays written once. An
+/// inlined copy of it was the whole cost of this exception, and it would have
+/// left the arrival-channel hang documented in two files that can drift.
 async fn ran_within(command: &mut Command, bound: std::time::Duration) -> Output {
     let mut child = Reaped(
         command
@@ -75,7 +78,7 @@ async fn ran_within(command: &mut Command, bound: std::time::Duration) -> Output
             .spawn()
             .expect("the built binary must be runnable"),
     );
-    let status = tokio::time::timeout(bound, async {
+    let status = common::within(bound, async {
         loop {
             if let Some(status) = child.0.try_wait().expect("the child must be waitable") {
                 return status;
@@ -83,11 +86,7 @@ async fn ran_within(command: &mut Command, bound: std::time::Duration) -> Output
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
     })
-    .await
-    .expect(
-        "timed out: the prober is never coming back. A sweep whose arrival channel never \
-         closes, which is what `run_sweep` dropping the sweep's own sender prevents",
-    );
+    .await;
     let mut stderr = Vec::new();
     if let Some(mut pipe) = child.0.stderr.take() {
         use std::io::Read;

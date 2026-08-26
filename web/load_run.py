@@ -70,13 +70,14 @@ declined to ask, one self-contained chunk per endpoint, and a footer, each
 section ending in a terminator quad: sw:emission closes the header,
 sw:dormantCount closes the dormancy section, sw:completedEndpoint closes a
 chunk, sw:finalised closes the footer. A crash leaves a prefix of that
-sequence, so the last section in the file may be a fragment. Refusing the whole file then
-loses every endpoint that did finish, which is the case the incremental
-write exists for; loading it whole publishes a fragment of a section as a
-whole one. So the bytes are cut back to the end of the last terminator line
-and everything after it is dropped. A file whose last statement already is a
-terminator loads exactly as before, and that includes every complete run,
-whose last line is the footer's sw:finalised and not a chunk marker.
+sequence, so the last section in the file may be a fragment. Refusing the
+whole file then loses every endpoint that did finish, which is the case
+the incremental write exists for; loading it whole publishes a fragment of
+a section as a whole one. So the bytes are cut back to the end of the last
+terminator line and everything after it is dropped. A file whose last
+statement already is a terminator loads exactly as before, and that
+includes every complete run, whose last line is the footer's sw:finalised
+and not a chunk marker.
 
 Two things this tolerance is not. It does not accept a file with no
 terminator anywhere and a parse error: there is nothing to cut back to, so

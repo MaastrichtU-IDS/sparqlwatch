@@ -37,8 +37,28 @@ pub const NO_DEADLOCK: Duration = Duration::from_secs(20);
 /// the reentrancy mistake above. `tests/binary.rs` wraps its wait on the
 /// spawned prober, where the hang is a sweep whose arrival channel never
 /// closes, which is what `run_sweep` dropping the sweep's own sender prevents.
+/// That second caller reaches this through `within`, because one test there is
+/// deliberately slow and needs a bound of its own.
 pub async fn without_deadlocking<T>(f: impl Future<Output = T>) -> T {
-    tokio::time::timeout(NO_DEADLOCK, f).await.expect(
+    within(NO_DEADLOCK, f).await
+}
+
+/// The same, with the bound named by the caller.
+///
+/// It exists so the MESSAGE lives in one place. `tests/binary.rs` has one test
+/// that cannot fit inside `NO_DEADLOCK`: relegating an endpoint needs a sweep
+/// whose measured cost exceeds `dormancy::MIN_COST_MS`, and that cost is summed
+/// wall-clock time, so no mock can produce a 30 second cost in less than 30
+/// seconds. Passing the bound in keeps that one exception from restating the
+/// diagnosis below, which is the thing a reader of a hung suite actually needs
+/// and so is the thing that must not drift into two versions.
+///
+/// Every other caller goes through `without_deadlocking` and keeps
+/// `NO_DEADLOCK`, which is many times longer than anything a local `wiremock`
+/// server needs: it can be reached by a probe that is never coming back and not
+/// by a slow one.
+pub async fn within<T>(bound: Duration, f: impl Future<Output = T>) -> T {
+    tokio::time::timeout(bound, f).await.expect(
         "timed out: something here is never coming back. A probe acquiring the per-host gate \
          it already holds, or a sweep whose arrival channel never closes",
     )
