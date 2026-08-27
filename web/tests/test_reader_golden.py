@@ -41,7 +41,7 @@ themselves are pinned conjunct by conjunct in
 web/tests/test_endpoint_measurements.py. So this is not a hole; it is a
 narrower claim than "all three readers' answers" sounds, and it is written down
 here so a later reader does not lean on it for the sentences the pages derive
-from those properties. The same is true of the index's own two row qualifiers,
+from those properties. The same is true of the index's own four row qualifiers,
 which web/app.py derives from the same fields: they are pinned in
 web/tests/test_index.py and not here.
 """

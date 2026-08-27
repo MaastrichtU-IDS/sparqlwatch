@@ -216,8 +216,9 @@
     <h2>If your endpoint is marked dormant</h2>
     <p data-dormancy="what-it-is">
       <b>Dormant is a place in this service's rotation</b>, and it is nothing
-      else. An endpoint marked that way is asked at most one sweep in every seven
-      days, and only when a person starts one, rather than in every sweep. It
+      else. An endpoint marked that way is asked at most one sweep in every
+      {{ dormancy['dormant-cadence-days'] }} days, and only when a person starts
+      one, rather than in every sweep. It
       stays on the list, its page stays up, and the verdicts on that page stay
       exactly as the last sweep that really asked recorded them, with that
       sweep's own instant printed beside them.
@@ -231,7 +232,8 @@
     </p>
     <p data-dormancy="what-was-measured">
       <b>What was actually observed</b> is narrower than the word may sound. In
-      each of two sweeps in a row, the checks sent to that endpoint together
+      each of {{ dormancy['dormant-strikes'] }} sweeps in a row, the checks sent
+      to that endpoint together
       spent longer than the first number below, and not one of them came back
       with something that could be counted as an answer: the time went on checks
       that were cancelled when their own budget ran out. A server that accepts
@@ -321,9 +323,10 @@
       and asked again on the next sweep, at the same rate. An endpoint that
       silently <b>drops</b> our packets is the case the admission policy above
       notices, because every check then runs until it is cancelled, which is
-      exactly what that policy measures: after two such sweeps in a row the
-      endpoint is marked dormant and asked at most one sweep in every seven days
-      rather than once per sweep. That is fewer requests. It is not none of
+      exactly what that policy measures: after
+      {{ dormancy['dormant-strikes'] }} such sweeps in a row the
+      endpoint is marked dormant and asked at most one sweep in every
+      {{ dormancy['dormant-cadence-days'] }} days rather than once per sweep. That is fewer requests. It is not none of
       them, it takes two sweeps to arrive, and it is a decision about our own
       rotation that we can change without telling you. The list below is the
       thing that works.

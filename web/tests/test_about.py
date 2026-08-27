@@ -190,6 +190,23 @@ def dormancy_defaults() -> dict[str, int]:
     }
 
 
+def skip_reason_slugs() -> set[str]:
+    """`SkipReason::slug`'s match arms, as the strings a run graph can carry.
+
+    The prober is the source of truth for these two words: it writes them into
+    every dormancy group, `web/load_run.py` carries them through, and both HTML
+    pages render them. Read out of the `match` rather than out of the enum's
+    variant names, because the slug is what crosses the wire and a variant can
+    be renamed without changing it.
+    """
+    source = rust("dormancy.rs")
+    body = source[source.index("pub fn slug(&self)") :]
+    body = body[: body.index("\n    }")]
+    found = re.findall(r'SkipReason::\w+\s*=>\s*"([^"]+)"', body)
+    assert found, "SkipReason::slug is no longer a match over string literals"
+    return set(found)
+
+
 def user_agent() -> str:
     """The User-Agent the prober really sends, rebuilt from `client.rs`'s
     `concat!` and the crate version `env!("CARGO_PKG_VERSION")` expands to."""
@@ -868,8 +885,12 @@ def test_the_content_facets_are_recorded_as_blocked_rather_than_unbuilt(client):
 # prober's own module header refuses, for the reason the six-verdict vocabulary
 # exists: what was observed is seven cancelled probes, not a broken server.
 DORMANCY_CLAIMS = {
-    # What it is: a place in this service's rotation, bounded in days.
-    "what-it-is": ("rotation", "seven days"),
+    # What it is: a place in this service's rotation, bounded in days. The
+    # bound itself is asserted against the constant in
+    # test_the_cadence_the_pages_state_is_the_constant_and_not_a_word, and not
+    # spelled out here, because a number written twice is a number that can
+    # drift.
+    "what-it-is": ("rotation",),
     # What it is not: a verdict, and not a claim about the server.
     "not-a-verdict": ("not a verdict",),
     # What was actually observed, in the terms the probe was run in.
@@ -915,9 +936,12 @@ def test_the_dormant_cadence_is_stated_as_a_bound_and_never_as_a_schedule(client
     assert "weekly" not in lowered, "the page calls the dormant cadence weekly"
     assert "every week" not in lowered
     # The bound, whole, in one element rather than assembled by a reader out of
-    # two sentences in different sections.
+    # two sentences in different sections. The number comes from the constant
+    # for the reason test_the_cadence_the_pages_state_is_the_constant_and_not_a_word
+    # gives; what this test owns is that the bound is stated as a bound at all.
+    cadence = dormancy_defaults()["dormant-cadence-days"]
     said = " ".join(texts_with(html, "data-dormancy")).lower()
-    assert "at most one sweep in every seven days" in said, said
+    assert f"at most one sweep in every {cadence} days" in said, said
     assert "only when a person starts one" in said, said
 
 
@@ -966,3 +990,60 @@ def test_the_dormancy_numbers_come_from_the_flags_that_carry_them():
     wake = (PROBER / "src" / "bin" / "dormancy.rs").read_text()
     assert "default_value_t = DEFAULT_GRACE" in wake
     assert "dormancy::DEFAULT_GRACE_DAYS" in wake
+
+
+def test_the_dormancy_reasons_the_pages_read_are_the_probers_own():
+    """Both reason maps in `web/app.py`, against `SkipReason::slug`.
+
+    Nothing else holds these two words together. The prober pins them on its
+    own side (`the_two_reason_slugs_are_stable`), and until this test the Python
+    side pinned nothing: renaming `operator-hold` in Rust left every row telling
+    the truth through the verbatim fallback while the index panel and the
+    endpoint page went on asserting, in prose, that there are two reasons and
+    naming a value no run graph could carry. That is a positive false claim on
+    pages whose whole doctrine is that a stale qualifier is a claim, and it
+    passed 304 tests.
+
+    Set equality in both directions, so a slug the prober adds fails here as
+    loudly as one it renames: a third reason with no reading on either page
+    would fall through to "a reason this page cannot read", which is honest
+    about the row and silently wrong in the panel that says there are two.
+    """
+    from app import _DORMANCY_REASONS, _ROW_DORMANCY_REASONS
+
+    slugs = skip_reason_slugs()
+    assert slugs == {"automatic", "operator-hold"}, (
+        "the prober's reason slugs changed; both pages' prose has to change "
+        "with them, which is what the two assertions below are about"
+    )
+    assert set(_DORMANCY_REASONS) == slugs, (
+        "the endpoint page's reason sentences and the prober's slugs differ"
+    )
+    assert set(_ROW_DORMANCY_REASONS) == slugs, (
+        "the index row's reason clauses and the prober's slugs differ"
+    )
+
+
+def test_the_numbers_in_the_prose_are_the_constants_and_not_words(client):
+    """Every place the prose states the cadence or the strike count.
+
+    The `<li>` items in the numbers list render `DORMANCY` and self-correct. The
+    prose beside them spelled both numbers out in words, so changing
+    `DEFAULT_CADENCE_DAYS` to 10 left three sentences promising seven days,
+    green, on the one page a server operator reads to decide what to expect, and
+    changing `DEFAULT_STRIKES` left two more describing a policy nobody runs.
+    This asserts the prose against the same constants the list renders.
+    """
+    defaults = dormancy_defaults()
+    cadence = defaults["dormant-cadence-days"]
+    strikes = defaults["dormant-strikes"]
+    html = page(client)
+
+    said = " ".join(texts_with(html, "data-dormancy")).lower()
+    assert f"at most one sweep in every {cadence} days" in said, said
+    assert "only when a person starts one" in said, said
+    assert f"in each of {strikes} sweeps in a row" in said, said
+
+    blocking = " ".join(texts_with(html, "data-blocking")).lower()
+    assert f"{cadence} days" in blocking, blocking
+    assert f"after {strikes} such sweeps" in blocking, blocking

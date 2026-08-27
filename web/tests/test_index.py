@@ -46,9 +46,12 @@ from starlette.testclient import TestClient
 
 import verdict_encoding
 from app import (
+    DORMANCY,
     ENDPOINT_PATH,
     INDEX_PATH,
     ROW_DORMANT_TEXT,
+    _ROW_DORMANCY_REASONS,
+    _group_dormancy_note,
     _row_dormancy_text,
     app,
     get_store,
@@ -1392,7 +1395,7 @@ def test_the_marked_row_panel_explains_the_dormant_marker_and_both_reasons(
 ):
     """The reasoning that will not fit in three words on a row.
 
-    Three markers now, so three explanations, each read out of its own element
+    Four markers now, so four explanations, each read out of its own element
     rather than searched for in the document: a sentence asserted to be
     somewhere on the page passes while it sits in the legend. The dormancy
     paragraph has to name both reasons, say what the marker does NOT mean, and
@@ -1410,9 +1413,28 @@ def test_the_marked_row_panel_explains_the_dormant_marker_and_both_reasons(
 
     assert set(panel) == {"run-unfinished", "never-reached", "dormant", "measured-by"}
     dormant = panel["dormant"].lower()
-    assert "operator-hold" in dormant and "automatic" in dormant
+    # The reasons the panel names are the ones the row can carry, read off the
+    # map the row is built from rather than spelled out here. test_about.py's
+    # test_the_dormancy_reasons_the_pages_read_are_the_probers_own pins that map
+    # to prober/src/dormancy.rs's SkipReason::slug, so this closes the chain
+    # from the Rust match arm to the words in the panel.
+    for slug, (clause, gloss) in _ROW_DORMANCY_REASONS.items():
+        assert slug in dormant, f"the panel does not name {slug}"
+        # Formatted the way _index_context formats it, because a gloss carrying
+        # one of the policy's numbers holds it as a field rather than as a word:
+        # see _ROW_DORMANCY_REASONS.
+        filled = gloss.format(
+            strikes=DORMANCY["dormant-strikes"],
+            cadence=DORMANCY["dormant-cadence-days"],
+        )
+        assert filled.lower() in dormant, f"the panel does not explain {slug}"
+        assert "{" not in dormant, "an unformatted field reached the page"
     assert "not a verdict" in dormant, dormant
-    assert "seven days" in dormant, dormant
+    # Both numbers, from the same constants /about states them from, and not
+    # spelled out in the template. test_about.py holds DORMANCY to
+    # prober/src/dormancy.rs, so this closes the chain to the words in the panel.
+    assert f"{DORMANCY['dormant-cadence-days']} days" in dormant, dormant
+    assert f"{DORMANCY['dormant-strikes']} sweeps in a row" in dormant, dormant
     # The provenance paragraph has to say what the instant is FOR: that the
     # header names another sweep, and that the gap between the two is not
     # something this service can measure.
@@ -1454,3 +1476,25 @@ def test_the_row_marker_reads_every_reason_a_run_graph_can_carry():
     assert "cannot read" in unknown
     for reading in ("by hand", "on cost and silence", "no reason"):
         assert reading not in unknown, unknown
+
+
+def test_the_group_note_agrees_with_itself_in_number():
+    """One marked row is "1 of these 2 rows carries", not "carry".
+
+    Four words in the sentence move with the count, and a note reading "1 of
+    these 2 rows carry the marker ... published them as endpoints" is a sentence
+    a reader trips over on a page whose whole argument is that it says exactly
+    what it means. Asserted on the function, because reaching the singular case
+    through a store means a fixture with exactly one dormant row in its group
+    and reaching the plural case means another one.
+    """
+    one = _group_dormancy_note(1, 2)
+    assert "1 of these 2 rows carries" in one, one
+    for plural in (" carry ", " them as endpoints", "They are in", "their last"):
+        assert plural not in one, f"{plural!r} is in the singular note: {one!r}"
+
+    many = _group_dormancy_note(4, 9)
+    assert "4 of these 9 rows carry" in many, many
+    assert "them as endpoints" in many, many
+    for singular in ("carries", " it as an endpoint", "It is in", " its last"):
+        assert singular not in many, f"{singular!r} is in the plural note: {many!r}"

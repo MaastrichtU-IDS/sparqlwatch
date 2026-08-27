@@ -216,22 +216,26 @@
    the metric IRI itself asks this resource for RDF, which is what the
    negotiation is for.
 
-   WHAT THE PROVENANCE MARKER COSTS, in UTF-8 bytes of this page, measured over
-   the 543-endpoint sweep with a two-endpoint newer run loaded on top of it, so
-   that all 543 rows name their own sweep: 436,341 bytes before and 502,345
-   after, 426.1 KiB to 490.6 KiB. That is the shape a narrow re-probe produces
-   in production and it is the worst case for this marker; with one run in the
-   store no row carries it and the page grows by the panel and the CSS alone,
-   434,895 bytes to 437,368, 424.7 KiB to 427.1 KiB. Both are inside the 500 KB
-   budget. The render cost of the whole change was 10.50 ms against 11.08 ms,
-   HEAD and this tree back to back in one process over one store.
+   WHAT THESE MARKERS COST, and THE PAGE IS OVER ITS 500,000 BYTE BUDGET AS SOON
+   AS ROWS ARE MARKED. In UTF-8 bytes of the served page over the 543-endpoint
+   sweep: 437,404 with no row marked, 502,381 with all 543 naming their own
+   sweep (a two-endpoint newer run on top), 509,455 with 57 of those also
+   dormant, which is the realistic near-term shape, and 578,932 with all 543
+   dormant, which is the worst case for these markers. 806, 922, 938 and 1,066
+   bytes a row. Only the first is inside the budget. The render cost of the whole
+   change was 10.50 ms against 11.08 ms, HEAD and this tree back to back in one
+   process over one store.
 
-   The 66 KB is bought deliberately, and it is bought for the defect this stage
-   exists to close: the alternative is 543 rows of one sweep's verdicts under a
+   THE OVERRUN IS NOT DECIDED HERE. The budget is set by
+   docs/superpowers/plans/2026-08-25-a-ui-you-can-use.md, which says an overrun
+   comes back to the plan owner rather than being decided in a task, so nothing
+   is dropped from this row to get under it. Deleting the markers is not the
+   answer either: the alternative is 543 rows of one sweep's verdicts under a
    header naming another sweep, which is one wrong answer 543 times. Roughly 11
-   KB of it is the instant's second spelling in data-measured-by-sweep, kept
-   because a script filtering these rows needs the instant as a value and the
-   RDF representation is a second request. #}
+   KB of the marked figure is the instant's second spelling in
+   data-measured-by-sweep, kept for now because a script filtering these rows
+   needs the instant as a value and the RDF representation is a second request,
+   and it is the cheapest thing to give up if something has to go. #}
       <li data-endpoint="{{ row.endpoint }}"{% if row.run_unfinished %} data-run-unfinished="true"{% endif %}{% if row.never_reached %} data-newer-run-unfinished="true"{% endif %}{% if row.dormant %} data-newest-sweep-dormant="true"{% if row.dormancy_reason %} data-dormancy-reason="{{ row.dormancy_reason }}"{% endif %}{% endif %}{% if row.measured_by %} data-measured-by-sweep="{{ row.measured_by }}"{% endif %}><a href="{{ row.href }}">{{ row.endpoint }}</a>{% if row.run_unfinished %}<span class="qual">{{ row_unfinished_text }}</span>{% endif %}{% if row.never_reached %}<span class="qual">{{ row_never_reached_text }}</span>{% endif %}{% if row.dormant %}<span class="qual">{{ row.dormant_text }}</span>{% endif %}{% if row.measured_by %}<span class="when">{{ row_measured_by_text }} {{ row.measured_by }}</span>{% endif %}<span class="cells">{% for cell in row.cells %}{% if cell.present %}<span class="{{ cell.css_class }}"{% if cell.verdict is not none %} data-verdict="{{ cell.verdict }}"{% else %} data-declined="{{ cell.reason }}"{% endif %}>{{ cell.abbr }}</span>{% else %}<span class="gap" data-gap="true">&#183;</span>{% endif %}{% endfor %}</span></li>
       {% endfor %}
     </ul>
@@ -285,11 +289,11 @@
     <p class="note" data-row-marker="dormant">
       <span class="qual">{{ row_dormant_text }}</span>
       The newest sweep published this endpoint as one it declined to ask, and
-      said why. There are two reasons. <code>automatic</code> is this service's
-      admission policy setting aside an endpoint that cost more than its ceiling
-      while answering nothing, in two sweeps in a row; <code>operator-hold</code>
-      is a person doing the same by hand. Either way the endpoint is asked at
-      most one sweep in every seven days, and only when a person starts one. That
+      said why. The reasons a sweep can give, and the slugs are the prober's own
+      rather than this template's:
+      {% for reason in dormancy_reasons %}<code>{{ reason.slug }}</code>, {{ reason.gloss }}{% if not loop.last %}; {% endif %}{% endfor %}.
+      Either way the endpoint is asked at most one sweep in every
+      {{ dormant_cadence_days }} days, and only when a person starts one. That
       is a fact about our rotation and not a verdict about the endpoint: dormancy
       is not a verdict, it has no chip and no entry in the key above, and the
       chips on the row are the ones its last real probe produced. A reason this

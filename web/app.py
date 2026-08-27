@@ -1133,16 +1133,33 @@ ROW_NEVER_REACHED_TEXT = "a later sweep never got here"
 # endpoint under a heading about us.
 ROW_DORMANT_TEXT = "the newest sweep did not ask"
 
-# The reason, in the fewest words that do not overstate it. Two spellings today,
-# and each is a different fact: "automatic" is the admission policy relegating
-# an endpoint that cost more than its ceiling while answering nothing in two
-# consecutive sweeps, and "operator-hold" is a person setting it aside. A row
-# that read the same for both would say less than the attribute beside it
-# already does. The full argument is in the page's panel, which is where the
-# reasoning that will not fit in four words lives.
+# The reason, twice: the clause a row carries, and the gloss the page's panel
+# explains it with. Two spellings today, and each is a different fact:
+# "automatic" is the admission policy relegating an endpoint that cost more than
+# its ceiling while answering nothing in two consecutive sweeps, and
+# "operator-hold" is a person setting it aside. A row that read the same for both
+# would say less than the attribute beside it already does.
+#
+# ONE MAP AND NOT TWO, because the panel used to spell these two slugs out in
+# the template. The prober owns them (prober/src/dormancy.rs's
+# SkipReason::slug), so a rename there left every row telling the truth through
+# the verbatim fallback while the panel went on naming a value no run graph could
+# carry, with every test green. The keys are now pinned to that match in
+# test_about.py's test_the_dormancy_reasons_the_pages_read_are_the_probers_own,
+# and the panel renders the keys of this map rather than repeating them, so the
+# chain runs from the Rust arm to the words a reader sees.
+# The gloss carries the whole explanation, so that the panel needs no sentence of
+# its own about a named reason. It used to have one ("Automatic means the
+# endpoint cost more than its ceiling ..."), which is prose about one slug that
+# nothing pins: a third reason, or a rename, left it standing. The strike count
+# in it is a format field for the same reason the cadence is, see below.
 _ROW_DORMANCY_REASONS = {
-    "automatic": "on cost and silence",
-    "operator-hold": "by hand",
+    "automatic": (
+        "on cost and silence",
+        "the admission policy setting it aside after {strikes} sweeps in a row "
+        "that cost more than its ceiling and answered nothing",
+    ),
+    "operator-hold": ("by hand", "a person setting it aside by hand"),
 }
 
 # The fourth thing a row can say, and it is provenance rather than a warning:
@@ -1184,7 +1201,7 @@ def _row_dormancy_text(reason: str | None) -> str:
     if reason is None:
         return f"{ROW_DORMANT_TEXT}, and gave no reason"
     if reason in _ROW_DORMANCY_REASONS:
-        return f"{ROW_DORMANT_TEXT}, {_ROW_DORMANCY_REASONS[reason]}"
+        return f"{ROW_DORMANT_TEXT}, {_ROW_DORMANCY_REASONS[reason][0]}"
     return f"{ROW_DORMANT_TEXT}, for a reason this page cannot read: {reason}"
 
 
@@ -1590,6 +1607,31 @@ def _index_context(entries: list[EndpointMeasurements]) -> dict:
         # on a row cannot come apart.
         "row_dormant_text": ROW_DORMANT_TEXT,
         "row_measured_by_text": ROW_MEASURED_BY_TEXT,
+        # The reasons the panel names, rendered from the map the ROWS are built
+        # from rather than written out in the template. See
+        # _ROW_DORMANCY_REASONS: the slugs belong to the prober, and a template
+        # that spelled them out could go on naming one after a rename.
+        # The gloss is formatted here rather than in the template, because the
+        # numbers in it belong to DORMANCY and a template holding them would be
+        # a second copy of a constant. A gloss with no field formats to itself.
+        "dormancy_reasons": [
+            {
+                "slug": slug,
+                "gloss": gloss.format(
+                    strikes=DORMANCY["dormant-strikes"],
+                    cadence=DORMANCY["dormant-cadence-days"],
+                ),
+            }
+            for slug, (_, gloss) in _ROW_DORMANCY_REASONS.items()
+        ],
+        # And the cadence, from the one dict that holds it. DORMANCY is defined
+        # with the /about page's constants below, because that is where its
+        # provenance comment belongs and because test_about.py holds it to
+        # prober/src/dormancy.rs's DEFAULT_CADENCE_DAYS. Read from there rather
+        # than written into this template too: the panel used to say "seven
+        # days" in words, so changing the constant self-corrected /about and left
+        # the index promising a cadence no sweep uses.
+        "dormant_cadence_days": DORMANCY["dormant-cadence-days"],
         "empty_cell_text": EMPTY_CELL_TEXT,
         "legend": _legend(drawn),
         "chip_width": verdict_encoding.CHIP_WIDTH_PX,

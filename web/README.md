@@ -535,20 +535,36 @@ generated from the metric names the store holds, so they change with the metric
 set rather than being a list in the template. That is the page's size budget at
 work: 543 rows carrying full metric names, or the metric repeated in an
 attribute beside each chip, measured 610 KB against the 500 KB the page is
-allowed. It is 437,368 bytes as it stands, which is 427.1 KiB and 437 KB. An earlier
+allowed. It is 437,404 bytes as it stands, which is 427.2 KiB and 437 KB. An earlier
 sentence here said 424.6 KiB, which is 434,790 bytes and no measurement anyone
 took.
 
-**A store whose newest sweep asked only a subset spends 66 KB more, and that is
-the worst case.** Every row whose facts are not the newest run's carries the
-instant of the sweep that measured it, in words and in
-`data-measured-by-sweep`, so the same 543 endpoints with a two-endpoint sweep
-loaded on top of them are 502,345 bytes, 490.6 KiB, against 436,341 bytes for
-the same page without the marker. That is inside the 500 KB budget and it is the
-shape a narrow re-probe produces, so it is the number to watch: without the
-marker those 543 rows would report one sweep's verdicts under a header naming
-another sweep, which is the same wrong answer 543 times. See "Rows whose facts
-are not the newest sweep's" below.
+**THE PAGE IS OVER THAT BUDGET AS SOON AS ROWS ARE MARKED, AND THE REMEDY IS
+NOT DECIDED HERE.** Every row whose facts are not the newest run's carries the
+instant of the sweep that measured it, in words and in `data-measured-by-sweep`,
+and a row the newest sweep declined to ask carries about 144 bytes more. Measured
+over the same 543 endpoints, in UTF-8 bytes of the served page, against the
+decimal 500,000 the budget is written in three lines above:
+
+| Store shape | Rows marked | Dormant | Bytes | Per row | Against 500,000 |
+| --- | --- | --- | --- | --- | --- |
+| one sweep, the shape above | 0 | 0 | 437,404 | 806 | under by 62,596 |
+| a two-endpoint newer sweep | 543 | 0 | 502,381 | 922 | **over by 2,381 (0.5%)** |
+| the same, plus the 57 endpoints the measured set relegates | 543 | 57 | 509,455 | 938 | **over by 9,455 (1.9%)** |
+| every row marked and dormant | 543 | 543 | 578,932 | 1,066 | **over by 78,932 (15.8%)** |
+
+The last row is the worst case FOR THIS MARKER and the third is the realistic
+near-term shape: a narrow re-probe plus the endpoints the cadence has taken. So
+this is not a hypothetical overrun and it is not inside the budget in any shape
+where the marker does its job. What it is not is a decision to take here:
+`docs/superpowers/plans/2026-08-25-a-ui-you-can-use.md` sets the budget and says
+an overrun comes back to the plan owner rather than being decided in a task, so
+the markup stands as written and the number is with them. The alternative to the
+marker is 543 rows of one sweep's verdicts under a header naming another sweep,
+which is the same wrong answer 543 times, so the fix is not simply to delete it.
+Roughly 11 KB of the marked figure is the instant's second spelling in
+`data-measured-by-sweep`, which is the cheapest thing to give up if something has
+to go. See "Rows whose facts are not the newest sweep's" below.
 
 **The row filter is an inline `<script>`, and the page does not depend on it.**
 Every row is in the document as served; with JavaScript off or blocked, all of
