@@ -1428,6 +1428,130 @@ def _index_chips(entry: EndpointMeasurements, metrics: list[dict]) -> list[dict]
     return cells
 
 
+# ---------------------------------------------------------------------------
+# The three facet groups above the rows
+# ---------------------------------------------------------------------------
+# Every count here is computed over the same rows the page renders, and every
+# chip filters by reading attributes the rows ALREADY carry: a cell's state is
+# its `enc-<slug>` class, a measured cell carries `data-verdict` and a declined
+# one carries `data-declined`, and a chip's text is the metric's abbreviation.
+# So faceting cost this page nothing per row, which matters because
+# web/README.md's table shows how little headroom 543 rows leave.
+#
+# WHAT EACH GROUP SELECTS was decided by the plan owner on 2026-08-27, against
+# the counts these functions return over the 2026-08-24 sweep. Two of the three
+# select very little on that data and the reason is coverage rather than the
+# facet: `classes` is the only expensive metric and every sweep so far ran at
+# the cheap ceiling, so seven metric chips match all 543 rows and one matches
+# none. That is the gap the metric chips exist to show.
+
+# The availability facet is TWO chips and not three, which is a decision with a
+# cost the plan owner took knowingly. 482 of 543 endpoints read `indeterminate`,
+# meaning no answer arrived inside the budget, and this page files them under
+# "not available" along with the 4 that answered `absent`. The six-verdict
+# vocabulary exists precisely to keep those apart, so the chip DISCLOSES ITS
+# COMPOSITION rather than leaving the reader to assume 486 servers are down:
+# the filter is what was asked for, and the label is what stops it lying.
+_POSITIVE_VERDICTS = ("verified", "undeclared-but-verified")
+
+
+def _availability_facets(groups: list[dict]) -> list[dict]:
+    """Two chips over the availability verdict, with the second one's makeup.
+
+    `available` is the two positive verdicts and `not-available` is every other
+    value, including `indeterminate`. The `detail` string is not decoration: it
+    is the sentence that keeps a 486 built mostly of "we could not tell" from
+    reading as 486 servers refusing to answer.
+    """
+    available, other, breakdown = 0, 0, {}
+    for group in groups:
+        value = group["availability"]
+        n = len(group["rows"])
+        if value in _POSITIVE_VERDICTS:
+            available += n
+        else:
+            other += n
+            if n:
+                breakdown[value or verdict_encoding.NOT_MEASURED] = n
+    unreached = breakdown.get("indeterminate", 0)
+    detail = None
+    if unreached:
+        detail = (
+            f"{unreached} of these {other} answered nothing inside the time "
+            f"budget, so what was measured is that no answer arrived and not "
+            f"that the endpoint is unavailable"
+        )
+    return [
+        {
+            "slug": "available",
+            "label": "available",
+            "count": available,
+            "detail": None,
+        },
+        {
+            "slug": "not-available",
+            "label": "not available",
+            "count": other,
+            "detail": detail,
+        },
+    ]
+
+
+def _metric_facets(groups: list[dict], metrics: list[dict]) -> list[dict]:
+    """One chip per metric column, counting the rows where it carries a verdict.
+
+    A DECLINED metric does not count. That is the whole point of the choice the
+    plan owner made: a chip reading 0 says the sweep never measured this, which
+    is a fact about coverage, and merging declines into the count would hide it
+    behind a number that looks like data.
+    """
+    counted = {metric["name"]: 0 for metric in metrics}
+    for group in groups:
+        for row in group["rows"]:
+            for cell in row["cells"]:
+                if cell["present"] and cell.get("verdict") is not None:
+                    counted[cell["name"]] += 1
+    return [
+        {"name": m["name"], "abbr": m["abbr"], "count": counted[m["name"]]}
+        for m in metrics
+    ]
+
+
+def _state_facets(groups: list[dict]) -> list[dict]:
+    """One chip per encoding state, counting rows uniformly in that state.
+
+    "Uniformly" means every cell that carries a verdict, and NOT every cell.
+    Counting the declined cells too returns zero for all seven states over the
+    2026-08-24 sweep, because `classes` is declined on all 543 rows and no row
+    can then be uniform in anything: a facet that is empty by construction is
+    not a facet. Excluding them, `indeterminate` selects 402 rows and the other
+    six select none, which is a true statement about that sweep.
+
+    Built from the same table as `_legend`, so a chip and its swatch cannot
+    disagree about what a state looks like or is called.
+    """
+    uniform: dict[str, int] = {}
+    for group in groups:
+        for row in group["rows"]:
+            slugs = {
+                cell["slug"]
+                for cell in row["cells"]
+                if cell["present"] and cell.get("verdict") is not None
+            }
+            if len(slugs) == 1:
+                only = next(iter(slugs))
+                uniform[only] = uniform.get(only, 0) + 1
+    return [
+        {
+            "slug": state.slug,
+            "label": state.label,
+            "css_class": verdict_encoding.css_class(state.slug),
+            "count": uniform.get(state.slug, 0),
+        }
+        for state in verdict_encoding.STATES
+    ]
+
+
 def _index_row(entry: EndpointMeasurements, metrics: list[dict]) -> dict:
     """One row: the endpoint, its link, its cells, and any qualification.
 
@@ -1574,12 +1698,13 @@ def _index_groups(
             # that generic gloss under an availability heading would explain the
             # group with a sentence about a different metric. The legend at the
             # foot of the page explains the drawing, which is what it is for.
-            meaning = (
-                f"These are the endpoints whose availability metric read "
-                f"\"{value}\" in the newest run that measured them. Nothing "
-                f"about their other metrics follows from it: every metric "
-                f"carries its own verdict, and the rows are where those are."
-            )
+            # No per-group note. Until 2026-08-27 each group carried one
+            # sentence differing only in a quoted verdict, directly beneath a
+            # heading that already names that verdict and its denominator, and
+            # the thing it went on to say (that one metric implies nothing
+            # about another) is now said once in the facets above the rows
+            # rather than three times between them.
+            meaning = None
         groups.append(
             {
                 # Empty for the final group, so that a group keyed on a verdict
@@ -1662,6 +1787,19 @@ def _index_context(entries: list[EndpointMeasurements]) -> dict:
         "metrics": metrics,
         "metric_count": len(metrics),
         "groups": groups,
+        # The three facet groups, above the rows. Each filters by reading
+        # attributes the rows already carry, so none of them costs a byte per
+        # row; see the block above _index_row for what each one selects and why.
+        "availability_facets": _availability_facets(groups),
+        "metric_facets": _metric_facets(groups, metrics),
+        # Keyed by slug rather than a list, because the legend it feeds is
+        # already looping over verdict_encoding.STATES to draw the swatches and
+        # must not loop over a second sequence that could fall out of step with
+        # it. The legend shows this beside its own chip count: two numbers
+        # answering two questions, which its note explains.
+        "state_rows": {
+            facet["slug"]: facet["count"] for facet in _state_facets(groups)
+        },
         "newest_generated_at": (
             entries[0].newest_generated_at if entries else None
         ),

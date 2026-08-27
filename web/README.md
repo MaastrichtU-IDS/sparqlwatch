@@ -551,7 +551,7 @@ that sets it records the change and the reasoning.
 
 | Store shape | Rows marked | Dormant | Bytes | Per row | Against 750,000 |
 | --- | --- | --- | --- | --- | --- |
-| one sweep, the shape above | 0 | 0 | 438,652 | 808 | under by 311,348 |
+| one sweep, the shape above | 0 | 0 | 448,552 | 808 | under by 301,448 |
 | a two-endpoint newer sweep | 543 | 0 | 501,609 | 924 | under by 248,391 |
 | the same, plus the 57 endpoints the measured set relegates | 543 | 57 | 510,188 | 940 | under by 239,812 |
 | every row marked and dormant | 543 | 543 | 580,357 | 1,069 | under by 169,643 |
@@ -559,7 +559,10 @@ that sets it records the change and the reasoning.
 The last row is the worst case FOR THIS MARKER and the third is the realistic
 near-term shape: a narrow re-probe plus the endpoints the cadence has taken. All
 four are inside 750,000, and three of the four were outside 500,000, which is the
-change. Two things the table does not say and a reader should know. **The page is
+change. The first row moved from 438,652 to 448,552 on 2026-08-27 when the three
+facet groups landed: **9,900 bytes, fixed rather than per row**, because every
+chip filters by reading attributes the rows already carried and none of them
+added markup to a row. The other three shapes move by the same 9,900. Two things the table does not say and a reader should know. **The page is
 95% rows**: 552,913 bytes of rows against 27,444 for the head, the CSS, the
 legend and all four explanation panels together, so per-row markup is the only
 lever with leverage. And **the chips are 576 of a 1,014 byte row, 57%**, more

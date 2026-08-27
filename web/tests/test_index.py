@@ -48,6 +48,9 @@ import verdict_encoding
 from app import (
     ABOUT_PATH,
     DORMANCY,
+    _availability_facets,
+    _metric_facets,
+    _state_facets,
     ENDPOINT_PATH,
     INDEX_PATH,
     ROW_DORMANT_TEXT,
@@ -1578,3 +1581,162 @@ def test_the_group_note_claims_a_reason_only_for_the_rows_that_carry_one():
 
     some = _group_dormancy_note(3, 9, 2)
     assert "and said why for 2 of them" in some, some
+
+# ---------------------------------------------------------------------------
+# The three facet groups
+# ---------------------------------------------------------------------------
+# Added 2026-08-27 with the facets. THE IMPLEMENTATION WENT IN FIRST AND THESE
+# TESTS FOLLOWED IT, which inverts the order every task in the dormancy stage
+# held to, and it showed: the two sentences this change removed turned out to
+# be asserted by nothing, so the suite could not have told me whether removing
+# them broke anything. The helper `group_note` above looks like cover for them
+# and is not: its one caller asks for the empty-string group, which still has
+# its note.
+
+
+def facets(text, name):
+    """{facet value: full button text} for one facet group, off the buttons."""
+    return {
+        attributes["data-facet-value"]: label
+        for attributes, label in zip(
+            with_attribute(text, "data-facet-value"),
+            texts_with(text, "data-facet-value"),
+        )
+        if attributes.get("data-facet") == name
+    }
+
+
+def rows_of(group_value, count, /, **cells):
+    """One group of `count` identical rows, in the shape _index_groups returns.
+
+    `cells` maps a metric name to either a verdict string or None for a decline,
+    which is the distinction all three facet builders turn on. Positional-only
+    first parameter, because one of the metrics a caller names is `availability`
+    and a keyword of that name would collide with the group's own value.
+    """
+    built = [
+        {
+            "present": True,
+            "name": name,
+            "abbr": name[:2].upper(),
+            "verdict": value,
+            "reason": None if value else "cost-ceiling",
+            "slug": value if value else verdict_encoding.NOT_MEASURED,
+        }
+        for name, value in cells.items()
+    ]
+    return {"availability": group_value, "rows": [{"cells": built}] * count}
+
+
+def test_the_availability_facet_is_two_chips_over_the_verdicts():
+    groups = [rows_of("verified", 57), rows_of("indeterminate", 482),
+              rows_of("absent", 4)]
+    available, other = _availability_facets(groups)
+    assert (available["slug"], available["count"]) == ("available", 57)
+    assert (other["slug"], other["count"]) == ("not-available", 486)
+
+
+def test_the_not_available_chip_discloses_how_many_it_could_not_reach():
+    """The chip counts 486 and 482 of those answered nothing at all.
+
+    Filing them under one word is the plan owner's decision, taken with the
+    number in front of them. What is not negotiable is that the page then says
+    so: 486 presented as a finding would be a claim about 482 servers that no
+    sweep made.
+    """
+    groups = [rows_of("verified", 57), rows_of("indeterminate", 482),
+              rows_of("absent", 4)]
+    _, other = _availability_facets(groups)
+    assert "482" in other["detail"]
+    assert "no answer arrived" in other["detail"]
+    assert "not that the endpoint is unavailable" in other["detail"]
+
+
+def test_a_registry_with_nothing_indeterminate_gets_no_disclosure():
+    groups = [rows_of("verified", 3), rows_of("absent", 1)]
+    _, other = _availability_facets(groups)
+    assert other["count"] == 1
+    assert other["detail"] is None
+
+
+def test_a_metric_chip_counts_the_rows_that_recorded_a_verdict():
+    """A declined metric does not count, which is the whole point of the count.
+
+    Over the 2026-08-24 sweep this is seven chips reading 543 and `classes`
+    reading 0, because classes is the one expensive metric and no sweep has run
+    at that ceiling. A chip reading 0 is the coverage gap on the page.
+    """
+    groups = [rows_of("verified", 5, availability="verified", classes=None)]
+    metrics = [{"name": "availability", "abbr": "AV"}, {"name": "classes", "abbr": "CL"}]
+    by_abbr = {f["abbr"]: f["count"] for f in _metric_facets(groups, metrics)}
+    assert by_abbr == {"AV": 5, "CL": 0}
+
+
+def test_a_state_chip_counts_rows_uniform_in_that_state_ignoring_declines():
+    """Counting the declined chip too makes every count 0 by construction.
+
+    `classes` is declined on all 543 rows of the measured sweep, so no row is
+    uniform in anything once the decline counts, and all seven chips would read
+    0 forever. That is a fact about the arithmetic rather than about any
+    endpoint, so the test excludes declines and this asserts it.
+    """
+    groups = [
+        rows_of("indeterminate", 4, availability="indeterminate",
+                cors="indeterminate", classes=None),
+        rows_of("verified", 2, availability="verified", cors="absent", classes=None),
+    ]
+    by_slug = {f["slug"]: f["count"] for f in _state_facets(groups)}
+    assert by_slug["indeterminate"] == 4
+    assert by_slug["verified"] == 0, "a row of verified and absent is uniform in neither"
+    assert by_slug[verdict_encoding.NOT_MEASURED] == 0
+
+
+def test_the_page_states_no_endpoint_or_metric_count_in_prose(
+    client_for, store_registry_sample
+):
+    """Both sentences are gone and both numbers are still machine readable.
+
+    They were removed because every chip now carries its own count and every
+    group heading its denominator, so the sentence repeated in words what the
+    page states in numbers. The attributes stay: that is where these tests and
+    any other reader find them.
+    """
+    page = index(client_for(store_registry_sample))
+    assert "endpoints, and" not in page
+    assert "These are the endpoints whose availability metric" not in page
+    attributes = with_attribute(page, "data-endpoint-count")
+    assert attributes and attributes[0]["data-endpoint-count"].isdigit()
+
+
+def test_every_facet_chip_is_an_unpressed_button(client_for, store_registry_sample):
+    """A button, because it changes this page and names no other resource, and
+    unpressed on arrival, because the page is correct with no filter applied."""
+    page = index(client_for(store_registry_sample))
+    for attributes in with_attribute(page, "data-facet"):
+        assert attributes["aria-pressed"] == "false"
+    assert set(facets(page, "availability")) == {"available", "not-available"}
+    assert len(facets(page, "state")) == len(verdict_encoding.STATES)
+
+
+def test_the_facet_groups_come_in_the_order_the_page_reads_in(
+    client_for, store_registry_sample
+):
+    """Availability, then the metrics, then the drawing. The last one moved down
+    from the foot of the page, so its position is a decision and not an
+    accident of where the markup happened to sit."""
+    page = index(client_for(store_registry_sample))
+    order = [a["data-facet-group"] for a in with_attribute(page, "data-facet-group")]
+    assert order == ["availability", "metric", "state"]
+    assert page.index("Availability") < page.index("what each chip's letters mean")
+    assert page.index("what each chip's letters mean") < page.index("What the drawing means")
+
+
+def test_a_filter_that_matches_nothing_has_a_sentence_ready(
+    client_for, store_registry_sample
+):
+    """Hidden on arrival and present in the document, so the script never has to
+    build markup: an empty page under a header naming 543 endpoints would leave
+    a reader guessing whether the page broke."""
+    page = index(client_for(store_registry_sample))
+    assert 'id="nothing"' in page
+    assert "matches every filter selected above" in page

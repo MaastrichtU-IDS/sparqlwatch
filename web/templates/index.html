@@ -72,6 +72,40 @@
     border: 1px solid var(--border); font-family: var(--mono); font-size: 10px;
     font-weight: 700; color: var(--text-muted); }
 
+  /* The facet chips. A button and not a link: it changes what this page shows
+     and does not name another resource, so a link would promise a URL that
+     does not exist. Every one of them is inert until the script at the foot
+     runs, which is why they are styled as pressed or not rather than as
+     enabled or disabled: with no script every chip is simply unpressed and
+     every row is on the page, which is the state this page is correct in. */
+  ul.facets { display: flex; flex-wrap: wrap; gap: 6px 8px;
+              list-style: none; margin: 0; padding: 0; }
+  .facet { display: inline-flex; align-items: center; gap: 7px; height: 26px;
+    padding: 0 10px; border: 1px solid var(--border); border-radius: 13px;
+    background: none; font: inherit; font-size: 12.5px; color: var(--text);
+    cursor: pointer; }
+  .facet:hover { border-color: var(--text-muted); }
+  .facet[aria-pressed="true"] { border-color: var(--text-bright);
+    color: var(--text-bright); box-shadow: inset 0 0 0 1px var(--text-bright); }
+  /* Zero is not greyed out and not hidden. A metric chip reading 0 is the page
+     saying no sweep has measured this, which is the coverage gap these chips
+     exist to show, and dimming it would hide the finding. */
+  .facet .f-count { font-family: var(--mono); font-size: 11px;
+    color: var(--text-dim); font-variant-numeric: tabular-nums; }
+  .facet[aria-pressed="true"] .f-count { color: var(--text-bright); }
+  .facet .f-swatch { display: inline-block; width: 14px; height: 11px;
+    border-radius: 2px; }
+  /* The legend's rows are buttons too, so they keep the grid the list already
+     had rather than becoming pills: the meaning column is a sentence and does
+     not fit in one. */
+  .facet-row { display: grid; grid-template-columns: 20px minmax(112px, auto) 1fr auto auto;
+    gap: 10px; align-items: center; width: 100%; height: auto; min-height: 26px;
+    padding: 4px 8px; border-radius: var(--radius-sm); text-align: left; }
+  .facet-row .l-mean { color: var(--text-muted); font-size: 12.5px; }
+  .facet-row .l-count, .facet-row .f-count { white-space: nowrap; }
+  .facet-detail { margin: 8px 0 0; font-size: 12px; color: var(--text-muted); }
+  .facet-empty { margin: 18px 0 0; font-size: 13px; color: var(--text); }
+
   .group { margin-top: 26px; }
   .g-head { display: flex; align-items: center; gap: 9px; margin: 0 0 4px;
             font-size: 13px; font-weight: 600; color: var(--text-bright);
@@ -155,10 +189,14 @@
   <h1>Public SPARQL endpoints this service has measured</h1>
   <p class="sub" data-endpoint-count="{{ endpoint_count }}" data-metric-count="{{ metric_count }}">
     {% if endpoint_count %}
-      {{ endpoint_count }} endpoint{{ "" if endpoint_count == 1 else "s" }}, and
-      {{ metric_count }} metric{{ "" if metric_count == 1 else "s" }} measured across
-      them. No score and no ranking: each endpoint carries one verdict per metric,
-      and the groups below are the availability verdict's own values rather than a
+      {# The endpoint and metric counts used to open this paragraph and were
+         removed on 2026-08-27: every facet chip below now carries its own count
+         and the group headings carry the denominator, so the sentence was
+         repeating in prose what the page states in numbers. The counts stay in
+         the data- attributes on this element, which is where the tests read
+         them and where a machine reading the HTML can still find them. #}
+      No score and no ranking: each endpoint carries one verdict per metric, and
+      the groups below are the availability verdict's own values rather than a
       judgement about which of them is better. Follow a row to see every verdict
       written out in words.
     {% else %}
@@ -177,19 +215,88 @@
     <span class="shown" id="shown"></span>
   </div>
 
+  {% if endpoint_count %}
+  <section class="panel" data-facet-group="availability">
+    <h2>Availability</h2>
+    <ul class="facets">
+      {% for facet in availability_facets %}
+      <li><button type="button" class="facet" aria-pressed="false"
+                  data-facet="availability" data-facet-value="{{ facet.slug }}">
+        {{ facet.label }}<span class="f-count">{{ facet.count }}</span>
+      </button></li>
+      {% endfor %}
+    </ul>
+    {% for facet in availability_facets %}{% if facet.detail %}
+    <p class="facet-detail" data-facet-detail="{{ facet.slug }}">{{ facet.detail }}</p>
+    {% endif %}{% endfor %}
+  </section>
+  {% endif %}
+
   {% if metrics %}
-  <section class="panel">
+  <section class="panel" data-facet-group="metric">
     <h2>The metrics, and what each chip's letters mean</h2>
-    <ul class="mkey">
-      {% for metric in metrics %}
-      <li data-metric-column="{{ metric.name }}" data-abbr="{{ metric.abbr }}">
-        <span class="mabbr">{{ metric.abbr }}</span>{{ metric.name }}
+    <ul class="facets">
+      {% for facet in metric_facets %}
+      <li><button type="button" class="facet" aria-pressed="false"
+                  data-facet="metric" data-facet-value="{{ facet.abbr }}"
+                  data-metric-column="{{ facet.name }}" data-abbr="{{ facet.abbr }}">
+        <span class="mabbr">{{ facet.abbr }}</span>{{ facet.name }}<span
+          class="f-count">{{ facet.count }}</span>
+      </button></li>
+      {% endfor %}
+    </ul>
+    <p class="note">
+      A count here is the endpoints whose newest sweep recorded a verdict for
+      that metric. A metric the sweep declined to run does not count towards
+      it, so a chip reading 0 says no sweep has measured this rather than that
+      every endpoint failed it. {{ empty_cell_text }}
+    </p>
+  </section>
+  {% endif %}
+
+  <section class="panel" data-facet-group="state">
+    <h2>What the drawing means</h2>
+    <ul class="legend">
+      {% for state in legend %}
+      <li data-state="{{ state.slug }}">
+        <button type="button" class="facet facet-row" aria-pressed="false"
+                data-facet="state" data-facet-value="{{ state.slug }}">
+          <span class="swatch {{ state.css_class }}" aria-hidden="true"></span>
+          <span class="l-label">{{ state.label }}</span>
+          <span class="l-mean">{{ state.meaning }}</span>
+          <span class="l-count">{{ state.count }} chips</span>
+          <span class="f-count">{{ state_rows[state.slug] }} rows</span>
+        </button>
       </li>
       {% endfor %}
     </ul>
-    <p class="note">{{ empty_cell_text }}</p>
+    <p class="note">
+      The drawing never rests on colour: a filled chip means we have positive
+      evidence the capability works; a dashed border means no declaration was
+      seen for it; a heavier border means something is actively wrong rather than
+      merely missing; a dotted border means we did not look; and no border at all
+      means nothing was there.
+
+      TWO NUMBERS, because they answer different questions. "chips" is how many
+      chips on this page are in that state, which is what this list counted
+      before it was clickable. "rows" is how many endpoints have that state and
+      no other, which is what pressing it filters to, and a declined metric is
+      left out of that test: counting it would make no row uniform in anything
+      and every row number here would be 0, which would be a fact about the
+      arithmetic and not about any endpoint.
+    </p>
+    <p class="note">
+      A chip on this page carries no words, so this is the one page where a state
+      is drawn and not written out. Every row links to that endpoint's own page,
+      where each verdict is named in words beside the metric it belongs to.
+    </p>
   </section>
-  {% endif %}
+
+
+  <p class="facet-empty" id="nothing" hidden>
+    No endpoint in this store matches every filter selected above. That is a
+    fact about the filters and not about any endpoint: clear one to widen it.
+  </p>
 
   {% for group in groups %}
   <section class="group" data-availability="{{ group.availability }}">
@@ -197,7 +304,9 @@
         data-group-count="{{ group.count }}" data-group-of="{{ group.of }}">
       <span class="swatch {{ group.css_class }}" aria-hidden="true"></span>{{ group.heading }}<span class="g-shown"></span>
     </h2>
+    {% if group.meaning %}
     <p class="g-note" data-group-note="{{ group.availability }}">{{ group.meaning }}</p>
+    {% endif %}
     {% if group.dormant_note %}
     {# A note on the group, not a group of its own: a dormant row keeps the
        verdict its last real probe produced, and that verdict is what this group
@@ -251,32 +360,6 @@
   </section>
   {% endfor %}
 
-  <section class="panel">
-    <h2>What the drawing means</h2>
-    <ul class="legend">
-      {% for state in legend %}
-      <li data-state="{{ state.slug }}">
-        <span class="swatch {{ state.css_class }}" aria-hidden="true"></span>
-        <span class="l-label">{{ state.label }}</span>
-        <span>{{ state.meaning }}</span>
-        <span class="l-count">{{ state.count }}</span>
-      </li>
-      {% endfor %}
-    </ul>
-    <p class="note">
-      The drawing never rests on colour: a filled chip means we have positive
-      evidence the capability works; a dashed border means no declaration was
-      seen for it; a heavier border means something is actively wrong rather than
-      merely missing; a dotted border means we did not look; and no border at all
-      means nothing was there. The count beside each state is how many chips on
-      this page are in it.
-    </p>
-    <p class="note">
-      A chip on this page carries no words, so this is the one page where a state
-      is drawn and not written out. Every row links to that endpoint's own page,
-      where each verdict is named in words beside the metric it belongs to.
-    </p>
-  </section>
 
   <section class="panel">
     <h2>What a marked row means</h2>
@@ -327,12 +410,28 @@
   </section>
 </main>
 <script>
-/* The filter, and the page does not depend on it. Every row is in the document
-   already: this hides the ones that do not match and keeps the counts honest
-   while it does, which is the only reason it is more than three lines. A group
-   heading reading "4 of 10 endpoints" beside two visible rows would be a wrong
-   number of exactly the kind this page is built to avoid, so filtering appends
-   what is shown rather than editing what was counted.
+/* The filter and the facets, and the page does not depend on either. Every row
+   is in the document already: this hides the ones that do not match and keeps
+   the counts honest while it does, which is the only reason it is more than
+   three lines. A group heading reading "4 of 10 endpoints" beside two visible
+   rows would be a wrong number of exactly the kind this page is built to avoid,
+   so filtering appends what is shown rather than editing what was counted.
+
+   THE FACETS COST NOTHING PER ROW, which is the reason they read the DOM the
+   way they do. A chip already carries its state in an `enc-<slug>` class, its
+   metric in its own text, and `data-verdict` when a verdict was recorded or
+   `data-declined` when the sweep declined to look. So every question a facet
+   asks is answerable from markup the rows carried before facets existed, and
+   web/README.md's byte table did not move. Adding one summary attribute per
+   row would have been easier to read and cost about 20 KB.
+
+   WITHIN a group the chips are OR and ACROSS groups they are AND, which is what
+   a reader of any faceted list expects. A metric chip matches a row that
+   recorded a verdict for that metric, and a DECLINED metric does not match: a
+   chip reading 0 means no sweep measured it. A state chip matches a row whose
+   every recorded verdict is that one state, declines excluded, which is the
+   only reading that is not empty by construction; app.py's `_state_facets`
+   says why at more length.
 
    Inline rather than a file because it is the only script on the page and it is
    smaller than the request that would fetch it. web/README.md notes that a
@@ -340,27 +439,87 @@
 (function () {
   var box = document.getElementById("q");
   var shown = document.getElementById("shown");
-  if (!box) { return; }
+  var chips = [].slice.call(document.querySelectorAll("[data-facet]"));
+  if (!box && !chips.length) { return; }
   var groups = [].slice.call(document.querySelectorAll("[data-availability]"));
   var total = document.querySelectorAll("[data-endpoint]").length;
-  function apply() {
-    var q = box.value.trim().toLowerCase();
-    var matched = 0;
-    groups.forEach(function (group) {
-      var here = 0;
-      [].slice.call(group.querySelectorAll("[data-endpoint]")).forEach(function (row) {
-        var hit = !q || row.getAttribute("data-endpoint").toLowerCase().indexOf(q) >= 0;
-        row.hidden = !hit;
-        if (hit) { here += 1; }
-      });
-      matched += here;
-      group.hidden = q && here === 0;
-      var note = group.querySelector(".g-shown");
-      if (note) { note.textContent = q ? ", " + here + " shown" : ""; }
+  var empty = document.getElementById("nothing");
+  var POSITIVE = { "verified": 1, "undeclared-but-verified": 1 };
+
+  /* One row's facts, read once. Re-reading the DOM per keystroke per chip per
+     row is 543 rows times 8 chips times three questions, and the page is meant
+     to answer a keystroke faster than a reader notices. */
+  function facts(row) {
+    var cells = [].slice.call(row.querySelectorAll(".cells > span"));
+    var measured = {}, states = {}, only = null, count = 0;
+    cells.forEach(function (cell) {
+      if (!cell.hasAttribute("data-verdict")) { return; }
+      measured[cell.textContent.trim()] = 1;
+      var cls = cell.className.replace(/^enc-/, "");
+      if (!states[cls]) { states[cls] = 1; count += 1; only = cls; }
     });
-    shown.textContent = q ? "showing " + matched + " of " + total + " endpoints" : "";
+    var av = row.parentNode.parentNode.getAttribute("data-availability");
+    return {
+      url: row.getAttribute("data-endpoint").toLowerCase(),
+      metrics: measured,
+      uniform: count === 1 ? only : null,
+      available: POSITIVE[av] ? "available" : "not-available"
+    };
   }
-  box.addEventListener("input", apply);
+  var rows = [];
+  groups.forEach(function (group) {
+    [].slice.call(group.querySelectorAll("[data-endpoint]")).forEach(function (el) {
+      rows.push({ el: el, group: group, f: facts(el) });
+    });
+  });
+
+  function selected(name) {
+    return chips.filter(function (c) {
+      return c.getAttribute("data-facet") === name &&
+             c.getAttribute("aria-pressed") === "true";
+    }).map(function (c) { return c.getAttribute("data-facet-value"); });
+  }
+
+  function apply() {
+    var q = box ? box.value.trim().toLowerCase() : "";
+    var av = selected("availability"), mt = selected("metric"), st = selected("state");
+    var filtering = !!q || av.length || mt.length || st.length;
+    var matched = 0;
+    var perGroup = [];
+    rows.forEach(function (r) {
+      var hit = (!q || r.f.url.indexOf(q) >= 0) &&
+        (!av.length || av.indexOf(r.f.available) >= 0) &&
+        (!mt.length || mt.some(function (a) { return r.f.metrics[a]; })) &&
+        (!st.length || (r.f.uniform && st.indexOf(r.f.uniform) >= 0));
+      r.el.hidden = !hit;
+      r.hit = hit;
+      if (hit) { matched += 1; }
+    });
+    groups.forEach(function (group) {
+      var here = rows.filter(function (r) { return r.group === group && r.hit; }).length;
+      group.hidden = filtering && here === 0;
+      var note = group.querySelector(".g-shown");
+      if (note) { note.textContent = filtering ? ", " + here + " shown" : ""; }
+      perGroup.push(here);
+    });
+    if (shown) {
+      shown.textContent = filtering
+        ? "showing " + matched + " of " + total + " endpoints" : "";
+    }
+    /* A filter that matches nothing says so. An empty page under a header
+       reading "543 endpoints" would leave a reader to guess whether the page
+       broke or the question has no answer here. */
+    if (empty) { empty.hidden = !(filtering && matched === 0); }
+  }
+
+  chips.forEach(function (chip) {
+    chip.addEventListener("click", function () {
+      var on = chip.getAttribute("aria-pressed") === "true";
+      chip.setAttribute("aria-pressed", on ? "false" : "true");
+      apply();
+    });
+  });
+  if (box) { box.addEventListener("input", apply); }
   apply();
 })();
 </script>
