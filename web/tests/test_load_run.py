@@ -9,13 +9,21 @@ destroying an existing run before the parse failure is noticed.
 from pathlib import Path
 
 import pytest
-from pyoxigraph import DefaultGraph, NamedNode, RdfFormat, Store, parse
+from pyoxigraph import (
+    DefaultGraph,
+    NamedNode,
+    RdfFormat,
+    Store,
+    Variable,
+    parse,
+)
 
 from conftest import run_graph_names, run_quad_count
 from endpoint_content import endpoint_content
 from endpoint_measurements import endpoint_measurements
 from load_run import (
     _TERMINATOR_PREDICATES,
+    CURRENT_GRAPH_IRI,
     LoadResult,
     check_current,
     load_run,
@@ -25,6 +33,35 @@ from load_run import (
 
 FIXTURE = Path(__file__).parent / "fixtures" / "run-with-samples.nq"
 TWO_SWEEPS_FIXTURE = Path(__file__).parent / "fixtures" / "run-two-sweeps.nq"
+
+# The dormancy trio. See each file's own header for how it was made and what it
+# is a claim about. DORMANCY_FIXTURE is captured RunWriter output, the other two
+# are mechanical derivations of the same end-to-end runs.
+DORMANCY_FIXTURE = Path(__file__).parent / "fixtures" / "run-with-dormancy.nq"
+PROMOTES_FIXTURE = (
+    Path(__file__).parent / "fixtures" / "run-promotes-the-dormant.nq"
+)
+CONTRADICTS_FIXTURE = (
+    Path(__file__).parent / "fixtures" / "run-measures-and-declares-dormant.nq"
+)
+
+
+def _verdicts(store: Store, endpoint: str) -> dict[str, str]:
+    """Every metric verdict `current` holds for one endpoint, by metric id.
+
+    ?e is in the SELECT projection because pyoxigraph 0.5.9 requires it:
+    substituting a variable the query does not project raises "The SPARQL
+    query does not contains variable ?e in its SELECT projection", so a
+    projection of ?metric and ?value alone never runs.
+    """
+    rows = store.query(
+        "PREFIX dqv: <http://www.w3.org/ns/dqv#> "
+        "PREFIX sw: <urn:sparqlwatch:> "
+        "SELECT ?e ?metric ?value WHERE { GRAPH sw:current { "
+        "  ?m dqv:computedOn ?e ; dqv:isMeasurementOf ?metric ; dqv:value ?value } }",
+        substitutions={Variable("e"): NamedNode(endpoint)},
+    )
+    return {r["metric"].value.rsplit(":", 1)[-1]: r["value"].value for r in rows}
 
 def test_loading_the_same_run_twice_leaves_one_graph(tmp_path):
     store = Store(str(tmp_path / "s"))
@@ -270,9 +307,11 @@ def test_a_bad_run_path_leaves_no_store_directory_behind(tmp_path):
     assert not store_path.exists(), "a rejected run file must not create the store"
 
 
-# The one committed fixture that is current emitter output: emit_nquads' own
-# 51 quads, so its section boundaries and terminator spellings are the wire
-# format itself rather than a restatement of it.
+# emit_nquads' own 51 quads, so its section boundaries and terminator spellings
+# are the wire format itself rather than a restatement of it. It predates the
+# dormancy section, so it carries three of the four terminators and no
+# sw:dormantCount; run-with-dormancy.nq is the committed fixture that carries
+# all four, and the two tests at the end of this file cut its dormancy section.
 TERMINATED_FIXTURE = Path(__file__).parent / "fixtures" / "run-prober-failed.nq"
 
 
@@ -1270,3 +1309,346 @@ def test_the_check_counts_the_endpoints_it_actually_compared(tmp_path):
         "compared and named"
     )
     assert len(checked.drifted) <= checked.endpoints
+
+
+# ---------------------------------------------------------------------------
+# Dormancy: the two refusals, and the design that needs nothing else
+# ---------------------------------------------------------------------------
+# Revision 3's headline is that this is small. A dormant endpoint has no
+# measurements, so it is absent from the measured and the sampled set, and
+# current is correct for it by construction: no pointer, no widened fact set,
+# no rebuild ordering rule. What the loader does add is two refusals, and the
+# tests below are half about the refusals and half about pinning the properties
+# the design silently rests on.
+
+DORMANCY_RUN = f"{SW}run:2026-08-27T10:00:00Z"
+PROMOTED_RUN = f"{SW}run:2026-08-27T11:00:00Z"
+CURRENT_SWEEP_RUN = f"{SW}run:2026-08-22T16:00:00Z"
+
+
+def test_a_dormant_endpoint_keeps_the_verdicts_from_its_last_probe(store):
+    load_run(store, TWO_SWEEPS_FIXTURE.read_bytes())
+    before = _verdicts(store, KADASTER)
+    assert before
+    load_run(store, DORMANCY_FIXTURE.read_bytes())
+    assert _verdicts(store, KADASTER) == before
+
+
+def test_a_dormant_endpoints_pointer_does_not_move(store):
+    """The other half of the same fact. Verdicts could survive while the
+    pointer moved to the declining run, and the site would then report the
+    endpoint's age as the age of a sweep that never asked it."""
+    load_run(store, TWO_SWEEPS_FIXTURE.read_bytes())
+    before = _pointer(store, KADASTER, "currentRun")
+    assert before == CURRENT_SWEEP_RUN, before
+
+    load_run(store, DORMANCY_FIXTURE.read_bytes())
+
+    assert _pointer(store, KADASTER, "currentRun") == before
+    assert _pointer(store, KADASTER, "currentSampleRun") == before, (
+        "the sample pointer is decided by sw:sampledFrom, which a dormancy "
+        "section also does not carry"
+    )
+
+
+def test_a_run_that_declined_an_endpoint_does_not_become_its_current_run(store):
+    """Carried in from Task 3's review, and it holds today by predicate choice
+    alone: the dormancy section carries sw:dormantEndpoint, rdf:type,
+    sw:dormancyReason and sw:dormantSince, while _MEASURED_ENDPOINTS needs
+    dqv:computedOn, sw:notMeasuredOn or sw:declarationsRead and
+    _SAMPLED_ENDPOINTS needs sw:sampledFrom. Nothing asserted it, and if it
+    ever breaks, declining an endpoint wipes its verdicts.
+
+    The three assertions before the pointer check are what stop this being
+    vacuous: the declining run really is in the store, it really is the store's
+    newest run, and it really does name kadaster.
+    """
+    load_run(store, TWO_SWEEPS_FIXTURE.read_bytes())
+    load_run(store, DORMANCY_FIXTURE.read_bytes())
+
+    assert NamedNode(DORMANCY_RUN) in list(store.named_graphs())
+    newest = list(store.query(f"""
+        PREFIX prov: <{PROV}>
+        SELECT (MAX(?t) AS ?newest) WHERE {{
+          GRAPH ?g {{ ?a a prov:Activity ; prov:generatedAtTime ?t }} }}"""))
+    assert newest[0]["newest"].value == "2026-08-27T10:00:00Z", (
+        "the declining run must be the store's NEWEST run, or this test is "
+        "only saying that an older run lost a race"
+    )
+    assert list(store.quads_for_pattern(
+        None, NamedNode(SW + "dormantEndpoint"), NamedNode(KADASTER),
+        NamedNode(DORMANCY_RUN))), "and it must really name kadaster"
+
+    assert _pointer(store, KADASTER, "currentRun") == CURRENT_SWEEP_RUN
+    assert _pointer(store, QLEVER, "currentRun") == DORMANCY_RUN, (
+        "an endpoint the same run DID measure advances, so the run is not "
+        "being ignored wholesale"
+    )
+
+
+def test_current_holds_no_dormancy_at_all(store):
+    """The design, pinned. A pointer for dormancy produced four Criticals in
+    review, every one of them two recencies disagreeing."""
+    load_run(store, DORMANCY_FIXTURE.read_bytes())
+    assert not list(store.quads_for_pattern(
+        None, NamedNode("urn:sparqlwatch:dormancyReason"), None,
+        NamedNode(CURRENT_GRAPH_IRI)))
+    for predicate in ("dormantEndpoint", "dormantSince", "dormantCount"):
+        assert not list(store.quads_for_pattern(
+            None, NamedNode(SW + predicate), None,
+            NamedNode(CURRENT_GRAPH_IRI))), predicate
+
+
+def test_check_current_agrees_over_a_store_with_dormancy(store):
+    """If dormancy needed anything of current, --check would be the detector
+    that noticed, and it would notice in production rather than here."""
+    load_run(store, TWO_SWEEPS_FIXTURE.read_bytes())
+    result = load_run(store, DORMANCY_FIXTURE.read_bytes())
+    assert result.drifted == [], result.drifted
+
+    checked = check_current(store)
+    assert checked.ok, checked.drifted
+    assert checked.endpoints == 3, (
+        "all three endpoints must have been compared, kadaster included, or "
+        "'nothing drifted' is only saying nothing was looked at"
+    )
+
+
+def test_a_rebuild_over_a_store_with_dormancy_changes_nothing(store):
+    """The sixth review's empirical claim, as a test: current is
+    reconstructible from the run graphs alone even when one of them declares an
+    endpoint dormant. If a dormancy fact had leaked into current, the rebuild
+    would not put it back and this comparison would fail."""
+    load_run(store, TWO_SWEEPS_FIXTURE.read_bytes())
+    load_run(store, DORMANCY_FIXTURE.read_bytes())
+    before = _current(store)
+
+    rebuild_current(store)
+
+    assert _current(store) == before
+
+
+def test_a_graph_that_both_measures_and_declares_dormant_is_refused(store):
+    """One graph, two opposite claims about one endpoint. Refused in
+    _parsed_graphs, so the store is never touched."""
+    before = _current(store)
+    graphs = sorted(graph.value for graph in store.named_graphs())
+
+    with pytest.raises(ValueError) as raised:
+        load_run(store, CONTRADICTS_FIXTURE.read_bytes())
+
+    said = str(raised.value)
+    assert KADASTER in said, said
+    assert f"{SW}run:2026-08-27T09:00:00Z" in said, (
+        f"name the graph, not just the endpoint: {said}"
+    )
+    assert _current(store) == before, "nothing may have been written"
+    assert sorted(graph.value for graph in store.named_graphs()) == graphs
+
+
+def test_the_contradiction_is_refused_before_the_store_is_opened(tmp_path, capsys):
+    """main() validates every file with _parsed_graphs before Store() is
+    called, which is the only reason the refusal has to live there rather than
+    in main()'s own loop."""
+    store_path = tmp_path / "s"
+    bad = tmp_path / "bad.nq"
+    bad.write_bytes(CONTRADICTS_FIXTURE.read_bytes())
+
+    with pytest.raises(ValueError, match="dormant"):
+        main([str(store_path), str(bad)])
+
+    assert not store_path.exists(), "a refused run file must not create the store"
+
+
+def test_a_file_of_two_graphs_where_one_skipped_and_one_probed_is_accepted(store):
+    """Why the refusal is per GRAPH. These bytes hold "kadaster is dormant" and
+    "kadaster was measured", which is exactly what a per-file check would
+    refuse, and it is the NORMAL pair under a weekly cadence: sweep 10:00
+    skipped it, sweep 11:00 probed it. It is also how dormancy clears itself,
+    with no delete and no condition."""
+    result = load_run(store, PROMOTES_FIXTURE.read_bytes())
+
+    assert result.quad_count == 277, "the fixture's own count, both graphs"
+    assert result.dormant == [KADASTER]
+    assert _verdicts(store, KADASTER), "the later sweep's verdicts are in"
+    assert _pointer(store, KADASTER, "currentRun") == PROMOTED_RUN, (
+        "the probe week's run, not the sweep that skipped it"
+    )
+
+
+def test_a_file_that_would_replace_measurements_with_dormancy_is_refused(
+    store, tmp_path
+):
+    """The history-rewriting case, and the general case Task 1's replay rule
+    only covers a corner of. Sweep 16:00 measured kadaster; a later sweep moved
+    last_probed on, so a re-run of --at 16:00 does not trip replay detection
+    and the cadence skips kadaster. The re-emitted file declares kadaster
+    dormant under the SAME run IRI, load_run replaces graph 16:00, and
+    kadaster's measurements are gone from the store while the retry's file has
+    overwritten the original on disk.
+
+    _drifted reports that only indirectly and only while current still points
+    at 16:00, and it says "a run graph has shrunk" rather than "your history
+    was rewritten".
+    """
+    load_run(store, TWO_SWEEPS_FIXTURE.read_bytes())
+    before = _verdicts(store, KADASTER)
+    assert before
+    replayed = _replayed(
+        DORMANCY_FIXTURE.read_bytes(), "2026-08-27T10:00:00Z", "2026-08-22T16:00:00Z"
+    )
+
+    with pytest.raises(ValueError) as raised:
+        load_run(store, replayed)
+
+    said = str(raised.value)
+    assert KADASTER in said, said
+    assert CURRENT_SWEEP_RUN in said, f"name the graph it would replace: {said}"
+    assert _verdicts(store, KADASTER) == before, (
+        "the measurements this refusal exists to save must still be there"
+    )
+
+    # The negative control, and it is what makes the assertions above a claim
+    # about the STORE rather than about these bytes: the very same file loads
+    # without complaint into a store that holds no 16:00 graph to lose.
+    fresh = Store(str(tmp_path / "fresh"))
+    assert load_run(fresh, replayed).dormant == [KADASTER]
+
+
+def test_a_dormancy_declaration_over_a_declarations_only_graph_is_refused(
+    tmp_path,
+):
+    """The third of the three shapes sw:currentRun is governed by. A graph
+    holding only <endpoint> sw:declarationsRead is not something the emitter
+    writes, because a chunk always carries measurements beside it, but the
+    pointer set is defined by all three shapes and losing any of them to a
+    dormancy declaration is the same rewritten history."""
+    store = Store(str(tmp_path / "s"))
+    graph = f"<{DORMANCY_RUN}>"
+    store.load(
+        (
+            f"<{SW}activity:2026-08-27T10:00:00Z> <http://www.w3.org/1999/02/"
+            f'22-rdf-syntax-ns#type> <{PROV}Activity> {graph} .\n'
+            f"<{SW}activity:2026-08-27T10:00:00Z> <{PROV}generatedAtTime> "
+            f'"2026-08-27T10:00:00Z"^^<http://www.w3.org/2001/XMLSchema#'
+            f"dateTime> {graph} .\n"
+            f'<{KADASTER}> <{SW}declarationsRead> "true"^^<http://www.w3.org/'
+            f"2001/XMLSchema#boolean> {graph} .\n"
+        ).encode(),
+        format=RdfFormat.N_QUADS,
+    )
+
+    with pytest.raises(ValueError, match="dormant"):
+        load_run(store, DORMANCY_FIXTURE.read_bytes())
+
+    assert list(store.quads_for_pattern(
+        NamedNode(KADASTER), NamedNode(SW + "declarationsRead"), None,
+        NamedNode(DORMANCY_RUN))), "the fact the refusal exists to save"
+
+
+def test_load_result_says_which_endpoints_the_file_declared_dormant(store):
+    result = load_run(store, DORMANCY_FIXTURE.read_bytes())
+    assert result.dormant == [KADASTER]
+    assert LoadResult().dormant == [], "and the field defaults to empty"
+    assert load_run(store, FIXTURE.read_bytes()).dormant == [], (
+        "a file with no dormancy section declares nothing dormant"
+    )
+
+
+def test_main_says_which_endpoints_a_file_declared_dormant(tmp_path, capsys):
+    """An endpoint the sweep declined to ask is an endpoint whose page will not
+    move this week. An operator told only "loaded 115 quads" has no way to tell
+    that from a sweep that asked everything."""
+    path = str(tmp_path / "s")
+    run = tmp_path / "dormant.nq"
+    run.write_bytes(DORMANCY_FIXTURE.read_bytes())
+
+    assert main([path, str(run)]) == 0
+
+    said = capsys.readouterr().out
+    assert KADASTER in said, said
+    assert "dormant" in said.lower(), said
+
+
+# The dormancy section's cut point. run-prober-failed.nq predates the section
+# entirely, so before this fixture existed there was no Python-side test of
+# either boundary, and the loader's tolerance was pinned for three of its four
+# terminators.
+
+
+def _dormancy_sections() -> tuple[bytes, bytes, bytes]:
+    """DORMANCY_FIXTURE split at the two terminators that bound its dormancy
+    section: everything up to and including sw:emission, the dormancy section
+    up to and including sw:dormantCount, and the rest.
+
+    Found by predicate rather than by line number, so a regenerated fixture
+    moves these boundaries with it.
+    """
+    lines = DORMANCY_FIXTURE.read_bytes().splitlines(keepends=True)
+    ends = {}
+    for index, line in enumerate(lines):
+        for predicate in (b"emission", b"dormantCount"):
+            if b"> <urn:sparqlwatch:" + predicate + b"> " in line:
+                ends[predicate] = index
+    assert set(ends) == {b"emission", b"dormantCount"}, sorted(ends)
+    assert ends[b"dormantCount"] > ends[b"emission"] + 1, (
+        "the section must be non-empty, or neither test below cuts inside it"
+    )
+    header = b"".join(lines[: ends[b"emission"] + 1])
+    section = b"".join(lines[ends[b"emission"] + 1 : ends[b"dormantCount"] + 1])
+    return header, section, b"".join(lines[ends[b"dormantCount"] + 1 :])
+
+
+def test_a_file_cut_inside_the_dormancy_section_cuts_back_to_the_header(tmp_path):
+    """A crash between sw:emission and sw:dormantCount. The groups written so
+    far are a fragment of a section, and loading them would publish "these
+    endpoints were skipped" as the whole list when it is a prefix of it. The
+    cut goes back to sw:emission, which is why that terminator is in the set."""
+    store = Store(str(tmp_path / "s"))
+    header, section, _ = _dormancy_sections()
+    partial = b"".join(section.splitlines(keepends=True)[:-1])
+    assert partial, "there must be something to drop"
+
+    result = load_run(store, header + partial)
+
+    assert result.quad_count == 7, "the header's run-level facts and nothing else"
+    assert result.discarded_bytes == len(partial)
+    assert not list(store.quads_for_pattern(
+        None, NamedNode(SW + "dormantEndpoint"), None, None)), (
+        "a fragment of the skipped list must not reach the store"
+    )
+    assert not list(store.quads_for_pattern(
+        None, NamedNode(SW + "dormantCount"), None, None))
+
+
+def test_a_file_ending_at_the_dormancy_terminator_loads_whole(tmp_path):
+    """A crash after the section and before the first chunk. Everything in the
+    file is a whole section, so nothing may be dropped: the run's own metadata
+    and the complete list of endpoints it declined to ask."""
+    store = Store(str(tmp_path / "s"))
+    header, section, _ = _dormancy_sections()
+
+    result = load_run(store, header + section)
+
+    assert result.discarded_bytes == 0, "every section here is complete"
+    assert result.quad_count == 12, "the header's 7 quads and the section's 5"
+    assert result.dormant == [KADASTER]
+    assert list(store.quads_for_pattern(
+        None, NamedNode(SW + "dormantCount"), None, None)), (
+        "the terminator itself must be in the store"
+    )
+
+
+def test_reloading_a_dormancy_run_over_its_own_graph_is_still_allowed(store):
+    """The refusal above must not close the documented recovery. Re-loading a
+    run is how an operator repairs a current graph left wrong, and the graph a
+    dormancy run replaces is its own, which holds no facts for the endpoint it
+    declared dormant. So this load has nothing to lose and must go through."""
+    load_run(store, DORMANCY_FIXTURE.read_bytes())
+    before = _current(store)
+
+    again = load_run(store, DORMANCY_FIXTURE.read_bytes())
+
+    assert again.replaced == [DORMANCY_RUN]
+    assert again.dormant == [KADASTER]
+    assert _current(store) == before
