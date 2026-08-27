@@ -702,6 +702,23 @@ def test_only_the_newest_runs_declaration_is_read(tmp_path):
     )
 
 
+def test_a_dormancy_with_no_reason_still_suppresses_the_crash_claim():
+    """The gate is the DECLARATION, not the reason.
+
+    Every dormancy group the prober writes carries an sw:dormancyReason, so
+    this shape has no committed fixture, and it is pinned on the dataclass for
+    the same reason condition (b)'s middle conjuncts are: a run graph that
+    declared an endpoint dormant and recorded no reason has still said it
+    declined to ask, and printing a crash claim over it would be as false as
+    printing one over a run that gave its reason.
+    """
+    r = _newest_is_a_crashed_later_run(
+        newest_declared_this_endpoint_dormant=True
+    )
+    assert r.newest_dormancy_reason is None
+    assert r.newer_run_did_not_reach_this_endpoint is False
+
+
 # ---------------------------------------------------------------------------
 # The decision's four conjuncts, one at a time
 # ---------------------------------------------------------------------------
@@ -766,23 +783,6 @@ def test_a_newest_run_that_marked_this_endpoint_reports_no_decision():
         newest_completed_this_endpoint=True
     )
     assert r.newest_sweep_recorded_nothing_for_this_endpoint is False
-
-
-def test_a_dormancy_with_no_reason_still_suppresses_the_crash_claim():
-    """The gate is the DECLARATION, not the reason.
-
-    Every dormancy group the prober writes carries an sw:dormancyReason, so
-    this shape has no committed fixture, and it is pinned on the dataclass for
-    the same reason condition (b)'s middle conjuncts are: a run graph that
-    declared an endpoint dormant and recorded no reason has still said it
-    declined to ask, and printing a crash claim over it would be as false as
-    printing one over a run that gave its reason.
-    """
-    r = _newest_is_a_crashed_later_run(
-        newest_declared_this_endpoint_dormant=True
-    )
-    assert r.newest_dormancy_reason is None
-    assert r.newer_run_did_not_reach_this_endpoint is False
 
 
 def test_the_index_and_the_endpoint_page_agree_about_dormancy(

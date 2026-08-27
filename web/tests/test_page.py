@@ -1528,8 +1528,12 @@ def test_the_dormancy_sentence_is_not_drawn_as_a_verdict(
     """
     text = page(client_for(store_dormant_newest), KADASTER)
 
+    # "dormant" in both, not "dormancy" in the second: an eighth state would be
+    # slugged with the vocabulary's own word, sw:dormantEndpoint's, so a search
+    # for "dormancy" would pass over data-state="dormant". This word catches
+    # both spellings.
     assert "dormant" not in str(with_attribute(text, "data-metric"))
-    assert "dormancy" not in str(with_attribute(text, "data-state"))
+    assert "dormant" not in str(with_attribute(text, "data-state"))
     assert [row["data-metric"] for row, _ in chips(text)], (
         "the page must still draw the verdicts it has"
     )
@@ -1665,13 +1669,15 @@ def test_an_unrecognised_dormancy_reason_is_shown_verbatim():
     assert "automatic" not in text and "operator-hold" not in text
 
 
-def test_a_dormancy_the_newest_run_did_not_declare_is_not_reported():
-    """The sentence is about the newest run, so it needs a newer run.
+def test_a_dormancy_with_no_newer_sweep_to_attribute_it_to_says_nothing():
+    """The sentence is about a newer sweep, so it needs one.
 
-    Both of the property's own guards, read through the sentence: an absent
-    newest run and a newest run that is this endpoint's own run each leave
-    nothing to say, and a sentence that fired anyway would name a sweep the
-    store does not hold or invent a second one.
+    Both of the property's own run guards, read through the sentence: an
+    absent newest run and a newest run that is this endpoint's own run each
+    leave nothing to say, and a sentence that fired anyway would name a sweep
+    the store does not hold or invent a second one. WHICH run's declaration is
+    read is a different question and
+    test_only_the_newest_runs_declaration_is_read owns it.
     """
     assert _silence_text(newest_run=None, newest_generated_at=None) is None
     assert (

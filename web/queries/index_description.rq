@@ -36,6 +36,29 @@
 #     dqv:computedOn or sw:notMeasuredOn object below, which is exactly the set
 #     the HTML lists.
 #
+# THE DORMANCY ARM IS THE FOURTH ARM AND NOT AN OPTIONAL IN THE THIRD, and that
+# is measured. Measured on this machine over a synthetic store of the DEPLOYED
+# shape, which is the shape the numbers are about and no committed fixture has:
+# 543 endpoints, an older sweep that measured all of them, and a newest sweep
+# that completes 486 and declares the other 57 dormant.
+#
+#   without any dormancy branch                      99 ms   26,615 triples
+#   an OPTIONAL inside the newest-activity arm      491 ms   26,786 triples
+#   its own fourth arm, which is what is below       94 ms   26,786 triples
+#
+# The same 171 extra triples, at five times the cost or at none of it. Inside
+# the third arm the dormancy pattern shares with it only variables that are
+# constant within that arm, so nothing joins and the arm's solutions become its
+# completion markers TIMES its dormancy declarations: 486 x 57 = 27,702 where
+# the facts wanted are 57. As its own arm the aggregate subquery is repeated,
+# which is the cost, and it is 0.4 ms at 402 runs by endpoint_description.rq's
+# measurement of the same subquery.
+#
+# web/queries/endpoint_description.rq and web/queries/index.rq do not have this
+# problem and needed no fourth arm: both scope the dormancy pattern to a single
+# substituted or bound ?endpoint, so it multiplies nothing. This file is the one
+# place the pattern is asked of every endpoint at once.
+#
 # Measured on this machine over the 543-endpoint registry sweep: 26,103 triples
 # serialised to about 2.2 MB of Turtle in 130 ms. The byte count moves by a few
 # tens of KB between runs while the triple count does not, because a CONSTRUCT's
@@ -189,24 +212,42 @@ WHERE {
       OPTIONAL { ?newestActivity sw:finalised ?newestFinalised }
       OPTIONAL { ?newestActivity sw:completedEndpoint ?newestCompleted }
     }
-    # Which endpoints that run declared dormant, with the reason and the instant
-    # it published for each. A FRESH VARIABLE, mirroring ?newestCompleted just
-    # above, and NOT ?endpoint. This arm binds no ?endpoint of its own, and the
-    # other two arms use that name for the endpoint a measurement or a decline
-    # is about, so binding it here would give one name two meanings across the
-    # arms of one UNION. The triples emitted happen to be the same either way
-    # today, because every template triple that mentions ?endpoint also names a
-    # subject this arm never binds and so drops; that is a property of the
-    # template as it stands and not one to write a branch against.
+  }
+  UNION
+  {
+    # Which endpoints the newest run declared dormant, with the reason and the
+    # instant it published for each. ITS OWN ARM, and that is measured rather
+    # than tidy. As an OPTIONAL inside the arm above it shared with that arm
+    # only variables that are constant within it, so the arm's solutions became
+    # its completion markers TIMES its dormancy declarations, on the deployed
+    # shape:
     #
-    # The declaration is dateable because it hangs off ?newestActivity, whose
-    # prov:generatedAtTime this arm already emits. Emitted for EVERY endpoint
-    # the run names here, unlike in endpoint_description.rq where it is scoped
-    # to the one endpoint that document describes, and for the same reason the
-    # completion marker above is: this document describes every endpoint in the
-    # index, so each declaration is a fact about a resource it describes.
+    #   the arm above, alone                          486 solutions
+    #   the arm above plus the dormancy OPTIONAL    27,702 solutions
+    #   this arm                                       57 solutions
     #
-    # KEYED ON sw:currentRun, which is what makes the sentence above true. An
+    # and the whole query 99 ms, 491 ms and 94 ms respectively, for exactly the
+    # same 26,786 triples either way. The store is named in this file's header.
+    #
+    # The aggregate subquery is repeated here rather than shared with the arm
+    # above, because a UNION arm is evaluated on its own; it is the same shape
+    # for the same measured reason, and the three read queries have to select
+    # the same newest run or the representations disagree about which run it is.
+    #
+    # A FRESH VARIABLE, mirroring ?newestCompleted in the arm above, and NOT
+    # ?endpoint. The other two arms use that name for the endpoint a
+    # measurement or a decline is about, so binding it here would give one name
+    # two meanings across the arms of one UNION.
+    #
+    # The declaration is dateable because it hangs off ?newestActivity, and this
+    # arm emits that activity's prov:generatedAtTime like the arm above does.
+    # Emitted for EVERY endpoint the run names, unlike in
+    # endpoint_description.rq where it is scoped to the one endpoint that
+    # document describes, and for the same reason the completion marker is: this
+    # document describes every endpoint in the index, so each declaration is a
+    # fact about a resource it describes.
+    #
+    # KEYED ON sw:currentRun, which is what makes that sentence true. An
     # endpoint the newest run ONLY declared dormant has no measurement and no
     # decline, so no row of web/queries/index.rq mentions it and the index does
     # not list it. Unkeyed, this arm would carry a dormancy for a resource the
@@ -216,13 +257,21 @@ WHERE {
     #
     # Only the newest run's declaration is read, for the reason
     # web/queries/index.rq gives at the same point.
-    OPTIONAL {
-      GRAPH ?newestRun {
-        ?newestActivity sw:dormantEndpoint ?newestDormant .
-        OPTIONAL { ?newestDormant sw:dormancyReason ?newestDormancyReason }
-        OPTIONAL { ?newestDormant sw:dormantSince ?newestDormantSince }
+    {
+      SELECT (MAX(?anyGeneratedAt) AS ?newestGeneratedAt) WHERE {
+        GRAPH ?anyRun {
+          ?anyActivity a prov:Activity ;
+                       prov:generatedAtTime ?anyGeneratedAt .
+        }
       }
-      GRAPH sw:current { ?newestDormant sw:currentRun ?dormantEndpointIsListed }
     }
+    GRAPH ?newestRun {
+      ?newestActivity a prov:Activity ;
+                      prov:generatedAtTime ?newestGeneratedAt ;
+                      sw:dormantEndpoint ?newestDormant .
+      OPTIONAL { ?newestDormant sw:dormancyReason ?newestDormancyReason }
+      OPTIONAL { ?newestDormant sw:dormantSince ?newestDormantSince }
+    }
+    GRAPH sw:current { ?newestDormant sw:currentRun ?dormantEndpointIsListed }
   }
 }

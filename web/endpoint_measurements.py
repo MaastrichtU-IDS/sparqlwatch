@@ -86,12 +86,14 @@ class EndpointMeasurements:
 
     The nine fields after them say whether that sweep, and the newest sweep
     in the store, actually finished, and whether that newest sweep declined
-    to ask this endpoint at all. They are the raw facts stage 1c-b4's prober
-    writes, not a conclusion: ``run_did_not_finish`` and
-    ``newer_run_did_not_reach_this_endpoint`` below are the two conclusions,
-    and they are kept separate from the facts so that the RDF representation
-    can serve the same facts and reach the same conclusions without this
-    module's help. See web/queries/endpoint_measurements.rq's header.
+    to ask this endpoint at all. They are the raw facts the prober writes, not
+    a conclusion: the four conclusions are the properties below,
+    ``run_did_not_finish``, ``newer_run_did_not_reach_this_endpoint``,
+    ``newest_sweep_recorded_nothing_for_this_endpoint`` and
+    ``newest_sweep_declined_to_ask_this_endpoint``, and they are kept separate
+    from the facts so that the RDF representation can serve the same facts and
+    reach the same conclusions without this module's help. See
+    web/queries/endpoint_measurements.rq's header.
     """
 
     endpoint: str
@@ -164,10 +166,12 @@ class EndpointMeasurements:
         run's and they are complete and current as far as this endpoint's own
         facts go.
 
-        All five conjuncts below are required, and they are not
-        interchangeable. ``newest_run is not None`` is first because
-        ``None != self.run`` is True, so an absent newest run would otherwise
-        read as "a run other than this one".
+        The five conjuncts of fact below are required, and they are not
+        interchangeable. (The sixth is a gate rather than a fact about the
+        run, and the paragraph after these five is about it.)
+        ``newest_run is not None`` is first because ``None != self.run`` is
+        True, so an absent newest run would otherwise read as "a run other
+        than this one".
         ``newest_run != run`` is what stops this firing on a finished run's own
         page, where the newest run in the store IS the run being shown.
         ``newest_emission is not None`` is the same requirement as above, for
