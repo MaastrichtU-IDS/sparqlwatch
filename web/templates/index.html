@@ -28,9 +28,10 @@
   .logo { display: flex; align-items: center; gap: 9px; font-weight: 600; color: var(--text-bright); }
   .run { margin-left: auto; font-family: var(--mono); font-size: 12px; color: var(--text-dim); }
   /* The header's link to /about, in the same token as every other link on the
-     page. One occurrence per page and not one per row: web/README.md's table
-     has this page over its byte budget in three of four measured shapes, and a
-     link repeated 543 times is the version of this fix that makes that worse. */
+     page. One occurrence per page and not one per row: at 543 rows anything
+     per-row costs 543 times what it reads, and web/README.md's table is the
+     record of how little headroom that leaves. A link repeated 543 times is the
+     version of this fix that spends 1,227 bytes as 24,000. */
   header a { font-family: var(--mono); font-size: 12px; }
   main { padding: 22px 24px; max-width: 1120px; }
   h1 { margin: 0; font-size: 18px; font-weight: 600; color: var(--text-bright);
@@ -222,21 +223,23 @@
    the metric IRI itself asks this resource for RDF, which is what the
    negotiation is for.
 
-   WHAT THESE MARKERS COST, and THE PAGE IS OVER ITS 500,000 BYTE BUDGET AS SOON
-   AS ROWS ARE MARKED. In UTF-8 bytes of the served page over the 543-endpoint
-   sweep: 437,404 with no row marked, 502,381 with all 543 naming their own
-   sweep (a two-endpoint newer run on top), 509,455 with 57 of those also
-   dormant, which is the realistic near-term shape, and 578,932 with all 543
-   dormant, which is the worst case for these markers. 806, 922, 938 and 1,066
-   bytes a row. Only the first is inside the budget. The render cost of the whole
-   change was 10.50 ms against 11.08 ms, HEAD and this tree back to back in one
-   process over one store.
+   WHAT THESE MARKERS COST. In UTF-8 bytes of the served page over the
+   543-endpoint sweep: 438,652 with no row marked, 501,609 with all 543 naming
+   their own sweep (a two-endpoint newer run on top), 510,188 with 57 of those
+   also dormant, which is the realistic near-term shape, and 580,357 with all
+   543 dormant, which is the worst case for these markers. 808, 924, 940 and
+   1,069 bytes a row. The render cost of the whole change was 10.50 ms against
+   11.08 ms, HEAD and this tree back to back in one process over one store.
 
-   THE OVERRUN IS NOT DECIDED HERE. The budget is set by
-   docs/superpowers/plans/2026-08-25-a-ui-you-can-use.md, which says an overrun
-   comes back to the plan owner rather than being decided in a task, so nothing
-   is dropped from this row to get under it. Deleting the markers is not the
-   answer either: the alternative is 543 rows of one sweep's verdicts under a
+   ALL FOUR ARE INSIDE THE BUDGET, WHICH IS 750,000 BYTES AND WAS 500,000 UNTIL
+   2026-08-27. Three of the four were outside the old number, and the plan owner
+   raised it rather than take markup out of these rows, because measuring the
+   overrun showed what it really was: at 808 bytes a row with nothing marked,
+   500,000 runs out at 619 endpoints, and the registry is 543 with two more
+   sources still to ingest. The limit was sized for the markup and not for a
+   list that only grows. NOTHING TESTS IT, which is how a 0.5% overrun survived
+   a commit; the form to pin is bytes per row, not a total. Deleting the markers
+   was never the alternative: that is 543 rows of one sweep's verdicts under a
    header naming another sweep, which is one wrong answer 543 times. Roughly 11
    KB of the marked figure is the instant's second spelling in
    data-measured-by-sweep, kept for now because a script filtering these rows

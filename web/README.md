@@ -534,7 +534,7 @@ the top of the page writes every abbreviation out in full. The abbreviations are
 generated from the metric names the store holds, so they change with the metric
 set rather than being a list in the template. That is the page's size budget at
 work: 543 rows carrying full metric names, or the metric repeated in an
-attribute beside each chip, measured 610 KB against the 500 KB the page is
+attribute beside each chip, measured 610 KB against the 750 KB the page is
 allowed. It is 437,404 bytes as it stands, which is 427.2 KiB and 437 KB. An earlier
 sentence here said 424.6 KiB, which is 434,790 bytes and no measurement anyone
 took.
@@ -544,19 +544,30 @@ NOT DECIDED HERE.** Every row whose facts are not the newest run's carries the
 instant of the sweep that measured it, in words and in `data-measured-by-sweep`,
 and a row the newest sweep declined to ask carries about 144 bytes more. Measured
 over the same 543 endpoints, in UTF-8 bytes of the served page, against the
-decimal 500,000 the budget is written in three lines above:
+decimal 750,000 the budget is written in. It was 500,000 until 2026-08-27, and the numbers below
+are why it moved: at 808 bytes a row with no markers at all, 500,000 runs out at **619
+endpoints**, so it was sized for the markup and not for a registry that only grows. The plan
+that sets it records the change and the reasoning.
 
-| Store shape | Rows marked | Dormant | Bytes | Per row | Against 500,000 |
+| Store shape | Rows marked | Dormant | Bytes | Per row | Against 750,000 |
 | --- | --- | --- | --- | --- | --- |
-| one sweep, the shape above | 0 | 0 | 437,404 | 806 | under by 62,596 |
-| a two-endpoint newer sweep | 543 | 0 | 502,381 | 922 | **over by 2,381 (0.5%)** |
-| the same, plus the 57 endpoints the measured set relegates | 543 | 57 | 509,455 | 938 | **over by 9,455 (1.9%)** |
-| every row marked and dormant | 543 | 543 | 578,932 | 1,066 | **over by 78,932 (15.8%)** |
+| one sweep, the shape above | 0 | 0 | 438,652 | 808 | under by 311,348 |
+| a two-endpoint newer sweep | 543 | 0 | 501,609 | 924 | under by 248,391 |
+| the same, plus the 57 endpoints the measured set relegates | 543 | 57 | 510,188 | 940 | under by 239,812 |
+| every row marked and dormant | 543 | 543 | 580,357 | 1,069 | under by 169,643 |
 
 The last row is the worst case FOR THIS MARKER and the third is the realistic
-near-term shape: a narrow re-probe plus the endpoints the cadence has taken. So
-this is not a hypothetical overrun and it is not inside the budget in any shape
-where the marker does its job. What it is not is a decision to take here:
+near-term shape: a narrow re-probe plus the endpoints the cadence has taken. All
+four are inside 750,000, and three of the four were outside 500,000, which is the
+change. Two things the table does not say and a reader should know. **The page is
+95% rows**: 552,913 bytes of rows against 27,444 for the head, the CSS, the
+legend and all four explanation panels together, so per-row markup is the only
+lever with leverage. And **the chips are 576 of a 1,014 byte row, 57%**, more
+than half the row before this stage touched it, so the cheap reductions all live
+outside them: dropping the visible instant saves 71 bytes a row, the
+`data-measured-by-sweep` attribute 45, halving the marker text 37, about 184
+bytes a row or 100 KB in total, none of it taken. What it is not is a decision
+that was taken here:
 `docs/superpowers/plans/2026-08-25-a-ui-you-can-use.md` sets the budget and says
 an overrun comes back to the plan owner rather than being decided in a task, so
 the markup stands as written and the number is with them. The alternative to the
