@@ -45,7 +45,14 @@ from pyoxigraph import NamedNode, RdfFormat, Store, parse
 from starlette.testclient import TestClient
 
 import verdict_encoding
-from app import ENDPOINT_PATH, INDEX_PATH, app, get_store
+from app import (
+    ENDPOINT_PATH,
+    INDEX_PATH,
+    ROW_DORMANT_TEXT,
+    _row_dormancy_text,
+    app,
+    get_store,
+)
 
 # The generic HTML readers, imported from the endpoint page's tests rather than
 # written twice. They depend on nothing about that page: ``with_attribute``
@@ -1085,3 +1092,365 @@ def test_a_metric_this_rows_run_never_recorded_is_not_drawn_as_a_verdict(
     for wide in (row_for(page, EPO), row_for(page, ASCDC)):
         assert wide["gaps"] == 0
         assert len(wide["chips"]) == len(key)
+
+
+# ---------------------------------------------------------------------------
+# Rows the newest sweep did not ask, and rows it did not measure
+# ---------------------------------------------------------------------------
+#
+# The defect these close is one sentence in the header: "newest sweep
+# <instant>". It is one fact about the store, and until now nothing on a row
+# said whether that instant had anything to do with the verdicts beside it. On
+# this site an absent qualifier is a positive claim, so 543 rows of a week-old
+# sweep's verdicts under a header dated today claimed 543 times that they were
+# measured today.
+#
+# Two claims, and they are not the same claim. WHICH SWEEP MEASURED THIS ROW is
+# provenance and is true of any row whose facts are not the newest sweep's, for
+# any reason at all. THE NEWEST SWEEP DID NOT ASK is a fact about this service's
+# rotation, published by the sweep itself with a reason.
+#
+# Both are worded against the sweep and never as an age from today. Nothing here
+# runs on a schedule, so "six days ago" is a claim the data does not support: the
+# store holds two instants and no cadence between them, and _provenance's rule
+# is that the two timestamps are named and never ordered.
+
+
+def stale_rows(page):
+    """{endpoint: the instant its row names} for every row that names one."""
+    return {
+        attributes["data-endpoint"]: attributes["data-measured-by-sweep"]
+        for attributes in with_attribute(page, "data-measured-by-sweep")
+    }
+
+
+def dormant_rows(page):
+    """{endpoint: the reason its row carries, or None} for every dormant row."""
+    return {
+        attributes["data-endpoint"]: attributes.get("data-dormancy-reason")
+        for attributes in with_attribute(page, "data-newest-sweep-dormant")
+    }
+
+
+def test_a_row_the_newest_sweep_declined_to_ask_says_so_in_words(
+    client_for, store_dormant_newest
+):
+    """The row for the endpoint the 10:00 sweep published as dormant.
+
+    Its verdicts are the 16:00 sweep's, five days older than the header's
+    instant, and the newest sweep did not ask it: it said so, and it said why.
+    The marker is words a reader sees and an attribute a machine reads, and the
+    reason travels verbatim so a consumer sees the value the store holds rather
+    than this build's reading of it.
+
+    The other two endpoints of the same trio were measured by that same 10:00
+    sweep, so nothing about them is qualified. Both halves are asserted for the
+    reason the pair beside them is: a page that marked every row would say of a
+    measured endpoint that nobody asked it.
+    """
+    page = index(client_for(store_dormant_newest))
+    assert set(listed(page)) == {KADASTER, QLEVER, ONTOP}
+
+    assert dormant_rows(page) == {KADASTER: "operator-hold"}
+
+    text = row_for(page, KADASTER)["text"]
+    assert text.strip() != KADASTER, "the marker attribute carries no words"
+    assert "did not ask" in text, text
+    for endpoint in (QLEVER, ONTOP):
+        assert "did not ask" not in row_for(page, endpoint)["text"]
+
+
+def test_a_dormant_rows_words_name_the_reason_the_store_holds(
+    client_for, store_dormant_newest, store_dormant_automatic
+):
+    """The two reasons, and the words differ between them.
+
+    An operator's hold and a machine relegation are different facts about this
+    service and a row that read the same for both would tell a reader nothing
+    the attribute did not already say. The automatic case is the one a stranger
+    meets in production: a hold is one person's decision about one endpoint.
+    """
+    held = index(client_for(store_dormant_newest))
+    automatic = index(client_for(store_dormant_automatic))
+
+    assert dormant_rows(held) == {KADASTER: "operator-hold"}
+    assert dormant_rows(automatic) == {KADASTER: "automatic"}
+
+    assert row_for(held, KADASTER)["text"] != row_for(automatic, KADASTER)["text"]
+    assert "hand" in row_for(held, KADASTER)["text"]
+    assert "cost" in row_for(automatic, KADASTER)["text"]
+
+
+def test_a_dormant_row_keeps_the_verdict_its_last_probe_produced(
+    client_for, store_dormant_newest
+):
+    """A group note, not a group of its own, and not a chip either.
+
+    Dormancy is not a verdict: the six-verdict vocabulary is closed and this is
+    a fact about this service's rotation. So the row stays in the group its last
+    real probe put it in, with every chip that probe produced, and moving it to
+    a group of its own would misfile a measured endpoint under a heading about
+    us. The group it sits in says what the marker means and how many of its rows
+    carry one.
+    """
+    page = index(client_for(store_dormant_newest))
+
+    groups_by_value = {group["availability"]: group for group in groups(page)}
+    assert "dormant" not in groups_by_value, "dormancy was drawn as a group"
+    assert chip_verdicts(page, row_for(page, KADASTER))["availability"] == "verified"
+    assert (
+        chip_verdicts(page, row_for(page, KADASTER))
+        == {
+            metric: verdict
+            for (endpoint, metric), verdict in stored_verdicts(
+                store_dormant_newest
+            ).items()
+            if endpoint == KADASTER
+        }
+    )
+
+    note = texts_with(page, "data-group-dormant")
+    assert len(note) == 1, f"{len(note)} groups carry a dormancy note"
+    assert "1" in note[0], note[0]
+    assert "did not ask" in note[0], note[0]
+
+
+def test_a_group_no_dormant_row_is_in_carries_no_dormancy_note(
+    client_for, store_registry_sample
+):
+    """The other half, which is what catches a note drawn on every group.
+
+    The registry sweep declared nothing dormant, so a note saying some of these
+    rows were not asked would be false of all nine of them.
+    """
+    page = index(client_for(store_registry_sample))
+    assert with_attribute(page, "data-group-dormant") == []
+
+
+def test_a_row_whose_facts_are_older_than_the_newest_sweep_names_its_own(
+    client_for, store_dormant_newest
+):
+    """Which sweep measured this row, on the row, whenever it is not the header's.
+
+    The header states one instant for the store. This row's verdicts come from
+    another sweep, and the gap is exactly what the marker above is about, so the
+    row carries the instant of the sweep that DID measure it. Not an age: the
+    store holds two instants and nothing that says how long is expected between
+    two sweeps.
+    """
+    page = index(client_for(store_dormant_newest))
+
+    assert stale_rows(page) == {KADASTER: "2026-08-22T16:00:00Z"}
+    assert "2026-08-22T16:00:00Z" in row_for(page, KADASTER)["text"]
+    assert "2026-08-27T10:00:00Z" in page, "the header's own instant is gone"
+
+
+def test_no_row_states_an_age_or_orders_the_two_instants(
+    client_for, store_dormant_newest
+):
+    """The wording rule, asserted rather than trusted.
+
+    _provenance's rule is that the two timestamps are named and never ordered.
+    Nothing in this service runs on a schedule, so "5 days ago", "stale for a
+    week" and "out of date" are all claims the store cannot support: it holds
+    two instants and no cadence between them.
+    """
+    page = index(client_for(store_dormant_newest)).lower()
+    for forbidden in ("ago", "days old", "out of date", "stale", "weekly"):
+        assert forbidden not in page, forbidden
+
+
+def test_a_store_of_one_sweep_names_no_sweep_on_any_row(
+    client_for, store_registry_sample
+):
+    """The half that catches an instant printed on every row.
+
+    Every row of this store's nine was measured by the only sweep in it, which
+    is the sweep the header names, so a row repeating that instant would be
+    qualifying a fact that needs no qualification.
+    """
+    page = index(client_for(store_registry_sample))
+    assert stale_rows(page) == {}
+    assert dormant_rows(page) == {}
+
+
+def test_a_row_older_than_the_newest_sweep_names_it_with_no_other_marker(
+    client_for, store_later_sample
+):
+    """The case only the widest condition catches, and no other marker fires.
+
+    This store's newest run is the 22:00 one, which SAMPLED one endpoint and
+    measured nothing at all. So no row here is from a sweep that stopped, no
+    later sweep crashed before reaching one, and no run in the store recorded
+    finishing while saying nothing about one: all three of the endpoint page's
+    qualifications are false of all three rows, and all three rows still carry
+    the 16:00 sweep's verdicts under a header dated 22:00.
+
+    That is why the instant is asked as its own question rather than hung off
+    one of the other three. Without it these three rows are the defect with no
+    marker at all on the page.
+    """
+    page = index(client_for(store_later_sample))
+
+    assert stale_rows(page) == {
+        KADASTER: "2026-08-22T16:00:00Z",
+        QLEVER: "2026-08-22T16:00:00Z",
+        ONTOP: "2026-08-22T16:00:00Z",
+    }
+    assert with_attribute(page, "data-run-unfinished") == []
+    assert with_attribute(page, "data-newer-run-unfinished") == []
+    assert dormant_rows(page) == {}
+
+
+def test_the_rows_a_crashed_sweep_never_reached_name_the_sweep_that_measured_them(
+    client_for, store_crashed_partway
+):
+    """The claim that was already on those rows, now with the instant beside it.
+
+    "a later sweep never got here" says which sweep did NOT produce the row. It
+    never said which one did, and the header names a third instant, so a reader
+    had the two facts the marker is about and neither of the two dates.
+    """
+    page = index(client_for(store_crashed_partway))
+
+    assert stale_rows(page) == {
+        QLEVER: "2026-08-22T16:00:00Z",
+        ONTOP: "2026-08-22T16:00:00Z",
+    }
+    # kadaster's own facts ARE the newest run's, unfinished though it is, so
+    # there is no second sweep to name for it.
+    assert KADASTER not in stale_rows(page)
+    assert row_for(page, KADASTER)["attributes"].get("data-run-unfinished") == "true"
+
+
+def test_a_crashed_declining_sweep_says_it_declined_and_not_that_it_crashed(
+    client_for, store_dormancy_then_crash
+):
+    """Two true facts about one sweep, and only one of them may be said.
+
+    The newest run in this store promised to write incrementally, never recorded
+    finishing, and published a complete account of the one endpoint it declined
+    to ask before it died. Both "the sweep stopped before it got here" and "the
+    sweep never intended to ask" are supported by those bytes; only the second is
+    true. The store-level note still says the sweep did not finish, because it
+    did not, and that is a fact about the store rather than about this row.
+    """
+    page = index(client_for(store_dormancy_then_crash))
+
+    assert dormant_rows(page) == {KADASTER: "operator-hold"}
+    never_reached = {
+        attributes["data-endpoint"]
+        for attributes in with_attribute(page, "data-newer-run-unfinished")
+    }
+    assert KADASTER not in never_reached, (
+        "a sweep that published why it skipped this endpoint is reported as "
+        "having crashed before reaching it"
+    )
+    assert "did not ask" not in row_for(page, QLEVER)["text"]
+    # And the other two rows keep the crash claim, which is true of them: that
+    # sweep declined one endpoint and died before reaching either of these. Both
+    # claims are on the page at once, about different rows, off one run graph.
+    assert never_reached == {QLEVER, ONTOP}
+    assert len(texts_with(page, "data-newest-sweep-unfinished")) == 1
+
+
+def test_an_endpoint_this_store_knows_only_as_dormant_has_no_row(
+    client_for, store_dormancy_alone
+):
+    """Nothing measured it, so there is nothing to date and no row to qualify.
+
+    Both read queries build rows from sw:currentRun, which such an endpoint has
+    none of, so it is absent from the index and its page 404s. A row drawn from
+    the declaration alone would carry no verdict, no sweep and no chip, and
+    would be this service's own rotation presented as an endpoint's record.
+    """
+    page = index(client_for(store_dormancy_alone))
+
+    assert set(listed(page)) == {QLEVER, ONTOP}
+    assert dormant_rows(page) == {}
+    assert stale_rows(page) == {}
+
+
+def test_dormancy_is_not_added_to_the_legend(client_for, store_dormant_newest):
+    """The seven states, and dormancy is not an eighth.
+
+    The legend counts chip states from the closed table in verdict_encoding and
+    is built by the same function as the endpoint page's, so an entry added here
+    would appear there too and would describe a drawing neither page uses.
+    Dormancy has no chip: it is a row qualifier, explained in the panel that
+    explains the other two.
+    """
+    page = index(client_for(store_dormant_newest))
+    states = [attributes["data-state"] for attributes in with_attribute(page, "data-state")]
+
+    assert states == [state.slug for state in verdict_encoding.STATES]
+    assert "dormant" not in states
+
+
+def test_the_marked_row_panel_explains_the_dormant_marker_and_both_reasons(
+    client_for, store_dormant_newest
+):
+    """The reasoning that will not fit in three words on a row.
+
+    Three markers now, so three explanations, each read out of its own element
+    rather than searched for in the document: a sentence asserted to be
+    somewhere on the page passes while it sits in the legend. The dormancy
+    paragraph has to name both reasons, say what the marker does NOT mean, and
+    say where a person changes it, because a reader who finds their own endpoint
+    marked will read this and nothing else.
+    """
+    page = index(client_for(store_dormant_newest))
+    panel = {
+        attributes["data-row-marker"]: text
+        for attributes, text in zip(
+            with_attribute(page, "data-row-marker"),
+            texts_with(page, "data-row-marker"),
+        )
+    }
+
+    assert set(panel) == {"run-unfinished", "never-reached", "dormant", "measured-by"}
+    dormant = panel["dormant"].lower()
+    assert "operator-hold" in dormant and "automatic" in dormant
+    assert "not a verdict" in dormant, dormant
+    assert "seven days" in dormant, dormant
+    # The provenance paragraph has to say what the instant is FOR: that the
+    # header names another sweep, and that the gap between the two is not
+    # something this service can measure.
+    measured_by = panel["measured-by"].lower()
+    assert "header" in measured_by, measured_by
+    assert "timer" in measured_by, measured_by
+
+
+def test_the_row_marker_reads_every_reason_a_run_graph_can_carry():
+    """The three branches, asked of the function rather than of a store.
+
+    Two of them have no committed fixture and cannot get one from the prober: it
+    writes a reason with every declaration, and the only file carrying a third
+    spelling would be a hand-edited one. They are reachable all the same, from a
+    prober newer or older than this page and from a hand-edited run file, and
+    each is a sentence a reader would act on, so each is pinned here the way
+    test_page.py pins the endpoint page's longer version of the same three.
+
+    An unrecognised reason travels VERBATIM. Relabelling it would hide which
+    value the store holds, and dropping it would leave the row claiming the run
+    gave no reason when it gave one this build cannot read.
+    """
+    assert _row_dormancy_text("operator-hold") == f"{ROW_DORMANT_TEXT}, by hand"
+    assert _row_dormancy_text("automatic") == (
+        f"{ROW_DORMANT_TEXT}, on cost and silence"
+    )
+
+    # A declaration with no reason beside it. The declaration is the fact the
+    # page turns on, so the marker still appears and says the reason is missing
+    # rather than guessing at one.
+    missing = _row_dormancy_text(None)
+    assert missing.startswith(ROW_DORMANT_TEXT)
+    assert "no reason" in missing
+
+    # A reason from a prober this build does not know. Both halves: the value is
+    # there, and nothing is claimed about what it means.
+    unknown = _row_dormancy_text("hibernating-2027")
+    assert "hibernating-2027" in unknown
+    assert "cannot read" in unknown
+    for reading in ("by hand", "on cost and silence", "no reason"):
+        assert reading not in unknown, unknown

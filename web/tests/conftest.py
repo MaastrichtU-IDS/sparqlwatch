@@ -35,6 +35,7 @@ RUN_REGISTRY_SAMPLE = FIXTURES / "run-registry-sample.nq"
 RUN_NO_AVAILABILITY = FIXTURES / "run-no-availability.nq"
 RUN_WITH_DORMANCY = FIXTURES / "run-with-dormancy.nq"
 RUN_DORMANCY_THEN_CRASH = FIXTURES / "run-dormancy-then-crash.nq"
+RUN_DORMANCY_AUTOMATIC = FIXTURES / "run-dormancy-automatic.nq"
 
 
 CURRENT_GRAPH = NamedNode("urn:sparqlwatch:current")
@@ -371,3 +372,25 @@ def store_dormancy_alone(tmp_path):
     the HTML representation does not serve.
     """
     return _loaded_store(tmp_path, "store-dormancy-alone", RUN_WITH_DORMANCY)
+
+
+@pytest.fixture
+def store_dormant_automatic(tmp_path):
+    """``store_dormant_newest`` with the OTHER reason: a machine relegation.
+
+    run-dormancy-automatic.nq is run-with-dormancy.nq with one literal changed,
+    sw:dormancyReason "automatic" rather than "operator-hold", so the store's
+    shape is identical and only the word the page has to read is different.
+
+    It exists because "automatic" had no loadable fixture. The only other
+    committed file carrying that value is run-measures-and-declares-dormant.nq,
+    which exists to be refused, so the sentence a machine relegation prints was
+    pinned on a hand-built dataclass and never rendered out of a store. It is
+    also the case a stranger meets far more often than the other: an operator
+    hold is one person's decision about one endpoint, and the automatic path is
+    what the policy does to every endpoint that costs more than the ceiling
+    while answering nothing, twice in a row.
+    """
+    return _loaded_store(
+        tmp_path, "store-dormant-automatic", RUN_WITH_SAMPLES, RUN_DORMANCY_AUTOMATIC
+    )

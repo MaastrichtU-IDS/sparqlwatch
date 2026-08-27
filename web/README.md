@@ -535,9 +535,20 @@ generated from the metric names the store holds, so they change with the metric
 set rather than being a list in the template. That is the page's size budget at
 work: 543 rows carrying full metric names, or the metric repeated in an
 attribute beside each chip, measured 610 KB against the 500 KB the page is
-allowed. It is 434,193 bytes as it stands, which is 424.0 KiB and 434 KB. An earlier
+allowed. It is 437,368 bytes as it stands, which is 427.1 KiB and 437 KB. An earlier
 sentence here said 424.6 KiB, which is 434,790 bytes and no measurement anyone
 took.
+
+**A store whose newest sweep asked only a subset spends 66 KB more, and that is
+the worst case.** Every row whose facts are not the newest run's carries the
+instant of the sweep that measured it, in words and in
+`data-measured-by-sweep`, so the same 543 endpoints with a two-endpoint sweep
+loaded on top of them are 502,345 bytes, 490.6 KiB, against 436,341 bytes for
+the same page without the marker. That is inside the 500 KB budget and it is the
+shape a narrow re-probe produces, so it is the number to watch: without the
+marker those 543 rows would report one sweep's verdicts under a header naming
+another sweep, which is the same wrong answer 543 times. See "Rows whose facts
+are not the newest sweep's" below.
 
 **The row filter is an inline `<script>`, and the page does not depend on it.**
 Every row is in the document as served; with JavaScript off or blocked, all of
@@ -553,7 +564,8 @@ what the page says changes either way.
 `sparqlwatch/0.1.0 (+https://sparqlwatch.dev.k8s.semanticscience.org/about)` with
 every request, so this page is where a sysadmin arrives after finding an
 unfamiliar agent in their own log. It answers, in that order,
-who is querying, how often, how politely, why this endpoint, and how to stop it.
+who is querying, how often, how politely, what "dormant" means if their endpoint
+is marked that way, why this endpoint, and how to stop it.
 
 **It takes no store dependency.** `about_resource` has no `store` parameter, and
 that absence is deliberate: the one page a stranger needs is the one page that must
@@ -774,6 +786,47 @@ conditions rest partly on an absence and a CONSTRUCT emits only presence, so suc
 flag could be built for the HTML and not for the RDF and the two would disagree about
 exactly the run this exists for. A consumer draws the same two conclusions from the
 same quads.
+
+### Rows whose facts are not the newest sweep's
+
+The index prints one timestamp in its header, the newest sweep in the store, and on
+this site an absent qualifier is a positive claim. A row that says nothing therefore
+says its verdicts were measured then. Four things a row can say, and each is a
+different claim about a different run:
+
+- **`from a sweep that stopped`.** This row's own run carries `sw:emission` and no
+  `sw:finalised`. The endpoint's chunk was written whole, which is how its facts got
+  here, so the row is what that sweep had written for it when it stopped.
+- **`a later sweep never got here`.** A newer run stopped and recorded no
+  `sw:completedEndpoint` for this endpoint. Nothing in the row is out of date: it is
+  the newest the store holds. What is not true is that it reports the latest sweep.
+- **`the newest sweep did not ask`**, with the reason the run published:
+  `automatic` for the admission policy, `operator-hold` for a person, the value
+  verbatim for anything else, and "gave no reason" for a declaration with none.
+  Carried in `data-newest-sweep-dormant` and `data-dormancy-reason`. **Dormancy is
+  not a verdict**: it gets no chip, no column and no entry in the legend, which
+  counts states from the closed table in `verdict_encoding.py` and is shared with the
+  endpoint page. The row keeps the verdict its last real probe produced and stays in
+  that verdict's group; the group carries a note saying how many of its rows are
+  marked, because moving them out would file a measured endpoint under a heading
+  about this service's rotation.
+- **`measured by the sweep at <instant>`**, in `data-measured-by-sweep`. The widest
+  of the four: any row whose facts did not come from the newest run in the store, for
+  any reason at all. The three above each say something further about why; a row can
+  satisfy none of them and still be older, which is what `store_later_sample` is (its
+  newest run sampled one endpoint and measured nothing, so all three of its rows are
+  the earlier sweep's and none of the other markers fires).
+
+**Worded against the sweep, never as an age from today.** No sweep here runs on a
+timer, so "six days ago" is a claim the store cannot support: it holds two instants
+and nothing about the gap expected between two of them. Both are printed and neither
+is given as a distance from the other, which is the rule `_provenance` states for the
+endpoint page's two timestamps.
+
+All four are explained in full sentences in the page's own "What a marked row means"
+panel, because a marker only a test can read qualifies nothing, and three words on a
+row cannot carry the reasoning. The RDF representation of the index carries the inputs
+and never the conclusions, for the reason the section above gives.
 
 ### RDF and HTML agreement
 

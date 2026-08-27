@@ -587,17 +587,41 @@ route, a GitHub `.owl` blob, Yandex Disk links). They stay seeded, because that
 is decidable only BY PROBE and not from the string, and the admission slice is
 where they go.
 
-### Not yet operable on a daily cadence
+### Not yet on a schedule, and what the admission policy did change
 
-Saying this plainly rather than leaving it to be inferred: **the seeded registry
-is not something to put on a schedule today**, because nothing yet stops the
-dead being re-probed on every sweep. 486 of the 543 candidates answered no query
-at all, and the 43 candidates the dump had marked timed-out cost two thirds of
-the sweep's serial probe time, 2.28 of its 3.46 serial hours. What makes a daily sweep affordable is an admission
-policy, which admits responders and keeps the rest as a published
-`unreachable-candidates` list that is not re-probed daily, and that is the next
-slice. Until it exists, a sweep of `registry/lod-cloud.toml` is a measurement
-somebody runs deliberately, not a `CronJob`.
+Saying this plainly rather than leaving it to be inferred: **a sweep of the
+seeded registry is still a measurement somebody runs deliberately, not a
+`CronJob`**, because nothing in this repository starts one. What has changed is
+the cost that made a daily sweep unaffordable in the first place. 486 of the 543
+candidates answered no query at all, and the 43 candidates the dump had marked
+timed-out cost two thirds of the sweep's serial probe time, 2.28 of its 3.46
+serial hours.
+
+The admission policy above is what addresses that, and it is worth being exact
+about which half of the old claim it retired. It sets aside an endpoint whose
+summed `elapsedMs` passed `--dormant-cost-ms` while it confirmed nothing, in
+`--dormant-strikes` consecutive sweeps, and asks it once every
+`--dormant-every-days` after that. So **the dead are no longer re-probed on
+every sweep**: they are re-probed on a cadence, and the 57 endpoints that were
+3.12 of those 3.46 serial hours are asked once in seven days rather than every
+time.
+
+What that comes to in a steady state is deliberately not stated. The cadence is
+per endpoint and the due set is divided by the gap since the last sweep, so
+daily sweeps each take a seventh of the dormant set and a weekly sweep takes all
+of it: the saving depends on how often somebody sweeps, and the arithmetic above
+is one sweep's.
+
+Two things the policy deliberately does not do, and both matter to a host
+operator reading this. It is cost-weighted and not failure-weighted, so **a fast
+refusal costs nothing and so earns no relegation**: the 339 equally silent
+endpoints that answered instantly cost 0.05 h between them and stay in every
+sweep, which is what makes an endpoint coming back to life visible on the day it
+happens. And it removes nothing from `registry/lod-cloud.toml`: a dormant
+endpoint is still on the list, still published, and still asked, only less
+often.
+
+What is still missing before a schedule is the schedule itself.
 
 ### Where the runs are kept
 
