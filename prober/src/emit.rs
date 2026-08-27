@@ -442,11 +442,13 @@ pub struct DormancyFact {
 /// document that named one activity and left the sample hanging off nothing
 /// would invite a consumer to date the sample to the sweep that declined to take
 /// it"), and it is the join any reader has to make to reach these facts at all.
-/// No `.rq` file in `web/queries/` joins it yet; a later stage's page is what
-/// will, and this is the quad that makes it possible.
+/// Four of the five `.rq` files in `web/queries/` now join it: both endpoint
+/// queries and both index queries, which is every read path that reports on an
+/// endpoint.
 const DORMANT_ENDPOINT: &str = "urn:sparqlwatch:dormantEndpoint";
-/// Why, as `SkipReason::slug` spells it. A slug and not a sentence, because a
-/// page renders it and the loader parses it.
+/// Why, as `SkipReason::slug` spells it: `automatic`, `operator-hold` or
+/// `not-in-this-sweep`. A slug and not a sentence, because a page renders it and
+/// the loader parses it.
 const DORMANCY_REASON: &str = "urn:sparqlwatch:dormancyReason";
 /// When, typed as `xsd:dateTime`. Omitted when the fact carries no instant.
 const DORMANT_SINCE: &str = "urn:sparqlwatch:dormantSince";
@@ -2024,8 +2026,12 @@ mod tests {
     // endpoints and saying nothing about the other 57 leaves a consumer to read
     // silence about an endpoint as a claim that nothing was found there.
 
-    /// Two facts, one relegated by the machine and one held by an operator, so
-    /// a test over them covers both slugs `SkipReason` can produce.
+    /// Two facts, one relegated by the machine and one held by an operator, so a
+    /// test over them covers the two shapes this module has to handle: one fact
+    /// carrying a `dormantSince` and one with none. The third slug,
+    /// `not-in-this-sweep`, takes the same path through here as `automatic`, and
+    /// the only thing about it that can be wrong is which skips get it, which is
+    /// decided and tested in `dormancy.rs`.
     fn dormancy_facts() -> Vec<DormancyFact> {
         vec![
             DormancyFact {

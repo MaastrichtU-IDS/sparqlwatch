@@ -1028,8 +1028,15 @@ It exists because silence is a positive claim. A sweep that probes 486 of 543
 endpoints and publishes a graph naming only those 486 leaves a consumer to read
 the absence of an endpoint as a finding about it. Dormancy is **not a verdict**
 and never becomes one, so the run says the weaker, true thing: this sweep
-declined to ask, and here is why. `sw:dormancyReason` is `automatic` or
-`operator-hold`. `sw:dormantSince` carries the instant the endpoint was actually
+declined to ask, and here is why. `sw:dormancyReason` is one of three slugs, and
+they differ in WHO decided: `automatic` is the admission policy relegating an
+expensive silent endpoint, `operator-hold` is a person setting one aside by hand,
+and `not-in-this-sweep` is nobody deciding anything about the endpoint at all,
+which is what a replay of an `--at` publishes for everything the first run of
+that `--at` did not probe. That third slug earns its place because a replay
+reaches healthy endpoints too: without it, a narrowed sweep followed by a full
+sweep at the same `--at` would publish `automatic` about 486 fast, working
+servers. `sw:dormantSince` carries the instant the endpoint was actually
 relegated, as the state file holds it and not this run's instant, and is omitted
 entirely when there is none rather than published as an empty value.
 
@@ -1637,10 +1644,28 @@ Everything but `live_smoke` runs against a local `wiremock` server, so the
 suite is deterministic and CI never touches a stranger's endpoint. Rust 1.96,
 edition 2021, no nightly features.
 
+A bare `cargo test` is the command that has to stay green, and one rule keeps it
+so: **no test target may hold a test whose own runtime approaches the 20 s bound
+its neighbours share.** libtest runs a target's tests in parallel threads, so a
+slow test starves them and they fail reporting a deadlock. There is exactly one
+deliberately slow test, the relegation sweep, and it has a target to itself in
+`tests/dormancy_sweep.rs`; `tests/common/mod.rs` records what it cost to learn
+that.
+
 ## Looking at a run
 
-The web tier is stage 3 and does not exist yet. Until it does, render a run as a
-standalone local page:
+The web tier exists, and it is what a run is for: load the file into the store
+and serve it (`web/README.md` has both halves, and the server must be stopped
+while a run is loaded, every time).
+
+```
+web/.venv/bin/python web/load_run.py path/to/sparqlwatch.db run.nq
+cd web && SPARQLWATCH_STORE=path/to/sparqlwatch.db python -m uvicorn app:app
+```
+
+`tools/render-run.mjs` predates it and is still here, because it needs no store,
+no venv and no server, and so is the shortest way to look at a file this crate
+just wrote:
 
 ```
 cargo run -q -- --at 2026-08-20T12:00:00Z --out run.nq
@@ -1650,7 +1675,8 @@ node ../tools/render-run.mjs run.nq run.html
 It is a read-only viewer over the emitted N-Quads, using the same verdict encoding
 as the design: dashed borders mark "works but not declared" and "indeterminate",
 and `absent` has no border at all, because it is the only verdict that claims a
-negative. The real web tier will query Oxigraph rather than parse a file.
+negative. It parses one file; the web tier queries Oxigraph over every run
+loaded, which is why it and not this is where a run is read from.
 
 A run containing content samples (that is, one from an `--max-cost expensive`
 sweep) also gets a "Content samples" panel, one detail block per (endpoint,

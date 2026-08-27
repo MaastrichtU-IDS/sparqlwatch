@@ -437,7 +437,7 @@ that each end in something demonstrable, and each gets its own plan.
 | **1c-b2** | **DELIVERED 2026-08-21**: Per-host politeness (concurrency cap of 1, configurable `--min-gap-ms` between requests), `Retry-After` handling (delta-seconds within `--retry-after-cap-s`), and honest User-Agent. | stage 1c-b1 |
 | **1c-b3** | **DELIVERED 2026-08-24**: Stable measurement identifiers and bounded concurrency across hosts. Every run-scoped fact's subject is derived from (run, endpoint, metric) rather than from a row index, so reordering the registry renames nothing and one endpoint's facts can be written alone; a metric id that would make a subject ambiguous is refused both at load and in the subject builder, a registry URL carrying userinfo is dropped with a warning, and a repeated (endpoint, metric) with conflicting facts publishes **nothing** about that pair rather than a contradiction. `--concurrency` (default 4) bounds how many **hosts** are talked to at once: endpoints group by host, one sequential task per group, so per-host concurrency stays at 1. A panicked group publishes `NotMeasured` with reason `prober-failed` for every metric it held, the activity publishes `sw:concurrency` and `sw:failedEndpoints`, and the run exits non-zero after writing its output. Measured on the three committed endpoints: 14.4s at `--concurrency 4` against 38.7s at 1, both producing 156 quads. This delivered only the **first half** of the per-endpoint isolation rule above. "Results are written per endpoint as they complete" was **not built here**: `run_sweep` joined every group before returning and the whole sweep was buffered and written once, so one endpoint burning its 600s budget still delayed the run's output by that much, and a crash lost the file. Concurrency shrank the constant, not the shape. Stage 1c-b4 built the missing half. | stage 1c-b2 |
 | **1c-b4** | **DELIVERED 2026-08-24**: Crash-safe incremental writing, so output survives a crash at endpoint 500 of 548 and the second half of the per-endpoint isolation rule is met. A run is emitted as a header, one self-contained chunk per endpoint written and flushed as that endpoint completes, and a footer, each section closed by its own terminator quad on the run's activity: `sw:emission "incremental"` for the header, `sw:completedEndpoint <endpoint>` for a chunk, and `sw:finalised true` for the footer, which is the last line a finished run ever writes. No fact family publishes its own summary before the things it summarises, so `sw:sampleSize` follows its values and `sw:failedEndpoints` moved into the footer. A run in progress is written to `<out>.<at>.partial` and renamed onto `--out` at the end, so a crash cannot touch the previous complete run, and a retry sharing an `--at` is **refused** rather than overwriting the earlier attempt's partial. `web/load_run.py` cuts an incomplete file back to its last terminator line, matched in predicate position rather than by substring, and reports the bytes it discarded; a file corrupted before that line is still refused whole. The read tier says both "this run did not finish" and "a later run did not finish and never reached this endpoint", in HTML and in RDF, carrying the inputs to that derivation rather than a derived flag. As predicted, the file's order is now **completion** order, deliberately breaking the old input-order property; the `Sweep` returned in memory is still input order, and those are two different properties. Measured: a `SIGKILL` mid-sweep left a 25,634-byte partial that loaded as 114 quads with 0 discarded, marked unfinished, one completed endpoint with its 8 verdicts intact, and the previous `--out` byte-identical; a retry at the same `--at` exited 1 and left that partial byte-identical. The guarantee is bounded at process death: there is no `fsync` per chunk, so a power loss can still lose a flushed chunk, and the zeroed tail such a loss can leave is refused whole rather than rescued. | stage 1c-b3 |
-| **1d. Registry seeding** | Ingest LOD Cloud + YummyData candidates, resolve front-ends to real endpoints, probe with politeness, admit responders. **PARTLY DELIVERED 2026-08-24** (stage 1d-a): ingest from LOD Cloud alone, plus the first registry-scale sweep. `seed::candidates` turns the 2026-06-15 dump (1683 datasets, 725 `access_url` entries, 548 distinct URLs) into **543 seeded candidates**, refusing 5 with a count per reason, and `seed-registry` writes `prober/registry/lod-cloud.toml` beside a parseable provenance file naming the dump, its SHA-256 (which the tool computes itself, refusing to write if `--sha256` disagrees) and every count. Endpoint-list policy has one implementation, because the seeder calls `registry.rs`, and the two refusals added there are split by the question each answers: `without_unroutable_hosts` in the seeder alone, since an operator may legitimately probe their own machine and this suite does so through wiremock, while `without_reserved_names` and `without_unpublishable_iris` are wired into `load_endpoints` so they hold whoever supplied the list. The dump's own `status` field gates nothing and a test pins that. The sweep: 543 candidates, cheap ceiling, `--concurrency 4`, **1h26m21s**, 3801 measurements, 0 failed endpoints, 6.3 MB, `finalised=true`, so 1c-b4's incremental protocol held at registry scale; 57 of 543 answered a query where the survey found 65 of 548, and **26** published a parseable service description (`service-description` `verified`; 30 returned some parseable RDF to the queryless GET, which is the weaker `declarationsRead` claim). Among the living, 24 of the 57 carry a description, 42.1%, against the survey's 28 of 65, 43.1%, so this sweep is slightly lower on both. Of the 26, **23 are at level 1, 2 at level 2 and one at level 4**, which is the survey's Virtuoso-stub finding reproduced by the graded metric. **Not built: front-end resolution, YummyData's list, and the admission policy**, so nothing yet stops the dead being re-probed and the registry is **not operable on a daily cadence**. The three deferrals with their reasons, the two items the measurement retired, and an answer to each of the four questions this row used to ask are under [Endpoint registry](#endpoint-registry). | stage 1c-b4 |
+| **1d. Registry seeding** | Ingest LOD Cloud + YummyData candidates, resolve front-ends to real endpoints, probe with politeness, admit responders. **PARTLY DELIVERED 2026-08-24** (stage 1d-a): ingest from LOD Cloud alone, plus the first registry-scale sweep. `seed::candidates` turns the 2026-06-15 dump (1683 datasets, 725 `access_url` entries, 548 distinct URLs) into **543 seeded candidates**, refusing 5 with a count per reason, and `seed-registry` writes `prober/registry/lod-cloud.toml` beside a parseable provenance file naming the dump, its SHA-256 (which the tool computes itself, refusing to write if `--sha256` disagrees) and every count. Endpoint-list policy has one implementation, because the seeder calls `registry.rs`, and the two refusals added there are split by the question each answers: `without_unroutable_hosts` in the seeder alone, since an operator may legitimately probe their own machine and this suite does so through wiremock, while `without_reserved_names` and `without_unpublishable_iris` are wired into `load_endpoints` so they hold whoever supplied the list. The dump's own `status` field gates nothing and a test pins that. The sweep: 543 candidates, cheap ceiling, `--concurrency 4`, **1h26m21s**, 3801 measurements, 0 failed endpoints, 6.3 MB, `finalised=true`, so 1c-b4's incremental protocol held at registry scale; 57 of 543 answered a query where the survey found 65 of 548, and **26** published a parseable service description (`service-description` `verified`; 30 returned some parseable RDF to the queryless GET, which is the weaker `declarationsRead` claim). Among the living, 24 of the 57 carry a description, 42.1%, against the survey's 28 of 65, 43.1%, so this sweep is slightly lower on both. Of the 26, **23 are at level 1, 2 at level 2 and one at level 4**, which is the survey's Virtuoso-stub finding reproduced by the graded metric. **Not built: front-end resolution and YummyData's list.** The third deferral, the admission policy, was **DELIVERED 2026-08-27**: the dead are no longer re-probed on every sweep, so the registry is operable on a cadence, and what each cadence costs is arithmetic given under [Admission policy: dormancy](#admission-policy-dormancy) rather than a single headline figure. The three deferrals with their reasons, the two items the measurement retired, and an answer to each of the four questions this row used to ask are under [Endpoint registry](#endpoint-registry). | stage 1c-b4 |
 | **2. Scoring as queries** | Score computation as pure SPARQL/functions over stored measurements, with recomputation over history proven. **PARTLY DELIVERED 2026-08-22** (stage 2-1): Storage in Oxigraph is in place, and one read query (`endpoint_content.rq`) is implemented and tested. Score computation is not built. | stage 1b |
 | **2b. Content metadata + examples** | Tiered VoID extraction, SIB example ingestion, `/.well-known/sparql-examples` discovery. **PARTLY DELIVERED 2026-08-22** (stage 2b-1): distinct classes are sampled and published as a `ContentSample` fact, deliberately not as VoID; see the tier-2 status note under [1b](#1b-content-metadata-extraction-tiered). Properties per class, counts, SIB ingestion, and example discovery are not built. | stage 1d |
 | **3. Web read tier** | Faceted search, browse, endpoint pages, metric pages, charts, content negotiation, read-only public SPARQL endpoint. **PARTLY DELIVERED 2026-08-23** (stage 3-1): One endpoint resource served at `GET /endpoint?url=...` with content negotiation returning HTML or any of four RDF serialisations (Turtle, N-Triples, RDF/XML, JSON-LD), the HTML and the RDF agreeing on every verdict the run recorded. **MORE DELIVERED 2026-08-25** (stage 3-2): an index at `GET /` listing all 543 endpoints in one page of 424.6 KiB, grouped by the availability verdict's own values with a denominator on every count; `GET /about`, the page the prober's `User-Agent` points at, saying who is querying, how often, how politely, why that endpoint, and how to ask to be left alone; and all three read paths moved onto the derived `urn:sparqlwatch:current` graph, which is what makes a whole-registry page a flat scan. All three resources negotiate. Leaderboard, per-metric pages, history, evidence per measurement, embedded query editor, and read-only public SPARQL endpoint are still not built. **Faceted search is blocked rather than unbuilt**: faceting by vocabulary or class needs content data, and stage 2b has produced no vocabulary or property data and one class sample per endpoint at best, since `sw:metric:classes` is declined at the default cost ceiling. | stage 2, 2b |
@@ -555,10 +555,11 @@ Seeded from two sources, then probed before admission:
 2. **YummyData's** curated biomedical list.
 
 Only URLs that answer a trivial query are admitted as monitored endpoints. The rest are
-retained as an `unreachable-candidates` list, which is data worth publishing but is not
-re-probed daily. This matters at the observed rates: **only 65 of 548 LOD Cloud URLs
-(11.9%) answer at all**, so importing everything would leave a directory that is ~88%
-tombstones and waste most of every sweep.
+retained rather than discarded, which is data worth publishing but is not re-probed on
+every sweep. (As built, "retained" is not a separate list: see deferral 3 below.) This
+matters at the observed rates: **only 65 of 548 LOD Cloud URLs (11.9%) answer at all**, so
+importing everything would leave a directory that is ~88% tombstones and waste most of
+every sweep.
 
 Two resolution steps are mandatory before admission, both from measured failure modes:
 
@@ -599,14 +600,24 @@ held at registry scale.
 2. **Front-end resolution.** Turning the 114 HTML responders above into endpoints is a
    judgement capability with its own failure modes: guessing a path, following a form
    action, mistaking a console for an endpoint. None of it is built.
-3. **The admission policy and the `unreachable-candidates` list.** What makes a daily sweep
+3. **The admission policy and the `unreachable-candidates` list. DELIVERED 2026-08-27, one
+   half as asked and one half by a different mechanism.** What makes a daily sweep
    affordable is not re-probing the dead, and that policy should be written against the
-   first sweep's real numbers rather than ahead of them. Those numbers now exist, which is
-   what makes this the next slice: **486 of 543 answered nothing**, and the 43 candidates
+   first sweep's real numbers rather than ahead of them. Those numbers existed, which is
+   what made this the next slice: **486 of 543 answered nothing**, and the 43 candidates
    the dump had marked timed-out cost **two thirds of the sweep's serial probe time**,
-   2.28 of its 3.46 serial hours. Until it is built the
-   seeded registry is **not operable on a daily cadence**, because nothing stops the dead
-   being re-probed on every sweep.
+   2.28 of its 3.46 serial hours.
+
+   **The admission policy is built**, and [Admission policy: dormancy](#admission-policy-dormancy)
+   is both the decision and the record of what landed. **The `unreachable-candidates` list
+   is not, deliberately**: a separate list of the dead is a second place for the same fact
+   to be wrong, so what replaced it is publication inside **every** run graph, which names
+   the endpoints that run declined to ask, why, and since when. Rule 5 below is satisfied by
+   that and not by a list. Revision 3 of the plan also removed the `sw:currentDormancyRun`
+   pointer it had proposed, so nothing names a current dormant set either: each run carries
+   its own, and a reader takes the newest run. "Published, not internal" therefore holds
+   through a mechanism this deferral did not imagine, and the list it did imagine should not
+   be built later out of deference to this sentence.
 
 **Two things the measurement retired.**
 
@@ -710,9 +721,17 @@ was earned twice.
 
 ### Admission policy: dormancy
 
-**Decided 2026-08-26, against two measured sweeps. Not built.** The deferral above asked
-for this policy to be written against real numbers rather than ahead of them, and the
-numbers that decide its shape are these.
+**Decided 2026-08-26 against two measured sweeps, and BUILT 2026-08-27** (plan
+`docs/superpowers/plans/2026-08-26-dormancy.md`, branch `dormancy`, seven tasks). The
+deferral above asked for this policy to be written against real numbers rather than ahead
+of them, and the numbers that decide its shape are these. What landed:
+`prober/src/dormancy.rs` decides a sweep's plan with no clock, disk or network;
+`prober/src/state_file.rs` reads and writes the state under a lock and an atomic replace; the sweep is narrowed to what the plan
+admits and every run graph publishes the endpoints it declined to ask, with a reason and a
+count; `dormancy init | list | wake | sleep | prune` is the operator's override; and the
+pages say, per endpoint, that the newest sweep did not ask. The rules below are the
+decision, and `prober/README.md` and `web/README.md` are what the implementation is
+documented against.
 
 From the 2026-08-24 sweep of all 543 candidates, splitting endpoints by whether any metric
 returned a positive verdict (`verified` or `undeclared-but-verified`):
@@ -760,8 +779,14 @@ The rules:
 1. An endpoint becomes **dormant** when, in **two consecutive sweeps that probed it**, it
    produced no positive verdict AND cost more than **60 s**. Both conditions in both
    sweeps.
-2. A dormant endpoint is probed **once every seven days**, spread so that no single sweep
-   carries the whole dormant set.
+2. Two bounds, and the second is proportional rather than absolute. **Per endpoint:** a
+   dormant endpoint is probed **at least once every seven days**. **Per sweep:** a sweep
+   takes a slice of the due set sized to the gap since the last sweep,
+   `clamp(ceil(governed * gap_days / 7), 1, governed)`. Daily sweeps therefore carry 9 of
+   57 and a sweep run a week after the last one carries **all** 57, which is the same
+   weekly work either way and is the correct reading of the per-endpoint bound. Dividing by
+   a constant 7 instead would assume a daily schedule that nothing here has: weekly sweeps
+   would then probe 9 at a time and give each dormant endpoint a probe every 6.3 weeks.
 3. Any positive verdict **promotes it immediately**, on the sweep that produced it.
 4. An operator may **wake** or **sleep** an endpoint by hand. A wake clears its strikes and
    makes it immune from automatic relegation for seven days; `--pin` makes that permanent.
@@ -771,11 +796,16 @@ The rules:
    not probe and why, and every page showing a verdict says how old that verdict is.
 
 **Thresholds, and why they are not delicate.** 56 of the 57 also clear 30 s, so any
-threshold between 30 s and 180 s selects essentially the same set: 60 s is chosen because it
-sits clear of the three answering endpoints at 61-89 s by construction, and because keeping
-the 4 silent endpoints in the 30-60 s band costs 0.04 h. Two strikes rather than one is not
-what the stability data demands (98% would justify one) but it costs one extra probe per
-endpoint and it is exactly the `data.datahub.kr` case.
+threshold between 30 s and 180 s selects essentially the same set: 60 s is the **lowest**
+threshold that still leaves the 4 silent endpoints in the 30-60 s band alone, and their
+0.04 h is not worth relegating anything for. **What it is not is a guard on the three
+endpoints that answer.** Measured, they cost 60.8 s (`caligraph.org/sparql`), 67.3 s
+(`trackloaded.com`) and 88.8 s (`es.dbpedia.org`), so all three are over 60 s and the cost
+condition admits every one of them. The silence condition is the whole of what protects
+them, which is what the paragraph above means by both conditions being required.
+
+Two strikes rather than one is not what the stability data demands (98% would justify one)
+but it costs one extra probe per endpoint and it is exactly the `data.datahub.kr` case.
 
 **`dormant`, not `unresponsive`.** The evidence supports a claim about our schedule, not a
 claim about the endpoint. What is known is that seven probes, each cancelled at 30 s, went
@@ -793,10 +823,35 @@ is a fact about us.
    costs one full budget to discover and two sweeps to confirm, which is the correct price,
    but it means the dormant set grows sweep over sweep and the saving below is a
    first-sweep figure, not a steady state.
-2. **The saving is serial-cost arithmetic, not a measured sweep.** 3.46 serial hours
-   becomes about 0.34 h for the 486 plus about 0.47 h for the rotating dormant slice, near
-   0.8 h, a 77% cut. At `--concurrency 4` the 2026-08-24 sweep's 3.46 serial hours ran in
-   1h26m21s; the policy has not been run, so no wall clock is claimed for it.
+2. **The saving is serial-cost arithmetic, not a measured sweep, and its size is a
+   function of a cadence nobody has chosen.** The 77% figure assumes a **daily** sweep, and
+   an earlier version of this paragraph stated it without that condition. The structure
+   underneath it does not depend on the schedule and is the better claim: **the dormant set
+   costs a fixed 3.12 serial hours per seven days at any sweep frequency**, because each of
+   its members is asked once a week and costs a full budget when it is asked, while the
+   other 486 cost 0.345 h **per sweep**. A week of sweeping is therefore
+   `sweeps_per_week * 0.345 h + 3.12 h`:
+
+   | cadence | without the policy | with it | cut | worst single sweep |
+   |---|---|---|---|---|
+   | weekly | 3.46 h | 3.46 h | **0%** | 3.46 h, the slice being all 57 |
+   | daily | 24.2 h | 5.54 h | 77% | 0.84 h, the slice being 9 |
+   | every 90 min | 388 h | 41.8 h | 89% | 0.84 h |
+
+   At a weekly cadence the policy saves nothing at all, and weekly is close to what this
+   project's own `/about` describes: no schedule, sweeps started by hand, "a burst of
+   requests and then nothing, possibly for weeks". So the honest headline is the fixed
+   3.12 h per week rather than any percentage. What weekly still buys is a bounded worst
+   sweep, and the percentage arrives as soon as anything sweeps more often than the cadence.
+
+   Two further facts the arithmetic hides. **Relegation needs two strikes, so the first
+   sweep that saves anything is the third**: sweeps one and two pay the full 3.46 h each.
+   And the 2026-08-26 re-probe found **56 of 57 still expensive** (`data.datahub.kr` had
+   recovered), so the steady dormant set starts at **56, not 57**, and grows from there as
+   cheap endpoints turn expensive, per limit 1 above.
+
+   At `--concurrency 4` the 2026-08-24 sweep's 3.46 serial hours ran in 1h26m21s; the
+   policy has not been run, so no wall clock is claimed for it.
 
 ## Deliberately out of scope for v1
 

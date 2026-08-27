@@ -356,22 +356,41 @@ fn advance(recorded: &mut Option<String>, now: &str) {
     }
 }
 
-/// Why one endpoint was not probed. Two reasons, closed, because a page has to
-/// say which and the machine's reason and a person's reason read differently.
+/// Why one endpoint was not probed. Three reasons, closed, because a page has to
+/// say which and they read differently: the machine judged this endpoint, a
+/// person judged it, or nobody judged it at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SkipReason {
+    /// The admission policy relegated it: two sweeps over the cost ceiling
+    /// answering nothing, and the cadence not yet due. Rule 6, and only rule 6.
     Automatic,
+    /// A person set it aside by hand. Rule 1.
     OperatorHold,
+    /// **Nothing decided anything about this endpoint.** This sweep is a replay
+    /// of an `--at` that has already run, and the first run of that `--at` did
+    /// not probe this endpoint, so neither does the replay. Rule 3.
+    ///
+    /// It has its own slug because it is the only skip that is not a judgement
+    /// about the endpoint, and reporting it as `Automatic` was a published
+    /// falsehood about a stranger's server. Rule 3 reads neither `dormant_since`
+    /// nor cost, and two reachable inputs put a fast healthy endpoint through
+    /// it: a narrowed sweep followed by a full sweep at the same `--at`, which
+    /// the ledger records as intended, would have called all 486 healthy
+    /// endpoints automatically relegated; so would any replay over an endpoint
+    /// an operator pinned awake, since rule 1 protects a `Dormant` hold from
+    /// replay and nothing protects an `Awake` one.
+    NotInThisSweep,
 }
 
 impl SkipReason {
-    /// The wire slugs, exactly these two strings: run graphs carry them, the
+    /// The wire slugs, exactly these three strings: run graphs carry them, the
     /// loader parses them and the pages render them. Precedent:
     /// `Verdict::slug` in `verdict.rs`.
     pub fn slug(&self) -> &'static str {
         match self {
             SkipReason::Automatic => "automatic",
             SkipReason::OperatorHold => "operator-hold",
+            SkipReason::NotInThisSweep => "not-in-this-sweep",
         }
     }
 }
@@ -444,7 +463,10 @@ fn hold_effect(hold: Option<&Hold>, today: i64, url: &str) -> anyhow::Result<Hol
 ///    overrides the machine in both directions.
 /// 2. This `--at` has already run and this endpoint's `last_probed` is
 ///    `now`: PROBE.
-/// 3. This `--at` has already run and it is not: SKIP, `Automatic`.
+/// 3. This `--at` has already run and it is not: SKIP, `NotInThisSweep`.
+///    **Not `Automatic`**: this branch reads neither `dormant_since` nor cost,
+///    so it reaches healthy endpoints too, and `Automatic` would publish the
+///    admission policy's verdict about an endpoint the policy never judged.
 /// 4. A live `Awake` hold: PROBE.
 /// 5. Not relegated: PROBE. This is the 339 cheap silent ones and every url
 ///    the state has never seen.
@@ -527,7 +549,10 @@ pub fn plan_sweep(
             if entry.and_then(|entry| entry.last_probed.as_deref()) == Some(now) {
                 probe.push(url.clone());
             } else {
-                skip(SkipReason::Automatic);
+                // `NotInThisSweep` and not `Automatic`. Nothing here has looked
+                // at `dormant_since` or at cost, so this skips healthy
+                // endpoints as readily as relegated ones.
+                skip(SkipReason::NotInThisSweep);
             }
             continue;
         }
@@ -1421,6 +1446,101 @@ mod tests {
         let rerun = plan_sweep(&written, &endpoints, "2026-08-24T00:00:00Z", &t).unwrap();
         assert_eq!(rerun.probe, first.probe);
         assert_eq!(rerun.skipped.len(), 48);
+        // Rule 3 and not rule 6, even though all 48 are in fact relegated: the
+        // replay did not weigh them, it copied the first run's decision.
+        assert!(rerun.skipped.iter().all(|s| s.reason == SkipReason::NotInThisSweep));
+    }
+
+    #[test]
+    fn a_replay_over_a_mixed_fleet_does_not_call_a_healthy_endpoint_relegated() {
+        // The 90% saving is only worth having if the other 10% keeps telling the
+        // truth. Two relegated endpoints and two cheap healthy ones; a narrowed
+        // sweep at D over ONE of the healthy pair, then a full sweep at the same
+        // `--at`. Rule 3 skips the other three, and the two healthy ones among
+        // them were never weighed by the policy at all: publishing `automatic`
+        // for them puts "the admission policy set it aside after two sweeps that
+        // cost more than its ceiling and answered nothing" on a page about a
+        // stranger's fast, working server. The existing replay test above cannot
+        // catch that, because its whole fleet is dormant and so `automatic`
+        // happens to be true of every endpoint in it.
+        let t = Thresholds::default();
+        let (mut state, mut endpoints) =
+            dormant_fleet(2, "2026-08-10T00:00:00Z", "2026-08-23T00:00:00Z");
+        for url in ["http://fast0.example/sparql", "http://fast1.example/sparql"] {
+            state.endpoint.push(EndpointState {
+                url: ep(url),
+                last_probed: Some(ep("2026-08-23T00:00:00Z")),
+                last_cost_ms: Some(4_000),
+                ..Default::default()
+            });
+            endpoints.push(ep(url));
+        }
+        let narrowed = vec![ep("http://fast0.example/sparql")];
+        let written = update(
+            &state,
+            &narrowed,
+            &[cheap("http://fast0.example/sparql")],
+            "2026-08-24T00:00:00Z",
+            &t,
+        )
+        .unwrap();
+
+        let replay = plan_sweep(&written, &endpoints, "2026-08-24T00:00:00Z", &t).unwrap();
+        assert_eq!(replay.probe, narrowed, "rule 2 takes exactly what that --at probed");
+        assert_eq!(replay.skipped.len(), 3);
+        let healthy = replay
+            .skipped
+            .iter()
+            .find(|s| s.url == ep("http://fast1.example/sparql"))
+            .expect("the healthy endpoint the narrowed sweep left out is skipped");
+        assert_ne!(
+            healthy.reason,
+            SkipReason::Automatic,
+            "nothing relegated this endpoint: it cost 4 s and the policy never looked at it"
+        );
+        assert_eq!(healthy.reason, SkipReason::NotInThisSweep);
+        assert_eq!(
+            healthy.dormant_since, None,
+            "and there is no relegation instant to publish, because there was no relegation"
+        );
+    }
+
+    #[test]
+    fn a_replay_does_not_call_an_endpoint_an_operator_pinned_awake_relegated() {
+        // Rule 1 protects a `Dormant` hold from replay; nothing protects an
+        // `Awake` one, because rule 3 runs before rule 4. The pin still loses
+        // its probe in a replay, which is right (the replay must reproduce the
+        // first run), but the REASON published for it must not be the policy's.
+        let t = Thresholds::default();
+        let (mut state, mut endpoints) =
+            dormant_fleet(1, "2026-08-10T00:00:00Z", "2026-08-23T00:00:00Z");
+        state.endpoint.push(EndpointState {
+            url: ep("http://pinned.example/sparql"),
+            last_probed: Some(ep("2026-08-23T00:00:00Z")),
+            dormant_since: Some(ep("2026-08-13T00:00:00Z")),
+            hold: Some(Hold::Awake { until: None, reason: "under repair".into() }),
+            ..Default::default()
+        });
+        endpoints.push(ep("http://pinned.example/sparql"));
+        let written = update(
+            &state,
+            &[ep("http://e000.example/sparql")],
+            &[expensive("http://e000.example/sparql")],
+            "2026-08-24T00:00:00Z",
+            &t,
+        )
+        .unwrap();
+
+        let replay = plan_sweep(&written, &endpoints, "2026-08-24T00:00:00Z", &t).unwrap();
+        assert_eq!(replay.probe, vec![ep("http://e000.example/sparql")]);
+        assert_eq!(replay.skipped.len(), 1);
+        assert_eq!(replay.skipped[0].url, ep("http://pinned.example/sparql"));
+        assert_eq!(
+            replay.skipped[0].reason,
+            SkipReason::NotInThisSweep,
+            "an operator pinned it awake, so the machine's `automatic` is the one reason it \
+             cannot be"
+        );
     }
 
     #[test]
@@ -1879,9 +1999,10 @@ mod tests {
     }
 
     #[test]
-    fn the_two_skip_reason_slugs_are_automatic_and_operator_hold() {
+    fn the_three_skip_reason_slugs_are_the_wire_strings_the_pages_read() {
         assert_eq!(SkipReason::Automatic.slug(), "automatic");
         assert_eq!(SkipReason::OperatorHold.slug(), "operator-hold");
+        assert_eq!(SkipReason::NotInThisSweep.slug(), "not-in-this-sweep");
     }
 
 
