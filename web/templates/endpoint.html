@@ -26,6 +26,11 @@
            background: var(--bg-secondary); border-bottom: 1px solid var(--border); }
   .logo { display: flex; align-items: center; gap: 9px; font-weight: 600; color: var(--text-bright); }
   .run { margin-left: auto; font-family: var(--mono); font-size: 12px; color: var(--text-dim); }
+  /* The header's link to /about, in the same token as every other link on the
+     page. Present on all three pages, so that a stranger who lands on their own
+     endpoint's page can reach what the marks mean and who changes them without
+     already knowing the address. */
+  header a { font-family: var(--mono); font-size: 12px; }
   main { padding: 22px 24px; max-width: 1120px; }
   h1 { margin: 0; font-family: var(--mono); font-size: 18px; font-weight: 600;
        color: var(--text-bright); letter-spacing: -0.01em; word-break: break-all; }
@@ -112,6 +117,7 @@
     sparqlwatch
   </span>
   <span class="run">{% if run %}run {{ generated_at }}{% else %}no measurement sweep{% endif %}</span>
+  <a href="{{ about_path }}">why we queried your server</a>
 </header>
 <main>
   <h1>{{ endpoint }}</h1>
@@ -151,10 +157,17 @@
      The two attributes are the machine-readable half of the sentence, not a
      drawing: dormancy gets no chip, no metric row and no legend entry, because
      it is not a finding about the endpoint and the seven states of
-     docs/design/verdict-encoding.md are a closed set. #}
+     docs/design/verdict-encoding.md are a closed set.
+
+     The link is inside this paragraph rather than only in the header because
+     this is the sentence an endpoint's own operator was sent here by, and it is
+     the one place on the page where knowing what the mark claims, what it does
+     not, and who lifts it is the reader's next question. It appears only for the
+     dormancy case: the other sentence in this element is about a sweep that
+     recorded nothing, and /about has nothing further to tell that reader. #}
   <p class="note warn-note" data-newest-sweep-silent="true"
      {%- if newest_declined_to_ask %} data-newest-sweep-dormant="true"{% endif %}
-     {%- if newest_dormancy_reason %} data-dormancy-reason="{{ newest_dormancy_reason }}"{% endif %}>{{ newest_silence_text }}</p>
+     {%- if newest_dormancy_reason %} data-dormancy-reason="{{ newest_dormancy_reason }}"{% endif %}>{{ newest_silence_text }}{% if newest_declined_to_ask %} What dormant claims, what it does not, and how a person changes it either way are set out on <a href="{{ about_path }}">this service's about page</a>.{% endif %}</p>
   {% endif %}
 
   <section>

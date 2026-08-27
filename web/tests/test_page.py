@@ -33,9 +33,11 @@ from starlette.testclient import TestClient
 
 import verdict_encoding
 from app import (
+    ABOUT_PATH,
     COMPLETE_TEXT,
     ENDPOINT_PATH,
     TRUNCATED_TEXT,
+    _DORMANCY_REASONS,
     _newest_sweep_silence_text,
     _rows,
     _sample,
@@ -1516,6 +1518,37 @@ def test_the_endpoint_page_says_the_newest_sweep_did_not_ask(
     )
 
 
+def test_the_endpoint_page_links_to_about(
+    client_for, store, store_dormant_newest
+):
+    """The instruction for overruling us has to be reachable from the page that
+    marks you.
+
+    Nothing on this site linked to `/about` until this stage. The contact address
+    that lifts a hold, the four numbers behind an automatic relegation and the
+    paragraph saying dormant is not a verdict all lived on a page reachable only
+    by pasting the prober's `User-Agent` URL into a browser, so this page said
+    what happened and stopped there.
+
+    Twice, and each is a different reader. The header is for anybody who lands on
+    an endpoint page at all. The second is inside the dormancy sentence, for the
+    one operator it is addressed to, so that "who changes this" is answered in
+    the same breath as the mark rather than two scrolls away.
+    """
+    href = f'href="{ABOUT_PATH}"'
+    plain = page(client_for(store), KADASTER)
+    assert href in plain, "no link to /about in the endpoint page header"
+    assert plain.count(href) == 1, (
+        "a page with no dormancy mark has nothing further to send a reader "
+        f"to /about for: {plain.count(href)} links"
+    )
+
+    marked = page(client_for(store_dormant_newest), KADASTER)
+    assert marked.count(href) == 2, "the header's link, and the sentence's"
+    said = texts_with(marked, SILENT)[0]
+    assert "about page" in said, said
+
+
 def test_the_dormancy_sentence_is_not_drawn_as_a_verdict(
     client_for, store_dormant_newest
 ):
@@ -1633,16 +1666,31 @@ def _silence_text(**overrides):
 
 
 def test_each_dormancy_reason_gets_its_own_sentence():
-    """The two slugs prober/src/dormancy.rs::SkipReason emits say different
-    things about who decided. "automatic" is this service's cost policy
-    relegating an endpoint that proved expensive and silent; "operator-hold"
-    is a person. Reporting the second as the first would tell a reader the
-    machine did something a person did."""
-    automatic = _silence_text(newest_dormancy_reason="automatic")
-    held = _silence_text(newest_dormancy_reason="operator-hold")
-    assert "automatic" in automatic and "operator-hold" not in automatic
-    assert "operator-hold" in held and "automatic" not in held
-    assert automatic != held, "two reasons, two sentences"
+    """Every slug prober/src/dormancy.rs::SkipReason emits says something
+    different, and no two of them share a sentence.
+
+    "automatic" is this service's cost policy relegating an endpoint that proved
+    expensive and silent; "operator-hold" is a person; "not-in-this-sweep" is
+    neither, and is not a relegation at all. Reporting any of them as another
+    tells a reader that somebody or something did what it did not: the machine
+    did a person's work, or a decision was taken about their server that nobody
+    took.
+
+    Read off _DORMANCY_REASONS rather than listed here, so that a fourth slug
+    fails this test rather than passing it three out of four.
+    test_about.py's test_the_dormancy_reasons_the_pages_read_are_the_probers_own
+    holds that map's keys to the Rust match arms.
+    """
+    said = {
+        slug: _silence_text(newest_dormancy_reason=slug)
+        for slug in _DORMANCY_REASONS
+    }
+    for slug, sentence in said.items():
+        assert slug in sentence, f"{slug} is not named in its own sentence"
+        for other in said:
+            if other != slug:
+                assert other not in sentence, f"{slug}'s sentence names {other}"
+    assert len(set(said.values())) == len(said), "two reasons share a sentence"
 
 
 def test_it_says_so_without_a_reason_when_no_reason_is_bound():

@@ -584,14 +584,22 @@ def _newer_unfinished_run_text(
 
 
 # What each dormancy reason means in words, keyed by the slug the graph
-# carries. The slugs are prober/src/dormancy.rs's SkipReason::slug, and the two
-# sentences differ in WHO decided: "automatic" is this project's cost policy
-# relegating an endpoint that proved expensive and silent over two consecutive
-# sweeps, "operator-hold" is a person putting it aside by hand. Reporting the
-# second as the first would tell a reader the machine did something a person
-# did, and would send an operator looking for a threshold to change.
+# carries. The slugs are prober/src/dormancy.rs's SkipReason::slug, and the
+# sentences differ in WHO decided and in what follows: "automatic" is this
+# project's cost policy relegating an endpoint that proved expensive and silent
+# over consecutive sweeps, "operator-hold" is a person putting it aside by hand.
+# Reporting the second as the first would tell a reader the machine did
+# something a person did, and would send an operator looking for a threshold to
+# change.
 #
-# Neither sentence says anything about the endpoint. Dormancy is a fact about
+# "not-in-this-sweep" is neither, and it is the reason this map cannot collapse
+# into one sentence: a sweep re-running an instant that already ran asks exactly
+# the endpoints that instant asked, so an endpoint it did not reach was not
+# relegated and nothing about it was decided. Rule 3 of the admission policy
+# used to publish "automatic" for those, which every one of these pages then
+# rendered as a relegation that never happened.
+#
+# No sentence here says anything about the endpoint. Dormancy is a fact about
 # this service's rotation, which is why the vocabulary calls it dormant rather
 # than unresponsive and why it is not one of the six verdicts.
 _DORMANCY_REASONS = {
@@ -600,6 +608,12 @@ _DORMANCY_REASONS = {
         "deal and returned nothing"
     ),
     "operator-hold": "an operator put it aside by hand",
+    "not-in-this-sweep": (
+        "that sweep re-ran an instant that had already run, so it asked "
+        "exactly the endpoints that instant asked before and this endpoint "
+        "was not one of them, which is not a relegation and not a judgement "
+        "about the endpoint"
+    ),
 }
 
 # The clause for a reason this build has no sentence for, from a prober newer
@@ -929,6 +943,12 @@ def _page_context(
             measurements.newest_sweep_declined_to_ask_this_endpoint
         ),
         "newest_dormancy_reason": measurements.newest_dormancy_reason,
+        # And where a reader of that sentence goes next. The sentence says what
+        # happened; /about is the only surface that says what the mark claims,
+        # what it does not, and who changes it, and until this stage no page
+        # linked to it. In the header for every reader, and once more inside the
+        # dormancy sentence for the one it is addressed to.
+        "about_path": ABOUT_PATH,
         "rows": rows,
         "legend": _legend(rows),
         "sample": _sample(measurements, content),
@@ -1134,13 +1154,15 @@ ROW_NEVER_REACHED_TEXT = "a later sweep never got here"
 ROW_DORMANT_TEXT = "the newest sweep did not ask"
 
 # The reason, twice: the clause a row carries, and the gloss the page's panel
-# explains it with. Two spellings today, and each is a different fact:
+# explains it with. Three spellings today, and each is a different fact:
 # "automatic" is the admission policy relegating an endpoint that cost more than
-# its ceiling while answering nothing in two consecutive sweeps, and
-# "operator-hold" is a person setting it aside. A row that read the same for both
-# would say less than the attribute beside it already does.
+# its ceiling while answering nothing in two consecutive sweeps, "operator-hold"
+# is a person setting it aside, and "not-in-this-sweep" is a sweep replaying an
+# instant that had already run and so asking exactly the set that instant asked.
+# A row that read the same for any two of them would say less than the attribute
+# beside it already does.
 #
-# ONE MAP AND NOT TWO, because the panel used to spell these two slugs out in
+# ONE MAP AND NOT TWO, because the panel used to spell these slugs out in
 # the template. The prober owns them (prober/src/dormancy.rs's
 # SkipReason::slug), so a rename there left every row telling the truth through
 # the verbatim fallback while the panel went on naming a value no run graph could
@@ -1153,13 +1175,33 @@ ROW_DORMANT_TEXT = "the newest sweep did not ask"
 # endpoint cost more than its ceiling ..."), which is prose about one slug that
 # nothing pins: a third reason, or a rename, left it standing. The strike count
 # in it is a format field for the same reason the cadence is, see below.
+#
+# The cadence lives in these glosses too, and no longer in a sentence of the
+# template's own. The panel used to end "Either way the endpoint is asked at
+# most one sweep in every N days", which is true of exactly one of the three
+# reasons: a hold is asked by no sweep at all until a person lifts it, and a
+# replay that did not reach an endpoint changed nothing about how often it is
+# asked. One sentence covering three reasons is how that got written, so each
+# reason now carries what follows from it and the template covers none of them.
 _ROW_DORMANCY_REASONS = {
     "automatic": (
         "on cost and silence",
         "the admission policy setting it aside after {strikes} sweeps in a row "
-        "that cost more than its ceiling and answered nothing",
+        "that cost more than its ceiling and answered nothing, after which it "
+        "is asked at most one sweep in every {cadence} days and only when a "
+        "person starts one",
     ),
-    "operator-hold": ("by hand", "a person setting it aside by hand"),
+    "operator-hold": (
+        "by hand",
+        "a person setting it aside by hand, after which no sweep asks it at "
+        "all until a person lifts the hold",
+    ),
+    "not-in-this-sweep": (
+        "on a replay of an earlier sweep",
+        "a sweep re-running an instant that had already run, which asks "
+        "exactly the endpoints that instant asked before and so did not reach "
+        "this one, leaving how often it is asked exactly as it was",
+    ),
 }
 
 # The fourth thing a row can say, and it is provenance rather than a warning:
@@ -1205,7 +1247,7 @@ def _row_dormancy_text(reason: str | None) -> str:
     return f"{ROW_DORMANT_TEXT}, for a reason this page cannot read: {reason}"
 
 
-def _group_dormancy_note(dormant: int, total: int) -> str:
+def _group_dormancy_note(dormant: int, total: int, with_reason: int) -> str:
     """What the marker means for the group it appears in.
 
     A note on the group rather than a group of its own, for the reason
@@ -1214,19 +1256,35 @@ def _group_dormancy_note(dormant: int, total: int) -> str:
     denominator like every other count on this page, and it points at the row
     for the instant rather than repeating one instant for rows that may not
     share it.
+
+    ``with_reason`` IS COUNTED AND NOT ASSUMED. This note used to end "declined
+    to ask, and said why" unconditionally, directly above rows that
+    _row_dormancy_text renders as "and gave no reason": a declaration with no
+    sw:dormancyReason beside it made the declaration, which is the half that
+    matters, and the note asserted the other half for it. The prober always
+    writes a reason, so no prober output reaches the mismatch; the branch exists
+    because _row_dormancy_text and _NO_DORMANCY_REASON both decline to assume
+    it, and on these pages a qualifier stated without a condition is a claim.
     """
     one = dormant == 1
+    if with_reason == dormant:
+        said = "and said why"
+    elif with_reason == 0:
+        said = "and recorded no reason" + ("" if one else " for any of them")
+    else:
+        said = f"and said why for {with_reason} of them"
     return (
         f"{dormant} of these {total} rows "
         f"{'carries' if one else 'carry'} the marker "
         f"\u201c{ROW_DORMANT_TEXT}\u201d: the newest sweep in this store "
         f"published {'it as an endpoint' if one else 'them as endpoints'} it "
-        f"declined to ask, and said why. "
+        f"declined to ask, {said}. "
         f"{'It is' if one else 'They are'} in this group because this is the "
         f"verdict {'its' if one else 'their'} last real probe produced, and "
         f"{'that row names' if one else 'each of those rows names'} the sweep "
-        f"that produced it. Being asked less often is a fact about this "
-        f"service's rotation and not a finding about the endpoint."
+        f"that produced it. Whichever reason the row names, and the panel "
+        f"below spells out every reason a sweep can give, it is a fact about "
+        f"this service and not a finding about the endpoint."
     )
 
 
@@ -1473,6 +1531,13 @@ def _index_groups(
         # the number in the note and the markers a reader can count are the same
         # decision read twice rather than two decisions that can differ.
         dormant = sum(1 for row in built if row["dormant"])
+        # And how many of those carried a reason, for the same reason the count
+        # above is read off the built rows: the note says "and said why", and
+        # whether that is true is a property of these rows rather than of the
+        # marker. See _group_dormancy_note.
+        with_reason = sum(
+            1 for row in built if row["dormant"] and row["dormancy_reason"]
+        )
         if value is None:
             state = verdict_encoding.presentation(verdict_encoding.NOT_MEASURED)
             label = state.label
@@ -1538,7 +1603,9 @@ def _index_groups(
                 # marker: a note saying that some of these rows were not asked
                 # would be false of every row in a group that holds none.
                 "dormant_note": (
-                    _group_dormancy_note(dormant, len(rows)) if dormant else None
+                    _group_dormancy_note(dormant, len(rows), with_reason)
+                    if dormant
+                    else None
                 ),
                 "rows": built,
             }
@@ -1599,6 +1666,13 @@ def _index_context(entries: list[EndpointMeasurements]) -> dict:
             entries[0].newest_generated_at if entries else None
         ),
         "newest_sweep_note": _newest_sweep_note(entries),
+        # The one link to /about on this page, in the page header where it costs
+        # one occurrence rather than one per row. Nothing on this site linked
+        # here until this stage: a row said the newest sweep did not ask and
+        # stopped, so the contact address that changes it, and the four numbers
+        # behind the mark, were reachable only by pasting the prober's
+        # User-Agent URL into a browser.
+        "about_path": ABOUT_PATH,
         "row_unfinished_text": ROW_UNFINISHED_TEXT,
         "row_never_reached_text": ROW_NEVER_REACHED_TEXT,
         # The two new markers' words, for the panel that explains them. The
@@ -1624,14 +1698,16 @@ def _index_context(entries: list[EndpointMeasurements]) -> dict:
             }
             for slug, (_, gloss) in _ROW_DORMANCY_REASONS.items()
         ],
-        # And the cadence, from the one dict that holds it. DORMANCY is defined
-        # with the /about page's constants below, because that is where its
-        # provenance comment belongs and because test_about.py holds it to
-        # prober/src/dormancy.rs's DEFAULT_CADENCE_DAYS. Read from there rather
-        # than written into this template too: the panel used to say "seven
-        # days" in words, so changing the constant self-corrected /about and left
-        # the index promising a cadence no sweep uses.
-        "dormant_cadence_days": DORMANCY["dormant-cadence-days"],
+        # No cadence of its own beside them, and that absence is the fix: the
+        # panel used to end one sentence with the cadence for all the reasons at
+        # once, which is true of the automatic one and false of the other two.
+        # The numbers now travel inside the gloss of the reason they belong to,
+        # formatted above from DORMANCY, which is defined with the /about page's
+        # constants below and held to prober/src/dormancy.rs's
+        # DEFAULT_CADENCE_DAYS by test_about.py. The template states no number
+        # of its own either way: it used to say "seven days" in words, so
+        # changing the constant self-corrected /about and left the index
+        # promising a cadence no sweep uses.
         "empty_cell_text": EMPTY_CELL_TEXT,
         "legend": _legend(drawn),
         "chip_width": verdict_encoding.CHIP_WIDTH_PX,
@@ -1822,9 +1898,12 @@ POLITENESS = {
 #
 # THESE ARE POLITENESS FIGURES, which is why the page renders them under the
 # same data-politeness attribute: they are how many requests somebody's server
-# gets. A dormant endpoint is asked at most one sweep in every seven days
-# instead of one per sweep, and that is the strongest single statement this
-# service makes about the load it puts on a host that never answers.
+# gets. An endpoint the admission policy set aside itself is asked at most one
+# sweep in every seven days instead of one per sweep, and that is the strongest
+# single statement this service makes about the load it puts on a host that
+# never answers. All four numbers are that case and only that case: an operator
+# hold is asked by no sweep at all until a person lifts it, so no threshold here
+# describes it, which is what /about's three paragraphs on the reasons separate.
 DORMANCY = {
     "dormant-cost-seconds": 60,
     "dormant-strikes": 2,

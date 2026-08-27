@@ -566,6 +566,16 @@ Roughly 11 KB of the marked figure is the instant's second spelling in
 `data-measured-by-sweep`, which is the cheapest thing to give up if something has
 to go. See "Rows whose facts are not the newest sweep's" below.
 
+**The link to `/about` costs 1,227 bytes and not one byte per row.** Measured on
+the served index of `store_registry_sample`, nine rows, against the same page
+before it: 27,449 to 28,676 bytes, and the identical 1,227 on a store with no rows
+at all, which is what makes it fixed. Almost all of it is the marked-row panel's
+prose and the CSS comment beside the header rule; the `href` itself appears twice
+per page, once in the header and once in that panel, and
+`test_the_index_links_to_about_once_and_not_once_per_row` asserts the count. A
+link in each row would have been the version of this fix that made the overrun
+above worse by roughly 25 KB.
+
 **The row filter is an inline `<script>`, and the page does not depend on it.**
 Every row is in the document as served; with JavaScript off or blocked, all of
 them are visible and only the filtering is missing. The spec's risk table flags
@@ -582,6 +592,27 @@ every request, so this page is where a sysadmin arrives after finding an
 unfamiliar agent in their own log. It answers, in that order,
 who is querying, how often, how politely, what "dormant" means if their endpoint
 is marked that way, why this endpoint, and how to stop it.
+
+**Both other pages link to it, and until this stage neither did.** The page
+asserts that a reader arrives two ways, the second being a row on the index saying
+the newest sweep did not ask their endpoint, and no template held an `href` to
+`/about`: the marked row said what happened and stopped, so the contact address
+that changes it and the four thresholds behind it were reachable only by pasting
+the `User-Agent` URL into a browser. There are now four links: the header of the
+index and of an endpoint page, the index's marked-row panel, and the endpoint
+page's own dormancy sentence, the last two being the places a reader who followed
+the mark is standing when the question becomes "who changes this".
+
+**The dormancy section states each reason separately, because one description of
+it was false of the others.** The section described the automatic case and
+presented it as what the word means, which is wrong for `operator-hold` in three
+ways: nothing was observed (`dormancy.rs` skips a `Dormant` hold before it sends
+anything), the cadence does not apply (a held endpoint is asked by no sweep until a
+person lifts it), and answering cannot end it (an endpoint never asked cannot
+answer, and the promotion is suppressed regardless). The four `data-politeness`
+numbers belong to the automatic case alone and the page now says so. It was the
+last of four surfaces to distinguish the reasons, and the only real prober output
+in this repository carries `operator-hold`.
 
 **It takes no store dependency.** `about_resource` has no `store` parameter, and
 that absence is deliberate: the one page a stranger needs is the one page that must
@@ -817,9 +848,24 @@ different claim about a different run:
   `sw:completedEndpoint` for this endpoint. Nothing in the row is out of date: it is
   the newest the store holds. What is not true is that it reports the latest sweep.
 - **`the newest sweep did not ask`**, with the reason the run published:
-  `automatic` for the admission policy, `operator-hold` for a person, the value
-  verbatim for anything else, and "gave no reason" for a declaration with none.
-  Carried in `data-newest-sweep-dormant` and `data-dormancy-reason`. **Dormancy is
+  `automatic` for the admission policy, `operator-hold` for a person,
+  `not-in-this-sweep` for a sweep replaying an instant that had already run and so
+  asking exactly the set that instant asked, the value verbatim for anything else,
+  and "gave no reason" for a declaration with none. The three slugs are
+  `SkipReason::slug`'s match arms, and `test_about.py` asserts set equality
+  between them and both of `app.py`'s reason maps, so a slug the prober adds or
+  renames fails here rather than degrading quietly into the verbatim branch while
+  the prose goes on naming a value no run graph can carry. **What follows from the
+  reason travels with the reason**: the cadence is inside the `automatic` gloss, a
+  hold is asked by no sweep until a person lifts it, and `not-in-this-sweep`
+  changes how often the endpoint is asked not at all. The panel used to close with
+  one sentence covering all of them ("Either way the endpoint is asked at most one
+  sweep in every 7 days"), which is true of the first and false of the other two.
+  The **group note counts the reasons rather than assuming them**: it reads "and
+  said why" only where every marked row in the group carries one, because
+  `_row_dormancy_text` renders "and gave no reason" for a declaration with none and
+  the two used to appear one above the other. Carried in
+  `data-newest-sweep-dormant` and `data-dormancy-reason`. **Dormancy is
   not a verdict**: it gets no chip, no column and no entry in the legend, which
   counts states from the closed table in `verdict_encoding.py` and is shared with the
   endpoint page. The row keeps the verdict its last real probe produced and stays in

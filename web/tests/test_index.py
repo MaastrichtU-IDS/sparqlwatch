@@ -46,6 +46,7 @@ from starlette.testclient import TestClient
 
 import verdict_encoding
 from app import (
+    ABOUT_PATH,
     DORMANCY,
     ENDPOINT_PATH,
     INDEX_PATH,
@@ -1166,7 +1167,7 @@ def test_a_row_the_newest_sweep_declined_to_ask_says_so_in_words(
 def test_a_dormant_rows_words_name_the_reason_the_store_holds(
     client_for, store_dormant_newest, store_dormant_automatic
 ):
-    """The two reasons, and the words differ between them.
+    """Two of the reasons, and the words differ between them.
 
     An operator's hold and a machine relegation are different facts about this
     service and a row that read the same for both would tell a reader nothing
@@ -1390,7 +1391,7 @@ def test_dormancy_is_not_added_to_the_legend(client_for, store_dormant_newest):
     assert "dormant" not in states
 
 
-def test_the_marked_row_panel_explains_the_dormant_marker_and_both_reasons(
+def test_the_marked_row_panel_explains_the_dormant_marker_and_every_reason(
     client_for, store_dormant_newest
 ):
     """The reasoning that will not fit in three words on a row.
@@ -1398,9 +1399,11 @@ def test_the_marked_row_panel_explains_the_dormant_marker_and_both_reasons(
     Four markers now, so four explanations, each read out of its own element
     rather than searched for in the document: a sentence asserted to be
     somewhere on the page passes while it sits in the legend. The dormancy
-    paragraph has to name both reasons, say what the marker does NOT mean, and
-    say where a person changes it, because a reader who finds their own endpoint
-    marked will read this and nothing else.
+    paragraph has to name every reason a run graph can carry, say what the
+    marker does NOT mean, and say where a person changes it, because a reader
+    who finds their own endpoint marked will read this and nothing else. The
+    reasons are read off _ROW_DORMANCY_REASONS rather than listed here, so a
+    third one arriving fails this test rather than passing it two out of three.
     """
     page = index(client_for(store_dormant_newest))
     panel = {
@@ -1443,15 +1446,52 @@ def test_the_marked_row_panel_explains_the_dormant_marker_and_both_reasons(
     assert "timer" in measured_by, measured_by
 
 
-def test_the_row_marker_reads_every_reason_a_run_graph_can_carry():
-    """The three branches, asked of the function rather than of a store.
+def test_the_index_links_to_about_once_and_not_once_per_row(
+    client_for, store_dormant_newest
+):
+    """The route this project tells strangers to take, made a route.
 
-    Two of them have no committed fixture and cannot get one from the prober: it
-    writes a reason with every declaration, and the only file carrying a third
-    spelling would be a hand-edited one. They are reachable all the same, from a
-    prober newer or older than this page and from a hand-edited run file, and
-    each is a sentence a reader would act on, so each is pinned here the way
-    test_page.py pins the endpoint page's longer version of the same three.
+    `/about` asserts that a reader arrives here two ways, the second being a row
+    on this page that says the newest sweep did not ask their endpoint. There was
+    no such route: no template held an `href` to `/about`, so the marked row said
+    what happened and stopped, and the contact address that changes it sat on a
+    page you reached by pasting a `User-Agent` URL into a browser.
+
+    TWICE, AND THE COUNT IS THE ASSERTION. web/README.md's table has this page
+    over its documented 500 KB in three of four measured shapes, and 543 rows is
+    the wrong place to spend bytes on a constant string: a link in the row would
+    be the version of this fix that makes the overrun worse. So one occurrence in
+    the page header, for every reader, and one in the panel that explains the
+    marker, for the reader who followed it, and neither of them grows with the
+    number of rows.
+    """
+    href = f'href="{ABOUT_PATH}"'
+    text = index(client_for(store_dormant_newest))
+    assert text.count(href) == 2, (
+        f"the header's link and the panel's, and no more: {text.count(href)}"
+    )
+
+    panel = {
+        attributes["data-row-marker"]: body
+        for attributes, body in zip(
+            with_attribute(text, "data-row-marker"),
+            texts_with(text, "data-row-marker"),
+        )
+    }
+    assert "about page" in panel["dormant"].lower(), panel["dormant"]
+
+
+def test_the_row_marker_reads_every_reason_a_run_graph_can_carry():
+    """Every named reason and both unnamed branches, asked of the function
+    rather than of a store.
+
+    Two of the branches have no committed fixture and cannot get one from the
+    prober: it writes a reason with every declaration, and the only file
+    carrying an unreadable spelling would be a hand-edited one. They are
+    reachable all the same, from a prober newer or older than this page and from
+    a hand-edited run file, and each is a sentence a reader would act on, so each
+    is pinned here the way test_page.py pins the endpoint page's longer version
+    of the same set.
 
     An unrecognised reason travels VERBATIM. Relabelling it would hide which
     value the store holds, and dropping it would leave the row claiming the run
@@ -1461,6 +1501,15 @@ def test_the_row_marker_reads_every_reason_a_run_graph_can_carry():
     assert _row_dormancy_text("automatic") == (
         f"{ROW_DORMANT_TEXT}, on cost and silence"
     )
+    assert _row_dormancy_text("not-in-this-sweep") == (
+        f"{ROW_DORMANT_TEXT}, on a replay of an earlier sweep"
+    )
+    # And every reason the map holds, so a fourth slug is a failure here rather
+    # than a row that quietly reads "for a reason this page cannot read". The
+    # words are spelled out above because a reader acts on them; the coverage is
+    # read off the map because its keys belong to the prober.
+    for slug, (clause, _) in _ROW_DORMANCY_REASONS.items():
+        assert _row_dormancy_text(slug) == f"{ROW_DORMANT_TEXT}, {clause}", slug
 
     # A declaration with no reason beside it. The declaration is the fact the
     # page turns on, so the marker still appears and says the reason is missing
@@ -1474,7 +1523,8 @@ def test_the_row_marker_reads_every_reason_a_run_graph_can_carry():
     unknown = _row_dormancy_text("hibernating-2027")
     assert "hibernating-2027" in unknown
     assert "cannot read" in unknown
-    for reading in ("by hand", "on cost and silence", "no reason"):
+    readings = [clause for clause, _ in _ROW_DORMANCY_REASONS.values()]
+    for reading in [*readings, "no reason"]:
         assert reading not in unknown, unknown
 
 
@@ -1488,13 +1538,43 @@ def test_the_group_note_agrees_with_itself_in_number():
     through a store means a fixture with exactly one dormant row in its group
     and reaching the plural case means another one.
     """
-    one = _group_dormancy_note(1, 2)
+    one = _group_dormancy_note(1, 2, 1)
     assert "1 of these 2 rows carries" in one, one
     for plural in (" carry ", " them as endpoints", "They are in", "their last"):
         assert plural not in one, f"{plural!r} is in the singular note: {one!r}"
 
-    many = _group_dormancy_note(4, 9)
+    many = _group_dormancy_note(4, 9, 4)
     assert "4 of these 9 rows carry" in many, many
     assert "them as endpoints" in many, many
     for singular in ("carries", " it as an endpoint", "It is in", " its last"):
         assert singular not in many, f"{singular!r} is in the plural note: {many!r}"
+
+
+def test_the_group_note_claims_a_reason_only_for_the_rows_that_carry_one():
+    """"And said why" is counted off the rows, not asserted of the marker.
+
+    The note used to end "declined to ask, and said why" whatever the rows said,
+    and _row_dormancy_text renders "and gave no reason" for a declaration with no
+    sw:dormancyReason beside it. A store whose newest run declares an endpoint
+    dormant and records no reason therefore printed the group note "... declined
+    to ask, and said why" directly above the row "... and gave no reason", which
+    is the page contradicting itself inside one group.
+
+    Unreachable from prober output, because the prober always writes a reason.
+    The branch exists because _row_dormancy_text and _NO_DORMANCY_REASON both
+    decline to assume one, and on this page a qualifier stated with no condition
+    is a claim: the fix is to count, not to drop the clause, so the common case
+    still reads as the strong sentence it is.
+    """
+    assert "and said why" in _group_dormancy_note(3, 9, 3)
+
+    none_at_all = _group_dormancy_note(3, 9, 0)
+    assert "and recorded no reason for any of them" in none_at_all, none_at_all
+    assert "said why" not in none_at_all, none_at_all
+
+    one_of_one = _group_dormancy_note(1, 4, 0)
+    assert "and recorded no reason." in one_of_one, one_of_one
+    assert "any of them" not in one_of_one, one_of_one
+
+    some = _group_dormancy_note(3, 9, 2)
+    assert "and said why for 2 of them" in some, some

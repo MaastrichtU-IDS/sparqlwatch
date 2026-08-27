@@ -27,6 +27,11 @@
            background: var(--bg-secondary); border-bottom: 1px solid var(--border); }
   .logo { display: flex; align-items: center; gap: 9px; font-weight: 600; color: var(--text-bright); }
   .run { margin-left: auto; font-family: var(--mono); font-size: 12px; color: var(--text-dim); }
+  /* The header's link to /about, in the same token as every other link on the
+     page. One occurrence per page and not one per row: web/README.md's table
+     has this page over its byte budget in three of four measured shapes, and a
+     link repeated 543 times is the version of this fix that makes that worse. */
+  header a { font-family: var(--mono); font-size: 12px; }
   main { padding: 22px 24px; max-width: 1120px; }
   h1 { margin: 0; font-size: 18px; font-weight: 600; color: var(--text-bright);
        letter-spacing: -0.01em; }
@@ -143,6 +148,7 @@
     sparqlwatch
   </span>
   <span class="run">{% if newest_generated_at %}newest sweep {{ newest_generated_at }}{% else %}no measurement sweep{% endif %}</span>
+  <a href="{{ about_path }}">why we queried your server</a>
 </header>
 <main>
   <h1>Public SPARQL endpoints this service has measured</h1>
@@ -288,17 +294,23 @@
     </p>
     <p class="note" data-row-marker="dormant">
       <span class="qual">{{ row_dormant_text }}</span>
-      The newest sweep published this endpoint as one it declined to ask, and
-      said why. The reasons a sweep can give, and the slugs are the prober's own
-      rather than this template's:
+      The newest sweep published this endpoint as one it declined to ask. Where
+      it gave a reason the row carries it, and where it gave none the row says
+      that instead. The reasons a sweep can give, and the slugs are the prober's
+      own rather than this template's:
       {% for reason in dormancy_reasons %}<code>{{ reason.slug }}</code>, {{ reason.gloss }}{% if not loop.last %}; {% endif %}{% endfor %}.
-      Either way the endpoint is asked at most one sweep in every
-      {{ dormant_cadence_days }} days, and only when a person starts one. That
-      is a fact about our rotation and not a verdict about the endpoint: dormancy
-      is not a verdict, it has no chip and no entry in the key above, and the
-      chips on the row are the ones its last real probe produced. A reason this
-      build has no reading of is printed on the row exactly as the store holds
-      it, and nothing is claimed about what it means.
+      How often the endpoint is asked next is part of the reason and not the
+      marker, which is why each reason above carries its own and this panel
+      states none. One of them is not a change in our rotation at all, and a row
+      marked with that reason was not relegated and was not judged. Every one of
+      them is a fact about this service and none is a verdict about the endpoint:
+      dormancy is not a verdict, it has no chip and no entry in the key above,
+      and the chips on the row are the ones its last real probe produced. A
+      reason this build has no
+      reading of is printed on the row exactly as the store holds it, and nothing
+      is claimed about what it means. What the mark claims, what it does not, and
+      how a person changes it are set out on
+      <a href="{{ about_path }}">this service's about page</a>.
     </p>
     <p class="note" data-row-marker="measured-by">
       <span class="when">{{ row_measured_by_text }} &hellip;</span>

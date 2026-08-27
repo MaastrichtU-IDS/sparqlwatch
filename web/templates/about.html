@@ -198,27 +198,43 @@
   <section class="panel">
     {# The second reason a stranger arrives here. The first is the User-Agent in
        their logs; this one is following a row on the index that says the newest
-       sweep did not ask their endpoint.
+       sweep did not ask their endpoint. That route is a LINK now, in the header
+       of the index and of the endpoint page and in the two places that explain
+       the marker: until this stage nothing on the site pointed here, so the
+       address below and the four numbers were reachable only by pasting a
+       User-Agent URL into a browser.
+
+       THREE REASONS AND NOT ONE, and this section was the last of four surfaces
+       to say so. The index panel and the endpoint page both read the slug the
+       run graph carries; this page described the automatic case and presented it
+       as what "dormant" means, which is false for a hold in three ways. Nothing
+       was observed, because prober/src/dormancy.rs skips a Dormant hold before
+       it sends anything. The cadence does not apply, because a held endpoint is
+       asked by no sweep until a person lifts the hold. And answering cannot end
+       it, because an endpoint never asked cannot answer and the same module
+       suppresses the promotion regardless. The only real prober output in this
+       repository carries operator-hold.
 
        TWO WORDS THIS SECTION MAY NOT USE. "Weekly" would promise a sweep every
        week, and the section above says no sweep runs on a timer; the cadence is
-       a bound on how often a dormant endpoint is asked WHEN somebody runs one.
-       "Unresponsive" is the word prober/src/dormancy.rs's header refuses, for
-       the reason the six-verdict vocabulary exists: what was observed is
-       cancelled probes, not a broken server. Both are pinned in
+       a bound on how often an endpoint set aside automatically is asked WHEN
+       somebody runs one. "Unresponsive" is the word prober/src/dormancy.rs's
+       header refuses, for the reason the six-verdict vocabulary exists: what was
+       observed is cancelled probes, not a broken server. Both are pinned in
        web/tests/test_about.py.
 
        The four numbers carry data-politeness rather than an attribute of their
        own, and that is deliberate: they ARE politeness figures, they belong in
        the RDF representation beside the other eight, and the test that holds the
        two representations to the same numbers iterates exactly that attribute.
+       All four belong to the automatic case, and the paragraph after them says
+       so rather than leaving a held operator to hunt for the threshold that
+       caught them.
     #}
     <h2>If your endpoint is marked dormant</h2>
     <p data-dormancy="what-it-is">
       <b>Dormant is a place in this service's rotation</b>, and it is nothing
-      else. An endpoint marked that way is asked at most one sweep in every
-      {{ dormancy['dormant-cadence-days'] }} days, and only when a person starts
-      one, rather than in every sweep. It
+      else. An endpoint marked that way is not asked in every sweep. It
       stays on the list, its page stays up, and the verdicts on that page stay
       exactly as the last sweep that really asked recorded them, with that
       sweep's own instant printed beside them.
@@ -230,17 +246,31 @@
       drawn as a finding, it gets no mark against any check, and nothing here
       concludes from it that your endpoint does not work.
     </p>
+    <p data-dormancy="which-of-them">
+      <b>Three different things put an endpoint here, and the page that sent you
+      says which.</b> <code>automatic</code> is this service's own admission
+      policy setting an endpoint aside on cost and silence.
+      <code>operator-hold</code> is a person setting one aside by hand.
+      <code>not-in-this-sweep</code> is neither, and it is described last. These
+      are not three wordings of one thing: they differ in what was observed, in
+      how often the endpoint is asked afterwards, and in what ends it. Read the
+      one your row or your endpoint page names, and not the others.
+    </p>
     <p data-dormancy="what-was-measured">
-      <b>What was actually observed</b> is narrower than the word may sound. In
-      each of {{ dormancy['dormant-strikes'] }} sweeps in a row, the checks sent
-      to that endpoint together
+      <b>Set aside automatically, and what was actually observed</b> is narrower
+      than the word may sound. In each of {{ dormancy['dormant-strikes'] }}
+      sweeps in a row, the checks sent to that endpoint together
       spent longer than the first number below, and not one of them came back
       with something that could be counted as an answer: the time went on checks
       that were cancelled when their own budget ran out. A server that accepts
       the connection and then holds it open produces exactly that, and so does
       one that is merely slower than the budgets allow. Which it was is not
-      something this project measured, and the mark does not say.
+      something this project measured, and the mark does not say. An endpoint set
+      aside this way is asked at most one sweep in every
+      {{ dormancy['dormant-cadence-days'] }} days, and only when a person starts
+      one, rather than in every sweep.
     </p>
+    <p>These four numbers are that case, and only that case:</p>
     <ul class="facts">
       <li data-politeness="dormant-cost-seconds" data-value="{{ dormancy['dormant-cost-seconds'] }}">
         <b>{{ dormancy['dormant-cost-seconds'] }} seconds</b> of cancelled
@@ -257,10 +287,11 @@
       </li>
       <li data-politeness="dormant-cadence-days" data-value="{{ dormancy['dormant-cadence-days'] }}">
         <b>{{ dormancy['dormant-cadence-days'] }} days</b> at least between two
-        sweeps that ask a dormant endpoint. A bound and not a timetable: if
-        nobody starts a sweep for a month then nobody asks for a month. When the
-        endpoint does answer one of those sweeps it goes straight back into every
-        sweep, with no request from anybody and no edit by anybody.
+        sweeps that ask an endpoint this service set aside itself. A bound and
+        not a timetable: if nobody starts a sweep for a month then nobody asks
+        for a month. When the endpoint does answer one of those sweeps it goes
+        straight back into every sweep, with no request from anybody and no edit
+        by anybody. An endpoint held by hand is not on this clock at all.
       </li>
       <li data-politeness="dormant-wake-grace-days" data-value="{{ dormancy['dormant-wake-grace-days'] }}">
         <b>{{ dormancy['dormant-wake-grace-days'] }} days</b> is how long an
@@ -269,6 +300,31 @@
         message below buys, if what you want is to be probed.
       </li>
     </ul>
+    <p data-dormancy="set-aside-by-hand">
+      <b>Set aside by hand, and then nothing at all was observed.</b> A hold is
+      not a measurement and it is not a threshold: a sweep skips a held endpoint
+      before it sends it anything, so no cancelled check and no cost figure lies
+      behind the mark, and none of the four numbers above is what put it there.
+      Neither is the cadence. A held endpoint is <b>never asked</b>, by any
+      sweep, until a person lifts the hold, and it cannot answer its way back in
+      because it is not asked. A hold put on by hand comes off by hand, at the
+      address below. This site publishes that a person set the endpoint aside and
+      not what for, because the reason may be one no verdict here expresses, and
+      guessing at it on your behalf is the one thing this page will not do.
+    </p>
+    <p data-dormancy="not-a-relegation">
+      <b>Not asked by a sweep that was repeating an earlier one, which is not a
+      relegation at all.</b> A sweep can be told to re-run an instant that has
+      already run. It then asks exactly the endpoints that instant asked, so an
+      endpoint it did not reach is one that was not in the earlier sweep either,
+      and the run graph records that with the reason
+      <code>not-in-this-sweep</code>. Nothing was observed, nothing was decided,
+      no threshold was crossed and how often the endpoint is asked is exactly
+      what it was before. If that is the reason your page names, none of the four
+      numbers above applies to you and there is nothing here to overrule; a page
+      that reported it as either of the two cases above would be describing a
+      decision about your server that nobody took.
+    </p>
     <p data-dormancy="how-to-change-it">
       <b>A person changes it, either way, at the address this page already
       publishes.</b> Email

@@ -874,8 +874,11 @@ def test_the_content_facets_are_recorded_as_blocked_rather_than_unbuilt(client):
 #
 # This is the second reason a stranger arrives here. The first is the User-Agent
 # in their logs; the second is following a row on the index that says the newest
-# sweep did not ask their endpoint. What they need is what that word claims,
-# what it does not claim, and who changes it.
+# sweep did not ask their endpoint, which became a route a reader can take when
+# the two pages grew a link to this one: test_index.py's
+# test_the_index_links_to_about_once_and_not_once_per_row and test_page.py's
+# test_the_endpoint_page_links_to_about. What they need is what that word
+# claims, what it does not claim, and who changes it.
 #
 # The wording rules are not stylistic. "Weekly" is the one word this section may
 # not use, because `test_the_page_says_nothing_is_on_a_schedule_and_nothing_is`
@@ -893,8 +896,39 @@ DORMANCY_CLAIMS = {
     "what-it-is": ("rotation",),
     # What it is not: a verdict, and not a claim about the server.
     "not-a-verdict": ("not a verdict",),
-    # What was actually observed, in the terms the probe was run in.
-    "what-was-measured": ("cancel",),
+    # WHICH of them put the endpoint here, said before any is described. This
+    # section described the automatic case alone and presented it as what the
+    # word means, on the one surface a stranger is sent to, while the index
+    # panel and the endpoint page both read the slug the run graph carries. The
+    # slugs themselves are asserted rather than glossed, because the reader
+    # arrives holding one of them, and all of them are asserted because a page
+    # naming two of three is the same false claim in a smaller size.
+    "which-of-them": ("automatic", "operator-hold", "not-in-this-sweep"),
+    # What was actually observed, in the terms the probe was run in, and whose
+    # case that is.
+    "what-was-measured": ("cancel", "set aside automatically"),
+    # And the hand case, where the answer to "what was observed" is nothing.
+    # Three claims this section used to make of every dormant endpoint are false
+    # of a hold: that checks were sent and cancelled, that it is asked once in
+    # the cadence, and that answering puts it back. prober/src/dormancy.rs skips
+    # a Dormant hold before it sends anything, keeps it out of every sweep until
+    # a person wakes it, and suppresses the promotion regardless, and the only
+    # real prober output in this repository carries operator-hold.
+    "set-aside-by-hand": (
+        "nothing at all was observed",
+        "never asked",
+        "comes off by hand",
+    ),
+    # And the third reason, which is not a relegation in either direction. Rule 3
+    # of the admission policy published "automatic" for endpoints a replayed
+    # `--at` merely did not reach, so this page and both others reported a
+    # decision about somebody's server that nobody took. What the reader with
+    # this slug needs to be told is that none of the four thresholds is theirs.
+    "not-a-relegation": (
+        "not a relegation",
+        "nothing was observed",
+        "none of the four numbers above applies",
+    ),
     # Who changes it, and the same honesty about the mailbox as the exclusion
     # list gets: nothing watches it.
     "how-to-change-it": ("person", "hand"),
@@ -902,8 +936,13 @@ DORMANCY_CLAIMS = {
 
 
 def test_the_page_says_what_dormant_means_and_what_it_does_not(client):
-    """Four claims, each in its own element, because a reader who finds their
-    own endpoint marked will read this section and nothing else."""
+    """One claim per element, because a reader who finds their own endpoint
+    marked will read this section and nothing else.
+
+    Seven of them now, and the three added ones are the fix for a section that
+    was true of one reason and false of the others on all three of its
+    substantive claims.
+    """
     html = page(client)
     shown = attributes_by(html, "data-dormancy")
     assert set(shown) == set(DORMANCY_CLAIMS), "the page states a different set"
@@ -1008,11 +1047,19 @@ def test_the_dormancy_reasons_the_pages_read_are_the_probers_own():
     loudly as one it renames: a third reason with no reading on either page
     would fall through to "a reason this page cannot read", which is honest
     about the row and silently wrong in the panel that says there are two.
+
+    `not-in-this-sweep` is that third reason, and this test is what made the two
+    sides land together. Rule 3 of the admission policy published `automatic`
+    for endpoints a replayed `--at` merely did not reach, and both pages
+    rendered that as a relegation on cost and silence that never happened. The
+    Python maps carried sentences for the new slug before `SkipReason` carried
+    the variant, and this assertion was red for exactly that window, which is
+    the direction it was written for.
     """
     from app import _DORMANCY_REASONS, _ROW_DORMANCY_REASONS
 
     slugs = skip_reason_slugs()
-    assert slugs == {"automatic", "operator-hold"}, (
+    assert slugs == {"automatic", "operator-hold", "not-in-this-sweep"}, (
         "the prober's reason slugs changed; both pages' prose has to change "
         "with them, which is what the two assertions below are about"
     )
