@@ -164,6 +164,17 @@ triples into it, and return a LoadResult with drifted=[]: the one detector for
 a broken current graph asks which pointers name a run that no longer states
 their facts, and an emptied graph holds no pointers to ask about.
 
+TWO MORE REFUSALS, for the same reason and at the same two layers. A run graph
+that both declares an endpoint dormant and states a fact current points at for
+it is self-contradicting, since a sweep either asked an endpoint or declined to,
+and is refused in _parsed_graphs, per GRAPH and not per file. And a file whose
+graph declares an endpoint dormant when the graph it is about to REPLACE holds
+such a fact is refused in load_run before remove_graph, because loading it
+deletes that fact from the store while the file has already overwritten on disk
+the run that stated it. Dormancy itself is a run-graph fact and reaches current
+never; see "DORMANCY, AND WHY current HOLDS NONE OF IT" at the end of this
+docstring, and the two _refuse_ functions for the case each one prevents.
+
 TWO POINTERS, which is the subtle half. The newest run that MEASURED an
 endpoint and the newest run that SAMPLED it are different runs the moment a
 cheap sweep declines sw:metric:classes, and that is the steady state: the
@@ -1158,17 +1169,35 @@ def _quads_to_the_last_terminator(nquads: bytes) -> tuple[list, int]:
 # alone.
 _DORMANT_ENDPOINT = "urn:sparqlwatch:dormantEndpoint"
 
-# The three shapes that make an endpoint one whose sw:currentRun a run graph
-# governs, as Python spellings. _MEASURED_ENDPOINTS above is the authority; it
-# asks the same question of the STORE, and these answer it about PARSED QUADS
-# instead, which is what both refusals below need. _refuse_self_contradiction
-# in particular runs from _parsed_graphs, where main() has not opened a store
-# yet and may never open one. The two sides must say the same thing: a shape
-# dropped from here would let a file through that the store then treats as
-# measuring the endpoint.
+# Every shape that makes an endpoint one current holds a POINTER for, as Python
+# spellings. _MEASURED_ENDPOINTS and _SAMPLED_ENDPOINTS above are the
+# authority; they ask this question of the STORE, and the spellings here answer
+# it about PARSED QUADS instead, which is what _refuse_self_contradiction needs,
+# since it runs from _parsed_graphs where main() has not opened a store yet and
+# may never open one.
+#
+# BOTH pointers, and the first review of this code found exactly that hole: a
+# version reading only the measured shapes protected sw:currentRun and left
+# sw:currentSampleRun open, so the loss both refusals exist to prevent still
+# went through the other door. run-later-sample-only.nq is a committed fixture
+# whose graph holds a class sample for an endpoint and NOT ONE measured-shaped
+# quad, so "a graph that states nothing measured about the endpoint" is not a
+# graph that states nothing: it is the second of the two independent notions of
+# recency this module's docstring calls the subtle half.
+#
+# The class pin is deliberate and matches _SAMPLED_ENDPOINTS exactly, so
+# _governed_by_graph below and those two queries return the same set for the
+# same quads, which is what test_the_python_shapes_and_the_sparql_shapes_agree
+# asserts. A sample of another metric (run-properties-sample.nq) is therefore
+# outside both refusals, and that is correct rather than an oversight: no
+# pointer in current names it, so a graph replaced by a dormancy declaration
+# loses nothing current holds, and there is no reader to tell two things.
 _COMPUTED_ON = "http://www.w3.org/ns/dqv#computedOn"
 _NOT_MEASURED_ON = "urn:sparqlwatch:notMeasuredOn"
 _DECLARATIONS_READ = "urn:sparqlwatch:declarationsRead"
+_SAMPLED_FROM = "urn:sparqlwatch:sampledFrom"
+_SAMPLED_BY = "urn:sparqlwatch:sampledBy"
+_CLASSES_METRIC = "urn:sparqlwatch:metric:classes"
 
 
 def _dormant_by_graph(quads: list) -> dict[NamedNode, set[str]]:
@@ -1188,30 +1217,55 @@ def _dormant_by_graph(quads: list) -> dict[NamedNode, set[str]]:
     return found
 
 
-def _measured_by_graph(quads: list) -> dict[NamedNode, set[str]]:
-    """Which endpoints each graph in ``quads`` records a measurement, a decline
-    or a declarations fact for.
+def _governed_by_graph(quads: list) -> dict[NamedNode, set[str]]:
+    """Which endpoints each graph in ``quads`` states a fact current holds a
+    POINTER for: a measurement, a decline, a declarations fact or a class
+    sample.
 
-    The endpoint is the OBJECT of dqv:computedOn and sw:notMeasuredOn and the
-    SUBJECT of sw:declarationsRead, which is why this cannot be one set of
-    predicates matched in one position.
+    "Governed" is the docstring's word for it above: sw:currentRun governs the
+    first three shapes and sw:currentSampleRun the fourth. This is deliberately
+    the union, because a graph replaced by a dormancy declaration loses whichever
+    of the two it happened to hold.
+
+    Four shapes, three positions, which is why this cannot be one set of
+    predicates matched in one place: the endpoint is the OBJECT of
+    dqv:computedOn, sw:notMeasuredOn and sw:sampledFrom, and the SUBJECT of
+    sw:declarationsRead. The class sample also needs two quads rather than one,
+    because sw:sampledFrom alone does not say which metric was sampled, so it is
+    resolved in a second pass over the sample nodes the first pass found to
+    carry sw:sampledBy sw:metric:classes.
     """
     found: dict[NamedNode, set[str]] = {}
+    class_samples: set[tuple] = set()
+    sampled_from: list = []
     for quad in quads:
         predicate = quad.predicate.value
         if predicate in (_COMPUTED_ON, _NOT_MEASURED_ON):
             endpoint = quad.object
         elif predicate == _DECLARATIONS_READ:
             endpoint = quad.subject
+        elif predicate == _SAMPLED_BY:
+            if quad.object.value == _CLASSES_METRIC:
+                class_samples.add((quad.graph_name, quad.subject))
+            continue
+        elif predicate == _SAMPLED_FROM:
+            sampled_from.append(quad)
+            continue
         else:
             continue
         if isinstance(endpoint, NamedNode):
             found.setdefault(quad.graph_name, set()).add(endpoint.value)
+    for quad in sampled_from:
+        if (quad.graph_name, quad.subject) in class_samples and isinstance(
+            quad.object, NamedNode
+        ):
+            found.setdefault(quad.graph_name, set()).add(quad.object.value)
     return found
 
 
 def _refuse_self_contradiction(quads: list) -> None:
-    """Refuse a run graph that both measures an endpoint and declares it dormant.
+    """Refuse a run graph that both declares an endpoint dormant and states a
+    fact current holds a pointer for about it.
 
     PER GRAPH, not per file, and that is the whole subtlety. A sweep either
     asked an endpoint or declined to ask it, so one graph claiming both is
@@ -1230,14 +1284,15 @@ def _refuse_self_contradiction(quads: list) -> None:
     dormant = _dormant_by_graph(quads)
     if not dormant:
         return
-    measured = _measured_by_graph(quads)
+    governed = _governed_by_graph(quads)
     for graph in sorted(dormant, key=lambda name: name.value):
-        both = sorted(dormant[graph] & measured.get(graph, set()))
+        both = sorted(dormant[graph] & governed.get(graph, set()))
         if both:
             raise ValueError(
                 f"graph {graph.value} declares {', '.join(both)} dormant and "
-                f"also records a measurement, a decline or a declarations fact "
-                f"for the same endpoint(s). A run graph describes one sweep's "
+                f"also records a measurement, a decline, a declarations fact or "
+                f"a class sample for the same endpoint(s). A run graph "
+                f"describes one sweep's "
                 f"outcome, and a sweep either asked an endpoint or declined to "
                 f"ask it, so whichever half of this a reader believes, the "
                 f"other half denies it. This is a claim about one GRAPH: a file "
@@ -1249,7 +1304,10 @@ def _refuse_self_contradiction(quads: list) -> None:
 
 def _refuse_rewriting_history(store: Store, quads: list) -> None:
     """Refuse a file whose graph declares an endpoint dormant when the graph it
-    is about to REPLACE holds facts for that endpoint.
+    is about to REPLACE holds a fact current points at for that endpoint.
+
+    Both pointers, not just sw:currentRun: see the comment on the shape
+    spellings above for the hole a measured-only version left open.
 
     The general case of the replay hazard, and the one that matters. Sweep D2
     measured E; a later sweep moved the cadence's last_probed to D3; the
@@ -1272,14 +1330,21 @@ def _refuse_rewriting_history(store: Store, quads: list) -> None:
     ):
         if not store.contains_named_graph(graph):
             continue
-        held = _run_endpoints(store, graph.value, _MEASURED_ENDPOINTS)
+        # BOTH pointers. _MEASURED_ENDPOINTS alone protects sw:currentRun and
+        # leaves sw:currentSampleRun open, and a graph can hold a class sample
+        # and no measured-shaped quad at all (run-later-sample-only.nq is one),
+        # so that version accepted a file that dropped the sample and drifted
+        # the pointer naming it.
+        held = _run_endpoints(store, graph.value, _MEASURED_ENDPOINTS) | (
+            _run_endpoints(store, graph.value, _SAMPLED_ENDPOINTS)
+        )
         lost = sorted(endpoints & held)
         if lost:
             raise ValueError(
                 f"this file declares {', '.join(lost)} dormant in graph "
                 f"{graph.value}, and the store's {graph.value} already holds a "
-                f"measurement, a decline or a declarations fact for the same "
-                f"endpoint(s). "
+                f"measurement, a decline, a declarations fact or a class "
+                f"sample for the same endpoint(s). "
                 f"Loading it would replace that graph with one that says the "
                 f"sweep never asked, deleting those facts from the store while "
                 f"this file has already overwritten the run that stated them, "
@@ -1296,10 +1361,20 @@ def _parsed_graphs(nquads: bytes) -> tuple[list, set[NamedNode], int]:
     """Parse ``nquads`` and return its quads, the named graphs it names, and
     how many trailing bytes were dropped as an incomplete final section.
 
-    Raises ValueError under exactly the conditions load_run() documents: not
-    valid N-Quads, default-graph triples present, no named graph at all,
-    urn:sparqlwatch:current named as a graph, or a graph that both measures an
-    endpoint and declares it dormant.
+    Raises ValueError under six conditions, enumerated here because this is
+    the function that raises them and an earlier version of this list, which
+    deferred to load_run()'s docstring, was wrong in both directions:
+
+      - the bytes are not valid N-Quads (via _quads_to_the_last_terminator);
+      - they hold activity metadata, no endpoint fact and no section
+        terminator, so they are a fragment of a header or a run that recorded
+        nothing (also via _quads_to_the_last_terminator);
+      - they hold default-graph triples, so they are not a run at all;
+      - they name no graph;
+      - they name urn:sparqlwatch:current, which this module derives;
+      - one of their graphs both declares an endpoint dormant and states a
+        fact current holds a pointer for about it.
+
     Split out of load_run() so main() can run the same validation, below,
     against every input file before Store() is called on any of them: this
     is where a mistyped run path, an unreadable file, or a file that fails

@@ -22,9 +22,13 @@ from conftest import run_graph_names, run_quad_count
 from endpoint_content import endpoint_content
 from endpoint_measurements import endpoint_measurements
 from load_run import (
+    _MEASURED_ENDPOINTS,
+    _SAMPLED_ENDPOINTS,
     _TERMINATOR_PREDICATES,
     CURRENT_GRAPH_IRI,
     LoadResult,
+    _governed_by_graph,
+    _run_endpoints,
     check_current,
     load_run,
     main,
@@ -62,6 +66,7 @@ def _verdicts(store: Store, endpoint: str) -> dict[str, str]:
         substitutions={Variable("e"): NamedNode(endpoint)},
     )
     return {r["metric"].value.rsplit(":", 1)[-1]: r["value"].value for r in rows}
+
 
 def test_loading_the_same_run_twice_leaves_one_graph(tmp_path):
     store = Store(str(tmp_path / "s"))
@@ -1446,7 +1451,7 @@ def test_a_graph_that_both_measures_and_declares_dormant_is_refused(store):
     assert sorted(graph.value for graph in store.named_graphs()) == graphs
 
 
-def test_the_contradiction_is_refused_before_the_store_is_opened(tmp_path, capsys):
+def test_the_contradiction_is_refused_before_the_store_is_opened(tmp_path):
     """main() validates every file with _parsed_graphs before Store() is
     called, which is the only reason the refusal has to live there rather than
     in main()'s own loop."""
@@ -1504,8 +1509,15 @@ def test_a_file_that_would_replace_measurements_with_dormancy_is_refused(
     said = str(raised.value)
     assert KADASTER in said, said
     assert CURRENT_SWEEP_RUN in said, f"name the graph it would replace: {said}"
+    assert list(store.quads_for_pattern(
+        None, NamedNode(DQV + "computedOn"), NamedNode(KADASTER),
+        NamedNode(CURRENT_SWEEP_RUN))), (
+        "the RUN GRAPH's measurements are what this refusal exists to save, "
+        "and they are the only copy: current holds copies, so reading current "
+        "cannot see the loss at all"
+    )
     assert _verdicts(store, KADASTER) == before, (
-        "the measurements this refusal exists to save must still be there"
+        "and current, which reads through the pointer, still agrees"
     )
 
     # The negative control, and it is what makes the assertions above a claim
@@ -1596,7 +1608,12 @@ def _dormancy_sections() -> tuple[bytes, bytes, bytes]:
     )
     header = b"".join(lines[: ends[b"emission"] + 1])
     section = b"".join(lines[ends[b"emission"] + 1 : ends[b"dormantCount"] + 1])
-    return header, section, b"".join(lines[ends[b"dormantCount"] + 1 :])
+    rest = b"".join(lines[ends[b"dormantCount"] + 1 :])
+    assert header + section + rest == DORMANCY_FIXTURE.read_bytes(), (
+        "the three parts must account for the whole file, or the tests below "
+        "are cutting the wrong bytes"
+    )
+    return header, section, rest
 
 
 def test_a_file_cut_inside_the_dormancy_section_cuts_back_to_the_header(tmp_path):
@@ -1605,7 +1622,7 @@ def test_a_file_cut_inside_the_dormancy_section_cuts_back_to_the_header(tmp_path
     endpoints were skipped" as the whole list when it is a prefix of it. The
     cut goes back to sw:emission, which is why that terminator is in the set."""
     store = Store(str(tmp_path / "s"))
-    header, section, _ = _dormancy_sections()
+    header, section, _rest = _dormancy_sections()
     partial = b"".join(section.splitlines(keepends=True)[:-1])
     assert partial, "there must be something to drop"
 
@@ -1626,7 +1643,11 @@ def test_a_file_ending_at_the_dormancy_terminator_loads_whole(tmp_path):
     file is a whole section, so nothing may be dropped: the run's own metadata
     and the complete list of endpoints it declined to ask."""
     store = Store(str(tmp_path / "s"))
-    header, section, _ = _dormancy_sections()
+    header, section, rest = _dormancy_sections()
+    assert b"<urn:sparqlwatch:completedEndpoint>" in rest, (
+        "the bytes left out must really be the chunks, or this test is only "
+        "loading a file that was whole anyway"
+    )
 
     result = load_run(store, header + section)
 
@@ -1636,6 +1657,10 @@ def test_a_file_ending_at_the_dormancy_terminator_loads_whole(tmp_path):
     assert list(store.quads_for_pattern(
         None, NamedNode(SW + "dormantCount"), None, None)), (
         "the terminator itself must be in the store"
+    )
+    assert not list(store.quads_for_pattern(
+        None, NamedNode(DQV + "computedOn"), None, None)), (
+        "and no chunk was reached, so no measurement may be in it"
     )
 
 
@@ -1652,3 +1677,198 @@ def test_reloading_a_dormancy_run_over_its_own_graph_is_still_allowed(store):
     assert again.replaced == [DORMANCY_RUN]
     assert again.dormant == [KADASTER]
     assert _current(store) == before
+
+
+# ---------------------------------------------------------------------------
+# All four shapes, and the two readers of them kept in step
+# ---------------------------------------------------------------------------
+# The first review of the code above found that both refusals read only the
+# MEASURED shapes, so they protected sw:currentRun and left sw:currentSampleRun
+# wide open, and it also found that two of the three shapes the Python side did
+# spell were untested: reducing the helper to dqv:computedOn alone left the
+# suite green. Every shape now has a refusal-1 case of its own, and the last
+# test in this block pins the Python spellings against the SPARQL ones so
+# neither can drift again.
+
+LATER_SAMPLE_FIXTURE = (
+    Path(__file__).parent / "fixtures" / "run-later-sample-only.nq"
+)
+LATER_SAMPLE_RUN = f"{SW}run:2026-08-22T22:00:00Z"
+
+XSD = "http://www.w3.org/2001/XMLSchema#"
+RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+
+
+def _one_graph(*triples: str, run: str = "2026-08-27T12:00:00Z") -> bytes:
+    """An N-Quads run of ONE graph: a minimal activity header, then ``triples``.
+
+    The header is the two quads every recency query needs (rdf:type
+    prov:Activity and prov:generatedAtTime), so the graph is a run the loader
+    and the readers both recognise. No terminator, which makes it the "run from
+    before the section format" case the tolerance loads whole.
+    """
+    graph = f"<{SW}run:{run}>"
+    activity = f"<{SW}activity:{run}>"
+    lines = [
+        f"{activity} <{RDF_TYPE}> <{PROV}Activity> {graph} .",
+        f'{activity} <{PROV}generatedAtTime> "{run}"^^<{XSD}dateTime> {graph} .',
+    ]
+    lines += [f"{triple} {graph} ." for triple in triples]
+    return ("\n".join(lines) + "\n").encode()
+
+
+def _declares_dormant(endpoint: str, run: str = "2026-08-27T12:00:00Z") -> str:
+    return f"<{SW}activity:{run}> <{SW}dormantEndpoint> <{endpoint}>"
+
+
+def test_a_graph_that_declined_an_endpoint_and_declares_it_dormant_is_refused(
+    tmp_path,
+):
+    """Refusal 1 over sw:notMeasuredOn, the second of the four shapes. Before
+    this test, deleting that shape from the Python spellings left the suite
+    green: the only contradicting fixture uses dqv:computedOn."""
+    store = Store(str(tmp_path / "s"))
+    data = _one_graph(
+        _declares_dormant(KADASTER),
+        f"<{SW}not-measured:x> <{SW}notMeasuredOn> <{KADASTER}>",
+    )
+
+    with pytest.raises(ValueError, match="dormant") as raised:
+        load_run(store, data)
+
+    assert KADASTER in str(raised.value)
+    assert "decline" in str(raised.value)
+
+
+def test_a_graph_that_read_declarations_and_declares_dormant_is_refused(tmp_path):
+    """Refusal 1 over sw:declarationsRead, the third shape, and the other one
+    that was dead. A sweep that read an endpoint's declarations asked it."""
+    store = Store(str(tmp_path / "s"))
+    data = _one_graph(
+        _declares_dormant(KADASTER),
+        f'<{KADASTER}> <{SW}declarationsRead> "true"^^<{XSD}boolean>',
+    )
+
+    with pytest.raises(ValueError, match="dormant") as raised:
+        load_run(store, data)
+
+    assert KADASTER in str(raised.value)
+
+
+def test_a_graph_that_sampled_an_endpoint_and_declares_it_dormant_is_refused(
+    tmp_path,
+):
+    """Refusal 1 over the SAMPLED shape, which the first version of this code
+    did not read at all. A sweep that pulled a class sample out of an endpoint
+    plainly asked it, and this graph holds no measured-shaped quad whatsoever,
+    which is exactly the run-later-sample-only.nq shape."""
+    store = Store(str(tmp_path / "s"))
+    data = _one_graph(
+        _declares_dormant(KADASTER),
+        f"<{SW}sample:x> <{SW}sampledFrom> <{KADASTER}>",
+        f"<{SW}sample:x> <{SW}sampledBy> <{SW}metric:classes>",
+    )
+
+    with pytest.raises(ValueError, match="dormant") as raised:
+        load_run(store, data)
+
+    assert KADASTER in str(raised.value)
+    assert "sample" in str(raised.value)
+
+
+def test_a_graph_that_sampled_another_metric_and_declares_dormant_is_accepted(
+    tmp_path,
+):
+    """The deliberate edge of both refusals, and the reason the Python side
+    carries the class pin rather than matching sw:sampledFrom bare. A sample of
+    some other metric has no pointer in current naming it, so replacing the
+    graph loses nothing current holds and there is no reader to tell two
+    things. Stated as a test so the pin is a decision and not an accident."""
+    store = Store(str(tmp_path / "s"))
+    result = load_run(store, _one_graph(
+        _declares_dormant(KADASTER),
+        f"<{SW}sample:x> <{SW}sampledFrom> <{KADASTER}>",
+        f"<{SW}sample:x> <{SW}sampledBy> <{SW}metric:properties>",
+    ))
+
+    assert result.dormant == [KADASTER]
+
+
+def test_a_file_that_would_replace_a_class_sample_with_dormancy_is_refused(store):
+    """Refusal 2 through the OTHER door, and the hole the first review found.
+    run-later-sample-only.nq's 22:00 graph holds a class sample for kadaster and
+    not one measured-shaped quad, so a refusal reading only the measured shapes
+    accepted this file: the sw:sampledFrom quad count went 1 to 0,
+    sw:currentSampleRun drifted, and the retry's file had already overwritten
+    the original on disk."""
+    load_run(store, LATER_SAMPLE_FIXTURE.read_bytes())
+    assert _pointer(store, KADASTER, "currentSampleRun") == LATER_SAMPLE_RUN
+    sampled = list(store.quads_for_pattern(
+        None, NamedNode(SW + "sampledFrom"), NamedNode(KADASTER),
+        NamedNode(LATER_SAMPLE_RUN)))
+    assert len(sampled) == 1, "the one quad this refusal exists to save"
+
+    replayed = _replayed(
+        DORMANCY_FIXTURE.read_bytes(), "2026-08-27T10:00:00Z", "2026-08-22T22:00:00Z"
+    )
+    with pytest.raises(ValueError) as raised:
+        load_run(store, replayed)
+
+    said = str(raised.value)
+    assert KADASTER in said, said
+    assert LATER_SAMPLE_RUN in said, f"name the graph it would replace: {said}"
+    assert "sample" in said, f"and say which kind of fact would be lost: {said}"
+    assert list(store.quads_for_pattern(
+        None, NamedNode(SW + "sampledFrom"), NamedNode(KADASTER),
+        NamedNode(LATER_SAMPLE_RUN))) == sampled
+    assert _pointer(store, KADASTER, "currentSampleRun") == LATER_SAMPLE_RUN
+    assert check_current(store).ok, "and nothing drifted"
+
+
+def test_the_python_shapes_and_the_sparql_shapes_agree(tmp_path):
+    """The two readers of "which endpoints does this graph govern", pinned
+    together without string surgery on either.
+
+    _governed_by_graph answers it over parsed quads, because
+    _refuse_self_contradiction runs before any store exists;
+    _MEASURED_ENDPOINTS and _SAMPLED_ENDPOINTS answer it over a store, and
+    _refuse_rewriting_history uses those. A shape in one and not the other is
+    how the first review's two findings both happened, so this compares them
+    over one graph carrying every shape at once.
+
+    E5 is the pin's other side: a sample of a metric that is not
+    sw:metric:classes is governed by NEITHER reader, so it must be absent from
+    both sets rather than absent from one of them.
+    """
+    e1 = "https://e1.example/sparql"
+    e2 = "https://e2.example/sparql"
+    e3 = "https://e3.example/sparql"
+    e4 = "https://e4.example/sparql"
+    e5 = "https://e5.example/sparql"
+    data = _one_graph(
+        f"<{SW}measurement:a> <{DQV}computedOn> <{e1}>",
+        f"<{SW}not-measured:b> <{SW}notMeasuredOn> <{e2}>",
+        f'<{e3}> <{SW}declarationsRead> "false"^^<{XSD}boolean>',
+        f"<{SW}sample:c> <{SW}sampledFrom> <{e4}>",
+        f"<{SW}sample:c> <{SW}sampledBy> <{SW}metric:classes>",
+        f"<{SW}sample:d> <{SW}sampledFrom> <{e5}>",
+        f"<{SW}sample:d> <{SW}sampledBy> <{SW}metric:properties>",
+    )
+    run = f"{SW}run:2026-08-27T12:00:00Z"
+    # A raw load rather than load_run(): this compares two readers of the same
+    # RUN GRAPH, and nothing here reads current, so the derived graph load_run
+    # would also maintain is beside the point.
+    store = Store(str(tmp_path / "s"))
+    store.load(data, format=RdfFormat.N_QUADS)
+
+    from_quads = _governed_by_graph(list(parse(data, format=RdfFormat.N_QUADS)))
+    from_sparql = _run_endpoints(store, run, _MEASURED_ENDPOINTS) | _run_endpoints(
+        store, run, _SAMPLED_ENDPOINTS
+    )
+
+    assert from_quads[NamedNode(run)] == from_sparql
+    assert from_sparql == {e1, e2, e3, e4}, (
+        "all four governed shapes, and only those: if this set shrinks, one "
+        "reader stopped seeing a shape and the refusals disagree"
+    )
+    assert e5 not in from_sparql, "the class pin, on both sides at once"
