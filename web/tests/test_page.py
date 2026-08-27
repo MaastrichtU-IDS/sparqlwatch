@@ -1528,12 +1528,15 @@ def test_the_dormancy_sentence_is_not_drawn_as_a_verdict(
     """
     text = page(client_for(store_dormant_newest), KADASTER)
 
-    # "dormant" in both, not "dormancy" in the second: an eighth state would be
-    # slugged with the vocabulary's own word, sw:dormantEndpoint's, so a search
-    # for "dormancy" would pass over data-state="dormant". This word catches
-    # both spellings.
-    assert "dormant" not in str(with_attribute(text, "data-metric"))
-    assert "dormant" not in str(with_attribute(text, "data-state"))
+    # BOTH spellings, and neither one alone. The vocabulary uses both,
+    # sw:dormantEndpoint and sw:dormancyReason, so an eighth state could be
+    # slugged either way, and neither word contains the other: "dormant" does
+    # not appear in "dormancy". This assertion has been wrong in each direction
+    # once, which is why it now names them both instead of picking the one that
+    # looks more likely.
+    for word in ("dormant", "dormancy"):
+        assert word not in str(with_attribute(text, "data-metric"))
+        assert word not in str(with_attribute(text, "data-state"))
     assert [row["data-metric"] for row, _ in chips(text)], (
         "the page must still draw the verdicts it has"
     )
