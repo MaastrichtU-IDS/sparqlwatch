@@ -62,11 +62,10 @@
     background: var(--bg-secondary); color: var(--text); font: inherit; outline: none; }
   .shown { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 
-  /* The metric key. Every chip on this page carries an abbreviation, so this is
-     where the abbreviation is written out in full. */
-  ul.mkey { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
-            gap: 5px 22px; list-style: none; margin: 0; padding: 0; }
-  ul.mkey li { display: flex; align-items: center; gap: 9px; font-size: 12.5px; color: var(--text); }
+  /* The abbreviation, drawn the size of a chip. Every cell on a row carries one
+     instead of the metric's name, so the metric chips are where each one is
+     written out in full. The ul.mkey rules that used to lay that list out went
+     with the list on 2026-08-27, when the metric key became the chips. */
   .mabbr { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
     width: {{ chip_width }}px; height: {{ chip_height }}px; border-radius: var(--radius-sm);
     border: 1px solid var(--border); font-family: var(--mono); font-size: 10px;
@@ -93,8 +92,6 @@
   .facet .f-count { font-family: var(--mono); font-size: 11px;
     color: var(--text-dim); font-variant-numeric: tabular-nums; }
   .facet[aria-pressed="true"] .f-count { color: var(--text-bright); }
-  .facet .f-swatch { display: inline-block; width: 14px; height: 11px;
-    border-radius: 2px; }
   /* The legend's rows are buttons too, so they keep the grid the list already
      had rather than becoming pills: the meaning column is a sentence and does
      not fit in one. */
@@ -154,10 +151,12 @@
   .when { font-size: 11.5px; font-family: var(--mono); color: var(--text-dim);
           white-space: nowrap; }
 
+  /* The legend, whose rows are the state filter chips. Each li holds one button
+     and nothing else, so the row's own columns are .facet-row's above and this
+     list lays out the rows alone: the four-column grid this rule carried until
+     2026-08-28 had no multi-child element left to lay out. */
   .legend { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
             gap: 7px 26px; list-style: none; margin: 0; padding: 0; }
-  .legend li { display: grid; grid-template-columns: 20px minmax(112px, auto) 1fr 3ch;
-               align-items: center; gap: 9px; font-size: 12.5px; color: var(--text-muted); }
   .legend .swatch { display: inline-block; width: 20px; height: 15px; border-radius: 3px; }
   .legend .l-label { color: var(--text); }
   .legend .l-count { text-align: right; font-variant-numeric: tabular-nums; color: var(--text-dim); }
@@ -216,18 +215,48 @@
   </div>
 
   {% if endpoint_count %}
+  {# WHAT A COUNT ON A CHIP IS, said once here rather than three times below.
+     Every chip states the endpoints IT would select given the other groups'
+     filters, recomputed each time one changes, which is what makes the state
+     panel's "which is what pressing it filters to" true after a second group is
+     pressed as well as before. Until 2026-08-28 the counts were rendered once
+     and never touched again: pressing availability/available and then
+     state/indeterminate left a chip reading 402 above a page reading "showing 0
+     of 543 endpoints". With no script running nothing is pressed, and the counts
+     the server rendered are the whole page's, which is the answer that is true
+     in that state. #}
+  <p class="note" data-facet-contract="true">
+    Chips filter the rows below: any of them within a group, all of them across
+    groups. Each count is how many of the rows the other groups' filters leave
+    that this chip selects, so every count moves as those filters are pressed.
+  </p>
   <section class="panel" data-facet-group="availability">
     <h2>Availability</h2>
     <ul class="facets">
+      {# ONE SPACE BEFORE THE COUNT SPAN, here and on the metric chips. A
+         button's accessible name is its text stream run together, so
+         "not available" followed immediately by "486" announces as
+         "not available486": a screen-reader user heard one word that is not a
+         number and one number that is not a word. Ten chips at one byte each,
+         plus one either side of a metric chip's abbreviation, which announced
+         as "AVavailability543". Eighteen bytes, fixed rather than per row. The
+         legend's rows need none: their spans sit on separate lines already, so
+         the newlines between them are the separator.
+
+         AND aria-describedby WHERE THERE IS A DISCLOSURE. The paragraph below
+         is what stops "not available" over-claiming, and a reader who cannot
+         see it gets it only if the button says where it is. #}
       {% for facet in availability_facets %}
       <li><button type="button" class="facet" aria-pressed="false"
-                  data-facet="availability" data-facet-value="{{ facet.slug }}">
-        {{ facet.label }}<span class="f-count">{{ facet.count }}</span>
+                  data-facet="availability" data-facet-value="{{ facet.slug }}"
+                  {%- if facet.detail %} aria-describedby="facet-detail-{{ facet.slug }}"{% endif %}>
+        {{ facet.label }} <span class="f-count">{{ facet.count }}</span>
       </button></li>
       {% endfor %}
     </ul>
     {% for facet in availability_facets %}{% if facet.detail %}
-    <p class="facet-detail" data-facet-detail="{{ facet.slug }}">{{ facet.detail }}</p>
+    <p class="facet-detail" id="facet-detail-{{ facet.slug }}"
+       data-facet-detail="{{ facet.slug }}">{{ facet.detail }}</p>
     {% endif %}{% endfor %}
   </section>
   {% endif %}
@@ -240,7 +269,7 @@
       <li><button type="button" class="facet" aria-pressed="false"
                   data-facet="metric" data-facet-value="{{ facet.abbr }}"
                   data-metric-column="{{ facet.name }}" data-abbr="{{ facet.abbr }}">
-        <span class="mabbr">{{ facet.abbr }}</span>{{ facet.name }}<span
+        <span class="mabbr">{{ facet.abbr }}</span> {{ facet.name }} <span
           class="f-count">{{ facet.count }}</span>
       </button></li>
       {% endfor %}
@@ -254,6 +283,14 @@
   </section>
   {% endif %}
 
+  {# Guarded on the endpoint count like the other two panels, and it was not
+     until 2026-08-28. On a store whose runs measured nothing this rendered
+     seven pressable chips reading "0 chips 0 rows", and pressing one said "No
+     endpoint in this store matches every filter selected above ... clear one to
+     widen it", which invites a reader to widen a filter to reveal rows on a
+     store the paragraph at the top has just said holds none. There is nothing
+     to explain the drawing of, either: no chip on the page is in any state. #}
+  {% if endpoint_count %}
   <section class="panel" data-facet-group="state">
     <h2>What the drawing means</h2>
     <ul class="legend">
@@ -291,12 +328,15 @@
       where each verdict is named in words beside the metric it belongs to.
     </p>
   </section>
+  {% endif %}
 
 
-  <p class="facet-empty" id="nothing" hidden>
+  {% if endpoint_count %}
+  <p class="facet-empty" id="nothing" data-facet-empty="true" hidden>
     No endpoint in this store matches every filter selected above. That is a
     fact about the filters and not about any endpoint: clear one to widen it.
   </p>
+  {% endif %}
 
   {% for group in groups %}
   <section class="group" data-availability="{{ group.availability }}">
@@ -439,17 +479,28 @@
 (function () {
   var box = document.getElementById("q");
   var shown = document.getElementById("shown");
-  var chips = [].slice.call(document.querySelectorAll("[data-facet]"));
-  if (!box && !chips.length) { return; }
+  var buttons = [].slice.call(document.querySelectorAll("[data-facet]"));
+  if (!box && !buttons.length) { return; }
   var groups = [].slice.call(document.querySelectorAll("[data-availability]"));
   var total = document.querySelectorAll("[data-endpoint]").length;
   var empty = document.getElementById("nothing");
   var POSITIVE = { "verified": 1, "undeclared-but-verified": 1 };
+  var NAMES = ["availability", "metric", "state"];
 
   /* One row's facts, read once. Re-reading the DOM per keystroke per chip per
      row is 543 rows times 8 chips times three questions, and the page is meant
-     to answer a keystroke faster than a reader notices. */
-  function facts(row) {
+     to answer a keystroke faster than a reader notices.
+
+     THE GROUP IS PASSED IN and not walked to. This read
+     row.parentNode.parentNode until 2026-08-28, which was correct for the
+     nesting the template writes and would have gone on being correct until
+     someone wrapped the rows in one more element: then it returns null,
+     POSITIVE[null] is falsy, EVERY ROW ON THE PAGE becomes "not available", the
+     two availability chips read 0 and 543, and nothing anywhere throws. The
+     loop below already holds the group element, so nothing has to be looked
+     up. closest("[data-availability]") would also survive that edit, and it is
+     still a lookup for something the caller knows. */
+  function facts(row, group) {
     var cells = [].slice.call(row.querySelectorAll(".cells > span"));
     var measured = {}, states = {}, only = null, count = 0;
     cells.forEach(function (cell) {
@@ -458,7 +509,7 @@
       var cls = cell.className.replace(/^enc-/, "");
       if (!states[cls]) { states[cls] = 1; count += 1; only = cls; }
     });
-    var av = row.parentNode.parentNode.getAttribute("data-availability");
+    var av = group.getAttribute("data-availability");
     return {
       url: row.getAttribute("data-endpoint").toLowerCase(),
       metrics: measured,
@@ -469,28 +520,80 @@
   var rows = [];
   groups.forEach(function (group) {
     [].slice.call(group.querySelectorAll("[data-endpoint]")).forEach(function (el) {
-      rows.push({ el: el, group: group, f: facts(el) });
+      rows.push({ el: el, group: group, f: facts(el, group) });
     });
+  });
+
+  /* Each chip with the count span it prints into, and the words after the
+     number kept exactly as the server wrote them: the state chips print
+     "402 rows" and the other two groups a bare number, and which it is belongs
+     to the template rather than being spelled here a second time. */
+  var chips = buttons.map(function (el) {
+    var span = el.querySelector(".f-count");
+    return {
+      el: el,
+      span: span,
+      suffix: span ? span.textContent.replace(/^\s*\d*/, "") : "",
+      name: el.getAttribute("data-facet"),
+      value: el.getAttribute("data-facet-value")
+    };
   });
 
   function selected(name) {
     return chips.filter(function (c) {
-      return c.getAttribute("data-facet") === name &&
-             c.getAttribute("aria-pressed") === "true";
-    }).map(function (c) { return c.getAttribute("data-facet-value"); });
+      return c.name === name && c.el.getAttribute("aria-pressed") === "true";
+    }).map(function (c) { return c.value; });
+  }
+
+  /* Does one row satisfy one group's selection? Asked by the filter and by the
+     counts, so what a chip's number means and what pressing it does cannot come
+     apart into two tests that agree today. */
+  function inGroup(f, name, values) {
+    if (name === "availability") { return values.indexOf(f.available) >= 0; }
+    if (name === "metric") {
+      return values.some(function (abbr) { return f.metrics[abbr]; });
+    }
+    return !!f.uniform && values.indexOf(f.uniform) >= 0;
+  }
+
+  /* The number one chip prints: the rows matching the text box and every OTHER
+     group that this one chip selects. That is the faceted-count contract every
+     such list keeps, and here it is what makes the page's own sentence true.
+     Rendered once and never recomputed, the state panel's "which is what
+     pressing it filters to" was false the moment a second group was pressed:
+     availability/available and then state/indeterminate left a chip reading 402
+     above a page reading "showing 0 of 543 endpoints".
+
+     Its own group is skipped rather than intersected, so a chip's number does
+     not fall to 0 because a sibling chip beside it is pressed. */
+  function count(chip, q, picked) {
+    var n = 0;
+    rows.forEach(function (r) {
+      if (q && r.f.url.indexOf(q) < 0) { return; }
+      for (var i = 0; i < NAMES.length; i += 1) {
+        var other = NAMES[i];
+        if (other !== chip.name && picked[other].length &&
+            !inGroup(r.f, other, picked[other])) { return; }
+      }
+      if (inGroup(r.f, chip.name, [chip.value])) { n += 1; }
+    });
+    return n;
   }
 
   function apply() {
     var q = box ? box.value.trim().toLowerCase() : "";
-    var av = selected("availability"), mt = selected("metric"), st = selected("state");
-    var filtering = !!q || av.length || mt.length || st.length;
+    var picked = {}, filtering = !!q;
+    NAMES.forEach(function (name) {
+      picked[name] = selected(name);
+      if (picked[name].length) { filtering = true; }
+    });
     var matched = 0;
-    var perGroup = [];
     rows.forEach(function (r) {
-      var hit = (!q || r.f.url.indexOf(q) >= 0) &&
-        (!av.length || av.indexOf(r.f.available) >= 0) &&
-        (!mt.length || mt.some(function (a) { return r.f.metrics[a]; })) &&
-        (!st.length || (r.f.uniform && st.indexOf(r.f.uniform) >= 0));
+      var hit = !q || r.f.url.indexOf(q) >= 0;
+      for (var i = 0; hit && i < NAMES.length; i += 1) {
+        if (picked[NAMES[i]].length &&
+            !inGroup(r.f, NAMES[i], picked[NAMES[i]])) { hit = false; }
+      }
       r.el.hidden = !hit;
       r.hit = hit;
       if (hit) { matched += 1; }
@@ -500,7 +603,15 @@
       group.hidden = filtering && here === 0;
       var note = group.querySelector(".g-shown");
       if (note) { note.textContent = filtering ? ", " + here + " shown" : ""; }
-      perGroup.push(here);
+    });
+    /* Recounted on every change, including the first call below, where nothing
+       is pressed and every chip therefore has to arrive at the number the
+       server already rendered. A page that flickered on load would be this
+       function and app.py's three builders disagreeing. */
+    chips.forEach(function (chip) {
+      if (chip.span) {
+        chip.span.textContent = count(chip, q, picked) + chip.suffix;
+      }
     });
     if (shown) {
       shown.textContent = filtering
@@ -513,9 +624,9 @@
   }
 
   chips.forEach(function (chip) {
-    chip.addEventListener("click", function () {
-      var on = chip.getAttribute("aria-pressed") === "true";
-      chip.setAttribute("aria-pressed", on ? "false" : "true");
+    chip.el.addEventListener("click", function () {
+      var on = chip.el.getAttribute("aria-pressed") === "true";
+      chip.el.setAttribute("aria-pressed", on ? "false" : "true");
       apply();
     });
   });

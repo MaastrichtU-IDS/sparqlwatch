@@ -49,6 +49,8 @@ from app import (
     ABOUT_PATH,
     DORMANCY,
     _availability_facets,
+    _index_html,
+    _legend,
     _metric_facets,
     _state_facets,
     ENDPOINT_PATH,
@@ -1587,11 +1589,20 @@ def test_the_group_note_claims_a_reason_only_for_the_rows_that_carry_one():
 # ---------------------------------------------------------------------------
 # Added 2026-08-27 with the facets. THE IMPLEMENTATION WENT IN FIRST AND THESE
 # TESTS FOLLOWED IT, which inverts the order every task in the dormancy stage
-# held to, and it showed: the two sentences this change removed turned out to
+# held to, and it showed: the two sentences that change removed turned out to
 # be asserted by nothing, so the suite could not have told me whether removing
 # them broke anything. The helper `group_note` above looks like cover for them
 # and is not: its one caller asks for the empty-string group, which still has
 # its note.
+#
+# Rewritten 2026-08-28 after a review of that commit returned SPEC: FAIL. Nine
+# of these tests fed hand-built group dicts to the three builders and NOTHING
+# connected any builder to the rows the page renders, which is how a legend
+# entry that printed no count at all survived a green suite. The test that
+# closes that is test_every_chip_count_is_the_rows_the_page_renders below, and
+# it is the one to keep working: it reads the rendered page, applies the
+# script's own predicate to the rows in it, and compares the answer with the
+# number each chip prints.
 
 
 def facets(text, name):
@@ -1606,26 +1617,223 @@ def facets(text, name):
     }
 
 
-def rows_of(group_value, count, /, **cells):
-    """One group of `count` identical rows, in the shape _index_groups returns.
+class _FacetChips(HTMLParser):
+    """Every facet chip: its tag, its attributes, and what its count span says.
 
-    `cells` maps a metric name to either a verdict string or None for a decline,
-    which is the distinction all three facet builders turn on. Positional-only
-    first parameter, because one of the metrics a caller names is `availability`
-    and a keyword of that name would collide with the group's own value.
+    The count is read off the span rather than out of the button's whole text,
+    because a state chip's text carries TWO numbers, the chips count and the
+    rows count, and picking one out of a run-together sentence would pass while
+    they were swapped. texts_with cannot do this: it records the outermost
+    element carrying an attribute, and every count span is inside a button that
+    carries a class of its own.
+
+    The tag name is collected too, which no other reader here does, because what
+    a chip IS is part of the claim being tested.
     """
-    built = [
-        {
-            "present": True,
-            "name": name,
-            "abbr": name[:2].upper(),
-            "verdict": value,
-            "reason": None if value else "cost-ceiling",
-            "slug": value if value else verdict_encoding.NOT_MEASURED,
-        }
-        for name, value in cells.items()
-    ]
-    return {"availability": group_value, "rows": [{"cells": built}] * count}
+
+    def __init__(self):
+        super().__init__()
+        self.chips = []
+        self._depth = None
+        self._count = None
+        self._buffer = []
+
+    def handle_starttag(self, tag, attrs):
+        attributes = dict(attrs)
+        if "data-facet" in attributes:
+            assert self._depth is None, "a facet chip is nested inside another"
+            self.chips.append(
+                {"tag": tag, "attributes": attributes, "count": None}
+            )
+            self._depth = 0
+            return
+        if self._depth is None:
+            return
+        self._depth += 1
+        if attributes.get("class") == "f-count":
+            assert self.chips[-1]["count"] is None, "a chip holds two counts"
+            self._count = self._depth
+            self._buffer = []
+
+    def handle_endtag(self, tag):
+        if self._depth is None:
+            return
+        if self._count is not None and self._depth == self._count:
+            self.chips[-1]["count"] = " ".join("".join(self._buffer).split())
+            self._count = None
+        if self._depth == 0:
+            self._depth = None
+        else:
+            self._depth -= 1
+
+    def handle_data(self, data):
+        if self._count is not None:
+            self._buffer.append(data)
+
+
+def facet_chips(text):
+    """Every facet chip on the page, in page order."""
+    parser = _FacetChips()
+    parser.feed(text)
+    return parser.chips
+
+
+def facet_counts(text):
+    """{(group, value): the number that chip prints}.
+
+    A span that prints no digits at all fails here, and says so, rather than
+    turning into a KeyError somewhere later. That was the shape of the defect
+    this reader exists for: the eighth legend entry rendered a blank where the
+    rows count belongs, and on these pages an absent qualifier is a positive
+    claim.
+    """
+    counts = {}
+    for chip in facet_chips(text):
+        attributes = chip["attributes"]
+        shown = chip["count"]
+        value = attributes["data-facet-value"]
+        assert shown is not None, f"chip {value!r} carries no count span"
+        head = shown.split()[:1]
+        assert head and head[0].isdigit(), (
+            f"chip {value!r} prints {shown!r}, which states no count"
+        )
+        counts[(attributes["data-facet"], value)] = int(head[0])
+    return counts
+
+
+class _GroupedRows(HTMLParser):
+    """Every row with the group element it is NESTED INSIDE, and its chips.
+
+    The nesting is the point. The script reads a row's availability off the
+    group element the row is inside, so a reader that credited each row to the
+    nearest PRECEDING group heading would agree with the page even on markup
+    where a row had escaped its group, which is the arrangement that would make
+    the script read null and file every row on the page under "not available".
+    This tracks the open elements, so a row outside every group is not
+    attributed to one.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.rows = []
+        self._availability = None
+        self._depth = None
+        self._row_depth = None
+        self._chip = None
+
+    def handle_starttag(self, tag, attrs):
+        attributes = dict(attrs)
+        if "data-availability" in attributes:
+            assert self._depth is None, "a group is nested inside another group"
+            self._availability = attributes["data-availability"]
+            self._depth = 0
+            return
+        if self._depth is None:
+            return
+        self._depth += 1
+        if "data-endpoint" in attributes:
+            assert self._row_depth is None, "a row is nested inside another row"
+            self._row_depth = self._depth
+            self.rows.append(
+                {
+                    "availability": self._availability,
+                    "endpoint": attributes["data-endpoint"],
+                    "chips": [],
+                }
+            )
+            return
+        if self._row_depth is not None and (
+            "data-verdict" in attributes or "data-declined" in attributes
+        ):
+            self._chip = dict(attributes, abbr="")
+            self.rows[-1]["chips"].append(self._chip)
+
+    def handle_endtag(self, tag):
+        if self._depth is None:
+            return
+        self._chip = None
+        if self._row_depth is not None and self._depth == self._row_depth:
+            self._row_depth = None
+        if self._depth == 0:
+            self._depth = None
+            self._availability = None
+        else:
+            self._depth -= 1
+
+    def handle_data(self, data):
+        if self._chip is not None:
+            self._chip["abbr"] += data
+
+
+def grouped_rows(text):
+    """Every rendered row, with its group's availability value and its chips."""
+    parser = _GroupedRows()
+    parser.feed(text)
+    return parser.rows
+
+
+def encoding_class(chip):
+    """The one enc- token on a cell, asserted to be the only class it carries.
+
+    The script turns a cell into a state with
+    ``cell.className.replace(/^enc-/, "")``, which returns "verified other" the
+    moment a second class is added and then matches no state at all, silently,
+    on every row. So the shape is pinned from pytest rather than trusted.
+    """
+    tokens = chip["class"].split()
+    assert len(tokens) == 1, f"a cell carries {tokens}, not one class"
+    assert tokens[0].startswith("enc-"), f"a cell carries {tokens[0]!r}"
+    return tokens[0][len("enc-") :]
+
+
+def group_of(group_value, *rows):
+    """One group of rows that need not be alike, in _index_groups' shape.
+
+    Each row is a mapping from a metric name to either a verdict string or None
+    for a decline, which is the distinction all three facet builders turn on.
+    The slug is taken through verdict_encoding.presentation, exactly as
+    _index_row takes it, so a value this build has no encoding for arrives here
+    drawn the way the page draws it rather than under its own name.
+    """
+    return {
+        "availability": group_value,
+        "rows": [
+            {
+                "cells": [
+                    {
+                        "present": True,
+                        "name": name,
+                        "abbr": name[:2].upper(),
+                        "verdict": value,
+                        "reason": None if value else "cost-ceiling",
+                        "slug": (
+                            verdict_encoding.presentation(value).slug
+                            if value
+                            else verdict_encoding.NOT_MEASURED
+                        ),
+                    }
+                    for name, value in cells.items()
+                ]
+            }
+            for cells in rows
+        ],
+    }
+
+
+def rows_of(group_value, count, /, **cells):
+    """One group of `count` rows, all alike, in the shape _index_groups returns.
+
+    Positional-only first parameter, because one of the metrics a caller names
+    is `availability` and a keyword of that name would collide with the group's
+    own value.
+
+    Each row gets its OWN dict, through group_of. The first version of this
+    built one row and aliased it `count` times, which was harmless because all
+    three builders are read-only over rows; harmless-until is not a property
+    worth keeping in a fixture, since a builder that ever annotated a row would
+    have annotated 543 of them.
+    """
+    return group_of(group_value, *([cells] * count))
 
 
 def test_the_availability_facet_is_two_chips_over_the_verdicts():
@@ -1647,9 +1855,24 @@ def test_the_not_available_chip_discloses_how_many_it_could_not_reach():
     groups = [rows_of("verified", 57), rows_of("indeterminate", 482),
               rows_of("absent", 4)]
     _, other = _availability_facets(groups)
-    assert "482" in other["detail"]
+    assert "482 of these 486" in other["detail"], other["detail"]
     assert "no answer arrived" in other["detail"]
-    assert "not that the endpoint is unavailable" in other["detail"]
+    assert "not that the endpoint is unavailable." in other["detail"]
+
+
+def test_the_disclosure_says_all_of_them_when_it_is_all_of_them():
+    """"482 of these 482" is arithmetic; "all 482 of these" is the fact.
+
+    The general form reads as a proper subset, so where the two numbers are
+    equal it understates its own claim: every endpoint filed under "not
+    available" would be one no answer arrived from, and the sentence would leave
+    a reader looking for the ones it is not true of.
+    """
+    groups = [rows_of("verified", 57), rows_of("indeterminate", 482)]
+    _, other = _availability_facets(groups)
+    assert other["count"] == 482
+    assert "All 482 of these answered nothing" in other["detail"], other["detail"]
+    assert "of these 482" not in other["detail"], other["detail"]
 
 
 def test_a_registry_with_nothing_indeterminate_gets_no_disclosure():
@@ -1657,6 +1880,21 @@ def test_a_registry_with_nothing_indeterminate_gets_no_disclosure():
     _, other = _availability_facets(groups)
     assert other["count"] == 1
     assert other["detail"] is None
+
+
+def test_the_disclosure_is_a_sentence_like_every_other_note_on_the_page():
+    """It shipped without a full stop, unlike the notes on the other two panels.
+
+    Small, and the reason it is pinned: the sentence exists to stop a number
+    reading as a claim no sweep made, so it is the last note on the page that
+    should look like an aside.
+    """
+    groups = [rows_of("verified", 57), rows_of("indeterminate", 482),
+              rows_of("absent", 4)]
+    details = [f["detail"] for f in _availability_facets(groups) if f["detail"]]
+    assert details
+    for detail in details:
+        assert detail.endswith("."), detail
 
 
 def test_a_metric_chip_counts_the_rows_that_recorded_a_verdict():
@@ -1670,6 +1908,35 @@ def test_a_metric_chip_counts_the_rows_that_recorded_a_verdict():
     metrics = [{"name": "availability", "abbr": "AV"}, {"name": "classes", "abbr": "CL"}]
     by_abbr = {f["abbr"]: f["count"] for f in _metric_facets(groups, metrics)}
     assert by_abbr == {"AV": 5, "CL": 0}
+
+
+def test_a_metric_chip_counts_a_group_whose_rows_differ_row_by_row():
+    """The heterogeneous group, which is the only kind the page renders.
+
+    A group is keyed on the availability verdict alone, so two rows in one group
+    routinely disagree about every other metric. Every test above this one hands
+    the builders a group whose rows are identical in all eight, which is the one
+    shape no page renders, so a builder that read a group's first row and
+    multiplied by the row count would satisfy all of them.
+    """
+    groups = [
+        group_of(
+            "verified",
+            {"availability": "verified", "cors": "verified", "classes": None},
+            {"availability": "verified", "cors": None, "classes": None},
+            {"availability": "verified", "cors": "absent", "classes": "verified"},
+        )
+    ]
+    metrics = [
+        {"name": "availability", "abbr": "AV"},
+        {"name": "cors", "abbr": "CO"},
+        {"name": "classes", "abbr": "CL"},
+    ]
+    by_abbr = {f["abbr"]: f["count"] for f in _metric_facets(groups, metrics)}
+    assert by_abbr == {"AV": 3, "CO": 2, "CL": 1}
+    by_slug = {f["slug"]: f["count"] for f in _state_facets(groups)}
+    assert by_slug["verified"] == 2, "the middle row is one verdict, verified"
+    assert by_slug["absent"] == 0
 
 
 def test_a_state_chip_counts_rows_uniform_in_that_state_ignoring_declines():
@@ -1691,8 +1958,103 @@ def test_a_state_chip_counts_rows_uniform_in_that_state_ignoring_declines():
     assert by_slug[verdict_encoding.NOT_MEASURED] == 0
 
 
+def test_the_state_chips_are_the_states_the_legend_lists_and_no_others():
+    """The two sequences the template pairs by slug, asserted to be one set.
+
+    `_legend` lists an EIGHTH state whenever this page drew a verdict this build
+    has no encoding for. The template reads each legend entry's rows count out
+    of this builder's result, so a builder that stopped at the closed seven
+    leaves that eighth row stating no count at all, and then revealing a row
+    when it is pressed. Keying the mapping by slug does not prevent that;
+    emitting the same slugs on the same condition is what prevents it.
+    """
+    seven = [state.slug for state in verdict_encoding.STATES]
+    eight = seven + [verdict_encoding.UNRECOGNISED.slug]
+    uniform = group_of("verified", {"availability": "sometime-in-2031"})
+    mixed = group_of(
+        "verified", {"availability": "verified", "cors": "sometime-in-2031"}
+    )
+    known = group_of("verified", {"availability": "verified"})
+
+    # A row uniform in the unrecognised state: the count is 1 and it is stated.
+    assert [f["slug"] for f in _state_facets([uniform])] == eight
+    assert {f["slug"]: f["count"] for f in _state_facets([uniform])}[
+        "unrecognised"
+    ] == 1
+    # And the case a condition on uniformity alone would miss: a row that DREW
+    # an unrecognised verdict without being uniform in it. The legend lists the
+    # eighth state because a chip on the page is in it, so the mapping carries
+    # it too, at the count that is true, which is no rows.
+    assert [f["slug"] for f in _state_facets([mixed])] == eight
+    assert {f["slug"]: f["count"] for f in _state_facets([mixed])}[
+        "unrecognised"
+    ] == 0
+    # The other direction, which is what catches an eighth entry always drawn.
+    assert [f["slug"] for f in _state_facets([known])] == seven
+    # And the condition is the legend's own, over the same rows.
+    for group in (uniform, mixed, known):
+        drawn = [
+            {"slug": cell["slug"]}
+            for row in group["rows"]
+            for cell in row["cells"]
+            if cell["present"]
+        ]
+        assert [f["slug"] for f in _state_facets([group])] == [
+            entry["slug"] for entry in _legend(drawn)
+        ]
+
+
+def test_the_unrecognised_legend_entry_states_its_rows_on_the_page(
+    client_for, store_hostile_literals
+):
+    """The rendered page for the store this defect was measured on.
+
+    run-hostile-literals.nq's one endpoint carries a dqv:value this build has no
+    encoding for, so the legend lists eight states, and the eighth used to print
+    "1 chips" and then nothing at all where the rows count belongs, which reads
+    as a filter that selects no endpoint and then reveals one when pressed. One
+    row is uniform in that state, so the number is 1.
+
+    Printing 0 there would be worse than the blank rather than better: a blank
+    is visibly missing, and 0 is a confident wrong answer.
+    """
+    page = index(client_for(store_hostile_literals))
+    states = [
+        attributes["data-state"] for attributes in with_attribute(page, "data-state")
+    ]
+
+    assert states[-1] == verdict_encoding.UNRECOGNISED.slug
+    assert facet_counts(page)[("state", "unrecognised")] == 1
+    assert len(listed(page)) == 1
+
+
+def test_every_legend_entry_carries_a_rows_number(
+    client_for, store_registry_sample, store_hostile_literals
+):
+    """Every state the legend lists, and no state it does not, has a count.
+
+    This replaces an assertion that the page renders exactly
+    len(verdict_encoding.STATES) state chips, which is FALSE on the second store
+    here: the legend lists eight states when the page drew a verdict this build
+    has no encoding for. That assertion passed only because its fixture holds no
+    such verdict, so its fixture rather than the assertion was keeping the suite
+    green over the defect above.
+    """
+    for store in (store_registry_sample, store_hostile_literals):
+        page = index(client_for(store))
+        states = [
+            attributes["data-state"] for attributes in with_attribute(page, "data-state")
+        ]
+        counts = facet_counts(page)
+
+        assert states, "the legend lists no state at all"
+        assert set(facets(page, "state")) == set(states)
+        for slug in states:
+            assert ("state", slug) in counts
+
+
 def test_the_page_states_no_endpoint_or_metric_count_in_prose(
-    client_for, store_registry_sample
+    client_for, store_registry_and_failure
 ):
     """Both sentences are gone and both numbers are still machine readable.
 
@@ -1700,22 +2062,140 @@ def test_the_page_states_no_endpoint_or_metric_count_in_prose(
     group heading its denominator, so the sentence repeated in words what the
     page states in numbers. The attributes stay: that is where these tests and
     any other reader find them.
+
+    Both halves are read off the elements the template contracts to carry them
+    rather than searched for in the document. The first version of this test
+    asserted that the substring "endpoints, and" is absent from the whole page,
+    which is the anti-pattern test_page's _Texts docstring warns about and which
+    says nothing about where the removed sentence was; and it never asserted the
+    metric-count sentence was gone at all, nor that the metric count was
+    readable, both of which its own docstring promised.
     """
-    page = index(client_for(store_registry_sample))
-    assert "endpoints, and" not in page
-    assert "These are the endpoints whose availability metric" not in page
+    page = index(client_for(store_registry_and_failure))
     attributes = with_attribute(page, "data-endpoint-count")
-    assert attributes and attributes[0]["data-endpoint-count"].isdigit()
+    assert len(attributes) == 1
+    endpoints = attributes[0]["data-endpoint-count"]
+    metrics = attributes[0]["data-metric-count"]
+    assert endpoints.isdigit() and metrics.isdigit()
+    assert int(endpoints) == len(listed(page))
+
+    # The paragraph that used to open with both counts, read as an element.
+    said = texts_with(page, "data-endpoint-count")
+    assert len(said) == 1
+    assert "measured across" not in said[0], said[0]
+    for number in (endpoints, metrics):
+        assert number not in said[0], f"{number} is still in prose: {said[0]}"
+
+    # The three group notes, of which the one keyed on NO verdict at all is the
+    # only one kept: it says which two cases are in that group, which its
+    # heading cannot. A group keyed ON a verdict has a heading that already
+    # names that verdict and its denominator, so its note said nothing the
+    # heading and the chips above the rows do not.
+    keyed = [
+        attributes["data-group-note"]
+        for attributes in with_attribute(page, "data-group-note")
+    ]
+    assert keyed == [""], keyed
+    assert "recorded no availability verdict at all" in group_note(page, "")
 
 
 def test_every_facet_chip_is_an_unpressed_button(client_for, store_registry_sample):
-    """A button, because it changes this page and names no other resource, and
-    unpressed on arrival, because the page is correct with no filter applied."""
+    """A button, and unpressed on arrival.
+
+    A button because it changes this page and names no other resource, so a link
+    would promise a URL that does not exist; unpressed because the page is
+    correct with no filter applied, and every chip is inert until the script at
+    the foot of the page runs.
+
+    The tag name and the type are asserted, which the first version of this test
+    did not do under this exact name: it read aria-pressed and nothing else, so
+    every chip could have been an anchor.
+    """
     page = index(client_for(store_registry_sample))
-    for attributes in with_attribute(page, "data-facet"):
-        assert attributes["aria-pressed"] == "false"
+    chips = facet_chips(page)
+
+    assert len(chips) == 2 + len(metric_key(page)) + len(verdict_encoding.STATES)
+    for chip in chips:
+        assert chip["tag"] == "button", f"a {chip['tag']} carries data-facet"
+        assert chip["attributes"]["type"] == "button"
+        assert chip["attributes"]["aria-pressed"] == "false"
     assert set(facets(page, "availability")) == {"available", "not-available"}
-    assert len(facets(page, "state")) == len(verdict_encoding.STATES)
+
+
+def test_a_chip_separates_its_words_from_its_count(
+    client_for, store_registry_sample
+):
+    """The accessible name, which is the button's text run together.
+
+    "not available486" is what a screen reader announced, and "AVavailability543"
+    on a metric chip, because the count span followed the label with no text node
+    between them. One space per chip fixes it, and there are ten chips, so the
+    cost is ten bytes and not ten bytes a row.
+    """
+    page = index(client_for(store_registry_sample))
+    for group in ("availability", "metric"):
+        for value, label in facets(page, group).items():
+            assert re.search(r"\D \d+$", label), (
+                f"chip {value!r} announces as {label!r}"
+            )
+    for name, abbr in metric_key(page).items():
+        label = facets(page, "metric")[abbr]
+        assert label.startswith(f"{abbr} {name} "), label
+
+
+def test_the_page_says_what_a_count_on_a_chip_is(
+    client_for, store_registry_sample
+):
+    """The sentence the recount makes true, and it is the page's own claim.
+
+    The state panel says a chip's rows number "is what pressing it filters to",
+    and the counts were rendered once and never recomputed: pressing
+    availability/available and then state/indeterminate left a chip reading 402
+    above a page reading "showing 0 of 543 endpoints". The script now recomputes
+    every count against the rows the other groups leave, which is the faceted
+    count contract, and this is where the page states it. Nothing here can run
+    the script; test_every_chip_count_is_the_rows_the_page_renders pins the
+    counts a reader arrives at, and web/README.md records what was driven in
+    jsdom and what cannot be tested from pytest at all.
+    """
+    page = index(client_for(store_registry_sample))
+    said = texts_with(page, "data-facet-contract")
+
+    assert len(said) == 1
+    assert "any of them within a group, all of them across groups" in said[0]
+    assert "moves as those filters are pressed" in said[0]
+    assert "what pressing it filters to" in page
+
+
+def test_the_not_available_chip_points_at_the_sentence_that_qualifies_it(
+    client_for, store_registry_sample
+):
+    """The disclosure reaches a reader who cannot see the paragraph below it.
+
+    The chip counts every endpoint that is not positively available, most of
+    which merely never answered inside the budget, and the paragraph under it is
+    what stops the words "not available" over-claiming. A sighted reader gets it
+    by reading on; a screen-reader user gets it only if the button says where it
+    is, and without that the accessible name is the over-claiming words alone.
+    """
+    page = index(client_for(store_registry_sample))
+    chips = {
+        attributes["data-facet-value"]: attributes
+        for attributes in with_attribute(page, "data-facet")
+        if attributes["data-facet"] == "availability"
+    }
+    details = {
+        attributes["data-facet-detail"]: attributes
+        for attributes in with_attribute(page, "data-facet-detail")
+    }
+
+    assert set(details) == {"not-available"}, details
+    described = chips["not-available"]["aria-describedby"]
+    assert described == details["not-available"]["id"]
+    # And it points at an element that is on this page, which is the way an
+    # aria-describedby fails without anything looking wrong.
+    assert described in {a["id"] for a in with_attribute(page, "id")}
+    assert "aria-describedby" not in chips["available"]
 
 
 def test_the_facet_groups_come_in_the_order_the_page_reads_in(
@@ -1736,7 +2216,137 @@ def test_a_filter_that_matches_nothing_has_a_sentence_ready(
 ):
     """Hidden on arrival and present in the document, so the script never has to
     build markup: an empty page under a header naming 543 endpoints would leave
-    a reader guessing whether the page broke."""
+    a reader guessing whether the page broke.
+
+    THE HIDDEN ATTRIBUTE IS THE ASSERTION. Remove it and every reader of a page
+    of 543 rows sees "No endpoint in this store matches every filter selected
+    above" standing permanently above them, which the first version of this
+    test, under this same docstring, could not tell: it asserted that the id and
+    the sentence are in the document and nothing more.
+    """
     page = index(client_for(store_registry_sample))
-    assert 'id="nothing"' in page
-    assert "matches every filter selected above" in page
+    attributes = with_attribute(page, "data-facet-empty")
+    said = texts_with(page, "data-facet-empty")
+
+    assert len(attributes) == 1 and len(said) == 1
+    assert "hidden" in attributes[0], attributes[0]
+    assert attributes[0]["id"] == "nothing", "the script looks it up by id"
+    assert "matches every filter selected above" in said[0]
+
+
+def test_a_store_with_no_endpoints_offers_no_chip_to_press():
+    """No rows, so no facet, and nothing implying a filter is hiding them.
+
+    The availability and metric panels were guarded on the endpoint count and
+    the state panel was not, so this page rendered seven pressable chips reading
+    "0 chips 0 rows"; pressing one said "No endpoint in this store matches every
+    filter selected above ... clear one to widen it", which implies clearing it
+    would reveal something, on a store the paragraph above has just said holds
+    nothing at all.
+
+    Asked of the renderer rather than through a client, because a store holding
+    no quads is one _opened_store refuses: this page is reachable only for a
+    store whose runs measured nothing, and it has to be right there too.
+    """
+    page = _index_html([])
+
+    assert with_attribute(page, "data-facet") == []
+    assert with_attribute(page, "data-state") == []
+    assert with_attribute(page, "data-facet-group") == []
+    assert with_attribute(page, "data-facet-contract") == []
+    assert "clear one to widen it" not in page
+    assert "nothing to list" in page
+
+
+def test_every_cell_carries_exactly_one_encoding_class(
+    client_for, store_registry_sample, store_hostile_literals, store_dormant_newest
+):
+    """One enc- token per cell, because the script reads the state off the class.
+
+    ``cell.className.replace(/^enc-/, "")`` is the whole of how a state chip
+    knows what a row is in. A second class on a cell makes that return
+    "verified something-else", which matches no state, on every row, with no
+    error anywhere: the state chips would all read 0 and the page would look
+    like a sweep that measured nothing.
+    """
+    for store in (store_registry_sample, store_hostile_literals, store_dormant_newest):
+        page = index(client_for(store))
+        seen = 0
+        for row in grouped_rows(page):
+            for chip in row["chips"]:
+                encoding_class(chip)
+                seen += 1
+        assert seen, "no cell on this page carries a class at all"
+
+
+def test_every_chip_count_is_the_rows_the_page_renders(
+    client_for,
+    store_registry_sample,
+    store_registry_and_failure,
+    store_hostile_literals,
+    store_dormant_newest,
+):
+    """THE TEST THAT CONNECTS THE THREE BUILDERS TO THE PAGE.
+
+    Every other test of the builders hands them a group dict written by hand, so
+    all of them would pass over a page that rendered different rows, a different
+    legend or a different set of chips. This one reads the rendered page, groups
+    its cells by row and by encoding class, applies the predicate the script at
+    the foot of the page applies, and asserts that each chip's printed count is
+    the number of rendered rows that predicate selects.
+
+    It needs no browser. What it cannot see is the recount the script does when
+    a filter is pressed; what it does see is the number every reader arrives at,
+    which is the number the page's own sentence about pressing a chip is about.
+
+    Four stores, and each adds a shape: the nine-endpoint registry sample is
+    heterogeneous in every metric, registry-and-failure adds the group keyed on
+    no availability verdict at all, hostile-literals adds the eighth legend
+    entry, and the dormant store adds rows the newest sweep declined to ask,
+    which keep the verdicts their last real probe produced.
+    """
+    positive = ("verified", "undeclared-but-verified")
+    for store in (
+        store_registry_sample,
+        store_registry_and_failure,
+        store_hostile_literals,
+        store_dormant_newest,
+    ):
+        page = index(client_for(store))
+        rendered = grouped_rows(page)
+        printed = facet_counts(page)
+        abbreviations = set(metric_key(page).values())
+
+        # Every row on the page is inside a group element, which is what the
+        # script depends on and what this reader refuses to fake.
+        assert [row["endpoint"] for row in rendered] == listed(page)
+        assert {value for group, value in printed if group == "metric"} == (
+            abbreviations
+        )
+        assert {value for group, value in printed if group == "availability"} == {
+            "available",
+            "not-available",
+        }
+
+        expected = {key: 0 for key in printed}
+        for row in rendered:
+            measured = {
+                chip["abbr"].strip()
+                for chip in row["chips"]
+                if "data-verdict" in chip
+            }
+            states = {
+                encoding_class(chip)
+                for chip in row["chips"]
+                if "data-verdict" in chip
+            }
+            available = (
+                "available" if row["availability"] in positive else "not-available"
+            )
+            expected[("availability", available)] += 1
+            for abbr in measured:
+                expected[("metric", abbr)] += 1
+            if len(states) == 1:
+                expected[("state", next(iter(states)))] += 1
+
+        assert printed == expected

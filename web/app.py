@@ -1454,6 +1454,13 @@ def _index_chips(entry: EndpointMeasurements, metrics: list[dict]) -> list[dict]
 # the filter is what was asked for, and the label is what stops it lying.
 _POSITIVE_VERDICTS = ("verified", "undeclared-but-verified")
 
+# The one verdict inside "not available" that is not a finding about the server
+# at all: no answer arrived inside the time budget. Named here rather than
+# spelled at the one place it is counted, because the disclosure sentence below
+# is entirely about this value and a rename that missed it would leave the
+# sentence saying nothing while the chip went on counting.
+_UNREACHED_VERDICT = "indeterminate"
+
 
 def _availability_facets(groups: list[dict]) -> list[dict]:
     """Two chips over the availability verdict, with the second one's makeup.
@@ -1463,7 +1470,7 @@ def _availability_facets(groups: list[dict]) -> list[dict]:
     is the sentence that keeps a 486 built mostly of "we could not tell" from
     reading as 486 servers refusing to answer.
     """
-    available, other, breakdown = 0, 0, {}
+    available = other = unreached = 0
     for group in groups:
         value = group["availability"]
         n = len(group["rows"])
@@ -1471,15 +1478,28 @@ def _availability_facets(groups: list[dict]) -> list[dict]:
             available += n
         else:
             other += n
-            if n:
-                breakdown[value or verdict_encoding.NOT_MEASURED] = n
-    unreached = breakdown.get("indeterminate", 0)
+            # Accumulated, not assigned. One group per value is what
+            # _index_groups returns today, so a second group of the same value
+            # cannot arrive; a counter that says what it means costs nothing and
+            # cannot silently drop one if that ever changes. The dict this
+            # replaced held a count per value and only this one was ever read.
+            if value == _UNREACHED_VERDICT:
+                unreached += n
     detail = None
     if unreached:
+        # "482 of these 482" is what the general form says where the two numbers
+        # are equal, which is every sweep so far: it reads as a proper subset and
+        # so understates its own claim, leaving a reader looking for the
+        # endpoints it is not true of. There are none.
+        how_many = (
+            f"All {other} of these"
+            if unreached == other
+            else f"{unreached} of these {other}"
+        )
         detail = (
-            f"{unreached} of these {other} answered nothing inside the time "
-            f"budget, so what was measured is that no answer arrived and not "
-            f"that the endpoint is unavailable"
+            f"{how_many} answered nothing inside the time budget, so what was "
+            f"measured is that no answer arrived and not that the endpoint is "
+            f"unavailable."
         )
     return [
         {
@@ -1529,18 +1549,41 @@ def _state_facets(groups: list[dict]) -> list[dict]:
 
     Built from the same table as `_legend`, so a chip and its swatch cannot
     disagree about what a state looks like or is called.
+
+    AND FROM THE SAME CONDITION FOR THE EIGHTH ENTRY. `_legend` lists an eighth
+    state, `verdict_encoding.UNRECOGNISED`, whenever a cell on this page was
+    drawn in it, and the template reads each legend entry's rows count out of
+    this function's result. So a result that stopped at the closed seven leaves
+    that eighth row stating NO COUNT AT ALL, which reads as a filter selecting
+    nothing and then reveals a row when it is pressed. That is what shipped on
+    2026-08-27 and what web/tests/fixtures/run-hostile-literals.nq measures.
+
+    The condition is the legend's, verbatim: any cell present on the page whose
+    slug is the unrecognised one. Not "any row uniform in it", which is the
+    narrower fact this function otherwise counts: a page can draw an
+    unrecognised verdict on a row that is uniform in nothing, and the legend
+    lists the state either way, so the mapping has to carry it either way. The
+    count there is 0 rows, which is true and is not the same claim as a blank.
     """
     uniform: dict[str, int] = {}
+    drawn_unrecognised = False
     for group in groups:
         for row in group["rows"]:
-            slugs = {
-                cell["slug"]
-                for cell in row["cells"]
-                if cell["present"] and cell.get("verdict") is not None
-            }
+            slugs = set()
+            for cell in row["cells"]:
+                if not cell["present"]:
+                    continue
+                if cell["slug"] == verdict_encoding.UNRECOGNISED.slug:
+                    drawn_unrecognised = True
+                if cell.get("verdict") is not None:
+                    slugs.add(cell["slug"])
             if len(slugs) == 1:
                 only = next(iter(slugs))
                 uniform[only] = uniform.get(only, 0) + 1
+
+    states = list(verdict_encoding.STATES)
+    if drawn_unrecognised:
+        states.append(verdict_encoding.UNRECOGNISED)
     return [
         {
             "slug": state.slug,
@@ -1548,7 +1591,7 @@ def _state_facets(groups: list[dict]) -> list[dict]:
             "css_class": verdict_encoding.css_class(state.slug),
             "count": uniform.get(state.slug, 0),
         }
-        for state in verdict_encoding.STATES
+        for state in states
     ]
 
 
@@ -1696,8 +1739,10 @@ def _index_groups(
             # true of cors and of the service description and is not true of
             # availability: nothing declares that it answers queries. Printing
             # that generic gloss under an availability heading would explain the
-            # group with a sentence about a different metric. The legend at the
-            # foot of the page explains the drawing, which is what it is for.
+            # group with a sentence about a different metric. What the drawing
+            # means is the legend's to say, and the legend is above these groups
+            # since 2026-08-27, where each of its rows is also the filter chip
+            # for that state.
             # No per-group note. Until 2026-08-27 each group carried one
             # sentence differing only in a quoted verdict, directly beneath a
             # heading that already names that verdict and its denominator, and
@@ -1793,10 +1838,20 @@ def _index_context(entries: list[EndpointMeasurements]) -> dict:
         "availability_facets": _availability_facets(groups),
         "metric_facets": _metric_facets(groups, metrics),
         # Keyed by slug rather than a list, because the legend it feeds is
-        # already looping over verdict_encoding.STATES to draw the swatches and
-        # must not loop over a second sequence that could fall out of step with
-        # it. The legend shows this beside its own chip count: two numbers
-        # answering two questions, which its note explains.
+        # already looping over the states to draw the swatches and must not loop
+        # over a second sequence beside it. The legend shows this beside its own
+        # chip count: two numbers answering two questions, which its note
+        # explains.
+        #
+        # KEYING BY SLUG IS NOT WHAT KEEPS THE TWO IN STEP, and a comment here
+        # claimed it was until 2026-08-28. A mapping is only total over the
+        # legend if it holds a key for every entry the legend lists, and
+        # `_legend` lists an eighth when this page drew a verdict this build has
+        # no encoding for. Where it did and `_state_facets` returned seven, the
+        # template's `state_rows[state.slug]` rendered as nothing at all, which
+        # is a chip claiming to select no endpoint that then reveals one. What
+        # keeps them in step is that both functions decide on that eighth entry
+        # from the same condition over the same rows; see `_state_facets`.
         "state_rows": {
             facet["slug"]: facet["count"] for facet in _state_facets(groups)
         },

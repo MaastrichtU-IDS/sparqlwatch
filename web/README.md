@@ -535,37 +535,63 @@ generated from the metric names the store holds, so they change with the metric
 set rather than being a list in the template. That is the page's size budget at
 work: 543 rows carrying full metric names, or the metric repeated in an
 attribute beside each chip, measured 610 KB against the 750 KB the page is
-allowed. It is 437,404 bytes as it stands, which is 427.2 KiB and 437 KB. An earlier
+allowed. It is 452,136 bytes as it stands, which is 441.5 KiB and 452 KB. An earlier
 sentence here said 424.6 KiB, which is 434,790 bytes and no measurement anyone
-took.
+took, and another said 437,404, which was a real measurement of a page two
+commits older than this one.
 
-**THE PAGE IS OVER THAT BUDGET AS SOON AS ROWS ARE MARKED, AND THE REMEDY IS
-NOT DECIDED HERE.** Every row whose facts are not the newest run's carries the
+**EVERY MEASURED SHAPE IS INSIDE THE BUDGET, AND THE BUDGET IS NOT DECIDED
+HERE.** Every row whose facts are not the newest run's carries the
 instant of the sweep that measured it, in words and in `data-measured-by-sweep`,
 and a row the newest sweep declined to ask carries about 144 bytes more. Measured
 over the same 543 endpoints, in UTF-8 bytes of the served page, against the
-decimal 750,000 the budget is written in. It was 500,000 until 2026-08-27, and the numbers below
-are why it moved: at 808 bytes a row with no markers at all, 500,000 runs out at **619
+decimal 750,000 the budget is written in. It was 500,000 until 2026-08-27, and three of the
+four shapes below were outside that number, which is why it moved: at the 808 bytes a row
+the page measured before the facet chips landed, 500,000 runs out at **619
 endpoints**, so it was sized for the markup and not for a registry that only grows. The plan
 that sets it records the change and the reasoning.
 
 | Store shape | Rows marked | Dormant | Bytes | Per row | Against 750,000 |
 | --- | --- | --- | --- | --- | --- |
-| one sweep, the shape above | 0 | 0 | 448,552 | 808 | under by 301,448 |
-| a two-endpoint newer sweep | 543 | 0 | 501,609 | 924 | under by 248,391 |
-| the same, plus the 57 endpoints the measured set relegates | 543 | 57 | 510,188 | 940 | under by 239,812 |
-| every row marked and dormant | 543 | 543 | 580,357 | 1,069 | under by 169,643 |
+| one sweep, the shape above | 0 | 0 | 452,136 | 833 | under by 297,864 |
+| a two-endpoint newer sweep | 541 | 0 | 515,433 | 949 | under by 234,567 |
+| the same, plus 57 of the rest declared dormant | 541 | 57 | 525,080 | 967 | under by 224,920 |
+| every row marked and dormant | 543 | 543 | 593,841 | 1,094 | under by 156,159 |
 
 The last row is the worst case FOR THIS MARKER and the third is the realistic
-near-term shape: a narrow re-probe plus the endpoints the cadence has taken. All
-four are inside 750,000, and three of the four were outside 500,000, which is the
-change. The first row moved from 438,652 to 448,552 on 2026-08-27 when the three
-facet groups landed: **9,900 bytes, fixed rather than per row**, because every
+near-term shape: a narrow re-probe plus the endpoints the cadence has taken.
+
+**How the four stores are built**, written down here because the table was not
+re-measurable without it and its middle two rows could not be reproduced. One
+replay of `~/code/sparqlwatch-runs/run-2026-08-24T19-45-03Z-lod-cloud-543.nq`;
+then a second run at a later instant built from that file's header, two of its
+543 endpoint sections and its footer, so 541 rows name the sweep that measured
+them; then the same second run with a dormancy section declaring 57 more of the
+543 dormant with the reason `automatic`; then the same declaring all 543 dormant
+and measuring nothing. Rows 1 and 4 reproduce the 2026-08-27 measurement to the
+byte. Rows 2 and 3 came out 398 and 1,466 bytes above what it recorded, so its
+second and third stores differed slightly from these and no one wrote down how
+they were built, which is what this paragraph is for.
+
+**The facet chips cost 13,426 bytes, fixed rather than per row.** Measured as the
+difference between `5353d5a`, the commit they landed on, and this tree, in all
+four shapes: it is the same number to the byte in each of them, because every
 chip filters by reading attributes the rows already carried and none of them
-added markup to a row. The other three shapes move by the same 9,900. Two things the table does not say and a reader should know. **The page is
-95% rows**: 552,913 bytes of rows against 27,444 for the head, the CSS, the
-legend and all four explanation panels together, so per-row markup is the only
-lever with leverage. And **the chips are 576 of a 1,014 byte row, 57%**, more
+added markup to a row. 9,842 of that landed with the chips on 2026-08-27 and
+3,584 with their fixes on 2026-08-28, most of the second figure being the
+recount that keeps a chip's number equal to what pressing it shows, and the
+comments explaining a script no test in CI runs. An earlier version of this
+paragraph said 9,900, which is the distance to the commit BEFORE the one the
+chips landed on: `5353d5a` renders 438,710 bytes in the first shape and its
+parent 438,652.
+
+Two things the table does not say and a reader should know. **The page is 92 to
+94% rows**: the 543 row elements are 416,620 bytes of the 452,136 byte first
+shape and 556,714 of the 593,841 byte last one, against 35,516 and 37,127 for
+everything else, which is the head, the CSS, the three facet panels, the group
+headings and all four explanation panels together. So per-row markup is the only
+lever with leverage, at 767 bytes a row unmarked and 1,025 marked and dormant.
+And **the chips are 578 of that 1,018 byte row element, 57%**, more
 than half the row before this stage touched it, so the cheap reductions all live
 outside them: dropping the visible instant saves 71 bytes a row, the
 `data-measured-by-sweep` attribute 45, halving the marker text 37, about 184
@@ -597,6 +623,21 @@ the `ids3` content security policy for a later stage's editor bundle, and this
 script raises the same question one stage early: under a policy that forbids
 inline script it will need a nonce or to become a static file, and nothing about
 what the page says changes either way.
+
+**NOTHING IN THE SUITE RUNS THAT SCRIPT**, and one of its claims can only be
+checked by running it: that every chip's count is what pressing that chip shows,
+which holds because the script recomputes each count against the rows the other
+groups leave. `pytest` reads the counts the server rendered, which is the state
+the page arrives in, and `test_every_chip_count_is_the_rows_the_page_renders`
+pins those against the rows the page actually contains, applying the same
+predicate the script applies. The recount itself was driven by hand over the real
+served 543-endpoint page in jsdom, pressing availability/available and then
+state/indeterminate, which is the pair that used to leave a chip reading 402
+above a page reading "showing 0 of 543 endpoints". Two things that verified
+beyond the fix: on load every recomputed count equals the server-rendered one, so
+the script and `app.py`'s three builders agree over 543 real rows; and a chip's
+own group is skipped in its count, so a chip does not read 0 because the chip
+beside it is pressed.
 
 ### `/about`, and how somebody asks to be left alone
 
@@ -950,8 +991,9 @@ vocabularies and the classes they hold is the part that needs content data, and 
 store holds no vocabulary or property data at all and one class sample per endpoint at
 best, since `sw:metric:classes` is expensive and declined at the default cost ceiling.
 The spec's stage 3 row already depends on stage 2b for exactly this reason, so these
-facets wait on 2b producing something to facet on rather than on UI work. Grouping by
-verdict does exist: the index groups by the availability verdict's own values.
+facets wait on 2b producing something to facet on rather than on UI work. Faceting by
+verdict does exist: the index groups its rows by the availability verdict's own values,
+and carries filter chips for availability, for each metric, and for each encoding state.
 
 ### Known gaps in what this service tells a stranger
 
