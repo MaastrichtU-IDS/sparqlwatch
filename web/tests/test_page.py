@@ -36,6 +36,7 @@ from app import (
     COMPLETE_TEXT,
     ENDPOINT_PATH,
     TRUNCATED_TEXT,
+    _newest_sweep_silence_text,
     _rows,
     _sample,
     app,
@@ -1464,3 +1465,216 @@ def test_two_finished_historical_runs_say_nothing_about_not_finishing(
     assert with_attribute(text, UNFINISHED) == []
     assert with_attribute(text, NEWER_UNFINISHED) == []
     assert "did not finish" not in text
+
+
+# ---------------------------------------------------------------------------
+# The newest sweep did not ask this endpoint
+# ---------------------------------------------------------------------------
+# An absent qualifier on this page is a POSITIVE CLAIM: the header sentence
+# dates every verdict below to one sweep, and saying nothing else asserts that
+# the newest sweep in the store is that sweep. For an endpoint the newest sweep
+# declined to ask, that is false, and the store holds the reason.
+#
+# DORMANCY IS NOT A VERDICT and nothing below lets it become one. The six
+# verdict states and the not-measured state are the closed vocabulary of the
+# chips; what these tests read is a sentence about the age of the verdicts the
+# page already draws.
+DECLINING_SWEEP_INSTANT = "2026-08-27T10:00:00Z"
+REGISTRY_SWEEP_INSTANT = "2026-08-24T19:45:03Z"
+FAILED_SWEEP_INSTANT = "2026-08-23T02:00:00Z"
+
+SILENT = "data-newest-sweep-silent"
+DORMANT = "data-newest-sweep-dormant"
+CRASH = "data-newer-run-unfinished"
+
+
+def test_the_endpoint_page_says_the_newest_sweep_did_not_ask(
+    client_for, store_dormant_newest
+):
+    """store_dormant_newest's kadaster, which is the whole point of the task.
+
+    The newest sweep finished, measured the other two endpoints of the trio
+    and published one dormancy group naming this one. So the page carries one
+    sentence, and it has to name three things: the sweep that did not ask, the
+    reason it gives, and the sweep the verdicts above actually come from. It
+    must NOT carry the crash sentence, which is about a sweep that stopped.
+    """
+    text = page(client_for(store_dormant_newest), KADASTER)
+
+    said = texts_with(text, SILENT)
+    assert len(said) == 1, "one sentence, in the element contracted to carry it"
+    assert DECLINING_SWEEP_INSTANT in said[0], "name the sweep that did not ask"
+    assert SAMPLING_SWEEP in said[0], "and the sweep the verdicts come from"
+    assert "dormant" in said[0]
+    assert "operator-hold" in said[0]
+
+    marked = with_attribute(text, SILENT)[0]
+    assert marked[DORMANT] == "true"
+    assert marked["data-dormancy-reason"] == "operator-hold"
+    assert texts_with(text, CRASH) == [], (
+        "that sweep finished, so nothing about it stopped partway"
+    )
+
+
+def test_the_dormancy_sentence_is_not_drawn_as_a_verdict(
+    client_for, store_dormant_newest
+):
+    """The closed vocabulary, pinned on the page that could break it.
+
+    Dormancy carries no chip, no metric row and no legend entry: it is not a
+    finding about the endpoint, and drawing it beside the verdicts would put
+    an eighth state into an encoding whose whole value is that it has seven.
+    The verdicts the 16:00 sweep did record are still drawn, unchanged.
+    """
+    text = page(client_for(store_dormant_newest), KADASTER)
+
+    assert "dormant" not in str(with_attribute(text, "data-metric"))
+    assert "dormancy" not in str(with_attribute(text, "data-state"))
+    assert [row["data-metric"] for row, _ in chips(text)], (
+        "the page must still draw the verdicts it has"
+    )
+    assert row_for(text, M + "availability")["data-verdict"] == "verified"
+
+
+def test_a_crashed_declining_sweep_makes_no_crash_claim(
+    client_for, store_dormancy_then_crash
+):
+    """The live defect this task fixes, end to end.
+
+    The newest run here published its dormancy list and was then killed, so
+    every conjunct of newer_run_did_not_reach_this_endpoint held and the page
+    printed "A later sweep did not finish and never recorded finishing this
+    endpoint" over an endpoint that sweep deliberately declined to ask, with
+    the true reason bound in the same row and unused.
+    """
+    text = page(client_for(store_dormancy_then_crash), KADASTER)
+
+    assert texts_with(text, CRASH) == [], (
+        "the sweep never intended to reach this endpoint, so it did not stop "
+        "short of it"
+    )
+    said = texts_with(text, SILENT)
+    assert len(said) == 1
+    assert DECLINING_SWEEP_INSTANT in said[0]
+    assert "operator-hold" in said[0]
+    assert SAMPLING_SWEEP in said[0]
+
+
+def test_the_calibration_shape_qualifies_every_page_the_narrower_run_skipped(
+    client_for, store_registry_and_failure
+):
+    """A finished, newer, NARROWER run, and no dormancy anywhere.
+
+    This is the defect on the deployed store: a 54-endpoint calibration run
+    minutes newer than the 543-endpoint sweep leaves 489 pages whose newest
+    sweep recorded nothing for them, and every one of those pages said
+    nothing at all about it. store_registry_and_failure is that shape at
+    fixture size, the registry sweep being a nine-endpoint cut that never
+    mentions kadaster.
+
+    Nothing in the store says WHY, so the sentence must not guess: no
+    dormancy attribute and no reason.
+    """
+    text = page(client_for(store_registry_and_failure), KADASTER)
+
+    said = texts_with(text, SILENT)
+    assert len(said) == 1
+    assert REGISTRY_SWEEP_INSTANT in said[0]
+    assert FAILED_SWEEP_INSTANT in said[0], "and the sweep the facts come from"
+    assert "dormant" not in said[0]
+    marked = with_attribute(text, SILENT)[0]
+    assert DORMANT not in marked
+    assert "data-dormancy-reason" not in marked
+    assert texts_with(text, CRASH) == []
+
+
+def test_a_page_no_later_sweep_passed_over_says_none_of_this(client_for, store):
+    """The control. One sweep, and it is every endpoint's own run, so there is
+    no later sweep to qualify anything and the page says nothing about one.
+
+    Without this the tests above would pass over a page that printed the
+    sentence unconditionally.
+    """
+    text = page(client_for(store), KADASTER)
+    assert with_attribute(text, SILENT) == []
+    assert with_attribute(text, CRASH) == []
+
+
+def _silence_text(**overrides):
+    """The sentence for one EndpointMeasurements, asked of app.py directly.
+
+    The two cases below have no committed fixture: every dormancy group the
+    prober writes carries a reason, and the reason it carries is one of
+    prober/src/dormancy.rs's two slugs. Inventing fixtures for them would pin
+    a run file no prober emits, which is the same call
+    test_each_decline_reason_gets_its_own_detail makes.
+    """
+    facts = dict(
+        endpoint="https://example.org/sparql",
+        assessed=True,
+        run="urn:sparqlwatch:run:2026-08-22T16:00:00Z",
+        generated_at="2026-08-22T16:00:00Z",
+        newest_run="urn:sparqlwatch:run:2026-08-27T10:00:00Z",
+        newest_generated_at=DECLINING_SWEEP_INSTANT,
+        newest_emission="incremental",
+        newest_finalised=True,
+        newest_declared_this_endpoint_dormant=True,
+        newest_dormancy_reason="operator-hold",
+    )
+    facts.update(overrides)
+    return _newest_sweep_silence_text(EndpointMeasurements(**facts))
+
+
+def test_each_dormancy_reason_gets_its_own_sentence():
+    """The two slugs prober/src/dormancy.rs::SkipReason emits say different
+    things about who decided. "automatic" is this service's cost policy
+    relegating an endpoint that proved expensive and silent; "operator-hold"
+    is a person. Reporting the second as the first would tell a reader the
+    machine did something a person did."""
+    automatic = _silence_text(newest_dormancy_reason="automatic")
+    held = _silence_text(newest_dormancy_reason="operator-hold")
+    assert "automatic" in automatic and "operator-hold" not in automatic
+    assert "operator-hold" in held and "automatic" not in held
+    assert automatic != held, "two reasons, two sentences"
+
+
+def test_it_says_so_without_a_reason_when_no_reason_is_bound():
+    """A declaration with no sw:dormancyReason beside it.
+
+    The declaration is the fact that matters: the sweep said it declined to
+    ask. So the sentence is still made, and it says the reason is not
+    recorded rather than borrowing either of the two above.
+    """
+    text = _silence_text(newest_dormancy_reason=None)
+    assert "dormant" in text
+    assert DECLINING_SWEEP_INSTANT in text
+    assert "no reason" in text
+    assert "automatic" not in text and "operator-hold" not in text
+
+
+def test_an_unrecognised_dormancy_reason_is_shown_verbatim():
+    """A reason from a prober newer than this page.
+
+    The same answer as an unrecognised verdict and an unrecognised decline
+    reason: claim nothing about what it means, and carry the value the store
+    holds so a reader can see which value that is. A reason has been added to
+    a closed set in this project once already.
+    """
+    text = _silence_text(newest_dormancy_reason="hibernating-2027")
+    assert "hibernating-2027" in text
+    assert "automatic" not in text and "operator-hold" not in text
+
+
+def test_a_dormancy_the_newest_run_did_not_declare_is_not_reported():
+    """The sentence is about the newest run, so it needs a newer run.
+
+    Both of the property's own guards, read through the sentence: an absent
+    newest run and a newest run that is this endpoint's own run each leave
+    nothing to say, and a sentence that fired anyway would name a sweep the
+    store does not hold or invent a second one.
+    """
+    assert _silence_text(newest_run=None, newest_generated_at=None) is None
+    assert (
+        _silence_text(newest_run="urn:sparqlwatch:run:2026-08-22T16:00:00Z")
+        is None
+    )

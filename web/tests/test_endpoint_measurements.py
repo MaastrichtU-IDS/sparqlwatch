@@ -6,11 +6,14 @@ web/tests/fixtures/. See each fixture's header comment (or, for
 run-with-samples.nq, web/tests/test_fixture.py) for its provenance.
 """
 
+from dataclasses import asdict
+
 import pytest
 from pyoxigraph import NamedNode, Store
 
 from conftest import RUN_WITH_SAMPLES
 from endpoint_content import endpoint_content
+from endpoint_index import endpoint_index
 from load_run import check_current, load_run, rebuild_current
 from endpoint_measurements import EndpointMeasurements, endpoint_measurements
 
@@ -527,3 +530,289 @@ def test_two_runs_tied_as_the_newest_in_the_store_are_refused(tmp_path):
     message = str(raised.value)
     assert "urn:sparqlwatch:test:run:a" in message, "name both runs, so the store is fixable"
     assert "urn:sparqlwatch:test:run:b" in message
+
+
+# ---------------------------------------------------------------------------
+# The newest sweep recorded nothing here, and whether it said why
+# ---------------------------------------------------------------------------
+# Condition (b) above is a crash. Its mirror is a DECISION: a newer sweep that
+# finished and recorded nothing for this endpoint. Both leave the endpoint's
+# own facts complete and current and both leave the page dating them to a
+# sweep that is not the newest one, and newest_finalised is the single fact
+# that tells them apart.
+#
+# Dormancy is one way the decision arises and the only one the store explains:
+# prober/src/dormancy.rs's cadence declines to ask an endpoint that has proved
+# expensive and silent, and the run graph publishes sw:dormantEndpoint,
+# sw:dormancyReason and sw:dormantSince for it. The others (a url dropped from
+# the registry, one added to registry/exclusions.toml, a deliberately narrowed
+# sweep) publish nothing, which is why the property is not gated on dormancy.
+#
+# DORMANCY IS NOT A VERDICT. Nothing below reads it as one; what it decides is
+# which sentence a page may print about the age of the verdicts it already has.
+DECLINING_RUN = "urn:sparqlwatch:run:2026-08-27T10:00:00Z"
+DECLINING_SWEEP = "2026-08-27T10:00:00Z"
+PROMOTING_RUN = "urn:sparqlwatch:run:2026-08-27T11:00:00Z"
+REGISTRY_RUN = "urn:sparqlwatch:run:2026-08-24T19:45:03Z"
+PROMOTES_THE_DORMANT = (
+    RUN_WITH_SAMPLES.parent / "run-promotes-the-dormant.nq"
+)
+
+
+def test_a_finished_sweep_that_recorded_nothing_is_not_a_crash(
+    store_registry_and_failure,
+):
+    """The general shape, with no dormancy anywhere in the store.
+
+    The registry sweep is the newest run here and it finished. It never
+    mentions kadaster, because it is a nine-endpoint cut of a different sweep,
+    which is exactly what a narrowed run looks like from an endpoint it left
+    out. So kadaster's facts come from the older 02:00 run, the newest sweep
+    recorded nothing for it, and nothing in the store says why.
+
+    Condition (b) must stay false: that sweep finished, so "it stopped before
+    it got here" would be false, and the two properties are mutually exclusive
+    on exactly that fact.
+    """
+    r = endpoint_measurements(store_registry_and_failure, KADASTER)
+    assert r.run == FINISHED_RUN
+    assert r.newest_run == REGISTRY_RUN
+    assert r.newest_finalised is True
+    assert r.newest_completed_this_endpoint is False
+    assert r.newest_sweep_recorded_nothing_for_this_endpoint is True
+    assert r.newer_run_did_not_reach_this_endpoint is False
+    assert r.newest_declared_this_endpoint_dormant is False
+    assert r.newest_dormancy_reason is None, (
+        "no run in this store declares anything dormant, so no reason may be "
+        "invented for the silence"
+    )
+
+
+def test_a_finished_declining_sweep_publishes_the_reason_it_did_not_ask(
+    store_dormant_newest,
+):
+    """The same silence, explained. run-with-dormancy.nq finished, measured
+    the other two endpoints of the trio, and published one dormancy group for
+    kadaster with sw:dormancyReason "operator-hold".
+
+    The reason comes from inside the newest run's graph, which is where the
+    prober writes it; load_run deliberately keeps no dormancy in the derived
+    current graph, so there is nowhere else it could come from.
+    """
+    r = endpoint_measurements(store_dormant_newest, KADASTER)
+    assert r.newest_run == DECLINING_RUN
+    assert r.newest_sweep_recorded_nothing_for_this_endpoint is True
+    assert r.newest_declared_this_endpoint_dormant is True
+    assert r.newest_dormancy_reason == "operator-hold"
+    assert r.newer_run_did_not_reach_this_endpoint is False
+
+
+def test_the_verdicts_age_comes_from_the_endpoints_own_pointer(
+    store_dormant_newest,
+):
+    """The trap this pair of fixtures exists to catch.
+
+    The declining run is the NEWEST run in the store and is deliberately NOT
+    kadaster's sw:currentRun. Code that dates a verdict by the store's
+    greatest prov:generatedAtTime dates it to the sweep that refused to
+    measure it, and the verdicts would then be reported as five days fresher
+    than they are.
+    """
+    r = endpoint_measurements(store_dormant_newest, KADASTER)
+    assert r.run == CURRENT_RUN
+    assert r.generated_at == "2026-08-22T16:00:00Z"
+    assert r.newest_generated_at == DECLINING_SWEEP
+    assert r.generated_at != r.newest_generated_at, (
+        "the two timestamps must stay distinguishable, or nothing here is "
+        "being tested"
+    )
+
+
+def test_the_endpoints_the_declining_sweep_did_measure_report_no_dormancy(
+    store_dormant_newest,
+):
+    """The same store, the other two endpoints. The declining sweep is their
+    own run, so there is no older run to date and no dormancy to report, and a
+    dormancy fact about kadaster may not leak onto their rows: the declaration
+    names one endpoint and is a fact about that one."""
+    for endpoint in (ONTOP, QLEVER):
+        r = endpoint_measurements(store_dormant_newest, endpoint)
+        assert r.run == DECLINING_RUN
+        assert r.newest_run == DECLINING_RUN
+        assert r.newest_declared_this_endpoint_dormant is False
+        assert r.newest_dormancy_reason is None
+        assert r.newest_sweep_recorded_nothing_for_this_endpoint is False
+
+
+def test_a_crashed_newest_sweep_that_declared_dormancy_is_not_reported_as_a_crash(
+    store_dormancy_then_crash,
+):
+    """The live defect, and the reason condition (b) is gated on dormancy.
+
+    The dormancy section sits before the first chunk, so it survives every
+    truncation that keeps the header. This store's newest run published its
+    complete dormancy list and was then killed: it carries sw:emission, no
+    sw:finalised and no sw:completedEndpoint at all, which satisfies every one
+    of condition (b)'s five conjuncts for kadaster.
+
+    Both sentences would be about the same sweep and only one of them is true.
+    "It stopped before it got here" is a crash claim about an endpoint that
+    sweep declined to ask and said so in the same run graph, so the crash
+    claim is the one that must not be made.
+    """
+    r = endpoint_measurements(store_dormancy_then_crash, KADASTER)
+    assert r.run == CURRENT_RUN
+    assert r.newest_run == DECLINING_RUN
+    assert r.newest_emission == "incremental"
+    assert r.newest_finalised is False
+    assert r.newest_completed_this_endpoint is False
+    assert r.newest_declared_this_endpoint_dormant is True
+    assert r.newest_dormancy_reason == "operator-hold"
+    assert r.newer_run_did_not_reach_this_endpoint is False, (
+        "the crash claim is false: that sweep never intended to reach this "
+        "endpoint and published the reason"
+    )
+    assert r.newest_sweep_recorded_nothing_for_this_endpoint is False, (
+        "and the decision claim needs a finished sweep, which this is not"
+    )
+
+
+def test_only_the_newest_runs_declaration_is_read(tmp_path):
+    """WHICH declaring run, decided. After several weekly skips more than one
+    run graph declares the same endpoint dormant, and the answer is: the
+    newest run in the store, and no other.
+
+    run-promotes-the-dormant.nq is the committed shape that makes the choice
+    visible. Its 10:00 run declared kadaster dormant; its 11:00 run is the
+    probe week and measured it. Reading "the newest run that declared it
+    dormant" would report kadaster as dormant while its own verdicts come from
+    a later sweep that asked, which is how dormancy would stop clearing
+    itself. Reading only the newest run reports nothing, and nothing is right.
+    """
+    store = Store(str(tmp_path / "s"))
+    load_run(store, PROMOTES_THE_DORMANT.read_bytes())
+
+    r = endpoint_measurements(store, KADASTER)
+    assert r.run == PROMOTING_RUN
+    assert r.newest_run == PROMOTING_RUN
+    assert r.newest_declared_this_endpoint_dormant is False
+    assert r.newest_dormancy_reason is None, (
+        "the 10:00 run's declaration is not the newest run's, so it is not "
+        "this page's answer"
+    )
+
+
+# ---------------------------------------------------------------------------
+# The decision's four conjuncts, one at a time
+# ---------------------------------------------------------------------------
+def _newest_finished_and_recorded_nothing(**overrides):
+    """An EndpointMeasurements where the decision is true, before overrides."""
+    facts = dict(
+        endpoint=KADASTER,
+        assessed=True,
+        run=CURRENT_RUN,
+        generated_at="2026-08-22T16:00:00Z",
+        newest_run=DECLINING_RUN,
+        newest_generated_at=DECLINING_SWEEP,
+        newest_emission="incremental",
+        newest_finalised=True,
+        newest_completed_this_endpoint=False,
+    )
+    facts.update(overrides)
+    return EndpointMeasurements(**facts)
+
+
+def test_the_reference_shape_for_the_four_conjuncts_does_derive_the_decision():
+    """The control, as above: every test below changes one field of this
+    shape, so if this one did not derive the property none of them would be
+    testing the conjunct it names."""
+    assert (
+        _newest_finished_and_recorded_nothing()
+        .newest_sweep_recorded_nothing_for_this_endpoint
+        is True
+    )
+
+
+def test_no_newest_run_at_all_reports_no_decision():
+    """Conjunct 1: there has to BE a newest run, for the same reason as
+    condition (b)'s first conjunct: ``None != self.run`` is True, so an absent
+    newest run would otherwise read as "a run other than this one"."""
+    r = _newest_finished_and_recorded_nothing(
+        newest_run=None, newest_generated_at=None
+    )
+    assert r.newest_sweep_recorded_nothing_for_this_endpoint is False
+
+
+def test_the_newest_run_being_this_run_reports_no_decision():
+    """Conjunct 2: a finished run on its own page is not a run that recorded
+    nothing here. Its facts ARE what is on the page."""
+    r = _newest_finished_and_recorded_nothing(newest_run=CURRENT_RUN)
+    assert r.newest_sweep_recorded_nothing_for_this_endpoint is False
+
+
+def test_an_unfinalised_newest_run_reports_no_decision():
+    """Conjunct 3, the one that separates the decision from the crash. A run
+    that never recorded finishing may yet have been on its way here, so
+    "it recorded nothing" is not a decision it made."""
+    r = _newest_finished_and_recorded_nothing(newest_finalised=False)
+    assert r.newest_sweep_recorded_nothing_for_this_endpoint is False
+
+
+def test_a_newest_run_that_marked_this_endpoint_reports_no_decision():
+    """Conjunct 4: an endpoint the newest run finished is one it did record
+    something for, whatever else is true, so the facts on the page are its
+    own and not an older sweep's."""
+    r = _newest_finished_and_recorded_nothing(
+        newest_completed_this_endpoint=True
+    )
+    assert r.newest_sweep_recorded_nothing_for_this_endpoint is False
+
+
+def test_a_dormancy_with_no_reason_still_suppresses_the_crash_claim():
+    """The gate is the DECLARATION, not the reason.
+
+    Every dormancy group the prober writes carries an sw:dormancyReason, so
+    this shape has no committed fixture, and it is pinned on the dataclass for
+    the same reason condition (b)'s middle conjuncts are: a run graph that
+    declared an endpoint dormant and recorded no reason has still said it
+    declined to ask, and printing a crash claim over it would be as false as
+    printing one over a run that gave its reason.
+    """
+    r = _newest_is_a_crashed_later_run(
+        newest_declared_this_endpoint_dormant=True
+    )
+    assert r.newest_dormancy_reason is None
+    assert r.newer_run_did_not_reach_this_endpoint is False
+
+
+def test_the_index_and_the_endpoint_page_agree_about_dormancy(
+    store_dormant_newest, store_dormancy_then_crash
+):
+    """The two queries, held to the one answer.
+
+    web/queries/index.rq and web/queries/endpoint_measurements.rq ask the same
+    question of the store and share one constructor, so a chip on the index
+    cannot contradict the page it links to. That guarantee is only as good as
+    the columns the two queries select: measurements_from_rows reads bindings
+    by NAME, and pyoxigraph 0.5.9 returns None for a name a query does not
+    project rather than raising, so an index.rq that had not gained the two new
+    columns would report every endpoint in the registry as not dormant, in
+    silence.
+
+    The comparison is over every field of every endpoint, not over the two new
+    ones, because the shapes that break the newest-run branch in this query
+    break the rest of it too: the form this file's header argues against gives
+    the dormant endpoint the right answer and every other endpoint a newest run
+    with no timestamp and no sw:finalised.
+    """
+    for store in (store_dormant_newest, store_dormancy_then_crash):
+        rows = endpoint_index(store)
+        assert rows, "the index must list something to be compared"
+        dormant = [r for r in rows if r.newest_declared_this_endpoint_dormant]
+        assert [r.endpoint for r in dormant] == [KADASTER], (
+            "one endpoint of the trio is dormant in both of these stores"
+        )
+        for row in rows:
+            assert asdict(row) == asdict(
+                endpoint_measurements(store, row.endpoint)
+            ), f"the two queries disagree about {row.endpoint}"

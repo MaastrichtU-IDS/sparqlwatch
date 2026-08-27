@@ -583,6 +583,108 @@ def _newer_unfinished_run_text(
     )
 
 
+# What each dormancy reason means in words, keyed by the slug the graph
+# carries. The slugs are prober/src/dormancy.rs's SkipReason::slug, and the two
+# sentences differ in WHO decided: "automatic" is this project's cost policy
+# relegating an endpoint that proved expensive and silent over two consecutive
+# sweeps, "operator-hold" is a person putting it aside by hand. Reporting the
+# second as the first would tell a reader the machine did something a person
+# did, and would send an operator looking for a threshold to change.
+#
+# Neither sentence says anything about the endpoint. Dormancy is a fact about
+# this service's rotation, which is why the vocabulary calls it dormant rather
+# than unresponsive and why it is not one of the six verdicts.
+_DORMANCY_REASONS = {
+    "automatic": (
+        "this service relegated it after consecutive sweeps that cost a great "
+        "deal and returned nothing"
+    ),
+    "operator-hold": "an operator put it aside by hand",
+}
+
+# The clause for a reason this build has no sentence for, from a prober newer
+# or older than this page. The same shape and the same reason as
+# _UNRECOGNISED_DECLINE_DETAIL: the value is carried verbatim so a reader can
+# see which value the store holds, and nothing is claimed about what it means.
+_UNRECOGNISED_DORMANCY_REASON = "is one this page has no reading of"
+
+# And the clause for a declaration with no sw:dormancyReason beside it. Every
+# dormancy group the prober writes carries one, so this is the branch that
+# exists because the DECLARATION is the fact the page turns on: a run that said
+# it declined to ask and did not say why has still said the first half, and
+# that half is what makes the crash sentence false.
+_NO_DORMANCY_REASON = "it recorded no reason for the skip"
+
+
+def _dormancy_clause(reason: str | None) -> str:
+    """How the sentence below names the reason the newest sweep did not ask."""
+    if reason is None:
+        return _NO_DORMANCY_REASON
+    if reason in _DORMANCY_REASONS:
+        return f"{_DORMANCY_REASONS[reason]} ({reason})"
+    return (
+        f"the reason it recorded, {reason}, {_UNRECOGNISED_DORMANCY_REASON}"
+    )
+
+
+def _newest_sweep_silence_text(
+    measurements: EndpointMeasurements,
+) -> str | None:
+    """The sentence for an endpoint the NEWEST sweep recorded nothing for.
+
+    Said in the same place as the two sentences above, and for the same
+    reason: the header sentence dates every verdict on this page to one sweep,
+    and on this site an absent qualifier is a positive claim. Saying nothing
+    here asserts that the sweep named up there is the newest one this service
+    ran, and for a page that reaches this function that is false.
+
+    Two claims, and which one is made is decided by the store rather than by
+    preference:
+
+    * the newest sweep DECLARED this endpoint dormant. Then it did not ask on
+      purpose, it published why, and that is true whether or not it finished:
+      the dormancy section is written whole, before the first chunk. This
+      claim comes first because it is the more specific one and because the
+      other two would both be saying less about the same sweep.
+    * the newest sweep FINISHED and recorded nothing here, with no dormancy in
+      the store. A url dropped from the registry, one added to
+      registry/exclusions.toml and a deliberately narrowed sweep all produce
+      this, so the sentence says what happened and refuses to say why.
+
+    The third claim, a newer sweep that STOPPED before it got here, is
+    _newer_unfinished_run_text's and is mutually exclusive with the second on
+    newest_finalised. It is excluded from the first by
+    newer_run_did_not_reach_this_endpoint's own dormancy gate, so no page can
+    print a crash claim and a dormancy claim about one sweep.
+
+    BOTH TIMESTAMPS ARE NAMED, and the verdicts' one comes from
+    measurements.generated_at, which is this endpoint's own sw:currentRun. Not
+    from newest_generated_at, ever: the sweep that declined to look is
+    routinely the newest run in the store, so dating the verdicts by the
+    store's greatest prov:generatedAtTime would report them as fresher than
+    they are, by exactly the gap this sentence exists to disclose.
+    """
+    if measurements.newest_sweep_declined_to_ask_this_endpoint:
+        return (
+            f"The newest sweep, at {measurements.newest_generated_at}, did "
+            f"not ask this endpoint: it recorded the endpoint as dormant and "
+            f"{_dormancy_clause(measurements.newest_dormancy_reason)}. That "
+            f"is a fact about this service's rotation and not a verdict about "
+            f"the endpoint. Nothing above comes from that sweep. What is "
+            f"above is the newest this store holds for this endpoint, from "
+            f"the sweep at {measurements.generated_at}."
+        )
+    if measurements.newest_sweep_recorded_nothing_for_this_endpoint:
+        return (
+            f"The newest sweep, at {measurements.newest_generated_at}, "
+            f"finished and recorded nothing at all for this endpoint, and no "
+            f"run in this store says why. Nothing above comes from that "
+            f"sweep. What is above is the newest this store holds for this "
+            f"endpoint, from the sweep at {measurements.generated_at}."
+        )
+    return None
+
+
 def _legend(rows: list[dict]) -> list[dict]:
     """The seven states, with how many rows on this page are in each.
 
@@ -808,8 +910,25 @@ def _page_context(
         # a later sweep stopped before it reached this endpoint. Both can hold
         # at once, in a store holding two crashed runs, and then both are
         # true and both are said.
+        #
+        # The second and the third are mutually exclusive: a later sweep that
+        # stopped and a later sweep that recorded nothing on purpose are two
+        # readings of one sweep, and only one of them can be right.
         "unfinished_text": _unfinished_run_text(measurements),
         "newer_unfinished_text": _newer_unfinished_run_text(measurements),
+        # The third thing that can be wrong with the sweep named above, and it
+        # is not about that sweep at all: a NEWER sweep recorded nothing here,
+        # so the timestamp above is not the newest this service holds. Its own
+        # sentence, for the same reason as the two above, and the two dormancy
+        # keys beside it are the machine-readable half of it. The reason slug
+        # is passed through rather than the flag alone, so a consumer of the
+        # page reads the value the store holds and not this build's reading of
+        # it; the sentence carries the reading.
+        "newest_silence_text": _newest_sweep_silence_text(measurements),
+        "newest_declined_to_ask": (
+            measurements.newest_sweep_declined_to_ask_this_endpoint
+        ),
+        "newest_dormancy_reason": measurements.newest_dormancy_reason,
         "rows": rows,
         "legend": _legend(rows),
         "sample": _sample(measurements, content),

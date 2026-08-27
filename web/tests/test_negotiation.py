@@ -19,11 +19,12 @@ from html.parser import HTMLParser
 from pathlib import Path
 
 import pytest
-from pyoxigraph import Literal, NamedNode, RdfFormat, Store, parse
+from pyoxigraph import Literal, NamedNode, RdfFormat, Store, Variable, parse
 from starlette.testclient import TestClient
 
-from app import STORE_PATH_VARIABLE, ENDPOINT_PATH, app, get_store
+from app import STORE_PATH_VARIABLE, ENDPOINT_PATH, INDEX_PATH, app, get_store
 from load_run import load_run, rebuild_current
+from queries import read_query
 
 KADASTER = "https://data.kkg.kadaster.nl/query"
 TRUNCATED = "https://truncated.example/sparql"
@@ -1038,3 +1039,166 @@ class _SentenceTexts(HTMLParser):
     def handle_data(self, data):
         if self._open:
             self._buffer.append(data)
+
+
+# ---------------------------------------------------------------------------
+# The dormancy facts, in both machine-readable representations
+# ---------------------------------------------------------------------------
+DORMANT_ENDPOINT = NamedNode(SW + "dormantEndpoint")
+DORMANCY_REASON = NamedNode(SW + "dormancyReason")
+DORMANT_SINCE = NamedNode(SW + "dormantSince")
+DORMANT_SWEEP = "2026-08-27T10:00:00Z"
+DORMANT_SINCE_INSTANT = "2026-08-27T09:30:00Z"
+DATE_TIME = NamedNode("http://www.w3.org/2001/XMLSchema#dateTime")
+
+
+def test_the_turtle_for_a_dormant_endpoint_carries_a_dateable_dormancy(
+    client_for, store_dormant_newest
+):
+    """The HTML says the newest sweep did not ask this endpoint and why. The
+    RDF has to let a machine reach the same claim, and date it.
+
+    Three facts, all of them verbatim from the newest run's graph: the
+    activity's sw:dormantEndpoint naming this endpoint, the endpoint's
+    sw:dormancyReason, and its sw:dormantSince. Dateable is the load-bearing
+    word: the declaration hangs off an activity that carries its own
+    prov:generatedAtTime, so the sweep that declined is identifiable and is
+    distinguishable from the older activity the measurements hang off. Without
+    that a consumer would date the dormancy to the only activity it could find.
+
+    endpoint_description.rq's header makes the widening a rule: the two
+    representations move together or the HTML draws a conclusion the RDF
+    cannot.
+    """
+    client = client_for(store_dormant_newest)
+    shown = texts_with(
+        get(client, KADASTER, accept="text/html"), "data-newest-sweep-silent"
+    )
+    assert len(shown) == 1, "the HTML must be making the claim being compared"
+    assert DORMANT_SWEEP in shown[0]
+
+    graph = graph_of(get(client, KADASTER, accept="text/turtle"))
+    declining = activity_at(DORMANT_SWEEP)
+    endpoint = NamedNode(KADASTER)
+
+    assert has_triple(graph, declining, DORMANT_ENDPOINT, endpoint)
+    assert has_triple(graph, endpoint, DORMANCY_REASON, Literal("operator-hold"))
+    assert has_triple(
+        graph,
+        endpoint,
+        DORMANT_SINCE,
+        Literal(DORMANT_SINCE_INSTANT, datatype=DATE_TIME),
+    )
+    assert has_triple(
+        graph,
+        declining,
+        GENERATED_AT,
+        Literal(DORMANT_SWEEP, datatype=DATE_TIME),
+    ), "the declining activity must be dated, or the dormancy is not dateable"
+    assert has_triple(
+        graph,
+        activity_at(SAMPLING_SWEEP),
+        GENERATED_AT,
+        Literal(SAMPLING_SWEEP, datatype=DATE_TIME),
+    ), "and the activity the verdicts come from must stay distinguishable"
+    assert not has_triple(graph, None, NamedNode(SW + "dormant"), None), (
+        "the derivation's result is not a fact any run graph holds"
+    )
+
+
+def test_the_index_turtle_carries_it_too(client_for, store_dormant_newest):
+    """The same three facts in the index's representation.
+
+    The index and the endpoint page are two views of one set of facts, so a
+    dormancy the endpoint's own document carries and the index's does not would
+    be a fact that exists only if you know which URL to ask. index.rq selects
+    it for the HTML index in this same commit, and the two must widen together
+    for the reason index_description.rq's header gives.
+
+    The declaration names ONE endpoint here, not every endpoint the document
+    describes: the other two of the trio were measured by that sweep, and a
+    dormancy triple about them would be false.
+    """
+    client = client_for(store_dormant_newest)
+    turtle = client.get(INDEX_PATH, headers={"accept": "text/turtle"})
+    assert turtle.status_code == 200
+    graph = graph_of(turtle)
+
+    declining = activity_at(DORMANT_SWEEP)
+    assert {
+        quad.object.value
+        for quad in graph.quads_for_pattern(declining, DORMANT_ENDPOINT, None)
+    } == {KADASTER}
+    assert has_triple(
+        graph, NamedNode(KADASTER), DORMANCY_REASON, Literal("operator-hold")
+    )
+    assert has_triple(
+        graph,
+        NamedNode(KADASTER),
+        DORMANT_SINCE,
+        Literal(DORMANT_SINCE_INSTANT, datatype=DATE_TIME),
+    )
+    assert has_triple(
+        graph, declining, GENERATED_AT, Literal(DORMANT_SWEEP, datatype=DATE_TIME)
+    )
+
+
+def test_neither_description_query_describes_an_endpoint_the_html_omits(
+    client_for, store_dormancy_alone
+):
+    """A dormancy-only endpoint stays a 404, and the RDF stays in lockstep.
+
+    An endpoint the newest run only declared dormant has no sw:currentRun, so
+    both read queries return zero rows for it and app.py's knownness test 404s
+    it. That test is deliberately NOT widened here: the comment above it
+    (app.py, at the `not measurements.assessed and not content.sampled` line)
+    argues this position already, and widening it would mean widening
+    endpoint_content.rq's metric pin, which belongs to spec stage 2b.
+
+    So the dormancy branch in both description queries is keyed on the endpoint
+    having that pointer. Without the key the index document would carry a
+    dormancy for a resource the index does not list and the endpoint document
+    would describe one the server will not serve, against
+    endpoint_description.rq's own rule that the two representations widen
+    together.
+    """
+    client = client_for(store_dormancy_alone)
+    assert get(client, KADASTER, accept="text/html").status_code == 404
+    assert get(client, KADASTER, accept="text/turtle").status_code == 404
+
+    index = graph_of(client.get(INDEX_PATH, headers={"accept": "text/turtle"}))
+    assert not has_triple(index, None, DORMANT_ENDPOINT, NamedNode(KADASTER)), (
+        "the index does not list this endpoint, so its document may not "
+        "describe it"
+    )
+    assert not has_triple(index, NamedNode(KADASTER), DORMANCY_REASON, None)
+    assert not has_triple(index, NamedNode(KADASTER), DORMANT_SINCE, None)
+    # And the endpoints that sweep DID measure are still described, so this is
+    # not passing because the document is empty.
+    assert has_triple(
+        index, None, NamedNode(DQV + "computedOn"), NamedNode(QLEVER)
+    )
+
+    # The endpoint's OWN description query, asked directly, because the route
+    # 404s before it is reached and the guard there would otherwise be
+    # untested: a CONSTRUCT that emitted a dormancy for this endpoint would be
+    # the document for a resource this server refuses to serve.
+    described = list(
+        store_dormancy_alone.query(
+            read_query("endpoint_description"),
+            substitutions={Variable("endpoint"): NamedNode(KADASTER)},
+        )
+    )
+    predicates = {triple.predicate for triple in described}
+    assert DORMANT_ENDPOINT not in predicates
+    assert DORMANCY_REASON not in predicates
+    assert DORMANT_SINCE not in predicates
+    # What the arm does still emit for an endpoint it knows nothing about is
+    # the newest activity's own run-level facts, which it emitted before this
+    # commit too: that arm is deliberately not scoped to ?endpoint, and the
+    # route 404s before the document is ever built. The dormancy branch is the
+    # part that had to be keyed, because a dormancy names an endpoint and those
+    # facts name only the run.
+    assert {triple.subject for triple in described} == {
+        activity_at(DORMANT_SWEEP)
+    }

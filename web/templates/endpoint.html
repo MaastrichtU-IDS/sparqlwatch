@@ -143,6 +143,19 @@
      first one, and both appear when both are true. #}
   <p class="note warn-note" data-newer-run-unfinished="true">{{ newer_unfinished_text }}</p>
   {% endif %}
+  {% if newest_silence_text %}
+  {# A later sweep recorded nothing for this endpoint, either on purpose or
+     because it never intended to ask. Said here for the same reason as the two
+     above: it qualifies that timestamp and nothing else on the page.
+
+     The two attributes are the machine-readable half of the sentence, not a
+     drawing: dormancy gets no chip, no metric row and no legend entry, because
+     it is not a finding about the endpoint and the seven states of
+     docs/design/verdict-encoding.md are a closed set. #}
+  <p class="note warn-note" data-newest-sweep-silent="true"
+     {%- if newest_declined_to_ask %} data-newest-sweep-dormant="true"{% endif %}
+     {%- if newest_dormancy_reason %} data-dormancy-reason="{{ newest_dormancy_reason }}"{% endif %}>{{ newest_silence_text }}</p>
+  {% endif %}
 
   <section>
     <h2>Conformance, attribute by attribute</h2>

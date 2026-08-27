@@ -136,7 +136,22 @@ CONSTRUCT {
                   prov:generatedAtTime ?newestGeneratedAt ;
                   sw:emission ?newestEmission ;
                   sw:finalised ?newestFinalised ;
-                  sw:completedEndpoint ?newestCompleted .
+                  sw:completedEndpoint ?newestCompleted ;
+                  sw:dormantEndpoint ?newestDormant .
+  # The declaration's own two facts, on the endpoint. Hung off ?newestDormant
+  # rather than off ?endpoint so that they drop with the declaration: ?endpoint
+  # is substituted and is therefore bound in every solution, so a template
+  # triple with it as subject would be emitted for every endpoint this query is
+  # ever asked about.
+  #
+  # sw:dormantSince is emitted although the HTML draws no sentence from it. That
+  # is not a widening past the HTML: it is the instant the endpoint was
+  # relegated, it is in the same group the prober wrote, and the rule this file
+  # keeps is that the RDF must never be able to claim LESS than the HTML, not
+  # that it must claim exactly as much. The document already carries more than
+  # the page in the same way for the run-level facts.
+  ?newestDormant sw:dormancyReason ?newestDormancyReason ;
+                 sw:dormantSince ?newestDormantSince .
   # No rdf:type triple for the sample, even though every committed run
   # carries one: this branch's WHERE clause matches exactly what
   # endpoint_content.rq matches, so that a sample the HTML representation
@@ -309,6 +324,39 @@ WHERE {
         ?newestActivity sw:completedEndpoint ?endpoint .
         BIND (?endpoint AS ?newestCompleted)
       }
+    }
+    # Whether the newest run declared THIS endpoint dormant, and the reason and
+    # the instant it published beside the declaration. The HTML representation
+    # says the newest sweep did not ask this endpoint and why; these are the
+    # facts it draws that from, and the two must widen together or the HTML
+    # draws a conclusion the RDF cannot (see this file's header).
+    #
+    # The declaration is dateable because it hangs off ?newestActivity, whose
+    # prov:generatedAtTime the branch above already emits. That matters more
+    # here than anywhere else: a dormant endpoint's verdicts come from an OLDER
+    # run, so the document holds two activities, and a dormancy that named
+    # neither would invite a consumer to date it to the sweep that took the
+    # measurements rather than to the sweep that declined to take any.
+    #
+    # KEYED ON sw:currentRun, and that key is the whole reason this OPTIONAL
+    # reaches outside the GRAPH ?newestRun block. An endpoint the newest run
+    # ONLY declared dormant has no measurement, no decline and no sample, so
+    # both SELECT queries return zero rows for it and web/app.py 404s it: see
+    # the comment above app.py's knownness test, which argues that position and
+    # why widening it belongs to spec stage 2b. Without this key the fourth arm,
+    # which is the one arm here not scoped to a pointer, would describe an
+    # endpoint the server will not serve.
+    #
+    # Only the newest run's declaration is read, for the reason
+    # web/queries/index.rq gives at the same point.
+    OPTIONAL {
+      GRAPH ?newestRun {
+        ?newestActivity sw:dormantEndpoint ?endpoint .
+        BIND (?endpoint AS ?newestDormant)
+        OPTIONAL { ?endpoint sw:dormancyReason ?newestDormancyReason }
+        OPTIONAL { ?endpoint sw:dormantSince ?newestDormantSince }
+      }
+      GRAPH sw:current { ?endpoint sw:currentRun ?dormantEndpointIsKnown }
     }
   }
 }

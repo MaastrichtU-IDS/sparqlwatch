@@ -84,7 +84,13 @@ CONSTRUCT {
                   prov:generatedAtTime ?newestGeneratedAt ;
                   sw:emission ?newestEmission ;
                   sw:finalised ?newestFinalised ;
-                  sw:completedEndpoint ?newestCompleted .
+                  sw:completedEndpoint ?newestCompleted ;
+                  sw:dormantEndpoint ?newestDormant .
+  # The declaration's own two facts. Their subject is ?newestDormant, which is
+  # bound only in the arm below, so they drop everywhere else. See that arm on
+  # why the variable is a fresh one rather than ?endpoint.
+  ?newestDormant sw:dormancyReason ?newestDormancyReason ;
+                 sw:dormantSince ?newestDormantSince .
 }
 WHERE {
   {
@@ -182,6 +188,41 @@ WHERE {
       OPTIONAL { ?newestActivity sw:emission ?newestEmission }
       OPTIONAL { ?newestActivity sw:finalised ?newestFinalised }
       OPTIONAL { ?newestActivity sw:completedEndpoint ?newestCompleted }
+    }
+    # Which endpoints that run declared dormant, with the reason and the instant
+    # it published for each. A FRESH VARIABLE, mirroring ?newestCompleted just
+    # above, and NOT ?endpoint. This arm binds no ?endpoint of its own, and the
+    # other two arms use that name for the endpoint a measurement or a decline
+    # is about, so binding it here would give one name two meanings across the
+    # arms of one UNION. The triples emitted happen to be the same either way
+    # today, because every template triple that mentions ?endpoint also names a
+    # subject this arm never binds and so drops; that is a property of the
+    # template as it stands and not one to write a branch against.
+    #
+    # The declaration is dateable because it hangs off ?newestActivity, whose
+    # prov:generatedAtTime this arm already emits. Emitted for EVERY endpoint
+    # the run names here, unlike in endpoint_description.rq where it is scoped
+    # to the one endpoint that document describes, and for the same reason the
+    # completion marker above is: this document describes every endpoint in the
+    # index, so each declaration is a fact about a resource it describes.
+    #
+    # KEYED ON sw:currentRun, which is what makes the sentence above true. An
+    # endpoint the newest run ONLY declared dormant has no measurement and no
+    # decline, so no row of web/queries/index.rq mentions it and the index does
+    # not list it. Unkeyed, this arm would carry a dormancy for a resource the
+    # index omits, and both representations of this one resource have to
+    # describe the same set of endpoints. See the comment above web/app.py's
+    # knownness test for why the omission is right and not widened here.
+    #
+    # Only the newest run's declaration is read, for the reason
+    # web/queries/index.rq gives at the same point.
+    OPTIONAL {
+      GRAPH ?newestRun {
+        ?newestActivity sw:dormantEndpoint ?newestDormant .
+        OPTIONAL { ?newestDormant sw:dormancyReason ?newestDormancyReason }
+        OPTIONAL { ?newestDormant sw:dormantSince ?newestDormantSince }
+      }
+      GRAPH sw:current { ?newestDormant sw:currentRun ?dormantEndpointIsListed }
     }
   }
 }
