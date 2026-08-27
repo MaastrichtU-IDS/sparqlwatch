@@ -15,15 +15,24 @@
 //! A `--wake` on the sweeper would sit in the same argv as a cron job's, and the
 //! first accident would be a scheduled run that quietly lifted a hold.
 //!
-//! **Every mutation goes through `state_file::merge_state`**, so none of them
-//! can race a sweep. The race is concrete: a sweep reads the state at 19:45 and
-//! finishes at 21:11, and a `sleep` at 20:10 sits inside that window. What
-//! makes it safe is that `merge_state` takes the lock, re-reads the file INSIDE
-//! it, and applies the closure to what is on disk at that moment, so this
-//! binary never holds a `State` it might write back. There is no `--force` and
-//! no way to write the file without the lock: a refusal that says which process
-//! holds it is the whole answer, and an override would be a way to lose a
-//! sweep's ninety minutes of strikes.
+//! **Every mutation that reads before it writes goes through
+//! `state_file::merge_state`**, so none of them can race a sweep. The race is
+//! concrete: a sweep reads the state at 19:45 and finishes at 21:11, and a
+//! `sleep` at 20:10 sits inside that window. What makes it safe is that
+//! `merge_state` takes the lock, re-reads the file INSIDE it, and applies the
+//! closure to what is on disk at that moment, so this binary never holds a
+//! `State` it might write back. There is no `--force`: a refusal that says which
+//! process holds the lock is the whole answer, and an override would be a way to
+//! lose a sweep's ninety minutes of strikes.
+//!
+//! `init` is the one write that does NOT take the lock, and it is not an
+//! exception to the rule so much as the one case the rule is not about. It
+//! reads nothing, so there is no snapshot to lose: it either creates the file or
+//! finds one there. Its exclusion is `O_EXCL`, which is stronger than the lock
+//! for the one race an init can lose, and taking a lock as well would only add
+//! a file to clean up on the path that refuses. `state_file::init_state`
+//! documents that, and it is why `init` is absent from
+//! `dormancy_cli.rs`'s `every_mutation_goes_through_the_lock_so_it_cannot_race_a_sweep`.
 //!
 //! **`list` is the one subcommand that takes no lock**, because it writes
 //! nothing and an operator whose sweep is mid-flight is exactly the operator
@@ -80,10 +89,17 @@ enum Command {
     /// Put an endpoint back in every sweep, with a grace period during which
     /// the machine may not relegate it again.
     Wake {
-        /// The endpoint url, exactly as `endpoints.toml` spells it. A url
-        /// carrying a stray space is refused rather than written, because such
-        /// an entry compares equal to nothing the sweep probes: the file would
-        /// then say the endpoint is held while every sweep probes it.
+        /// The endpoint url, exactly as `endpoints.toml` spells it.
+        ///
+        /// Leading and trailing whitespace is TRIMMED, not refused, and nothing
+        /// else about the string is checked: only a url that is blank once
+        /// trimmed is refused, because it is about no endpoint at all. So this
+        /// is not the flag that catches a mis-paste. A url differing from the
+        /// registry's by anything but surrounding whitespace is accepted and
+        /// written, and it then compares equal to nothing the sweep probes: the
+        /// file says the endpoint is held while every sweep probes it. What
+        /// catches that is reading back what was written, which is why this
+        /// command prints the entry it left rather than reporting success.
         url: String,
         /// Why. Required and refused when blank, on the rule
         /// `registry/exclusions.toml` sets for its own entries: a decision that
@@ -95,14 +111,21 @@ enum Command {
         /// changes it.
         #[arg(long)]
         pin: bool,
-        /// How long the grace lasts, in whole days, when `--pin` is not given.
+        /// How long the grace lasts, in whole days. Refused together with
+        /// `--pin`, which is the wake that has no expiry at all: a pair of flags
+        /// that contradict each other is one this command refuses rather than
+        /// resolves quietly, because silently discarding the number an operator
+        /// typed leaves them believing a grace was set. clap does not count a
+        /// defaulted value as present, so the conflict fires only when both are
+        /// really typed.
         ///
-        /// The flag lives here and not only on the prober because THIS is the
-        /// only caller of `dormancy::wake`, which is the only code that reads
-        /// the number: the expiry is computed once, at wake time, and stored in
-        /// the file as an instant. The sweeper's `--dormant-grace-days` reaches
-        /// no code that can use it.
-        #[arg(long, default_value_t = DEFAULT_GRACE)]
+        /// The flag lives here and nowhere else because THIS is the only caller
+        /// of `dormancy::wake`, which is the only code that reads the number:
+        /// the expiry is computed once, at wake time, and stored in the file as
+        /// an instant. A `--dormant-grace-days` on the sweeper could be parsed
+        /// and threaded through the whole policy without changing anything, so
+        /// it was removed rather than left to mislead.
+        #[arg(long, default_value_t = DEFAULT_GRACE, conflicts_with = "pin")]
         grace_days: NonZeroU64,
         /// The instant this decision was taken, exactly `YYYY-MM-DDTHH:MM:SSZ`.
         /// Required and never read from the clock. See the module header.
@@ -114,9 +137,24 @@ enum Command {
     /// expresses: a request from its admin, a cost nobody wants to pay, a
     /// machine that is being migrated.
     Sleep {
+        /// The endpoint url, exactly as `endpoints.toml` spells it. Trimmed and
+        /// not otherwise checked, as on `wake`: only a blank url is refused, and
+        /// the entry this command prints is how a mis-paste is caught.
         url: String,
+        /// Why. Required and refused when blank, on the rule
+        /// `registry/exclusions.toml` sets for its own entries: a decision that
+        /// cannot say why it was taken is one nobody can review in a year. It
+        /// matters most here, because this is the direction that takes an
+        /// endpoint out of every sweep until a person puts it back, and the
+        /// reason is all the next operator has to decide whether that is safe.
         #[arg(long, value_parser = clap::builder::NonEmptyStringValueParser::new())]
         reason: String,
+        /// The instant this decision was taken, exactly `YYYY-MM-DDTHH:MM:SSZ`:
+        /// UTC, no offset, no fractional second, no leap second. Required and
+        /// never read from the clock. It becomes this endpoint's
+        /// `dormant_since` if it has none, which the run graphs then publish,
+        /// so it is a decision and not a side effect of when the terminal was
+        /// free. See the module header for the other reason it has no default.
         #[arg(long)]
         at: String,
     },
@@ -233,9 +271,14 @@ fn sleep(path: &Path, url: &str, reason: &str, at: &str) -> anyhow::Result<()> {
 }
 
 /// What one mutation left behind, read back out of what was actually written
-/// rather than out of the arguments: the entry is the record, and an operator
-/// who typed a url with a trailing slash needs to see the url that is now in
-/// the file.
+/// rather than out of the arguments.
+///
+/// The entry is the record, and the argument is not: `checked_url` TRIMS
+/// surrounding whitespace, so an operator who pasted a url with a trailing
+/// space has a hold on a string they did not type. Printing the entry is what
+/// shows them the url now in the file. It is also the only check on a url that
+/// differs from the registry's in some way trimming does not fix, since nothing
+/// here compares the url against the endpoint list.
 fn report(path: &Path, written: &State, url: &str) {
     match written.get(url.trim()) {
         Some(entry) => {

@@ -203,6 +203,19 @@ fn waking_an_endpoint_the_state_does_not_know_still_records_the_hold() {
     ]);
 
     assert!(out.status.success(), "the wake must succeed: {}", stderr(&out));
+    // What the operator over ssh actually sees. Asserted because it is the only
+    // confirmation they get and because it is the only check on a url that was
+    // trimmed or mistyped: `checked_url` trims surrounding whitespace and
+    // compares nothing against the registry, so the printed entry is where a
+    // paste that went wrong becomes visible. Delete the print and this reds.
+    let said = stdout(&out);
+    assert!(said.contains(A), "the entry that was written must be printed: {said}");
+    assert!(
+        said.contains("admin says it is fixed"),
+        "with the reason now in the file, so a wrong one is seen at once: {said}"
+    );
+    assert!(said.contains("2026-09-02T19:45:00Z"), "and the expiry computed for it: {said}");
+
     let written = read_state(&state).unwrap();
     let entry = written.get(A).expect("the url the state had never seen must now have an entry");
     assert_eq!(
@@ -236,6 +249,55 @@ fn a_pinned_wake_records_a_hold_with_no_expiry() {
     assert_eq!(
         read_state(&state).unwrap().get(A).unwrap().hold,
         Some(Hold::Awake { reason: "watched by hand".to_string(), until: None })
+    );
+}
+
+/// `--pin` and `--grace-days` contradict each other, so passing both is refused
+/// rather than resolved.
+///
+/// Resolving it quietly is the failure this closes: `--pin` won, the hold was
+/// written with no expiry, and the operator who typed `--grace-days 30` was told
+/// nothing and would have believed a thirty day grace was in place. clap does
+/// not count a defaulted value as present, so a plain `--pin` still works, which
+/// is the other half of what this asserts.
+#[test]
+fn pin_and_an_explicit_grace_contradict_each_other_and_are_refused() {
+    let dir = tempdir("wake-pin-grace");
+    let state = state_path(&dir);
+    init_state(&state).unwrap();
+    let state_arg = state.to_str().unwrap();
+
+    let both = dormancy(&[
+        "wake", A, "--reason", "watched by hand", "--pin", "--grace-days", "30",
+        "--state", state_arg, "--at", AT,
+    ]);
+    assert!(!both.status.success(), "--pin with an explicit --grace-days must be refused");
+    let said = stderr(&both);
+    assert!(said.contains("--pin"), "the refusal must name both flags: {said}");
+    assert!(said.contains("--grace-days"), "the refusal must name both flags: {said}");
+    assert_eq!(
+        read_state(&state).unwrap().endpoint,
+        Vec::new(),
+        "and write nothing at all"
+    );
+
+    // The default must not count as present, or `--pin` alone would refuse too.
+    let pinned =
+        dormancy(&["wake", A, "--reason", "watched by hand", "--pin", "--state", state_arg, "--at", AT]);
+    assert!(pinned.status.success(), "--pin alone must still work: {}", stderr(&pinned));
+    // And an explicit --grace-days without --pin.
+    let graced = dormancy(&[
+        "wake", B, "--reason", "two days is enough", "--grace-days", "2",
+        "--state", state_arg, "--at", AT,
+    ]);
+    assert!(graced.status.success(), "{}", stderr(&graced));
+    assert_eq!(
+        read_state(&state).unwrap().get(B).unwrap().hold,
+        Some(Hold::Awake {
+            reason: "two days is enough".to_string(),
+            until: Some("2026-08-28T19:45:00Z".to_string()),
+        }),
+        "and --grace-days must reach the expiry, since nothing else can set it"
     );
 }
 
@@ -291,6 +353,13 @@ fn sleeping_a_new_url_leaves_a_state_the_prober_can_still_read() {
         "--at", AT,
     ]);
     assert!(out.status.success(), "{}", stderr(&out));
+    let said = stdout(&out);
+    assert!(said.contains(A), "the entry written must be printed: {said}");
+    assert!(said.contains("its admin asked"), "with its reason: {said}");
+    assert!(
+        said.contains("dormant"),
+        "and the direction, since a sleep and a wake print the same shape: {said}"
+    );
 
     let written = read_state(&state).expect("the prober must still be able to read this file");
     let entry = written.get(A).unwrap();
@@ -379,6 +448,15 @@ fn init_writes_a_state_a_sweep_can_read() {
     let out = dormancy(&["init", "--state", state.to_str().unwrap()]);
 
     assert!(out.status.success(), "{}", stderr(&out));
+    // Naming the path it wrote, because `--state` has a default relative to the
+    // working directory and the commonest way to get this wrong is to
+    // bootstrap a file somewhere nothing will ever look. A silent success also
+    // reads like a no-op.
+    let said = stdout(&out);
+    assert!(
+        said.contains(state.to_str().unwrap()),
+        "init must say which file it created: {said}"
+    );
     let written = read_state(&state).expect("init's output must be readable");
     assert_eq!(written, State::empty());
 }
@@ -665,6 +743,14 @@ fn prune_asks_the_exclusion_list_and_a_hold_still_outranks_it() {
 /// write-back nor destroy the sweep's strikes. A planted lock stands in for the
 /// sweep, and a mutation that could reach the file around `merge_state` would
 /// not notice it.
+///
+/// **`init` is deliberately not in the list, and its absence is not an
+/// oversight.** It reads nothing before it writes, so it has no snapshot to
+/// lose, which is the only thing the lock protects. Its exclusion is `O_EXCL`
+/// through `create_new`, which is stronger than the lock for the one race an
+/// init can lose, and `init_refuses_a_state_that_already_exists_and_changes_nothing`
+/// is where that is asserted. Adding it here would assert the opposite of what
+/// `state_file::init_state` documents.
 #[test]
 fn every_mutation_goes_through_the_lock_so_it_cannot_race_a_sweep() {
     let dir = tempdir("lock");

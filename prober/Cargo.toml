@@ -5,7 +5,7 @@ edition = "2021"
 rust-version = "1.96"
 # The sweeper, so a bare `cargo run` stays the sweeper now that `seed-registry`
 # and `dormancy` are `[[bin]]` targets beside it. Without this key cargo refuses
-# to choose, and README.md:69 and :1591 and src/bin/seed-registry.rs:11 all
+# to choose, and README.md:69 and :1622 and src/bin/seed-registry.rs:11 all
 # instruct a bare `cargo run`.
 default-run = "sparqlwatch-prober"
 

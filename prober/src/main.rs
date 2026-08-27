@@ -171,19 +171,9 @@ struct Args {
     /// seventh of the dormant set each and a weekly sweep takes all of it.
     #[arg(long, default_value_t = DEFAULT_DORMANT_CADENCE)]
     dormant_every_days: NonZeroU64,
-    /// How many days a hand `dormancy wake` protects an endpoint from being
-    /// relegated again by the machine.
-    ///
-    /// The spec's word is that a wake "makes it immune from automatic relegation
-    /// for seven days", and immunity means the endpoint counts toward neither
-    /// the slice nor the published dormant count during it. Strikes still
-    /// accumulate underneath, so relegation after the grace lapses costs two
-    /// fresh post-grace sweeps rather than landing the moment it expires.
-    #[arg(long, default_value_t = DEFAULT_DORMANT_GRACE)]
-    dormant_grace_days: NonZeroU64,
 }
 
-/// The three counted dormancy defaults as values of their own `NonZero` types.
+/// The two counted dormancy defaults as values of their own `NonZero` types.
 ///
 /// Named constants for the reason `DEFAULT_CONCURRENCY` records: `default_value_t`
 /// needs a value of the field's type, and `NonZeroU32::new(2).unwrap()` inside
@@ -194,7 +184,6 @@ struct Args {
 /// `default_value_t` were changed to name something else.
 const DEFAULT_DORMANT_STRIKES: NonZeroU32 = NonZeroU32::new(DEFAULT_STRIKES).unwrap();
 const DEFAULT_DORMANT_CADENCE: NonZeroU64 = NonZeroU64::new(DEFAULT_CADENCE_DAYS).unwrap();
-const DEFAULT_DORMANT_GRACE: NonZeroU64 = NonZeroU64::new(DEFAULT_GRACE_DAYS).unwrap();
 
 /// The four numbers the admission policy is calibrated against, gathered from
 /// the flags that carry them.
@@ -203,12 +192,26 @@ const DEFAULT_DORMANT_GRACE: NonZeroU64 = NonZeroU64::new(DEFAULT_GRACE_DAYS).un
 /// policies inside one run: the plan decides what is probed and the update
 /// decides what that means, and a sweep whose two halves disagreed would skip an
 /// endpoint on one cadence and record it against another.
+/// **`grace_days` comes from the policy and not from a flag, because a sweep
+/// never reads it.** `Thresholds::grace_days` has exactly one reader,
+/// `dormancy::wake`, which computes a hold's expiry once and stores it in the
+/// state file as an instant; nothing in this binary calls `wake`. So the
+/// `--dormant-grace-days` this field used to carry could be typed, parsed and
+/// threaded through `plan_sweep` and `update` without changing anything at all,
+/// which is worse than not offering it: an operator who set it would believe a
+/// grace period had been shortened. The flag that DOES decide a grace is
+/// `dormancy wake --grace-days`, on the binary that owns the decision. The value
+/// is still filled in here rather than left out, because `Thresholds` is one
+/// value the whole policy shares and a second constructor for it is how the two
+/// halves of a sweep come to disagree.
 fn thresholds_from(args: &Args) -> Thresholds {
     Thresholds {
         cost_ms: args.dormant_cost_ms,
         strikes: args.dormant_strikes,
         cadence_days: args.dormant_every_days,
-        grace_days: args.dormant_grace_days,
+        // Unwrap on a literal const, like the two above it: unreachable unless
+        // somebody edits `DEFAULT_GRACE_DAYS` to zero, which is not a grace.
+        grace_days: NonZeroU64::new(DEFAULT_GRACE_DAYS).unwrap(),
     }
 }
 
@@ -705,10 +708,15 @@ mod tests {
         assert!(err.contains("30000"), "names the floor to stay at or above: {err}");
     }
 
-    /// The five dormancy defaults, pinned on the PARSED args rather than on the
+    /// The four dormancy defaults, pinned on the PARSED args rather than on the
     /// `DEFAULT_*` constants, for the reason the cost ceiling's test records:
     /// asserting on the constant would still pass if `default_value_t` were
     /// changed to name something else.
+    ///
+    /// Four and not five: there is no `--dormant-grace-days`, because a sweep
+    /// never reads a grace. The equality against `Thresholds::default()` below
+    /// is what still pins the grace this binary hands the policy, and
+    /// `thresholds_from` says why it is a constant here.
     #[test]
     fn the_dormancy_defaults_are_the_calibrated_ones() {
         let args = Args::parse_from(["prober", "--at", "2026-01-01T00:00:00Z"]);
@@ -716,7 +724,14 @@ mod tests {
         assert_eq!(args.dormant_cost_ms, 60_000);
         assert_eq!(args.dormant_strikes.get(), 2);
         assert_eq!(args.dormant_every_days.get(), 7);
-        assert_eq!(args.dormant_grace_days.get(), 7);
+        assert!(
+            Args::try_parse_from([
+                "prober", "--at", "2026-01-01T00:00:00Z", "--dormant-grace-days", "14"
+            ])
+            .is_err(),
+            "a flag a sweep cannot read must not be offered: the grace is set by \
+             `dormancy wake --grace-days`"
+        );
         assert_eq!(
             thresholds_from(&args),
             Thresholds::default(),
@@ -724,16 +739,15 @@ mod tests {
         );
     }
 
-    /// A zero in any of the three counted flags is refused by the parser rather
-    /// than repaired downstream, the same argument `--concurrency` records.
-    /// Zero strikes would relegate an endpoint on its first silent sweep, and a
-    /// zero cadence or grace divides by nothing.
+    /// A zero in either counted flag is refused by the parser rather than
+    /// repaired downstream, the same argument `--concurrency` records. Zero
+    /// strikes would relegate an endpoint on its first silent sweep, and a zero
+    /// cadence divides by nothing.
     #[test]
     fn a_zero_in_a_counted_dormancy_flag_is_refused_by_the_parser() {
         for (flag, value) in [
             ("--dormant-strikes", "0"),
             ("--dormant-every-days", "0"),
-            ("--dormant-grace-days", "0"),
         ] {
             assert!(
                 Args::try_parse_from(["prober", "--at", "2026-01-01T00:00:00Z", flag, value])

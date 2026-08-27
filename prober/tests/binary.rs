@@ -242,7 +242,7 @@ fn overlapped(arrivals: &[&str]) -> bool {
 /// A bare `cargo run` in `prober/` has to be the sweeper.
 ///
 /// THREE `[[bin]]` targets and no `default-run` key make `cargo run` an error
-/// instead of a sweep, and a bare `cargo run` is what `README.md:69`, `:1591`
+/// instead of a sweep, and a bare `cargo run` is what `README.md:69`, `:1622`
 /// and `src/bin/seed-registry.rs:11` instruct. The third target is `dormancy`,
 /// the operator's override, added with stage 2's dormancy work; the assertion
 /// below did not have to change for it, but the count in this sentence is part

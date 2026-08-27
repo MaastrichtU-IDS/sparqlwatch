@@ -83,7 +83,14 @@ cargo run -- --at 2026-08-20T12:00:00Z --out run.nq
 | `--dormant-cost-ms` | `60000` | Summed per-metric `elapsedMs` for one endpoint above which a sweep that confirmed nothing is a strike. Refused below `30000`, one request budget |
 | `--dormant-strikes` | `2` | Consecutive expensive silent sweeps that relegate an endpoint |
 | `--dormant-every-days` | `7` | How often a relegated endpoint is probed anyway, in whole days |
-| `--dormant-grace-days` | `7` | Reaches no code on this binary. The grace is computed once, at wake time, and stored as an instant, so the flag that decides it is `dormancy wake --grace-days`. Kept here because the sweeper builds the whole `Thresholds` value in one place |
+
+There is deliberately **no `--dormant-grace-days`** here. A hand wake's grace is
+computed once, at wake time, and stored in the state file as an instant, so the
+only code that reads the number is `dormancy::wake` and the only binary that
+calls it is `dormancy`. The flag existed on the sweeper until 2026-08-27 and
+reached nothing: it could be typed, parsed and threaded through the whole policy
+without changing anything, which is worse than not offering it. `dormancy wake
+--grace-days` is where the grace is set.
 
 `prober/state/` is **git-ignored**, because the state file is machine-written and
 every sweep rewrites it. So a fresh checkout and a container image both need
@@ -112,8 +119,8 @@ working directory like `--endpoints` and `--exclusions`.
 | Subcommand | Flags | What it does |
 | --- | --- | --- |
 | `init` | | Writes an empty state file, creating the directory above it, and **refuses one that exists**. The only thing that creates the file |
-| `list` | | Prints the state: dormant endpoints first, then by url, with `updated_at` and `last_sweep_at` above them. Takes no lock |
-| `wake` | `<URL> --reason --at [--pin] [--grace-days 7]` | Puts an endpoint back in every sweep, clears its strikes and its relegation, and protects it from being relegated again for `--grace-days`. `--pin` never lapses |
+| `list` | | Prints the state: dormant endpoints first, then by url, with `updated_at` and `last_sweep_at` above them. Takes no lock and reads no clock |
+| `wake` | `<URL> --reason --at [--pin] [--grace-days 7]` | Puts an endpoint back in every sweep, clears its strikes and its relegation, and protects it from being relegated again for `--grace-days`. `--pin` never lapses, and is refused together with an explicit `--grace-days` rather than silently winning |
 | `sleep` | `<URL> --reason --at` | Takes an endpoint out of every sweep, permanently until a person wakes it |
 | `prune` | `--endpoints [--exclusions] [--dry-run]` | Drops the entries for endpoints the registry no longer lists, printing every url it drops. A **held** entry is kept whatever the registry says |
 
@@ -140,14 +147,38 @@ flag rather than about a file it has not created yet. `prune` takes no `--at`,
 because it records no decision about an endpoint and moves no instant in the
 file: it only drops entries the registry stopped naming.
 
-**Every mutation goes through `merge_state`**, which takes the lock, re-reads
-the file inside it, and applies the change to what is on disk at that moment.
-So a `sleep` at 20:10 cannot be destroyed by, nor destroy, a sweep that read the
-state at 19:45 and finishes at 21:11. There is no `--force`: a refusal naming
-the process that holds the lock is the whole answer, and an override would be a
-way to lose ninety minutes of measured strikes. `list` and `prune --dry-run`
-take no lock at all, because they write nothing and the operator who most needs
-to look is the one whose sweep is mid-flight.
+**Every mutation that reads before it writes goes through `merge_state`**, which
+takes the lock, re-reads the file inside it, and applies the change to what is on
+disk at that moment. So a `sleep` at 20:10 cannot be destroyed by, nor destroy, a
+sweep that read the state at 19:45 and finishes at 21:11. There is no `--force`:
+a refusal naming the process that holds the lock is the whole answer, and an
+override would be a way to lose ninety minutes of measured strikes. `list` and
+`prune --dry-run` take no lock at all, because they write nothing and the
+operator who most needs to look is the one whose sweep is mid-flight.
+
+`init` takes no lock either, and it is the one write that does not. It reads
+nothing before it writes, so there is no snapshot to lose, and its exclusion is
+the `O_EXCL` in `create_new`, which is stronger than the lock for the one race an
+init can lose: two inits at once, one of which is refused. A lock around it would
+only add a file to clean up on the path that refuses.
+
+**`list` prints a hold's expiry, not whether it has passed.** It reads no clock,
+like everything else here, so it has nothing to compare an `until` against: a
+grace that ran out last week still reads `hold: awake until <a past instant>`.
+Compare it against today by eye. The field that records a grace the machine has
+ALREADY taken back is different and is printed differently, as `lapsed hold`:
+`update` moves an `Awake` hold's reason there on the first sweep after it
+expires, so `hold:` means the state file still carries the hold and `lapsed
+hold` means a sweep has since cleared it.
+
+**Getting an endpoint back under machine control** takes two steps, because there
+is no `release` subcommand: nothing here removes a hold outright, and `wake` and
+`sleep` each replace the other's. Run `wake <URL> --reason ... --grace-days 1`
+and let the next sweep clear it, which is `update` rule A doing what it does to
+any lapsed grace. Or edit the state file and delete the `[endpoint.hold]` table:
+the file's own header declares hand editing supported and checked, and every
+field an edit can reach is validated on the next read. A `release` is noted as
+later work rather than added, because the two-step is not wrong, only wordy.
 
 **`prune` needs `--exclusions`** because it compares the state against
 `load_endpoints`, which subtracts the excluded hosts, and that decides the
