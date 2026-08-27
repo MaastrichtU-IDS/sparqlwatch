@@ -314,13 +314,14 @@
       merely missing; a dotted border means we did not look; and no border at all
       means nothing was there.
 
-      TWO NUMBERS, because they answer different questions. "chips" is how many
-      chips on this page are in that state, which is what this list counted
-      before it was clickable. "rows" is how many endpoints have that state and
-      no other, which is what pressing it filters to, and a declined metric is
-      left out of that test: counting it would make no row uniform in anything
-      and every row number here would be 0, which would be a fact about the
-      arithmetic and not about any endpoint.
+      TWO NUMBERS, because they answer different questions, and both are over
+      the rows a filter leaves rather than over the whole page. "chips" counts
+      every chip drawn in that state, a declined one included, which is what
+      this list counted before it was clickable. "rows" counts the endpoints
+      whose every recorded verdict is that state and nothing else, and there a
+      declined metric is left out: counting it would make no row uniform in
+      anything and every row number here would read 0 forever, which would be a
+      fact about the arithmetic and not about any endpoint.
     </p>
     <p class="note">
       A chip on this page carries no words, so this is the one page where a state
@@ -485,7 +486,12 @@
   var total = document.querySelectorAll("[data-endpoint]").length;
   var empty = document.getElementById("nothing");
   var POSITIVE = { "verified": 1, "undeclared-but-verified": 1 };
-  var NAMES = ["availability", "metric", "state"];
+  /* The facet groups, read off the document rather than written here. A
+     fourth group added to the template used to be counted as a state by
+     inGroup's fall-through and would have filtered nothing, silently: the
+     same shape as the parentNode walk this script no longer does. */
+  var NAMES = [].slice.call(document.querySelectorAll("[data-facet-group]"))
+    .map(function (section) { return section.getAttribute("data-facet-group"); });
 
   /* One row's facts, read once. Re-reading the DOM per keystroke per chip per
      row is 543 rows times 8 chips times three questions, and the page is meant
@@ -502,17 +508,23 @@
      still a lookup for something the caller knows. */
   function facts(row, group) {
     var cells = [].slice.call(row.querySelectorAll(".cells > span"));
-    var measured = {}, states = {}, only = null, count = 0;
+    var measured = {}, states = {}, only = null, count = 0, drawn = {};
     cells.forEach(function (cell) {
+      /* EVERY drawn chip is tallied, including a declined one, because that
+         tally is the legend's "chips" number and the legend lists a state for
+         the declines too. The measured/uniform tests below skip them, which is
+         the asymmetry app.py's _state_facets argues for at length. */
+      var cls = cell.className.replace(/^enc-/, "");
+      drawn[cls] = (drawn[cls] || 0) + 1;
       if (!cell.hasAttribute("data-verdict")) { return; }
       measured[cell.textContent.trim()] = 1;
-      var cls = cell.className.replace(/^enc-/, "");
       if (!states[cls]) { states[cls] = 1; count += 1; only = cls; }
     });
     var av = group.getAttribute("data-availability");
     return {
       url: row.getAttribute("data-endpoint").toLowerCase(),
       metrics: measured,
+      drawn: drawn,
       uniform: count === 1 ? only : null,
       available: POSITIVE[av] ? "available" : "not-available"
     };
@@ -524,16 +536,36 @@
     });
   });
 
+  /* How many chips are drawn in one state among the rows a filter leaves, which
+     is the legend's other number. Counted over the same rows the row count is
+     conditioned on, so the two move together and mean the same population. */
+  function drawn(chip, q, picked) {
+    var seen = 0;
+    rows.forEach(function (r) {
+      if (!survives(r, q, picked, chip.name)) { return; }
+      seen += r.f.drawn[chip.value] || 0;
+    });
+    return seen;
+  }
+
   /* Each chip with the count span it prints into, and the words after the
      number kept exactly as the server wrote them: the state chips print
      "402 rows" and the other two groups a bare number, and which it is belongs
      to the template rather than being spelled here a second time. */
   var chips = buttons.map(function (el) {
     var span = el.querySelector(".f-count");
+    /* The legend's rows carry a SECOND number, the chips drawn in that state,
+       which used to be written once by the server and then sat still while the
+       number beside it moved. One filtered row read "3373 chips 0 rows": two
+       counts over two different populations in one button, with nothing saying
+       so. Both are live now, and both are over the rows currently shown. */
+    var chipSpan = el.querySelector(".l-count");
     return {
       el: el,
       span: span,
+      chipSpan: chipSpan,
       suffix: span ? span.textContent.replace(/^\s*\d*/, "") : "",
+      chipSuffix: chipSpan ? chipSpan.textContent.replace(/^\s*\d*/, "") : "",
       name: el.getAttribute("data-facet"),
       value: el.getAttribute("data-facet-value")
     };
@@ -548,12 +580,17 @@
   /* Does one row satisfy one group's selection? Asked by the filter and by the
      counts, so what a chip's number means and what pressing it does cannot come
      apart into two tests that agree today. */
+  /* One predicate per group, and NO fall-through: a name this function does
+     not know matches nothing rather than being treated as a state, so a group
+     added to the template without a predicate here hides every row instead of
+     quietly filtering none of them. Failing visibly is the whole difference. */
   function inGroup(f, name, values) {
     if (name === "availability") { return values.indexOf(f.available) >= 0; }
     if (name === "metric") {
       return values.some(function (abbr) { return f.metrics[abbr]; });
     }
-    return !!f.uniform && values.indexOf(f.uniform) >= 0;
+    if (name === "state") { return !!f.uniform && values.indexOf(f.uniform) >= 0; }
+    return false;
   }
 
   /* The number one chip prints: the rows matching the text box and every OTHER
@@ -566,16 +603,25 @@
 
      Its own group is skipped rather than intersected, so a chip's number does
      not fall to 0 because a sibling chip beside it is pressed. */
+  /* Whether one row survives everything EXCEPT the group a chip belongs to,
+     which is the standard faceted-count contract: a chip says how many rows it
+     would add, not how many are showing. Shared by both counters so they can
+     never condition on different rows. */
+  function survives(r, q, picked, skip) {
+    if (q && r.f.url.indexOf(q) < 0) { return false; }
+    for (var i = 0; i < NAMES.length; i += 1) {
+      var other = NAMES[i];
+      if (other !== skip && picked[other].length &&
+          !inGroup(r.f, other, picked[other])) { return false; }
+    }
+    return true;
+  }
+
   function count(chip, q, picked) {
     var n = 0;
     rows.forEach(function (r) {
-      if (q && r.f.url.indexOf(q) < 0) { return; }
-      for (var i = 0; i < NAMES.length; i += 1) {
-        var other = NAMES[i];
-        if (other !== chip.name && picked[other].length &&
-            !inGroup(r.f, other, picked[other])) { return; }
-      }
-      if (inGroup(r.f, chip.name, [chip.value])) { n += 1; }
+      if (survives(r, q, picked, chip.name) &&
+          inGroup(r.f, chip.name, [chip.value])) { n += 1; }
     });
     return n;
   }
@@ -611,6 +657,9 @@
     chips.forEach(function (chip) {
       if (chip.span) {
         chip.span.textContent = count(chip, q, picked) + chip.suffix;
+      }
+      if (chip.chipSpan) {
+        chip.chipSpan.textContent = drawn(chip, q, picked) + chip.chipSuffix;
       }
     });
     if (shown) {

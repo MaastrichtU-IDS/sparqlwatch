@@ -2114,7 +2114,14 @@ def test_every_facet_chip_is_an_unpressed_button(client_for, store_registry_samp
     page = index(client_for(store_registry_sample))
     chips = facet_chips(page)
 
-    assert len(chips) == 2 + len(metric_key(page)) + len(verdict_encoding.STATES)
+    # Counted off the page's own facet groups rather than against
+    # len(verdict_encoding.STATES), which is off by one on any store holding a
+    # verdict this build has no encoding for: the legend lists an eighth state
+    # there and this assertion passed only because the fixture holds none. That
+    # is the same blind spot that let the blank rows count survive.
+    listed = len(facets(page, "availability")) + len(facets(page, "metric")) \
+        + len(facets(page, "state"))
+    assert len(chips) == listed
     for chip in chips:
         assert chip["tag"] == "button", f"a {chip['tag']} carries data-facet"
         assert chip["attributes"]["type"] == "button"
@@ -2130,7 +2137,8 @@ def test_a_chip_separates_its_words_from_its_count(
     "not available486" is what a screen reader announced, and "AVavailability543"
     on a metric chip, because the count span followed the label with no text node
     between them. One space per chip fixes it, and there are ten chips, so the
-    cost is ten bytes and not ten bytes a row.
+    cost is eighteen bytes and not eighteen bytes a row: two availability chips
+    take one space each and eight metric chips take two.
     """
     page = index(client_for(store_registry_sample))
     for group in ("availability", "metric"):
@@ -2164,7 +2172,16 @@ def test_the_page_says_what_a_count_on_a_chip_is(
     assert len(said) == 1
     assert "any of them within a group, all of them across groups" in said[0]
     assert "moves as those filters are pressed" in said[0]
-    assert "what pressing it filters to" in page
+
+    # And the contract is stated ONCE. The state panel used to restate it
+    # locally as "which is what pressing it filters to", which stopped being
+    # true when the counts became conditional: with a sibling chip in the same
+    # group pressed, pressing a chip filters to the union and so to more than
+    # its own number, and with another group pressed the number is conditioned
+    # on that group. The unconditioned definition was true only in the state a
+    # test without a browser can see, which is the worst kind of sentence to
+    # leave on a page.
+    assert "what pressing it filters to" not in page
 
 
 def test_the_not_available_chip_points_at_the_sentence_that_qualifies_it(

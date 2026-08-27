@@ -1487,10 +1487,18 @@ def _availability_facets(groups: list[dict]) -> list[dict]:
                 unreached += n
     detail = None
     if unreached:
-        # "482 of these 482" is what the general form says where the two numbers
-        # are equal, which is every sweep so far: it reads as a proper subset and
-        # so understates its own claim, leaving a reader looking for the
-        # endpoints it is not true of. There are none.
+        # Where the two numbers are equal the general form would say "482 of
+        # these 482", which reads as a proper subset and so understates its own
+        # claim, leaving a reader looking for the endpoints it is not true of.
+        # There are none, so the equal case says "all".
+        #
+        # That case is NOT what the measured sweep produces, and an earlier
+        # version of this comment claimed it was. On 2026-08-24, `unreached` is
+        # 482 and `other` is 486, because 4 endpoints answered `absent`, so the
+        # page says "482 of these 486" and the branch below is reached by no
+        # store in this repository. It exists for a registry whose
+        # not-available column is entirely endpoints that never answered, which
+        # is the shape a stricter cost ceiling would produce.
         how_many = (
             f"All {other} of these"
             if unreached == other
