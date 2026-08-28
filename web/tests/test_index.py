@@ -48,6 +48,7 @@ from starlette.testclient import TestClient
 import verdict_encoding
 from app import (
     ABOUT_PATH,
+    DOCS_PATH,
     METRIC_DESCRIPTIONS,
     DORMANCY,
     _index_html,
@@ -1236,47 +1237,38 @@ def test_dormancy_is_not_added_to_the_legend(client_for, store_dormant_newest):
     assert "dormant" not in states
 
 
-def test_the_row_markers_are_explained_on_about_and_not_on_the_index(
+def test_the_row_markers_are_explained_in_the_docs_and_not_on_the_index(
     client_for, store_dormant_newest
 ):
-    """The panel that explained the four row markers was commented out by the
-    plan owner on 2026-08-28, so this pins where the explanation now lives.
+    """The panel that explained the four row markers went on 2026-08-28, and
+    the header now leads to the docs section rather than straight to /about.
 
-    The markers themselves still render, so a reader still meets "the newest
-    sweep did not ask" on a row. What changed is that the index no longer says
-    what that means, what it does NOT mean, or who changes it. /about does say
-    all three, and the header links there from every page, which is why this is
-    a relocation rather than a loss: the sentence a reader needs is one click
-    away instead of one scroll away. The row's own wording still carries the
-    reason, which is what stops the marker being bare.
+    The markers still render, so a reader still meets "the newest sweep did not
+    ask" on a row. What the index no longer does is explain it, and the way to
+    the page that does is two clicks instead of one: docs, then Monitoring.
     """
     page = index(client_for(store_dormant_newest))
     assert not with_attribute(page, "data-row-marker")
-    # The marker is still on the row, and still says why.
     marked = texts_with(page, "data-newest-sweep-dormant")
     assert marked and any("did not ask" in text for text in marked)
-    # And the way to the page that explains it is in the header.
-    assert f'href="{ABOUT_PATH}"' in page
+    nav = with_attribute(page, "data-nav")
+    assert [a["href"] for a in nav] == [DOCS_PATH]
 
 
-def test_the_index_links_to_about_once_and_not_once_per_row(
+def test_the_index_carries_one_nav_link_and_never_one_per_row(
     client_for, store_dormant_newest
 ):
     """One occurrence, in the page header, and never one per row.
 
-    Was two until 2026-08-28: the header's and one inside the panel that
-    explained the dormancy marker, which the plan owner commented out. The
-    invariant this test exists for is unchanged and is the one that matters at
-    543 rows: a link repeated per row would spend 1,227 bytes as 24,000, and
+    It pointed at /about until 2026-08-28 and points at /docs now. The
+    invariant is the one that matters at 543 rows and is unchanged: a link
+    repeated per row would spend about 1,200 bytes as 24,000, and
     web/README.md's table is the record of how little headroom that leaves.
     """
-    href = f'href="{ABOUT_PATH}"'
     text = index(client_for(store_dormant_newest))
-    assert text.count(href) == 1, (
-        f"the header's link and no more: {text.count(href)}"
-    )
-    # The real invariant: not once per row, whatever the row count.
-    assert text.count(href) < len(listed(text))
+    nav = f'href="{DOCS_PATH}"'
+    assert text.count(nav) == 1, f"{text.count(nav)} nav links"
+    assert text.count(nav) < len(listed(text))
 
 
 def test_the_row_marker_reads_every_reason_a_run_graph_can_carry():

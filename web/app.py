@@ -109,6 +109,12 @@ ENDPOINT_PATH = "/endpoint"
 # one route and reaching it meant knowing an endpoint URL and percent-encoding
 # it by hand.
 INDEX_PATH = "/"
+# The documentation section. Three pages, and the third is /about, which keeps
+# its own url because the prober's User-Agent points at it; see the /docs
+# section comment further down.
+DOCS_PATH = "/docs"
+DOCS_METRICS_PATH = "/docs/metrics"
+DOCS_STATES_PATH = "/docs/states"
 
 # This path is not a choice. Every request the prober makes carries
 # `sparqlwatch/<version> (+https://<host>/about)` in its User-Agent
@@ -388,6 +394,25 @@ _ENDPOINT_VARIABLE = Variable("endpoint")
 app = FastAPI(
     title="sparqlwatch",
     description="What this service observed of public SPARQL endpoints.",
+    # FastAPI serves a Swagger UI at /docs and a ReDoc at /redoc unless told
+    # not to, and both are off for two reasons.
+    #
+    # The first is that /docs is this site's documentation section as of
+    # 2026-08-28 and the framework's route wins a collision silently: the page
+    # rendered, the tests failed, and what came back was an API explorer.
+    #
+    # The second is the better reason and would stand on its own. That explorer
+    # is a third-party script: the served page carries
+    # `src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"`,
+    # so every reader who opened it fetched code from a CDN this project has no
+    # relationship with and told that CDN which page they were on. This site puts
+    # `rel="noreferrer"` on its one outward link so that a person looking up
+    # their own endpoint does not announce to it that they read us first, and
+    # shipping a CDN bundle nobody asked for is the same leak with the argument
+    # reversed. The schema itself stays at /openapi.json, which is ours, static
+    # and machine-readable.
+    docs_url=None,
+    redoc_url=None,
 )
 
 
@@ -972,6 +997,7 @@ def _page_context(
         # arrived on one endpoint from a search engine has somewhere to go
         # other than the back button.
         "index_path": INDEX_PATH,
+        "docs_path": DOCS_PATH,
         # The endpoint itself, in a new tab, when its scheme is one a browser
         # should follow. See _outward_link: this is the only href on this site
         # holding a string a third party chose.
@@ -1868,6 +1894,7 @@ def _index_context(entries: list[EndpointMeasurements]) -> dict:
         # arrived on one endpoint from a search engine has somewhere to go
         # other than the back button.
         "index_path": INDEX_PATH,
+        "docs_path": DOCS_PATH,
         "row_unfinished_text": ROW_UNFINISHED_TEXT,
         "row_never_reached_text": ROW_NEVER_REACHED_TEXT,
         # The two new markers' words, for the panel that explains them. The
@@ -1960,6 +1987,216 @@ def index_resource(
         content=_index_rdf(store, media_type),
         media_type=media_type,
     )
+
+
+# ---------------------------------------------------------------------------
+# /docs: the documentation section
+# ---------------------------------------------------------------------------
+# Three pages, and the third one is not here. `/docs/metrics` describes what
+# each metric asks, `/docs/states` what each verdict means and how it is drawn,
+# and monitoring stays at `/about`.
+#
+# WHY MONITORING KEEPS ITS OWN URL rather than moving under /docs. Every request
+# this prober makes to a stranger's server carries
+# `sparqlwatch/<version> (+https://<host>/about)` in its User-Agent
+# (prober/src/client.rs:169), and the spec records that stage 3 "owed an /about"
+# at that address. That URL is a promise printed in traffic we have already
+# sent, so it is the one URL on this site that is not ours to tidy. The docs
+# index names it Monitoring and links to it, which costs a reader nothing and
+# costs the promise nothing either.
+#
+# WHAT IS PINNED AND WHAT IS NOT. `label`, `dimension` and `cost` are
+# prober/metrics.toml's own values, and a test reads that file and fails when
+# they drift, the same way test_about.py pins the politeness numbers. `explains`
+# is documentation: prose nothing can check, written here rather than implied by
+# a label. The run graphs carry none of this, because a measurement names its
+# metric by IRI and nothing publishes a description for that IRI, which is why
+# this table exists at all.
+METRIC_DOCS = {
+    "availability": {
+        "label": "Answers a trivial query",
+        "dimension": "availability",
+        "cost": "cheap",
+        "explains": (
+            "Whether a query reaches the endpoint and comes back. The probe is "
+            "one SELECT for a single triple, which is the smallest question a "
+            "SPARQL endpoint can be asked, so a failure here is about reaching "
+            "the service rather than about anything in its data. A timeout is "
+            "indeterminate and never absent: what was observed is that no "
+            "answer arrived inside the budget, which is not the same as an "
+            "endpoint that answered and had nothing."
+        ),
+    },
+    "cors": {
+        "label": "Sends access-control-allow-origin on a simple GET",
+        "dimension": "interoperability",
+        "cost": "cheap",
+        "explains": (
+            "Whether a script in a browser could read this endpoint's answer. "
+            "This is what a curl user sees: the header on a plain GET. It is "
+            "deliberately separate from the preflight below, because an "
+            "endpoint can have one and not the other and neither implies the "
+            "other."
+        ),
+    },
+    "cors-preflight": {
+        "label": "Answers a CORS preflight for a cross-origin GET",
+        "dimension": "interoperability",
+        "cost": "cheap",
+        "explains": (
+            "Whether a browser would even attempt a real query. Before sending "
+            "a cross-origin request that is not simple, a browser asks the "
+            "target for permission with an OPTIONS request naming the method "
+            "and headers it intends to use, and sends nothing if the answer "
+            "does not allow them. That question is the preflight, and it is "
+            "what decides whether an in-page query editor can talk to this "
+            "endpoint at all. The probe records the header VALUES and not just "
+            "their presence, because a header that is there and says no is not "
+            "permission."
+        ),
+    },
+    "geo-functions": {
+        "label": "GeoSPARQL relation functions",
+        "dimension": "capability",
+        "cost": "cheap",
+        "explains": (
+            "Whether the engine evaluates GeoSPARQL relation functions, asked "
+            "with a filter over constants so the answer is about the engine "
+            "rather than about the data. This is the metric where the "
+            "vocabulary earns its keep: an endpoint can evaluate these "
+            "functions without declaring them, which is undeclared but "
+            "verified, and an endpoint can answer a point-in-polygon test with "
+            "the wrong answer, which is declared but wrong. Both are true of "
+            "real endpoints in this registry."
+        ),
+    },
+    "geo-data": {
+        "label": "Holds WKT geometry",
+        "dimension": "content",
+        "cost": "cheap",
+        "explains": (
+            "Whether any geometry is actually stored, asked separately from the "
+            "functions above because holding geometry and being able to reason "
+            "over it are different facts. The probe guards against a literal "
+            "that is present and empty, because one endpoint in the survey this "
+            "project reproduces passed a naive check while every geometry it "
+            "held was nil."
+        ),
+    },
+    "service-description": {
+        "label": "Service description informativeness",
+        "dimension": "documentation",
+        "cost": "cheap",
+        "explains": (
+            "What the endpoint says about itself when asked with no query at "
+            "all. Graded rather than yes or no, because a description that "
+            "exists and names nothing useful is not the same as one that names "
+            "its dataset, its graphs and the languages it supports. Most of the "
+            "descriptions in this registry are at the lowest level, which is "
+            "the engine's default stub rather than anything a publisher wrote."
+        ),
+    },
+    "has-classes": {
+        "label": "Holds typed resources",
+        "dimension": "content",
+        "cost": "cheap",
+        "explains": (
+            "Whether anything in the endpoint carries a type at all. One row "
+            "with one type is enough, which is why this is cheap where counting "
+            "the distinct types is not."
+        ),
+    },
+    "classes": {
+        "label": "Distinct classes",
+        "dimension": "content",
+        "cost": "expensive",
+        "explains": (
+            "Which types the endpoint holds, sampled rather than counted. The "
+            "only expensive metric here, and every sweep so far has run at the "
+            "cheap ceiling, so this is declined for every endpoint and the grid "
+            "on the index shows that as a column of 543 declines. That is a gap "
+            "in what this service has looked at and not a finding about any "
+            "endpoint."
+        ),
+    },
+}
+
+
+def _docs_context() -> dict:
+    """What every page in this section needs: the way home, and its siblings.
+
+    One table, so a fourth page is added in one place and every page's nav
+    learns about it. Monitoring is a full entry with a `path` like the others,
+    which is what lets the index list three pages without knowing that one of
+    them lives outside /docs.
+    """
+    return {
+        "index_path": INDEX_PATH,
+        "docs_path": DOCS_PATH,
+        "docs_path": DOCS_PATH,
+        "about_path": ABOUT_PATH,
+        "pages": [
+            {
+                "path": DOCS_METRICS_PATH,
+                "title": "Metrics",
+                "blurb": (
+                    "The eight things this service asks an endpoint, what each "
+                    "question is, and what an answer to it does and does not "
+                    "establish."
+                ),
+            },
+            {
+                "path": DOCS_STATES_PATH,
+                "title": "States",
+                "blurb": (
+                    "The seven verdicts a measurement can carry, what each one "
+                    "means, and how each is drawn without relying on colour."
+                ),
+            },
+            {
+                "path": ABOUT_PATH,
+                "title": "Monitoring",
+                "blurb": (
+                    "Who queried your server, how often, how politely, why "
+                    "that endpoint, and how to ask to be left alone. This page "
+                    "keeps its own address because every request this service "
+                    "makes carries it."
+                ),
+            },
+        ],
+    }
+
+
+def _docs_metrics_context() -> dict:
+    """One entry per metric, in the order prober/metrics.toml declares them."""
+    return {
+        "metrics": [
+            {"id": metric, **facts} for metric, facts in METRIC_DOCS.items()
+        ],
+    }
+
+
+def _docs_states_context() -> dict:
+    """One entry per state, from the encoding table itself.
+
+    Nothing is written twice here: the label, the meaning and all three drawing
+    channels come from verdict_encoding, which docs/design/verdict-encoding.md
+    is canonical for and a test compares against.
+    """
+    return {
+        "states": [
+            {
+                "slug": state.slug,
+                "label": state.label,
+                "meaning": state.meaning,
+                "css_class": verdict_encoding.css_class(state.slug),
+                "border": state.border,
+                "fill": "filled" if state.fill else "empty",
+                "weight": state.weight,
+            }
+            for state in verdict_encoding.STATES
+        ],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -2173,6 +2410,7 @@ SUMMARY = (
 _SERVICE = NamedNode("urn:sparqlwatch:service")
 _ABOUT = "urn:sparqlwatch:about:"
 _XSD_INTEGER = NamedNode("http://www.w3.org/2001/XMLSchema#integer")
+_XSD_BOOLEAN = NamedNode("http://www.w3.org/2001/XMLSchema#boolean")
 
 
 def _about_context() -> dict:
@@ -2193,6 +2431,7 @@ def _about_context() -> dict:
         "registry": REGISTRY,
         "full_sweep": FULL_SWEEP_DURATION,
         "index_path": INDEX_PATH,
+        "docs_path": DOCS_PATH,
         "endpoint_path": ENDPOINT_PATH,
     }
 
@@ -2255,6 +2494,152 @@ def _about_rdf(media_type: str) -> bytes:
         for name, value in (*POLITENESS.items(), *DORMANCY.items())
     )
     return serialize(iter(triples), format=RdfFormat.from_media_type(media_type))
+
+
+# ---------------------------------------------------------------------------
+# The docs routes
+# ---------------------------------------------------------------------------
+# Negotiated like every other resource here, because the spec's rule is
+# "content negotiation on every resource: HTML for people, RDF for machines"
+# and these two are not an exception in the way it might first look. A metric
+# and a state are VOCABULARY: what this service measures and what its verdicts
+# mean are exactly the things a client integrating with it needs without
+# parsing English, and the encoding table is already canonical in
+# docs/design/verdict-encoding.md. The prose is the part only a person reads.
+_DOCS = "urn:sparqlwatch:docs:"
+_METRIC = "urn:sparqlwatch:metric:"
+_STATE = "urn:sparqlwatch:state:"
+
+
+def _docs_rdf(media_type: str) -> bytes:
+    """The three documents this section holds, and nothing about their prose."""
+    section = NamedNode(_DOCS + "section")
+    triples = [
+        Triple(section, NamedNode(_DOCS + "page"), NamedNode(_DOCS + name))
+        for name in ("metrics", "states", "monitoring")
+    ]
+    return serialize(iter(triples), format=RdfFormat.from_media_type(media_type))
+
+
+def _docs_metrics_rdf(media_type: str) -> bytes:
+    """Each metric with the three facts prober/metrics.toml states about it.
+
+    The label, the dimension and the cost class, which are the prober's own
+    values and are pinned against its file by a test. Not the prose: an
+    explanation is for a reader and putting it here would invite a consumer to
+    treat a paragraph as data.
+    """
+    triples = []
+    for metric, facts in METRIC_DOCS.items():
+        subject = NamedNode(_METRIC + metric)
+        triples.append(
+            Triple(subject, NamedNode(_DOCS + "label"), Literal(facts["label"]))
+        )
+        triples.append(
+            Triple(
+                subject,
+                NamedNode(_DOCS + "dimension"),
+                Literal(facts["dimension"]),
+            )
+        )
+        triples.append(
+            Triple(subject, NamedNode(_DOCS + "cost"), Literal(facts["cost"]))
+        )
+    return serialize(iter(triples), format=RdfFormat.from_media_type(media_type))
+
+
+def _docs_states_rdf(media_type: str) -> bytes:
+    """Each state with its label, its meaning and all three drawing channels.
+
+    The channels are here because they are the encoding, not decoration: a
+    client rendering these verdicts itself needs to know that the difference
+    between "declared but wrong" and "verified" is a border weight and not a
+    colour, which is the property that keeps the drawing legible without colour.
+    """
+    triples = []
+    for state in verdict_encoding.STATES:
+        subject = NamedNode(_STATE + state.slug)
+        triples.append(
+            Triple(subject, NamedNode(_DOCS + "label"), Literal(state.label))
+        )
+        triples.append(
+            Triple(subject, NamedNode(_DOCS + "meaning"), Literal(state.meaning))
+        )
+        triples.append(
+            Triple(subject, NamedNode(_DOCS + "border"), Literal(state.border))
+        )
+        triples.append(
+            Triple(
+                subject,
+                NamedNode(_DOCS + "fill"),
+                Literal("true" if state.fill else "false", datatype=_XSD_BOOLEAN),
+            )
+        )
+        triples.append(
+            Triple(
+                subject,
+                NamedNode(_DOCS + "border-weight-px"),
+                Literal(str(state.weight), datatype=_XSD_INTEGER),
+            )
+        )
+    return serialize(iter(triples), format=RdfFormat.from_media_type(media_type))
+
+
+def _negotiated(request: Request, html, rdf) -> Response:
+    """One negotiation for the three docs resources.
+
+    The other three routes each spell this out, and each had a reason to: they
+    differ in what they do when the store cannot answer. These three read no
+    store and cannot 404, so one helper is the honest shape rather than three
+    copies of an identical branch.
+    """
+    media_type = choose_representation(request.headers.get("accept"))
+    if media_type is None:
+        return Response(
+            content=(
+                "none of the requested media types can be served; this "
+                "resource offers " + ", ".join(OFFERED_MEDIA_TYPES) + "\n"
+            ),
+            status_code=406,
+            media_type="text/plain; charset=utf-8",
+        )
+    if media_type == HTML_MEDIA_TYPE:
+        return Response(content=html(), media_type="text/html; charset=utf-8")
+    return Response(content=rdf(media_type), media_type=media_type)
+
+
+@app.get(DOCS_PATH)
+def docs_resource(request: Request) -> Response:
+    """What this service measures, what its verdicts mean, and why it queried."""
+    return _negotiated(
+        request,
+        lambda: _TEMPLATES.get_template("docs.html").render(**_docs_context()),
+        _docs_rdf,
+    )
+
+
+@app.get(DOCS_METRICS_PATH)
+def docs_metrics_resource(request: Request) -> Response:
+    """One section per metric: what it asks and what a verdict on it means."""
+    return _negotiated(
+        request,
+        lambda: _TEMPLATES.get_template("docs-metrics.html").render(
+            **_docs_context(), **_docs_metrics_context()
+        ),
+        _docs_metrics_rdf,
+    )
+
+
+@app.get(DOCS_STATES_PATH)
+def docs_states_resource(request: Request) -> Response:
+    """One section per state: what it means and how it is drawn."""
+    return _negotiated(
+        request,
+        lambda: _TEMPLATES.get_template("docs-states.html").render(
+            **_docs_context(), **_docs_states_context()
+        ),
+        _docs_states_rdf,
+    )
 
 
 @app.get(ABOUT_PATH)
