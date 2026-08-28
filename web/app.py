@@ -1499,75 +1499,6 @@ def _outward_link(endpoint: str) -> str | None:
     return None
 
 
-def _availability_facets(groups: list[dict]) -> list[dict]:
-    """Two chips over the availability verdict, with the second one's makeup.
-
-    `available` is the two positive verdicts and `not-available` is every other
-    value, including `indeterminate`. The `detail` string is not decoration: it
-    is the sentence that keeps a 486 built mostly of "we could not tell" from
-    reading as 486 servers refusing to answer.
-    """
-    available = other = unreached = 0
-    for group in groups:
-        value = group["availability"]
-        n = len(group["rows"])
-        if value in _POSITIVE_VERDICTS:
-            available += n
-        else:
-            other += n
-            # Accumulated, not assigned. One group per value is what
-            # _index_groups returns today, so a second group of the same value
-            # cannot arrive; a counter that says what it means costs nothing and
-            # cannot silently drop one if that ever changes. The dict this
-            # replaced held a count per value and only this one was ever read.
-            if value == _UNREACHED_VERDICT:
-                unreached += n
-    detail = None
-    # NO DISCLOSURE SENTENCE. It read "482 of these 486 answered nothing inside
-    # the time budget, so what was measured is that no answer arrived and not
-    # that the endpoint is unavailable", and the plan owner removed it on
-    # 2026-08-28. Recorded here rather than deleted silently, because the two
-    # chips file 482 endpoints that never answered under a word that says they
-    # are unavailable, and this sentence was the page's only statement of the
-    # difference. `unreached` is still counted so the number is one line away if
-    # it is wanted back.
-    detail = None
-    return [
-        {
-            "slug": "available",
-            "label": "available",
-            "count": available,
-            "detail": None,
-        },
-        {
-            "slug": "not-available",
-            "label": "not available",
-            "count": other,
-            "detail": detail,
-        },
-    ]
-
-
-def _metric_facets(groups: list[dict], metrics: list[dict]) -> list[dict]:
-    """One chip per metric column, counting the rows where it carries a verdict.
-
-    A DECLINED metric does not count. That is the whole point of the choice the
-    plan owner made: a chip reading 0 says the sweep never measured this, which
-    is a fact about coverage, and merging declines into the count would hide it
-    behind a number that looks like data.
-    """
-    counted = {metric["name"]: 0 for metric in metrics}
-    for group in groups:
-        for row in group["rows"]:
-            for cell in row["cells"]:
-                if cell["present"] and cell.get("verdict") is not None:
-                    counted[cell["name"]] += 1
-    return [
-        {"name": m["name"], "abbr": m["abbr"], "count": counted[m["name"]]}
-        for m in metrics
-    ]
-
-
 def _state_facets(groups: list[dict]) -> list[dict]:
     """One chip per encoding state, counting rows with AT LEAST ONE chip in it.
 
@@ -1929,27 +1860,19 @@ def _index_context(entries: list[EndpointMeasurements]) -> dict:
         # The three facet groups, above the rows. Each filters by reading
         # attributes the rows already carry, so none of them costs a byte per
         # row; see the block above _index_row for what each one selects and why.
-        "availability_facets": _availability_facets(groups),
-        "metric_facets": _metric_facets(groups, metrics),
+
         # The grid: metrics down, states across, a count in every intersection.
         # It subsumes the two chip strips it replaced, because a row header
         # filters on the metric alone and a column header on the state alone,
         # which is exactly what those strips did.
         "matrix": _metric_state_matrix(groups, metrics),
         "matrix_states": _matrix_states(_metric_state_matrix(groups, metrics)),
-        # The header counts, keyed so the template can put each beside the
-        # header it belongs to. They are the metric and state facet counts
-        # unchanged, because a header IS that facet's chip: the grid did not
-        # invent a filter, it gave the two strips a shape.
-        #
-        # A header carries a count for the same reason every other chip does. It
-        # is the invariant that caught a chip printing 402 above an empty page,
-        # and dropping it for the fifteen headers to keep the grid quiet would
-        # trade the page's strongest property for tidiness.
-        "metric_counts": {
-            facet["abbr"]: facet["count"]
-            for facet in _metric_facets(groups, metrics)
-        },
+        # The column headers' counts. A header carries one for the same reason
+        # every other chip does: it is the invariant that caught a chip printing
+        # 402 above an empty page. The ROW headers stopped being chips on
+        # 2026-08-28 and carry no count, because every cell in the row already
+        # filters on that metric and a chip on the name could only widen what
+        # they narrow.
         "state_counts": {
             facet["slug"]: facet["count"] for facet in _state_facets(groups)
         },

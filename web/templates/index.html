@@ -244,50 +244,6 @@
     <span class="shown" id="shown"></span>
   </div>
 
-  {% if endpoint_count %}
-  {# WHAT A COUNT ON A CHIP IS, said once here rather than three times below.
-     Every chip states the endpoints IT would select given the other groups'
-     filters, recomputed each time one changes, which is what makes the state
-     panel's "which is what pressing it filters to" true after a second group is
-     pressed as well as before. Until 2026-08-28 the counts were rendered once
-     and never touched again: pressing availability/available and then
-     state/indeterminate left a chip reading 402 above a page reading "showing 0
-     of 543 endpoints". With no script running nothing is pressed, and the counts
-     the server rendered are the whole page's, which is the answer that is true
-     in that state. #}
-  <p class="note" data-facet-contract="true">
-
-  </p>
-  <section class="panel" data-facet-group="availability">
-    <h2>Availability</h2>
-    <ul class="facets">
-      {# ONE SPACE BEFORE THE COUNT SPAN, here and on the metric chips. A
-         button's accessible name is its text stream run together, so
-         "not available" followed immediately by "486" announces as
-         "not available486": a screen-reader user heard one word that is not a
-         number and one number that is not a word. Ten chips at one byte each,
-         plus one either side of a metric chip's abbreviation, which announced
-         as "AVavailability543". Eighteen bytes, fixed rather than per row. The
-         legend's rows need none: their spans sit on separate lines already, so
-         the newlines between them are the separator.
-
-         AND aria-describedby WHERE THERE IS A DISCLOSURE. The paragraph below
-         is what stops "not available" over-claiming, and a reader who cannot
-         see it gets it only if the button says where it is. #}
-      {% for facet in availability_facets %}
-      <li><button type="button" class="facet" aria-pressed="false"
-                  data-facet="availability" data-facet-value="{{ facet.slug }}"
-                  {%- if facet.detail %} aria-describedby="facet-detail-{{ facet.slug }}"{% endif %}>
-        {{ facet.label }} <span class="f-count">{{ facet.count }}</span>
-      </button></li>
-      {% endfor %}
-    </ul>
-    {% for facet in availability_facets %}{% if facet.detail %}
-    <p class="facet-detail" id="facet-detail-{{ facet.slug }}"
-       data-facet-detail="{{ facet.slug }}">{{ facet.detail }}</p>
-    {% endif %}{% endfor %}
-  </section>
-  {% endif %}
 
   {% if metrics %}
   {# The grid. Metrics down, states across, and a count in every intersection.
@@ -328,13 +284,15 @@
       <tbody>
         {% for row in matrix %}
         <tr data-matrix-row="{{ row.name }}">
-          <th scope="row">
-            <button type="button" class="facet facet-head" aria-pressed="false"
-                    data-facet="metric" data-facet-value="{{ row.abbr }}"
-                    data-metric-column="{{ row.name }}" data-abbr="{{ row.abbr }}">
-              <span class="mabbr">{{ row.abbr }}</span> {{ row.name }} <span
-                class="f-count">{{ metric_counts[row.abbr] }}</span>
-            </button>
+          {# A label and not a button. The metric alone was selectable until
+             2026-08-28 and the plan owner took it out: every cell in the row
+             already filters on that metric, so a chip on the name could only
+             widen what the cells beside it narrow. data-metric-column stays,
+             because it is how the tests and any other reader of this HTML learn
+             which abbreviation belongs to which metric. #}
+          <th scope="row" data-metric-column="{{ row.name }}"
+              data-abbr="{{ row.abbr }}">
+            <span class="mabbr">{{ row.abbr }}</span> {{ row.name }}
           </th>
           {% for cell in row.cells %}
           <td>
@@ -356,13 +314,11 @@
     </table>
     <p class="note">
       A cell is the endpoints whose newest sweep put that metric in that state,
-      so a row's cells account for every endpoint once. Press a cell for the
-      intersection, a row header for the metric whatever its state, or a column
-      header for the state whatever the metric, and each says how many it
-      selects. A row header counts the endpoints with a VERDICT for that metric,
-      which is why the classes header reads 0 beside a row whose cells sum to
-      every endpoint: the sweep declined it 543 times and a decline is not a
-      finding.
+      so a row's cells account for every endpoint once. Press a cell for that pair, or a
+      column header for the state whatever the metric, and each says how many it
+      selects. The metric names are labels: every cell in a row already filters
+      on that metric, so a chip on the name could only widen what the cells
+      beside it narrow.
     </p>
     <p class="note">
       A filled chip means we have positive evidence the capability works;
@@ -534,7 +490,6 @@
   var groups = [].slice.call(document.querySelectorAll("[data-availability]"));
   var total = document.querySelectorAll("[data-endpoint]").length;
   var empty = document.getElementById("nothing");
-  var POSITIVE = { "verified": 1, "undeclared-but-verified": 1 };
   /* The facet groups, read off the CHIPS rather than off the panels. Both are
      in the document and only one is right: a panel's data-facet-group names the
      panel, and since the grid landed one panel holds chips of three different
@@ -550,49 +505,39 @@
   });
 
   /* One row's facts, read once. Re-reading the DOM per keystroke per chip per
-     row is 543 rows times 8 chips times three questions, and the page is meant
-     to answer a keystroke faster than a reader notices.
+     row is 543 rows times 8 chips, and the page is meant to answer a keystroke
+     faster than a reader notices.
 
-     THE GROUP IS PASSED IN and not walked to. This read
-     row.parentNode.parentNode until 2026-08-28, which was correct for the
-     nesting the template writes and would have gone on being correct until
-     someone wrapped the rows in one more element: then it returns null,
-     POSITIVE[null] is falsy, EVERY ROW ON THE PAGE becomes "not available", the
-     two availability chips read 0 and 543, and nothing anywhere throws. The
-     loop below already holds the group element, so nothing has to be looked
-     up. closest("[data-availability]") would also survive that edit, and it is
-     still a lookup for something the caller knows. */
-  function facts(row, group) {
-    var cells = [].slice.call(row.querySelectorAll(".cells > span"));
-    var measured = {}, drawn = {}, pairs = {};
-    cells.forEach(function (cell) {
-      /* EVERY drawn chip is tallied, including a declined one. It answers
-         both of the legend's numbers and the state filter, which since
-         2026-08-28 all ask the same question of the same cells. The metric
-         tally below is the one that skips a decline, because a chip reading 0
-         there means no sweep measured it. */
+     Two fields went on 2026-08-28 with the chips that read them: `available`,
+     which the availability panel used, and `metrics`, which the row headers
+     used before they became labels. The group element is no longer needed here
+     at all, which retires the parentNode walk this function used to do and the
+     comment that explained why it was a hazard: it read
+     row.parentNode.parentNode, correct for the nesting the template writes and
+     silently wrong the moment anyone wrapped the rows in one more element. */
+  function facts(row) {
+    var drawn = {}, pairs = {};
+    [].slice.call(row.querySelectorAll(".cells > span")).forEach(function (cell) {
+      /* EVERY drawn chip is tallied, a declined one included, because the state
+         columns count a row that carries the state anywhere and the grid's
+         not-measured column is the endpoints with a metric no sweep ran. */
       var cls = cell.className.replace(/^enc-/, "");
       drawn[cls] = (drawn[cls] || 0) + 1;
       /* The grid's key, built from what the chip already carries: its own text
          is the metric's abbreviation and its class is the state. Nothing per
          row grew to support the grid. */
       pairs[cell.textContent.trim() + "|" + cls] = 1;
-      if (!cell.hasAttribute("data-verdict")) { return; }
-      measured[cell.textContent.trim()] = 1;
     });
-    var av = group.getAttribute("data-availability");
     return {
       url: row.getAttribute("data-endpoint").toLowerCase(),
-      metrics: measured,
       drawn: drawn,
-      pairs: pairs,
-      available: POSITIVE[av] ? "available" : "not-available"
+      pairs: pairs
     };
   }
   var rows = [];
   groups.forEach(function (group) {
     [].slice.call(group.querySelectorAll("[data-endpoint]")).forEach(function (el) {
-      rows.push({ el: el, group: group, f: facts(el, group) });
+      rows.push({ el: el, group: group, f: facts(el) });
     });
   });
 

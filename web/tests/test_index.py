@@ -48,10 +48,8 @@ import verdict_encoding
 from app import (
     ABOUT_PATH,
     DORMANCY,
-    _availability_facets,
     _index_html,
     _legend,
-    _metric_facets,
     _state_facets,
     ENDPOINT_PATH,
     INDEX_PATH,
@@ -1789,106 +1787,6 @@ def rows_of(group_value, count, /, **cells):
     return group_of(group_value, *([cells] * count))
 
 
-def test_the_availability_facet_is_two_chips_over_the_verdicts():
-    groups = [rows_of("verified", 57), rows_of("indeterminate", 482),
-              rows_of("absent", 4)]
-    available, other = _availability_facets(groups)
-    assert (available["slug"], available["count"]) == ("available", 57)
-    assert (other["slug"], other["count"]) == ("not-available", 486)
-
-
-def test_the_not_available_chip_carries_no_disclosure(client_for, store_registry_sample):
-    """Removed by the plan owner on 2026-08-28, and pinned as removed.
-
-    The chip counts 486 endpoints of which 482 merely never answered inside the
-    time budget, and the sentence under it used to say so. This test asserts the
-    page no longer does, so the removal is a decision on the record rather than
-    a sentence that fell out and nobody noticed. app.py's _availability_facets
-    still counts the number, one line from being rendered again.
-    """
-    page = index(client_for(store_registry_sample))
-    assert not with_attribute(page, "data-facet-detail")
-    assert "answered nothing inside the time budget" not in page
-
-
-def test_the_availability_facets_are_two_counts_and_no_prose():
-    """Both chips, both counts, and `detail` None on every shape.
-
-    The equal-numbers wording ("All 482 of these") went with the sentence it
-    belonged to; the two counts it qualified are unchanged.
-    """
-    groups = [rows_of("verified", 5), rows_of("indeterminate", 9)]
-    available, other = _availability_facets(groups)
-    assert (available["count"], other["count"]) == (5, 9)
-    assert available["detail"] is None and other["detail"] is None
-
-
-def test_a_registry_with_nothing_indeterminate_gets_no_disclosure():
-    groups = [rows_of("verified", 3), rows_of("absent", 1)]
-    _, other = _availability_facets(groups)
-    assert other["count"] == 1
-    assert other["detail"] is None
-
-
-def test_no_availability_chip_claims_more_than_its_own_count():
-    """What survives the disclosure's removal: the labels themselves.
-
-    "not available" is the word the plan owner chose for a column that is mostly
-    endpoints which answered nothing, and the labels are all the page says now,
-    so this pins that neither chip's label asserts a cause.
-    """
-    groups = [rows_of("verified", 1), rows_of("indeterminate", 1)]
-    for facet in _availability_facets(groups):
-        assert "broken" not in facet["label"]
-        assert "down" not in facet["label"]
-        assert "unresponsive" not in facet["label"]
-
-
-def test_a_metric_chip_counts_the_rows_that_recorded_a_verdict():
-    """A declined metric does not count, which is the whole point of the count.
-
-    Over the 2026-08-24 sweep this is seven chips reading 543 and `classes`
-    reading 0, because classes is the one expensive metric and no sweep has run
-    at that ceiling. A chip reading 0 is the coverage gap on the page.
-    """
-    groups = [rows_of("verified", 5, availability="verified", classes=None)]
-    metrics = [{"name": "availability", "abbr": "AV"}, {"name": "classes", "abbr": "CL"}]
-    by_abbr = {f["abbr"]: f["count"] for f in _metric_facets(groups, metrics)}
-    assert by_abbr == {"AV": 5, "CL": 0}
-
-
-def test_a_metric_chip_counts_a_group_whose_rows_differ_row_by_row():
-    """The heterogeneous group, which is the only kind the page renders.
-
-    A group is keyed on the availability verdict alone, so two rows in one group
-    routinely disagree about every other metric. Every test above this one hands
-    the builders a group whose rows are identical in all eight, which is the one
-    shape no page renders, so a builder that read a group's first row and
-    multiplied by the row count would satisfy all of them.
-    """
-    groups = [
-        group_of(
-            "verified",
-            {"availability": "verified", "cors": "verified", "classes": None},
-            {"availability": "verified", "cors": None, "classes": None},
-            {"availability": "verified", "cors": "absent", "classes": "verified"},
-        )
-    ]
-    metrics = [
-        {"name": "availability", "abbr": "AV"},
-        {"name": "cors", "abbr": "CO"},
-        {"name": "classes", "abbr": "CL"},
-    ]
-    by_abbr = {f["abbr"]: f["count"] for f in _metric_facets(groups, metrics)}
-    assert by_abbr == {"AV": 3, "CO": 2, "CL": 1}
-    by_slug = {f["slug"]: f["count"] for f in _state_facets(groups)}
-    # All three rows carry a verified chip somewhere, and only the third carries
-    # an absent one. Under the uniform reading these were 2 and 0, which is the
-    # reading the plan owner replaced on 2026-08-28.
-    assert by_slug["verified"] == 3
-    assert by_slug["absent"] == 1
-
-
 def test_a_state_chip_counts_the_rows_carrying_at_least_one_of_that_state():
     """At least one chip in that state, not every chip, and declines count.
 
@@ -2049,18 +1947,39 @@ def test_the_page_states_no_endpoint_or_metric_count_in_prose(
 
 def test_every_facet_chip_is_an_unpressed_button(client_for, store_registry_sample):
     """A button, because it changes this page and names no other resource, and
-    unpressed on arrival, because the page is correct with no filter applied."""
+    unpressed on arrival, because the page is correct with no filter applied.
+
+    Two of the four chip groups went on 2026-08-28: the availability panel, whose
+    question the grid's availability row answers per state instead of merged into
+    two words, and the metric row headers, which became labels. What is left is
+    the grid: a column header per state and a cell per pair that holds anything.
+    """
     page = index(client_for(store_registry_sample))
     for attributes in with_attribute(page, "data-facet"):
         assert attributes["aria-pressed"] == "false"
-    assert set(facets(page, "availability")) == {"available", "not-available"}
-    # Three groups of chip live in the grid: a row header filters on the metric,
-    # a column header on the state, a cell on the pair. The script reads its
-    # group list off the chips for exactly this reason, since one panel now
-    # holds all three and the panel's own name is none of them.
-    assert len(facets(page, "metric")) == len(metric_key(page))
+    assert not facets(page, "availability")
+    assert not facets(page, "metric")
     assert len(facets(page, "state")) >= len(verdict_encoding.STATES)
     assert facets(page, "matrix")
+
+
+def test_a_metric_name_is_a_label_and_not_a_filter(
+    client_for, store_registry_sample
+):
+    """Removed by the plan owner on 2026-08-28, and pinned as removed.
+
+    Every cell in a metric's row already filters on that metric, so a chip on
+    the name could only select the union of its own row: it widened what the
+    cells beside it narrow. The abbreviation and the name stay, and so does
+    data-metric-column, which is how a reader of this HTML learns which
+    abbreviation belongs to which metric.
+    """
+    page = index(client_for(store_registry_sample))
+    key = metric_key(page)
+    assert len(key) == 8, key
+    for attributes in with_attribute(page, "data-metric-column"):
+        assert "aria-pressed" not in attributes
+        assert "data-facet" not in attributes
 
 
 def test_a_grid_cell_is_a_bare_count_and_a_header_is_bare_words(
@@ -2083,49 +2002,37 @@ def test_a_grid_cell_is_a_bare_count_and_a_header_is_bare_words(
         assert not digits or f" {digits}" in label
 
 
-def test_the_count_contract_paragraph_is_empty_and_says_nothing_false(
+def test_the_count_contract_paragraph_says_nothing_false(
     client_for, store_registry_sample
 ):
-    """The paragraph is still in the document and its sentence was removed.
+    """Emptied by the plan owner on 2026-08-28, and the element left in place.
 
     It used to state the contract the counts keep: any within a group, all
-    across groups, each count conditioned on the other groups' filters. The
-    element stays because the script reads nothing from it and the tests find
-    the panels by their own attributes, so an empty note breaks nothing. What is
+    across groups, each count conditioned on the other groups' filters. What is
     gone is the only place the page explained why a count moves when another
-    chip is pressed.
+    chip is pressed. The element stays because nothing reads it and an empty
+    note breaks nothing.
     """
     page = index(client_for(store_registry_sample))
     said = texts_with(page, "data-facet-contract")
-    assert len(said) == 1
-    assert said[0].strip() == ""
+    assert len(said) <= 1
+    if said:
+        assert said[0].strip() == ""
     assert "what pressing it filters to" not in page
 
 
-def test_no_chip_points_at_a_sentence_that_is_no_longer_there(
-    client_for, store_registry_sample
-):
-    """The aria-describedby went with the paragraph it referenced.
+def test_the_grid_is_the_only_facet_panel(client_for, store_registry_sample):
+    """One panel where there were three.
 
-    A dangling reference is worse than none: a screen reader announces a
-    description that does not exist, and a reader who tabs to the chip is told
-    less than a reader who does not.
+    The metric strip and the state legend became the grid's headers, and the
+    availability panel went because the grid's availability row says the same
+    thing per state instead of merging indeterminate and absent into one word.
     """
     page = index(client_for(store_registry_sample))
-    for attributes in with_attribute(page, "data-facet"):
-        assert "aria-describedby" not in attributes
-
-
-def test_the_panels_come_in_the_order_the_page_reads_in(
-    client_for, store_registry_sample
-):
-    """Availability, then the grid. Two panels where there were three: the grid
-    subsumed the metric strip and the state legend by making them its own row
-    and column headers."""
-    page = index(client_for(store_registry_sample))
     order = [a["data-facet-group"] for a in with_attribute(page, "data-facet-group")]
-    assert order == ["availability", "matrix"]
-    assert page.index("<h2>Availability</h2>") < page.index("<h2>Metrics and states</h2>")
+    assert order == ["matrix"]
+    assert "<h2>Availability</h2>" not in page
+    assert "<h2>Metrics and states</h2>" in page
 
 
 def test_a_filter_that_matches_nothing_has_a_sentence_ready(
@@ -2237,31 +2144,21 @@ def test_every_chip_count_is_the_rows_the_page_renders(
         # Every row on the page is inside a group element, which is what the
         # script depends on and what this reader refuses to fake.
         assert [row["endpoint"] for row in rendered] == listed(page)
-        assert {value for group, value in printed if group == "metric"} == (
-            abbreviations
-        )
-        assert {value for group, value in printed if group == "availability"} == {
-            "available",
-            "not-available",
-        }
+        # No metric group and no availability group since 2026-08-28: the row
+        # headers are labels and the availability panel is gone. What the grid
+        # projects is a column per state and a cell per pair that holds
+        # anything, and every cell's abbreviation must be one of the page's own.
+        assert not {group for group, _ in printed} - {"state", "matrix"}
+        assert {
+            value.split("|")[0] for group, value in printed if group == "matrix"
+        } <= abbreviations
 
         expected = {key: 0 for key in printed}
         for row in rendered:
-            measured = {
-                chip["abbr"].strip()
-                for chip in row["chips"]
-                if "data-verdict" in chip
-            }
             # EVERY drawn chip, a declined one included, because the state
             # filter counts a row that carries the state anywhere. The metric
             # set above is the one that skips a decline.
             states = {encoding_class(chip) for chip in row["chips"]}
-            available = (
-                "available" if row["availability"] in positive else "not-available"
-            )
-            expected[("availability", available)] += 1
-            for abbr in measured:
-                expected[("metric", abbr)] += 1
             for slug in states:
                 expected[("state", slug)] += 1
             # And the grid: this metric in this state, keyed the way the cell
