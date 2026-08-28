@@ -81,6 +81,12 @@
   .entry p { margin: 0 0 8px; }
   .facts { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0 0 8px;
            font-size: 12px; color: var(--text-dim); font-family: var(--mono); }
+  /* A retired metric is not an error and is not drawn as one: the measurements
+     it produced are still true of the sweep that took them. The marker says
+     only that no new sweep will add to them. */
+  .retired { font-family: var(--mono); font-size: 10.5px; font-weight: 500;
+             color: var(--text-dim); border: 1px solid var(--border);
+             border-radius: 3px; padding: 1px 5px; vertical-align: 2px; }
   .swatch-lg { display: inline-block; width: 26px; height: 18px;
                border-radius: 3px; vertical-align: -4px; margin-right: 8px; }
 </style>
@@ -108,11 +114,15 @@
   <section class="panel">
     {% for metric in metrics %}
     <div class="entry" data-metric-doc="{{ metric.id }}">
-      <h3>{{ metric.id }}</h3>
+      <h3>{{ metric.id }}{% if metric.retired %} <span class="retired"
+        data-metric-retired="{{ metric.id }}">no longer measured</span>{% endif %}</h3>
       <p class="said" data-metric-label="{{ metric.id }}">{{ metric.label }}</p>
       <p class="facts">
         <span data-metric-dimension="{{ metric.id }}">dimension: {{ metric.dimension }}</span>
         <span data-metric-cost="{{ metric.id }}">cost: {{ metric.cost }}</span>
+        {%- if metric.retired %}
+        <span>retired: {{ metric.retired }}</span>
+        {%- endif %}
       </p>
       <p>{{ metric.explains }}</p>
     </div>

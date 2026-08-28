@@ -2096,14 +2096,27 @@ METRIC_DOCS = {
             "the engine's default stub rather than anything a publisher wrote."
         ),
     },
+    # RETIRED 2026-08-28, and still here because the data is still published.
+    # A run graph records what one sweep observed and nothing rewrites one, so
+    # 543 has-classes measurements stand in the store, the index derives a
+    # column from them, and a column with no description would be a chip a
+    # reader cannot look up. `retired` is what keeps that honest: described,
+    # and marked as a thing no new sweep will produce.
     "has-classes": {
         "label": "Holds typed resources",
         "dimension": "content",
         "cost": "cheap",
+        "retired": "2026-08-28",
         "explains": (
-            "Whether anything in the endpoint carries a type at all. One row "
-            "with one type is enough, which is why this is cheap where counting "
-            "the distinct types is not."
+            "Whether anything in the endpoint carried a type at all, asked with "
+            "one row as the whole answer. No longer measured, because the "
+            "question it answered was not the one it looked like: every RDF "
+            "dataset worth monitoring has types, so as a fact about CONTENT "
+            "this was close to worthless, and 54 verified against 489 "
+            "indeterminate on the 2026-08-24 sweep says what it was really "
+            "reporting was whether a query came back. Availability asks that, "
+            "with a smaller query. Measurements already taken are still shown "
+            "and still true of the sweep that took them."
         ),
     },
     "classes": {
@@ -2170,8 +2183,14 @@ def _docs_context() -> dict:
 def _docs_metrics_context() -> dict:
     """One entry per metric, in the order prober/metrics.toml declares them."""
     return {
+        # Measured first, retired last, because a reader scanning this page is
+        # looking for what the service does now and a retired entry is a
+        # footnote to that rather than one of the eight things it asks.
         "metrics": [
-            {"id": metric, **facts} for metric, facts in METRIC_DOCS.items()
+            {"id": metric, **facts}
+            for metric, facts in sorted(
+                METRIC_DOCS.items(), key=lambda pair: bool(pair[1].get("retired"))
+            )
         ],
     }
 
@@ -2295,7 +2314,7 @@ POLITENESS = {
     "request-budget-seconds": 30,
     "metric-budget-seconds": 60,
     "endpoint-budget-seconds": 600,
-    "requests-per-endpoint": 7,
+    "requests-per-endpoint": 6,
 }
 
 # What the admission policy costs an endpoint that has proved expensive and

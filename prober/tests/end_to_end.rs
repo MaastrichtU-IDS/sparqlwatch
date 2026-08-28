@@ -87,10 +87,10 @@ async fn a_sweep_over_one_mock_endpoint_produces_nquads() {
         // so the queryless fetch's body_kind is `Other`, not `Rdf`. A 200 with
         // an unparsed body is `Indeterminate`, never `Absent`.
         ("service-description", Verdict::Indeterminate),
-        // Likewise ?c is unbound, so zero classes, honestly measured.
+        // Likewise ?c is unbound, so zero classes, honestly measured. This had
+        // a cheap counterpart, `has-classes`, asserting the same absence until
+        // that metric was removed on 2026-08-28.
         ("classes", Verdict::Absent),
-        // Same unbound ?c, same honest absence, at the cheap end of the split.
-        ("has-classes", Verdict::Absent),
     ]);
     assert_eq!(got, expected);
 
@@ -1275,7 +1275,7 @@ fn binds(block: &str, var: &str) -> bool {
 #[test]
 fn the_content_metrics_reach_named_graphs_without_colliding_variables() {
     let defs = load_shipped_metrics();
-    for id in ["geo-data", "classes", "has-classes"] {
+    for id in ["geo-data", "classes"] {
         let d = defs.iter().find(|d| d.id == id).expect("metric must exist");
         let q = d.query.as_deref().unwrap_or("");
         let var = d.var.as_deref().expect("both metrics read a bound variable");
@@ -1338,9 +1338,12 @@ fn the_content_metrics_reach_named_graphs_without_colliding_variables() {
     }
 }
 
-/// Pins the `SelectIris` choice on `has-classes` against the exact mistake its
-/// own comment in `metrics.toml` warns about. Every other fixture in this file
-/// leaves `?c` unbound, so `has-classes` reads `absent` under either probe
+/// Pins the `SelectIris` choice on `classes` against the exact mistake its own
+/// comment in `metrics.toml` warns about. The warning and this test were about
+/// `has-classes` until that metric went on 2026-08-28; the trap is unchanged,
+/// because this metric binds the same `?c` through the same probe kind. Every
+/// other fixture in this file leaves `?c` unbound, so `classes` reads `absent`
+/// under either probe
 /// kind and no existing test can tell `SelectIris` from `AskData`. Only a mock
 /// that actually binds `?c` to a URI can separate them: `SelectIris` collects
 /// it and confirms the metric, while `AskData` would route it through
@@ -1374,9 +1377,9 @@ async fn has_classes_reads_the_iri_c_binds_through_select_iris_not_ask_data() {
     }).unwrap();
 
     assert_eq!(
-        verdict_of(&run, "has-classes"),
+        verdict_of(&run, "classes"),
         Verdict::Verified,
-        "has-classes must be confirmed from an IRI bound to ?c; a metric routed through \
+        "classes must be confirmed from an IRI bound to ?c; a metric routed through \
          AskData's literal guard would see no literal here and report absent instead"
     );
 }
@@ -1428,8 +1431,14 @@ async fn a_declined_metric_is_recorded_as_not_measured_not_as_indeterminate() {
             "a declined metric produces no measurement row");
     assert!(out.not_measured.iter().any(|n| n.metric_id == "classes"),
             "and is recorded as not measured instead");
-    assert!(out.rows.iter().any(|r| r.metric_id == "has-classes"),
-            "while its cheap counterpart still runs");
+    // Every cheap definition ran, asserted as a property rather than by naming
+    // one: this said `has-classes` until that metric was removed on 2026-08-28,
+    // and a test that names an example breaks when the example goes while a
+    // test that names the rule does not.
+    for cheap in &run {
+        assert!(out.rows.iter().any(|r| r.metric_id == cheap.id),
+                "{} is within the ceiling and produced no row", cheap.id);
+    }
     // Not an `Indeterminate` row wearing a different hat: no row at all, and a
     // fact that says why.
     assert_eq!(out.rows.len() + out.not_measured.len(), load_shipped_metrics().len(),
@@ -1502,8 +1511,9 @@ async fn a_declined_metric_reaches_the_published_graph_with_no_verdict() {
     // The run itself says which ceiling declined it.
     assert!(quads.iter().any(|q| q.predicate.as_str() == "urn:sparqlwatch:maxCost"
                 && q.object == Term::Literal(oxrdf::Literal::new_simple_literal("cheap"))));
-    // ...while the cheap counterpart is a real measurement with a real verdict.
-    assert_eq!(verdict_of(&nq, "has-classes"), Verdict::Verified);
+    // ...while a metric within the ceiling is a real measurement with a real
+    // verdict. This named `has-classes` until 2026-08-28.
+    assert_eq!(verdict_of(&nq, "availability"), Verdict::Verified);
 }
 
 /// A declined metric produces one not-measured fact PER ENDPOINT, and every
@@ -1717,9 +1727,11 @@ async fn the_classes_metric_publishes_the_iris_it_bound() {
     let Sweep { rows, declarations_read: read, not_measured, content_samples, failed_endpoints: _failed_endpoints } =
         without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
 
-    // Only the metric that declared a `sample_limit` publishes one:
-    // `has-classes` binds the very same `?c` in this sweep and must publish
-    // nothing, or the cheap probe would quietly enumerate too.
+    // Only the metric that declared a `sample_limit` publishes one. This case
+    // was sharper while `has-classes` existed, because it bound the very same
+    // `?c` and had to publish nothing or the cheap probe would have quietly
+    // enumerated too; with that metric gone the assertion is that no OTHER
+    // metric in the shipped set produces a sample.
     let ids: Vec<&str> = content_samples.iter().map(|s| s.metric_id.as_str()).collect();
     assert_eq!(ids, ["classes"], "only a metric declaring a sample_limit enumerates");
     let sample = &content_samples[0];
@@ -1770,7 +1782,6 @@ async fn the_classes_metric_publishes_the_iris_it_bound() {
     // And the verdict has not moved: this slice adds a fact, it does not
     // regrade anything.
     assert_eq!(verdict_of(&nq, "classes"), Verdict::Verified);
-    assert_eq!(verdict_of(&nq, "has-classes"), Verdict::Verified);
 }
 
 #[tokio::test]
@@ -1863,8 +1874,11 @@ async fn a_declined_metric_publishes_no_sample_and_still_says_why() {
         "the absence is published as a choice, not left as a silence");
     assert!(quads.iter().any(|q| q.predicate.as_str() == "urn:sparqlwatch:notMeasuredReason"
         && q.object == Term::Literal(oxrdf::Literal::new_simple_literal("cost-ceiling"))));
-    // The cheap counterpart still measured, and its verdict has not moved.
-    assert_eq!(verdict_of(&nq, "has-classes"), Verdict::Verified);
+    // A cheap metric still measured, and its verdict has not moved. This named
+    // `has-classes` until that metric went on 2026-08-28; availability is the
+    // one every sweep runs and the one this file can name without pinning the
+    // test to a definition that may change again.
+    assert_eq!(verdict_of(&nq, "availability"), Verdict::Verified);
 }
 
 /// An endpoint that answers every query with `status` and a SPARQL-results

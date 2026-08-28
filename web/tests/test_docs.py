@@ -82,7 +82,26 @@ def test_every_metric_fact_is_the_probers_own():
     """
     stated = metrics_toml()
     assert stated, "no metric in prober/metrics.toml carries the three fields"
-    assert set(METRIC_DOCS) == set(stated), "the two disagree about which metrics exist"
+
+    # A metric this page describes is either one the prober measures now, and
+    # then the three facts must match its file, or one it has RETIRED, and then
+    # the file must not mention it. The second case is not an escape hatch: the
+    # store still holds measurements a retired metric produced, the index still
+    # derives a column from them, and a column a reader cannot look up would be
+    # worse than a description marked out of date. What the marking buys is that
+    # nobody reads it as something a new sweep will produce.
+    described = set(METRIC_DOCS)
+    retired = {m for m, facts in METRIC_DOCS.items() if facts.get("retired")}
+    current = described - retired
+
+    assert current == set(stated), (
+        "the docs and prober/metrics.toml disagree about which metrics are "
+        f"measured: docs say {sorted(current)}, the file says {sorted(stated)}"
+    )
+    for metric in retired:
+        assert metric not in stated, (
+            f"{metric} is marked retired and prober/metrics.toml still defines it"
+        )
     for metric, facts in stated.items():
         for field in ("label", "dimension", "cost"):
             assert METRIC_DOCS[metric][field] == facts[field], (
@@ -91,12 +110,39 @@ def test_every_metric_fact_is_the_probers_own():
             )
 
 
+def test_a_retired_metric_is_described_and_marked(client):
+    """Because its measurements are still published and still true.
+
+    has-classes was removed from prober/metrics.toml on 2026-08-28 after 543
+    endpoints had been measured for it. Those measurements are a record of what
+    that sweep observed, nothing here rewrites a run graph, and the index
+    derives its columns from the store rather than from the prober's file, so
+    the column outlives the probe. A reader who meets it needs to be able to
+    look it up AND to be told no new sweep will produce it.
+    """
+    page = html(client, DOCS_METRICS_PATH)
+    retired = [m for m, facts in METRIC_DOCS.items() if facts.get("retired")]
+    assert retired, "this test needs at least one retired metric to be about"
+    for metric in retired:
+        assert metric in {
+            a["data-metric-doc"] for a in with_attribute(page, "data-metric-doc")
+        }
+        marked = [
+            a["data-metric-retired"]
+            for a in with_attribute(page, "data-metric-retired")
+        ]
+        assert metric in marked, f"{metric} is not marked retired on the page"
+
+
 def test_the_metrics_page_renders_every_metric_and_its_facts(client):
     page = html(client, DOCS_METRICS_PATH)
     stated = metrics_toml()
+    # Every metric the docs describe, measured or retired: the page is the place
+    # a reader looks up a column, and the store outlives the prober's file.
     assert {a["data-metric-doc"] for a in with_attribute(page, "data-metric-doc")} == (
-        set(stated)
+        set(METRIC_DOCS)
     )
+    assert set(stated) <= set(METRIC_DOCS)
     for metric, facts in stated.items():
         for field, attribute in (
             ("label", "data-metric-label"),

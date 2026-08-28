@@ -2053,9 +2053,15 @@ def test_the_metric_descriptions_are_the_probers_own_labels():
         if found_id and found_label:
             labels[found_id.group(1)] = found_label.group(1)
     assert labels, "no metric in prober/metrics.toml carries a label"
-    assert METRIC_DESCRIPTIONS == labels, (
-        "app.py's descriptions and prober/metrics.toml's labels have drifted"
-    )
+    # Every metric the prober measures must be described, and a description may
+    # outlive the probe: see test_docs.py's retirement rule, which is where the
+    # marking is enforced. The store keeps publishing a retired metric's
+    # measurements and the index keeps deriving a column from them.
+    for metric, label in labels.items():
+        assert METRIC_DESCRIPTIONS.get(metric) == label, (
+            f"{metric}: the page says {METRIC_DESCRIPTIONS.get(metric)!r}, "
+            f"prober/metrics.toml says {label!r}"
+        )
 
 
 def test_every_state_column_carries_its_meaning(client_for, store_registry_sample):
