@@ -270,9 +270,20 @@
           <th scope="col">metric</th>
           {% for state in matrix_states %}
           <th scope="col">
+            {# The state's meaning, as a title. It was printed as prose under
+               this panel until 2026-08-28 and the prose went with the plan
+               owner's edit, so it sits on the thing it describes instead.
+
+               A native title and not a widget: it is the mouseover a browser
+               already gives and a screen reader already reads as the element's
+               description. What it does not reach is a keyboard or a touch
+               reader, and no amount of styling fixes that, so the words are
+               also still in verdict_encoding.py and on every endpoint's own
+               page, where each verdict is written out beside its metric. #}
             <button type="button" class="facet facet-head" aria-pressed="false"
                     data-facet="state" data-facet-value="{{ state.slug }}"
-                    data-state="{{ state.slug }}">
+                    data-state="{{ state.slug }}"
+                    {%- if state.description %} title="{{ state.description }}"{% endif %}>
               <span class="f-swatch {{ state.css_class }}" aria-hidden="true"></span>
               <span class="f-head-label">{{ state.label }}</span>
               <span class="f-count">{{ state_counts[state.slug] }}</span>
@@ -291,7 +302,8 @@
              because it is how the tests and any other reader of this HTML learn
              which abbreviation belongs to which metric. #}
           <th scope="row" data-metric-column="{{ row.name }}"
-              data-abbr="{{ row.abbr }}">
+              data-abbr="{{ row.abbr }}"
+              {%- if row.description %} title="{{ row.description }}"{% endif %}>
             <span class="mabbr">{{ row.abbr }}</span> {{ row.name }}
           </th>
           {% for cell in row.cells %}
@@ -312,21 +324,6 @@
         {% endfor %}
       </tbody>
     </table>
-    <p class="note">
-      A cell is the endpoints whose newest sweep put that metric in that state,
-      so a row's cells account for every endpoint once. Press a cell for that pair, or a
-      column header for the state whatever the metric, and each says how many it
-      selects. The metric names are labels: every cell in a row already filters
-      on that metric, so a chip on the name could only widen what the cells
-      beside it narrow.
-    </p>
-    <p class="note">
-      A filled chip means we have positive evidence the capability works;
-      a dashed border means no declaration was seen for it;
-      a heavier border means something is actively wrong rather;
-      a dotted border means we did not look;
-      and no border at all means nothing was there.
-    </p>
   </section>
   {% endif %}
 
@@ -338,25 +335,24 @@
   </p>
   {% endif %}
 
-  {% for group in groups %}
-  <section class="group" data-availability="{{ group.availability }}">
-    <h2 class="g-head" data-group-heading="true" data-group-label="{{ group.label }}"
-        data-group-count="{{ group.count }}" data-group-of="{{ group.of }}">
-      <span class="swatch {{ group.css_class }}" aria-hidden="true"></span>{{ group.heading }}<span class="g-shown"></span>
-    </h2>
-    {% if group.meaning %}
-    <p class="g-note" data-group-note="{{ group.availability }}">{{ group.meaning }}</p>
-    {% endif %}
-    {% if group.dormant_note %}
-    {# A note on the group, not a group of its own: a dormant row keeps the
-       verdict its last real probe produced, and that verdict is what this group
-       is keyed on. Drawn in the warn token because it bounds what the rows
-       below report, which is the same kind of claim as the store-level note at
-       the top of the page. #}
-    <p class="g-note warn-note" data-group-dormant="{{ group.availability }}">{{ group.dormant_note }}</p>
-    {% endif %}
-    <ul class="rows">
-      {% for row in group.rows %}
+  {% if dormant_note %}
+  {# Once for the page, where it was once per group until 2026-08-28. A group
+     holding no marked row correctly carried no note, so three sections could
+     say three different things about one marker; one listing says it once. #}
+  <p class="note warn-note" data-page-dormant="true">{{ dormant_note }}</p>
+  {% endif %}
+
+  {# ONE LISTING, alphabetical by endpoint. Three sections headed "availability
+     verified: 57 of 543 endpoints" and so on stood here until 2026-08-28, and
+     the grid's availability row states those same three counts, keeping 482
+     that answered nothing apart from 4 that answered absent where the headings'
+     own two-way reading did not.
+
+     No heading means no grouping element, so the script that filters rows no
+     longer has per-group counts to keep honest: one number, in the header, over
+     one list. #}
+  <ul class="rows" data-listing="all">
+      {% for row in rows %}
 {# ONE LINE PER ROW, AND EVERY BYTE OF IT IS COUNTED. 543 rows times eight
    cells is where this page's size lives: it is 90 percent of the document, so
    the row is not indented, it carries no class attribute that a descendant
@@ -396,9 +392,7 @@
    and it is the cheapest thing to give up if something has to go. #}
       <li data-endpoint="{{ row.endpoint }}"{% if row.run_unfinished %} data-run-unfinished="true"{% endif %}{% if row.never_reached %} data-newer-run-unfinished="true"{% endif %}{% if row.dormant %} data-newest-sweep-dormant="true"{% if row.dormancy_reason %} data-dormancy-reason="{{ row.dormancy_reason }}"{% endif %}{% endif %}{% if row.measured_by %} data-measured-by-sweep="{{ row.measured_by }}"{% endif %}><a href="{{ row.href }}">{{ row.endpoint }}</a>{% if row.run_unfinished %}<span class="qual">{{ row_unfinished_text }}</span>{% endif %}{% if row.never_reached %}<span class="qual">{{ row_never_reached_text }}</span>{% endif %}{% if row.dormant %}<span class="qual">{{ row.dormant_text }}</span>{% endif %}{% if row.measured_by %}<span class="when">{{ row_measured_by_text }} {{ row.measured_by }}</span>{% endif %}<span class="cells">{% for cell in row.cells %}{% if cell.present %}<span class="{{ cell.css_class }}"{% if cell.verdict is not none %} data-verdict="{{ cell.verdict }}"{% else %} data-declined="{{ cell.reason }}"{% endif %}>{{ cell.abbr }}</span>{% else %}<span class="gap" data-gap="true">&#183;</span>{% endif %}{% endfor %}</span></li>
       {% endfor %}
-    </ul>
-  </section>
-  {% endfor %}
+  </ul>
 
 {# Commented out by the plan owner on 2026-08-28. A JINJA comment and not an
    HTML one: `<!-- -->` leaves all 3,393 bytes of this panel in every response,
@@ -487,7 +481,6 @@
   var shown = document.getElementById("shown");
   var buttons = [].slice.call(document.querySelectorAll("[data-facet]"));
   if (!box && !buttons.length) { return; }
-  var groups = [].slice.call(document.querySelectorAll("[data-availability]"));
   var total = document.querySelectorAll("[data-endpoint]").length;
   var empty = document.getElementById("nothing");
   /* The facet groups, read off the CHIPS rather than off the panels. Both are
@@ -534,12 +527,8 @@
       pairs: pairs
     };
   }
-  var rows = [];
-  groups.forEach(function (group) {
-    [].slice.call(group.querySelectorAll("[data-endpoint]")).forEach(function (el) {
-      rows.push({ el: el, group: group, f: facts(el) });
-    });
-  });
+  var rows = [].slice.call(document.querySelectorAll("[data-endpoint]"))
+    .map(function (el) { return { el: el, f: facts(el) }; });
 
   /* How many chips are drawn in one state among the rows a filter leaves, which
      is the legend's other number. Counted over the same rows the row count is
@@ -661,12 +650,6 @@
       r.el.hidden = !hit;
       r.hit = hit;
       if (hit) { matched += 1; }
-    });
-    groups.forEach(function (group) {
-      var here = rows.filter(function (r) { return r.group === group && r.hit; }).length;
-      group.hidden = filtering && here === 0;
-      var note = group.querySelector(".g-shown");
-      if (note) { note.textContent = filtering ? ", " + here + " shown" : ""; }
     });
     /* Recounted on every change, including the first call below, where nothing
        is pressed and every chip therefore has to arrive at the number the
