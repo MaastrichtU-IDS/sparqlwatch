@@ -1396,94 +1396,47 @@ def test_dormancy_is_not_added_to_the_legend(client_for, store_dormant_newest):
     assert "dormant" not in states
 
 
-def test_the_marked_row_panel_explains_the_dormant_marker_and_every_reason(
+def test_the_row_markers_are_explained_on_about_and_not_on_the_index(
     client_for, store_dormant_newest
 ):
-    """The reasoning that will not fit in three words on a row.
+    """The panel that explained the four row markers was commented out by the
+    plan owner on 2026-08-28, so this pins where the explanation now lives.
 
-    Four markers now, so four explanations, each read out of its own element
-    rather than searched for in the document: a sentence asserted to be
-    somewhere on the page passes while it sits in the legend. The dormancy
-    paragraph has to name every reason a run graph can carry, say what the
-    marker does NOT mean, and say where a person changes it, because a reader
-    who finds their own endpoint marked will read this and nothing else. The
-    reasons are read off _ROW_DORMANCY_REASONS rather than listed here, so a
-    third one arriving fails this test rather than passing it two out of three.
+    The markers themselves still render, so a reader still meets "the newest
+    sweep did not ask" on a row. What changed is that the index no longer says
+    what that means, what it does NOT mean, or who changes it. /about does say
+    all three, and the header links there from every page, which is why this is
+    a relocation rather than a loss: the sentence a reader needs is one click
+    away instead of one scroll away. The row's own wording still carries the
+    reason, which is what stops the marker being bare.
     """
     page = index(client_for(store_dormant_newest))
-    panel = {
-        attributes["data-row-marker"]: text
-        for attributes, text in zip(
-            with_attribute(page, "data-row-marker"),
-            texts_with(page, "data-row-marker"),
-        )
-    }
-
-    assert set(panel) == {"run-unfinished", "never-reached", "dormant", "measured-by"}
-    dormant = panel["dormant"].lower()
-    # The reasons the panel names are the ones the row can carry, read off the
-    # map the row is built from rather than spelled out here. test_about.py's
-    # test_the_dormancy_reasons_the_pages_read_are_the_probers_own pins that map
-    # to prober/src/dormancy.rs's SkipReason::slug, so this closes the chain
-    # from the Rust match arm to the words in the panel.
-    for slug, (clause, gloss) in _ROW_DORMANCY_REASONS.items():
-        assert slug in dormant, f"the panel does not name {slug}"
-        # Formatted the way _index_context formats it, because a gloss carrying
-        # one of the policy's numbers holds it as a field rather than as a word:
-        # see _ROW_DORMANCY_REASONS.
-        filled = gloss.format(
-            strikes=DORMANCY["dormant-strikes"],
-            cadence=DORMANCY["dormant-cadence-days"],
-        )
-        assert filled.lower() in dormant, f"the panel does not explain {slug}"
-        assert "{" not in dormant, "an unformatted field reached the page"
-    assert "not a verdict" in dormant, dormant
-    # Both numbers, from the same constants /about states them from, and not
-    # spelled out in the template. test_about.py holds DORMANCY to
-    # prober/src/dormancy.rs, so this closes the chain to the words in the panel.
-    assert f"{DORMANCY['dormant-cadence-days']} days" in dormant, dormant
-    assert f"{DORMANCY['dormant-strikes']} sweeps in a row" in dormant, dormant
-    # The provenance paragraph has to say what the instant is FOR: that the
-    # header names another sweep, and that the gap between the two is not
-    # something this service can measure.
-    measured_by = panel["measured-by"].lower()
-    assert "header" in measured_by, measured_by
-    assert "timer" in measured_by, measured_by
+    assert not with_attribute(page, "data-row-marker")
+    # The marker is still on the row, and still says why.
+    marked = texts_with(page, "data-newest-sweep-dormant")
+    assert marked and any("did not ask" in text for text in marked)
+    # And the way to the page that explains it is in the header.
+    assert f'href="{ABOUT_PATH}"' in page
 
 
 def test_the_index_links_to_about_once_and_not_once_per_row(
     client_for, store_dormant_newest
 ):
-    """The route this project tells strangers to take, made a route.
+    """One occurrence, in the page header, and never one per row.
 
-    `/about` asserts that a reader arrives here two ways, the second being a row
-    on this page that says the newest sweep did not ask their endpoint. There was
-    no such route: no template held an `href` to `/about`, so the marked row said
-    what happened and stopped, and the contact address that changes it sat on a
-    page you reached by pasting a `User-Agent` URL into a browser.
-
-    TWICE, AND THE COUNT IS THE ASSERTION. web/README.md's table has this page
-    over its documented 500 KB in three of four measured shapes, and 543 rows is
-    the wrong place to spend bytes on a constant string: a link in the row would
-    be the version of this fix that makes the overrun worse. So one occurrence in
-    the page header, for every reader, and one in the panel that explains the
-    marker, for the reader who followed it, and neither of them grows with the
-    number of rows.
+    Was two until 2026-08-28: the header's and one inside the panel that
+    explained the dormancy marker, which the plan owner commented out. The
+    invariant this test exists for is unchanged and is the one that matters at
+    543 rows: a link repeated per row would spend 1,227 bytes as 24,000, and
+    web/README.md's table is the record of how little headroom that leaves.
     """
     href = f'href="{ABOUT_PATH}"'
     text = index(client_for(store_dormant_newest))
-    assert text.count(href) == 2, (
-        f"the header's link and the panel's, and no more: {text.count(href)}"
+    assert text.count(href) == 1, (
+        f"the header's link and no more: {text.count(href)}"
     )
-
-    panel = {
-        attributes["data-row-marker"]: body
-        for attributes, body in zip(
-            with_attribute(text, "data-row-marker"),
-            texts_with(text, "data-row-marker"),
-        )
-    }
-    assert "about page" in panel["dormant"].lower(), panel["dormant"]
+    # The real invariant: not once per row, whatever the row count.
+    assert text.count(href) < len(listed(text))
 
 
 def test_the_row_marker_reads_every_reason_a_run_graph_can_carry():
@@ -1844,35 +1797,30 @@ def test_the_availability_facet_is_two_chips_over_the_verdicts():
     assert (other["slug"], other["count"]) == ("not-available", 486)
 
 
-def test_the_not_available_chip_discloses_how_many_it_could_not_reach():
-    """The chip counts 486 and 482 of those answered nothing at all.
+def test_the_not_available_chip_carries_no_disclosure(client_for, store_registry_sample):
+    """Removed by the plan owner on 2026-08-28, and pinned as removed.
 
-    Filing them under one word is the plan owner's decision, taken with the
-    number in front of them. What is not negotiable is that the page then says
-    so: 486 presented as a finding would be a claim about 482 servers that no
-    sweep made.
+    The chip counts 486 endpoints of which 482 merely never answered inside the
+    time budget, and the sentence under it used to say so. This test asserts the
+    page no longer does, so the removal is a decision on the record rather than
+    a sentence that fell out and nobody noticed. app.py's _availability_facets
+    still counts the number, one line from being rendered again.
     """
-    groups = [rows_of("verified", 57), rows_of("indeterminate", 482),
-              rows_of("absent", 4)]
-    _, other = _availability_facets(groups)
-    assert "482 of these 486" in other["detail"], other["detail"]
-    assert "no answer arrived" in other["detail"]
-    assert "not that the endpoint is unavailable." in other["detail"]
+    page = index(client_for(store_registry_sample))
+    assert not with_attribute(page, "data-facet-detail")
+    assert "answered nothing inside the time budget" not in page
 
 
-def test_the_disclosure_says_all_of_them_when_it_is_all_of_them():
-    """"482 of these 482" is arithmetic; "all 482 of these" is the fact.
+def test_the_availability_facets_are_two_counts_and_no_prose():
+    """Both chips, both counts, and `detail` None on every shape.
 
-    The general form reads as a proper subset, so where the two numbers are
-    equal it understates its own claim: every endpoint filed under "not
-    available" would be one no answer arrived from, and the sentence would leave
-    a reader looking for the ones it is not true of.
+    The equal-numbers wording ("All 482 of these") went with the sentence it
+    belonged to; the two counts it qualified are unchanged.
     """
-    groups = [rows_of("verified", 57), rows_of("indeterminate", 482)]
-    _, other = _availability_facets(groups)
-    assert other["count"] == 482
-    assert "All 482 of these answered nothing" in other["detail"], other["detail"]
-    assert "of these 482" not in other["detail"], other["detail"]
+    groups = [rows_of("verified", 5), rows_of("indeterminate", 9)]
+    available, other = _availability_facets(groups)
+    assert (available["count"], other["count"]) == (5, 9)
+    assert available["detail"] is None and other["detail"] is None
 
 
 def test_a_registry_with_nothing_indeterminate_gets_no_disclosure():
@@ -1882,19 +1830,18 @@ def test_a_registry_with_nothing_indeterminate_gets_no_disclosure():
     assert other["detail"] is None
 
 
-def test_the_disclosure_is_a_sentence_like_every_other_note_on_the_page():
-    """It shipped without a full stop, unlike the notes on the other two panels.
+def test_no_availability_chip_claims_more_than_its_own_count():
+    """What survives the disclosure's removal: the labels themselves.
 
-    Small, and the reason it is pinned: the sentence exists to stop a number
-    reading as a claim no sweep made, so it is the last note on the page that
-    should look like an aside.
+    "not available" is the word the plan owner chose for a column that is mostly
+    endpoints which answered nothing, and the labels are all the page says now,
+    so this pins that neither chip's label asserts a cause.
     """
-    groups = [rows_of("verified", 57), rows_of("indeterminate", 482),
-              rows_of("absent", 4)]
-    details = [f["detail"] for f in _availability_facets(groups) if f["detail"]]
-    assert details
-    for detail in details:
-        assert detail.endswith("."), detail
+    groups = [rows_of("verified", 1), rows_of("indeterminate", 1)]
+    for facet in _availability_facets(groups):
+        assert "broken" not in facet["label"]
+        assert "down" not in facet["label"]
+        assert "unresponsive" not in facet["label"]
 
 
 def test_a_metric_chip_counts_the_rows_that_recorded_a_verdict():
@@ -2168,68 +2115,37 @@ def test_a_chip_separates_its_words_from_its_count(
         assert label.startswith(f"{abbr} {name} "), label
 
 
-def test_the_page_says_what_a_count_on_a_chip_is(
+def test_the_count_contract_paragraph_is_empty_and_says_nothing_false(
     client_for, store_registry_sample
 ):
-    """The sentence the recount makes true, and it is the page's own claim.
+    """The paragraph is still in the document and its sentence was removed.
 
-    The state panel says a chip's rows number "is what pressing it filters to",
-    and the counts were rendered once and never recomputed: pressing
-    availability/available and then state/indeterminate left a chip reading 402
-    above a page reading "showing 0 of 543 endpoints". The script now recomputes
-    every count against the rows the other groups leave, which is the faceted
-    count contract, and this is where the page states it. Nothing here can run
-    the script; test_every_chip_count_is_the_rows_the_page_renders pins the
-    counts a reader arrives at, and web/README.md records what was driven in
-    jsdom and what cannot be tested from pytest at all.
+    It used to state the contract the counts keep: any within a group, all
+    across groups, each count conditioned on the other groups' filters. The
+    element stays because the script reads nothing from it and the tests find
+    the panels by their own attributes, so an empty note breaks nothing. What is
+    gone is the only place the page explained why a count moves when another
+    chip is pressed.
     """
     page = index(client_for(store_registry_sample))
     said = texts_with(page, "data-facet-contract")
-
     assert len(said) == 1
-    assert "any of them within a group, all of them across groups" in said[0]
-    assert "moves as those filters are pressed" in said[0]
-
-    # And the contract is stated ONCE. The state panel used to restate it
-    # locally as "which is what pressing it filters to", which stopped being
-    # true when the counts became conditional: with a sibling chip in the same
-    # group pressed, pressing a chip filters to the union and so to more than
-    # its own number, and with another group pressed the number is conditioned
-    # on that group. The unconditioned definition was true only in the state a
-    # test without a browser can see, which is the worst kind of sentence to
-    # leave on a page.
+    assert said[0].strip() == ""
     assert "what pressing it filters to" not in page
 
 
-def test_the_not_available_chip_points_at_the_sentence_that_qualifies_it(
+def test_no_chip_points_at_a_sentence_that_is_no_longer_there(
     client_for, store_registry_sample
 ):
-    """The disclosure reaches a reader who cannot see the paragraph below it.
+    """The aria-describedby went with the paragraph it referenced.
 
-    The chip counts every endpoint that is not positively available, most of
-    which merely never answered inside the budget, and the paragraph under it is
-    what stops the words "not available" over-claiming. A sighted reader gets it
-    by reading on; a screen-reader user gets it only if the button says where it
-    is, and without that the accessible name is the over-claiming words alone.
+    A dangling reference is worse than none: a screen reader announces a
+    description that does not exist, and a reader who tabs to the chip is told
+    less than a reader who does not.
     """
     page = index(client_for(store_registry_sample))
-    chips = {
-        attributes["data-facet-value"]: attributes
-        for attributes in with_attribute(page, "data-facet")
-        if attributes["data-facet"] == "availability"
-    }
-    details = {
-        attributes["data-facet-detail"]: attributes
-        for attributes in with_attribute(page, "data-facet-detail")
-    }
-
-    assert set(details) == {"not-available"}, details
-    described = chips["not-available"]["aria-describedby"]
-    assert described == details["not-available"]["id"]
-    # And it points at an element that is on this page, which is the way an
-    # aria-describedby fails without anything looking wrong.
-    assert described in {a["id"] for a in with_attribute(page, "id")}
-    assert "aria-describedby" not in chips["available"]
+    for attributes in with_attribute(page, "data-facet"):
+        assert "aria-describedby" not in attributes
 
 
 def test_the_facet_groups_come_in_the_order_the_page_reads_in(
@@ -2241,8 +2157,8 @@ def test_the_facet_groups_come_in_the_order_the_page_reads_in(
     page = index(client_for(store_registry_sample))
     order = [a["data-facet-group"] for a in with_attribute(page, "data-facet-group")]
     assert order == ["availability", "metric", "state"]
-    assert page.index("Availability") < page.index("what each chip's letters mean")
-    assert page.index("what each chip's letters mean") < page.index("What the drawing means")
+    assert page.index("<h2>Availability</h2>") < page.index("<h2>Metrics</h2>")
+    assert page.index("<h2>Metrics</h2>") < page.index("<h2>States</h2>")
 
 
 def test_a_filter_that_matches_nothing_has_a_sentence_ready(

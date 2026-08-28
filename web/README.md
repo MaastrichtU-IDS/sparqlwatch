@@ -553,7 +553,7 @@ that sets it records the change and the reasoning.
 
 | Store shape | Rows marked | Dormant | Bytes | Per row | Against 750,000 |
 | --- | --- | --- | --- | --- | --- |
-| one sweep, the shape above | 0 | 0 | 455,542 | 839 | under by 294,458 |
+| one sweep, the shape above | 0 | 0 | 449,793 | 828 | under by 300,207 |
 | a two-endpoint newer sweep | 541 | 0 | 515,433 | 949 | under by 234,567 |
 | the same, plus 57 of the rest declared dormant | 541 | 57 | 525,080 | 967 | under by 224,920 |
 | every row marked and dormant | 543 | 543 | 593,841 | 1,094 | under by 156,159 |

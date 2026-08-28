@@ -958,7 +958,7 @@ def test_the_not_measured_legend_entry_names_no_reason():
     the graph.
     """
     state = verdict_encoding.presentation(verdict_encoding.NOT_MEASURED)
-    assert state.meaning == "no measurement was taken; the row says why"
+    assert state.meaning == "not measured"
     for reason in ("cost", "ceiling", "prober", "failed", "declined"):
         assert reason not in state.meaning
 

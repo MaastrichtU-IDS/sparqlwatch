@@ -191,7 +191,7 @@
   <a href="{{ about_path }}">why we queried your server</a>
 </header>
 <main>
-  <h1>Public SPARQL endpoints this service has measured</h1>
+  <h1>SPARQL Watch - Public SPARQL endpoint monitoring service</h1>
   <p class="sub" data-endpoint-count="{{ endpoint_count }}" data-metric-count="{{ metric_count }}">
     {% if endpoint_count %}
       {# The endpoint and metric counts used to open this paragraph and were
@@ -200,10 +200,12 @@
          repeating in prose what the page states in numbers. The counts stay in
          the data- attributes on this element, which is where the tests read
          them and where a machine reading the HTML can still find them. #}
-      No score and no ranking: each endpoint carries one verdict per metric, and
-      the groups below are the availability verdict's own values rather than a
-      judgement about which of them is better. Follow a row to see every verdict
-      written out in words.
+      {# Removed by the plan owner on 2026-08-28, as a Jinja comment so the
+         sentence is not shipped to every reader:
+         No score and no ranking: each endpoint carries one verdict per metric,
+         and the groups below are the availability verdict's own values rather
+         than a judgement about which of them is better. Follow a row to see
+         every verdict written out in words. #}
     {% else %}
       No run in this store has recorded a measurement or a decline for any
       endpoint, so there is nothing to list. That is a fact about this store and
@@ -232,9 +234,7 @@
      the server rendered are the whole page's, which is the answer that is true
      in that state. #}
   <p class="note" data-facet-contract="true">
-    Chips filter the rows below: any of them within a group, all of them across
-    groups. Each count is how many of the rows the other groups' filters leave
-    that this chip selects, so every count moves as those filters are pressed.
+
   </p>
   <section class="panel" data-facet-group="availability">
     <h2>Availability</h2>
@@ -269,7 +269,7 @@
 
   {% if metrics %}
   <section class="panel" data-facet-group="metric">
-    <h2>The metrics, and what each chip's letters mean</h2>
+    <h2>Metrics</h2>
     <ul class="facets">
       {% for facet in metric_facets %}
       <li><button type="button" class="facet" aria-pressed="false"
@@ -281,10 +281,7 @@
       {% endfor %}
     </ul>
     <p class="note">
-      A count here is the endpoints whose newest sweep recorded a verdict for
-      that metric. A metric the sweep declined to run does not count towards
-      it, so a chip reading 0 says no sweep has measured this rather than that
-      every endpoint failed it. {{ empty_cell_text }}
+      {{ empty_cell_text }}
     </p>
   </section>
   {% endif %}
@@ -298,7 +295,7 @@
      to explain the drawing of, either: no chip on the page is in any state. #}
   {% if endpoint_count %}
   <section class="panel" data-facet-group="state">
-    <h2>What the drawing means</h2>
+    <h2>States</h2>
     <ul class="legend">
       {% for state in legend %}
       <li data-state="{{ state.slug }}">
@@ -314,25 +311,11 @@
       {% endfor %}
     </ul>
     <p class="note">
-      The drawing never rests on colour: a filled chip means we have positive
-      evidence the capability works; a dashed border means no declaration was
-      seen for it; a heavier border means something is actively wrong rather than
-      merely missing; a dotted border means we did not look; and no border at all
-      means nothing was there.
-
-      TWO NUMBERS, because they answer different questions, and both are over
-      the rows a filter leaves rather than over the whole page. "chips" counts
-      every chip drawn in that state. "rows" counts the endpoints carrying AT
-      LEAST ONE of them, so pressing a state finds every endpoint it is true of
-      anywhere across the eight metrics rather than only the endpoints it is
-      true of everywhere. A declined metric counts in both, which is what makes
-      the "we did not look" row mean something: its number is the endpoints with
-      a metric no sweep has run.
-    </p>
-    <p class="note">
-      A chip on this page carries no words, so this is the one page where a state
-      is drawn and not written out. Every row links to that endpoint's own page,
-      where each verdict is named in words beside the metric it belongs to.
+      A filled chip means we have positive evidence the capability works; 
+      a dashed border means no declaration was seen for it; 
+      a heavier border means something is actively wrong rather;
+      a dotted border means we did not look; 
+      and no border at all means nothing was there.
     </p>
   </section>
   {% endif %}
@@ -407,6 +390,11 @@
   </section>
   {% endfor %}
 
+{# Commented out by the plan owner on 2026-08-28. A JINJA comment and not an
+   HTML one: `<!-- -->` leaves all 3,393 bytes of this panel in every response,
+   which on a page with a byte budget is paying for markup nobody is shown. The
+   markers themselves still render on the rows, and /about carries what they
+   mean, what they do not, and who changes it.
 
   <section class="panel">
     <h2>What a marked row means</h2>
@@ -455,6 +443,7 @@
       service holds for that endpoint.
     </p>
   </section>
+#}
 </main>
 <script>
 /* The filter and the facets, and the page does not depend on either. Every row

@@ -10,13 +10,19 @@ Six verdicts, plus one fact that is deliberately not a verdict.
 
 | state | border | fill | weight | means |
 |---|---|---|---|---|
-| `verified` | solid | filled | 1px | works, and the endpoint declares it |
-| `undeclared-but-verified` | dashed | filled | 1px | works, no declaration seen |
-| `declared-only` | solid | empty | 1px | claimed, not confirmable by probe |
-| `declared-but-wrong` | solid | filled | **2px** | answered, and answered incorrectly |
-| `indeterminate` | dashed | empty | 1px | we never got to find out |
-| `absent` | none | empty | 1px | neither claimed nor observed |
-| `not measured` | dotted | empty | 1px | no measurement was taken; the row says why |
+| `verified` | solid | filled | 1px | confirmed and declared |
+| `undeclared-but-verified` | dashed | filled | 1px | confirmed, not declared |
+| `declared-only` | solid | empty | 1px | declared, not confirmed |
+| `declared-but-wrong` | solid | filled | **2px** | declared, but incorrect |
+| `indeterminate` | dashed | empty | 1px | not determined |
+| `absent` | none | empty | 1px | neither declared nor confirmed |
+| `not-measured` | dotted | empty | 1px | not measured |
+
+The wordings above were rewritten by the plan owner on 2026-08-28 to one
+vocabulary. Every row now says what was declared and what was confirmed, in
+those two words, rather than mixing "works", "claimed", "answered" and "observed
+ " across seven rows that a reader meets side by side in a legend. The channels
+and the slugs did not move, so nothing about the drawing or the data changed.
 
 The channels carry meaning rather than being arbitrary:
 

@@ -1230,12 +1230,13 @@ ROW_MEASURED_BY_TEXT = "measured by the sweep at"
 # states and it is deliberately not drawn as one: a metric this endpoint's
 # newest run recorded neither a measurement nor a decline for is a gap in what
 # the store holds, and drawing it as "not measured" would claim the run said so.
-EMPTY_CELL_TEXT = (
-    "A cell holding only a dot means this endpoint's newest run recorded "
-    "nothing at all about that metric, neither a measurement nor a decline. It "
-    "is a gap in what this service holds, not a verdict about the endpoint, "
-    "which is why it is not drawn as one of the states below."
-)
+EMPTY_CELL_TEXT = ""
+# (
+    # "A cell holding only a dot means this endpoint's newest run recorded "
+    # "nothing at all about that metric, neither a measurement nor a decline. It "
+    # "is a gap in what this service holds, not a verdict about the endpoint, "
+    # "which is why it is not drawn as one of the states below."
+#)
 
 
 def _row_dormancy_text(reason: str | None) -> str:
@@ -1522,29 +1523,15 @@ def _availability_facets(groups: list[dict]) -> list[dict]:
             if value == _UNREACHED_VERDICT:
                 unreached += n
     detail = None
-    if unreached:
-        # Where the two numbers are equal the general form would say "482 of
-        # these 482", which reads as a proper subset and so understates its own
-        # claim, leaving a reader looking for the endpoints it is not true of.
-        # There are none, so the equal case says "all".
-        #
-        # That case is NOT what the measured sweep produces, and an earlier
-        # version of this comment claimed it was. On 2026-08-24, `unreached` is
-        # 482 and `other` is 486, because 4 endpoints answered `absent`, so the
-        # page says "482 of these 486" and the branch below is reached by no
-        # store in this repository. It exists for a registry whose
-        # not-available column is entirely endpoints that never answered, which
-        # is the shape a stricter cost ceiling would produce.
-        how_many = (
-            f"All {other} of these"
-            if unreached == other
-            else f"{unreached} of these {other}"
-        )
-        detail = (
-            f"{how_many} answered nothing inside the time budget, so what was "
-            f"measured is that no answer arrived and not that the endpoint is "
-            f"unavailable."
-        )
+    # NO DISCLOSURE SENTENCE. It read "482 of these 486 answered nothing inside
+    # the time budget, so what was measured is that no answer arrived and not
+    # that the endpoint is unavailable", and the plan owner removed it on
+    # 2026-08-28. Recorded here rather than deleted silently, because the two
+    # chips file 482 endpoints that never answered under a word that says they
+    # are unavailable, and this sentence was the page's only statement of the
+    # difference. `unreached` is still counted so the number is one line away if
+    # it is wanted back.
+    detail = None
     return [
         {
             "slug": "available",
