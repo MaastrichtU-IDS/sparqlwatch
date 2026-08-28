@@ -86,7 +86,7 @@ STATES: tuple[Presentation, ...] = (
     Presentation(
         slug="verified",
         label="verified",
-        meaning="works, and the endpoint declares it",
+        meaning="confirmed and declared",
         border="solid",
         fill=True,
         weight=1,
@@ -94,8 +94,8 @@ STATES: tuple[Presentation, ...] = (
     ),
     Presentation(
         slug="undeclared-but-verified",
-        label="works, not declared",
-        meaning="works, no declaration seen",
+        label="confirmed, not declared",
+        meaning="confirmed, not declared",
         border="dashed",
         fill=True,
         weight=1,
@@ -104,7 +104,7 @@ STATES: tuple[Presentation, ...] = (
     Presentation(
         slug="declared-only",
         label="declared only",
-        meaning="claimed, not confirmable by probe",
+        meaning="declared, not confirmed",
         border="solid",
         fill=False,
         weight=1,
@@ -113,7 +113,7 @@ STATES: tuple[Presentation, ...] = (
     Presentation(
         slug="declared-but-wrong",
         label="declared but wrong",
-        meaning="answered, and answered incorrectly",
+        meaning="declared, but incorrect",
         border="solid",
         fill=True,
         weight=2,
@@ -122,7 +122,7 @@ STATES: tuple[Presentation, ...] = (
     Presentation(
         slug="indeterminate",
         label="indeterminate",
-        meaning="we never got to find out",
+        meaning="not determined",
         border="dashed",
         fill=False,
         weight=1,
@@ -131,7 +131,7 @@ STATES: tuple[Presentation, ...] = (
     Presentation(
         slug="absent",
         label="absent",
-        meaning="neither claimed nor observed",
+        meaning="neither declared nor confirmed",
         border="none",
         fill=False,
         weight=1,
@@ -140,7 +140,7 @@ STATES: tuple[Presentation, ...] = (
     Presentation(
         slug="not-measured",
         label="not measured",
-        meaning="no measurement was taken; the row says why",
+        meaning="not measured",
         border="dotted",
         fill=False,
         weight=1,

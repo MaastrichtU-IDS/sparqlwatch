@@ -70,6 +70,19 @@ STORES: dict[str, tuple[Path, ...]] = {
         conftest.RUN_PROBER_FAILED,
         conftest.RUN_NO_AVAILABILITY,
     ),
+    "store_dormant_newest": (
+        conftest.RUN_WITH_SAMPLES,
+        conftest.RUN_WITH_DORMANCY,
+    ),
+    "store_dormant_automatic": (
+        conftest.RUN_WITH_SAMPLES,
+        conftest.RUN_DORMANCY_AUTOMATIC,
+    ),
+    "store_dormancy_then_crash": (
+        conftest.RUN_WITH_SAMPLES,
+        conftest.RUN_DORMANCY_THEN_CRASH,
+    ),
+    "store_dormancy_alone": (conftest.RUN_WITH_DORMANCY,),
 }
 
 # An endpoint no run mentions, so "we know nothing about this one" is frozen
@@ -77,6 +90,27 @@ STORES: dict[str, tuple[Path, ...]] = {
 # endpoint, and it must stay wrong for these.
 ABSENT_ENDPOINT = "https://absent.example/sparql"
 
+# EVERY WAY A RUN GRAPH CAN MENTION AN ENDPOINT, and the list is the point: an
+# endpoint this misses is silently absent from the golden, and nothing notices,
+# because test_the_golden_holds_answers_that_are_not_all_empty asks only that
+# SOME endpoint per store was assessed.
+#
+# The dormancy arm is the fifth and it was added with the dormancy stores. A
+# dormant endpoint gets no chunk at all: no measurement, no decline, no sample
+# and no sw:declarationsRead, so it matches none of the four arms above it. In
+# store_dormancy_alone that is the ONLY way the store mentions kadaster, and
+# what the golden is there to freeze is that both readers answer "nothing
+# known" for it and the CONSTRUCT emits nothing about it. Without this arm that
+# endpoint would not be in the file and the claim would be untested.
+#
+# Keyed on the DECLARATION and not on sw:dormancyReason, which is what the plan
+# for this task named. The reason is optional in the vocabulary (see
+# EndpointMeasurements.newest_declared_this_endpoint_dormant on why the read
+# tier turns on the declaration and not the reason), so an endpoint declared
+# dormant with no reason beside it would match a reason arm and not be
+# enumerated. Every committed fixture carries both, so the two arms select the
+# same endpoints today; this one keeps doing so if a run graph ever carries a
+# declaration alone.
 _ENDPOINTS_QUERY = """
 SELECT DISTINCT ?endpoint WHERE {
   GRAPH ?g {
@@ -84,6 +118,7 @@ SELECT DISTINCT ?endpoint WHERE {
     UNION { ?s <urn:sparqlwatch:notMeasuredOn> ?endpoint }
     UNION { ?s <urn:sparqlwatch:sampledFrom> ?endpoint }
     UNION { ?endpoint <urn:sparqlwatch:declarationsRead> ?read }
+    UNION { ?activity <urn:sparqlwatch:dormantEndpoint> ?endpoint }
   }
 }
 """

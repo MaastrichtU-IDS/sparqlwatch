@@ -71,7 +71,7 @@ cargo run -- --at 2026-08-20T12:00:00Z --out run.nq
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
-| `--at` | *required* | The run instant, ISO-8601 with an explicit timezone |
+| `--at` | *required* | The run instant, exactly `YYYY-MM-DDTHH:MM:SSZ` |
 | `--endpoints` | `endpoints.toml` | Endpoint list to sweep |
 | `--metrics` | `metrics.toml` | Metric definitions to apply |
 | `--out` | `run.nq` | Where the finished N-Quads land. The run itself is written to `<out>.<at>.partial` and renamed onto this at the end |
@@ -79,15 +79,135 @@ cargo run -- --at 2026-08-20T12:00:00Z --out run.nq
 | `--min-gap-ms` | `2000` | Minimum pause between two consecutive requests to one host |
 | `--retry-after-cap-s` | `20` | Longest `Retry-After` waited out before one retry of a throttled request |
 | `--concurrency` | `4` | How many HOSTS to probe at once; one host is never asked two things at once |
+| `--state` | `state/dormancy.toml` | The dormancy state: which endpoints this sweep may decline to ask, and where this run's strikes and promotions are written back |
+| `--dormant-cost-ms` | `60000` | Summed per-metric `elapsedMs` for one endpoint above which a sweep that confirmed nothing is a strike. Refused below `30000`, one request budget |
+| `--dormant-strikes` | `2` | Consecutive expensive silent sweeps that relegate an endpoint |
+| `--dormant-every-days` | `7` | How often a relegated endpoint is probed anyway, in whole days |
+
+There is deliberately **no `--dormant-grace-days`** here. A hand wake's grace is
+computed once, at wake time, and stored in the state file as an instant, so the
+only code that reads the number is `dormancy::wake` and the only binary that
+calls it is `dormancy`. The flag existed on the sweeper until 2026-08-27 and
+reached nothing: it could be typed, parsed and threaded through the whole policy
+without changing anything, which is worse than not offering it. `dormancy wake
+--grace-days` is where the grace is set.
+
+`prober/state/` is **git-ignored**, because the state file is machine-written and
+every sweep rewrites it. So a fresh checkout and a container image both need
+`dormancy init --state <path>` once before the first sweep, and a deployment that
+wants strikes to survive a restart mounts that directory. Nothing else creates
+the file: a sweep that created its own could not tell "first ever run" from "the
+volume holding the state did not get mounted", and the second of those quietly
+re-admits every relegated endpoint at roughly 210 s each. A state file that
+cannot be read stops the sweep rather than being treated as an empty one, for the
+same reason and the one `--exclusions` records.
+
+### Overruling the policy by hand
+
+```sh
+cargo run --bin dormancy -- init
+cargo run --bin dormancy -- list
+cargo run --bin dormancy -- wake  <URL> --reason "admin says it is fixed" --at 2026-08-26T19:45:00Z
+cargo run --bin dormancy -- sleep <URL> --reason "its admin asked" --at 2026-08-26T19:45:00Z
+cargo run --bin dormancy -- prune --endpoints endpoints.toml --dry-run
+```
+
+Five subcommands, and `--state` is global so it may come before or after the
+verb. Its default is the sweeper's, `state/dormancy.toml`, relative to the
+working directory like `--endpoints` and `--exclusions`.
+
+| Subcommand | Flags | What it does |
+| --- | --- | --- |
+| `init` | | Writes an empty state file, creating the directory above it, and **refuses one that exists**. The only thing that creates the file |
+| `list` | | Prints the state: dormant endpoints first, then by url, with `updated_at` and `last_sweep_at` above them. Takes no lock and reads no clock |
+| `wake` | `<URL> --reason --at [--pin] [--grace-days 7]` | Puts an endpoint back in every sweep, clears its strikes and its relegation, and protects it from being relegated again for `--grace-days`. `--pin` never lapses, and is refused together with an explicit `--grace-days` rather than silently winning |
+| `sleep` | `<URL> --reason --at` | Takes an endpoint out of every sweep, permanently until a person wakes it |
+| `prune` | `--endpoints [--exclusions] [--dry-run]` | Drops the entries for endpoints the registry no longer lists, printing every url it drops. A **held** entry is kept whatever the registry says |
+
+**A third binary and not a flag on the sweeper**, for the reason `seed-registry`
+is one too: a plain sweep must not be one flag away from mutating the decisions
+a person took. A `--wake` on the sweeper would sit in the same argv as the cron
+job's, and the first accident would be a scheduled run that quietly lifted a
+hold.
+
+**`--reason` is required and refused when blank**, on the rule
+`registry/exclusions.toml` sets for its own entries: a decision that cannot say
+why it was taken is one nobody can review in a year. It is written into the
+state file and printed by `list`.
+
+**`--at` is required on `wake` and `sleep` and is never read from the clock**,
+in the same one spelling the sweeper takes. Two reasons beyond reproducibility.
+The instant is what a grace period is measured from, so a hold's expiry has to
+be a decision rather than a side effect of when the terminal was free. And the
+lock file records the process's **argv**, which is the only place a writer's
+identity is available to the message a later run prints about a stale lock: a
+default would leave that message with nothing to name. A malformed `--at` is
+refused before the state file is read, so a fresh deployment hears about the
+flag rather than about a file it has not created yet. `prune` takes no `--at`,
+because it records no decision about an endpoint and moves no instant in the
+file: it only drops entries the registry stopped naming.
+
+**Every mutation that reads before it writes goes through `merge_state`**, which
+takes the lock, re-reads the file inside it, and applies the change to what is on
+disk at that moment. So a `sleep` at 20:10 cannot be destroyed by, nor destroy, a
+sweep that read the state at 19:45 and finishes at 21:11. There is no `--force`:
+a refusal naming the process that holds the lock is the whole answer, and an
+override would be a way to lose ninety minutes of measured strikes. `list` and
+`prune --dry-run` take no lock at all, because they write nothing and the
+operator who most needs to look is the one whose sweep is mid-flight.
+
+`init` takes no lock either, and it is the one write that does not. It reads
+nothing before it writes, so there is no snapshot to lose, and its exclusion is
+the `O_EXCL` in `create_new`, which is stronger than the lock for the one race an
+init can lose: two inits at once, one of which is refused. A lock around it would
+only add a file to clean up on the path that refuses.
+
+**`list` prints a hold's expiry, not whether it has passed.** It reads no clock,
+like everything else here, so it has nothing to compare an `until` against: a
+grace that ran out last week still reads `hold: awake until <a past instant>`.
+Compare it against today by eye. The field that records a grace the machine has
+ALREADY taken back is different and is printed differently, as `lapsed hold`:
+`update` moves an `Awake` hold's reason there on the first sweep after it
+expires, so `hold:` means the state file still carries the hold and `lapsed
+hold` means a sweep has since cleared it.
+
+**Getting an endpoint back under machine control** takes two steps, because there
+is no `release` subcommand: nothing here removes a hold outright, and `wake` and
+`sleep` each replace the other's. Run `wake <URL> --reason ... --grace-days 1`
+and let the next sweep clear it, which is `update` rule A doing what it does to
+any lapsed grace. Or edit the state file and delete the `[endpoint.hold]` table:
+the file's own header declares hand editing supported and checked, and every
+field an edit can reach is validated on the next read. A `release` is noted as
+later work rather than added, because the two-step is not wrong, only wordy.
+
+**`prune` needs `--exclusions`** because it compares the state against
+`load_endpoints`, which subtracts the excluded hosts, and that decides the
+answer for an excluded entry: excluded and unheld is **prunable**, since no
+sweep would probe it again; excluded and **held** is kept, since a person's
+decision outranks the registry in both directions. The default is the sweeper's,
+so a prune run from `prober/` asks the same list a sweep asks. An endpoint list
+that loads as empty is a warning and not a refusal, because an empty registry
+legitimately makes every unheld entry stale; `--dry-run` is what to run first.
 
 `--at` is required and is **not** read from the clock, deliberately. It names
 the run graph, it is published as the activity's `prov:generatedAtTime`, and a
 scheduled `CronJob` passes the scheduled instant, so a retry of a failed sweep
-lands in the same graph rather than inventing a second one. That also makes the
-run's IDENTIFIERS reproducible: same `--at`, same graph and same subjects. Not
-its contents and not its bytes, because a sweep observes a changing world; see
-"Output is not byte-identical" below. It is validated before any probing starts,
-because it is interpolated into IRIs and published as an `xsd:dateTime`.
+lands in the same graph rather than inventing a second one.
+
+It is accepted in exactly one spelling, `YYYY-MM-DDTHH:MM:SSZ`: UTC, no offset,
+no fractional second, no leap second. That is narrower than ISO-8601 on purpose.
+Dormancy recognises a retry by comparing `--at` against the state file's
+`last_probed` as STRINGS, so two spellings of one instant (`...00Z` beside
+`...00.000Z`, or `12:00:00Z` beside `14:00:00+02:00`) would give the retry a
+second run IRI and no replay match: it would strike an endpoint twice for one
+sweep and publish a run graph that disagrees with the first about what it
+skipped.
+
+That also makes the run's IDENTIFIERS reproducible: same `--at`, same graph and
+same subjects. Not its contents and not its bytes, because a sweep observes a
+changing world; see "Output is not byte-identical" below. It is validated before
+any probing starts, because it is interpolated into IRIs and published as an
+`xsd:dateTime`.
 
 A retry of a failed sweep therefore meets the partial file the failed attempt
 left, and it **refuses to start** rather than overwriting it, naming the file and
@@ -467,17 +587,41 @@ route, a GitHub `.owl` blob, Yandex Disk links). They stay seeded, because that
 is decidable only BY PROBE and not from the string, and the admission slice is
 where they go.
 
-### Not yet operable on a daily cadence
+### Not yet on a schedule, and what the admission policy did change
 
-Saying this plainly rather than leaving it to be inferred: **the seeded registry
-is not something to put on a schedule today**, because nothing yet stops the
-dead being re-probed on every sweep. 486 of the 543 candidates answered no query
-at all, and the 43 candidates the dump had marked timed-out cost two thirds of
-the sweep's serial probe time, 2.28 of its 3.46 serial hours. What makes a daily sweep affordable is an admission
-policy, which admits responders and keeps the rest as a published
-`unreachable-candidates` list that is not re-probed daily, and that is the next
-slice. Until it exists, a sweep of `registry/lod-cloud.toml` is a measurement
-somebody runs deliberately, not a `CronJob`.
+Saying this plainly rather than leaving it to be inferred: **a sweep of the
+seeded registry is still a measurement somebody runs deliberately, not a
+`CronJob`**, because nothing in this repository starts one. What has changed is
+the cost that made a daily sweep unaffordable in the first place. 486 of the 543
+candidates answered no query at all, and the 43 candidates the dump had marked
+timed-out cost two thirds of the sweep's serial probe time, 2.28 of its 3.46
+serial hours.
+
+The admission policy above is what addresses that, and it is worth being exact
+about which half of the old claim it retired. It sets aside an endpoint whose
+summed `elapsedMs` passed `--dormant-cost-ms` while it confirmed nothing, in
+`--dormant-strikes` consecutive sweeps, and asks it once every
+`--dormant-every-days` after that. So **the dead are no longer re-probed on
+every sweep**: they are re-probed on a cadence, and the 57 endpoints that were
+3.12 of those 3.46 serial hours are asked once in seven days rather than every
+time.
+
+What that comes to in a steady state is deliberately not stated. The cadence is
+per endpoint and the due set is divided by the gap since the last sweep, so
+daily sweeps each take a seventh of the dormant set and a weekly sweep takes all
+of it: the saving depends on how often somebody sweeps, and the arithmetic above
+is one sweep's.
+
+Two things the policy deliberately does not do, and both matter to a host
+operator reading this. It is cost-weighted and not failure-weighted, so **a fast
+refusal costs nothing and so earns no relegation**: the 339 equally silent
+endpoints that answered instantly cost 0.05 h between them and stay in every
+sweep, which is what makes an endpoint coming back to life visible on the day it
+happens. And it removes nothing from `registry/lod-cloud.toml`: a dormant
+endpoint is still on the list, still published, and still asked, only less
+often.
+
+What is still missing before a schedule is the schedule itself.
 
 ### Where the runs are kept
 
@@ -820,11 +964,13 @@ it was incomplete.
 
 ### How a run is written, and what a truncated one says
 
-A run is emitted as three kinds of section: a header of run-level facts, one
-self-contained chunk per endpoint, and a footer. Each section ends with its own
-terminator, `urn:sparqlwatch:emission "incremental"` for the header,
+A run is emitted as four kinds of section: a header of run-level facts, the
+endpoints the sweep declined to ask, one self-contained chunk per endpoint, and a
+footer. Each section ends with its own terminator,
+`urn:sparqlwatch:emission "incremental"` for the header,
+`urn:sparqlwatch:dormantCount "N"^^xsd:integer` for the dormancy section,
 `urn:sparqlwatch:completedEndpoint <endpoint>` for a chunk and
-`urn:sparqlwatch:finalised "true"^^xsd:boolean` for the footer, all three on the
+`urn:sparqlwatch:finalised "true"^^xsd:boolean` for the footer, all four on the
 run's activity. N-Quads has no prologue and every line ends in a newline, so any
 prefix of the file parses, which means a crash leaves a readable file whose only
 risk is that its lines contradict each other. The terminators are what remove
@@ -832,8 +978,9 @@ that risk: a reader that holds a section's terminator holds the whole section,
 and a reader that does not may drop the fragment.
 
 A consumer reads three cases off facts that were each true when they were
-written. `emission` with `finalised` is a complete run: every endpoint the sweep
-was given has a chunk, including the ones a panicked group lost, and
+written, and the fourth terminator adds a cut point rather than a case.
+`emission` with `finalised` is a complete run: every endpoint the sweep was
+given has a chunk, including the ones a panicked group lost, and
 `failedEndpoints` counts over all of them. `emission` without `finalised` is a
 run that did not finish, so an endpoint with no `completedEndpoint` marker was
 never reached rather than measured and found wanting, and there is no
@@ -842,11 +989,12 @@ summary of chunks is not published until the chunks are. Neither terminator is a
 run that makes no claim about sections either way: that is what a run emitted
 before this scheme existed looks like, and it promised nothing, so it must not be
 reported as unfinished. It is also what a run of THIS scheme cut inside its
-header looks like, since `emission` is the header's last quad, and no reader can
-tell the two apart from the bytes. `web/load_run.py` separates them on a fact the
-file does carry: a run from before this scheme still measured endpoints, so a file
-with no terminator and no endpoint fact at all is refused rather than admitted as
-the store's newest activity. `finalised` is a boolean rather than
+header, or inside the dormancy section that follows it, looks like, since
+`emission` is the header's last quad, and no reader can tell those apart from
+the bytes. `web/load_run.py` separates them on a fact the file does carry: a run
+from before this scheme still measured endpoints, so a file with no terminator
+and no endpoint fact at all is refused rather than admitted as the store's
+newest activity. `finalised` is a boolean rather than
 `prov:endedAtTime` because nothing in the prober can produce that instant
 soundly: `emit` reads no clock by design,
 `std` cannot format a `SystemTime` as `xsd:dateTime`, no date library is in the
@@ -864,6 +1012,47 @@ the store ends up identical, so a re-load is always safe (the non-atomic window
 `load_run.py` documents is itself closed by re-running that same load). So a
 partial file is worth loading as soon as it appears, and nothing has to be undone
 when that run is later completed.
+
+**The dormancy section says what the sweep declined to ask**, one group per
+endpoint and then the count that closes it:
+
+```
+<activity> sw:dormantEndpoint <endpoint> <run> .
+<endpoint> rdf:type dcat:DataService <run> .
+<endpoint> sw:dormancyReason "automatic" <run> .
+<endpoint> sw:dormantSince "2026-08-13T08:00:00Z"^^xsd:dateTime <run> .
+<activity> sw:dormantCount "48"^^xsd:integer <run> .
+```
+
+It exists because silence is a positive claim. A sweep that probes 486 of 543
+endpoints and publishes a graph naming only those 486 leaves a consumer to read
+the absence of an endpoint as a finding about it. Dormancy is **not a verdict**
+and never becomes one, so the run says the weaker, true thing: this sweep
+declined to ask, and here is why. `sw:dormancyReason` is one of three slugs, and
+they differ in WHO decided: `automatic` is the admission policy relegating an
+expensive silent endpoint, `operator-hold` is a person setting one aside by hand,
+and `not-in-this-sweep` is nobody deciding anything about the endpoint at all,
+which is what a replay of an `--at` publishes for everything the first run of
+that `--at` did not probe. That third slug earns its place because a replay
+reaches healthy endpoints too: without it, a narrowed sweep followed by a full
+sweep at the same `--at` would publish `automatic` about 486 fast, working
+servers. `sw:dormantSince` carries the instant the endpoint was actually
+relegated, as the state file holds it and not this run's instant, and is omitted
+entirely when there is none rather than published as an empty value.
+
+Four properties of that shape are load-bearing. The section sits **after** the
+header's terminator, because its quads have endpoint subjects and a file cut
+inside the header carries no terminator at all: `web/load_run.py` decides whether
+to take such a fragment by asking whether every subject is the activity, and an
+endpoint fact before `emission` would make it load whole and win the newest-run
+aggregate with no `emission` beside it. `sw:dormantEndpoint` on the activity is
+required, mirroring `sw:completedEndpoint`, or the dormancy triples hang off
+nothing an activity reaches and no query can date them. The endpoint is typed
+here because a skipped endpoint has no chunk to be typed in. And the count is
+last and is published **even at zero**, because a summary must not precede what
+it summarises and because a reader has to be able to tell "this sweep declined
+nothing" from "this run predates dormancy". Nothing in this project reads the
+count; it is for a reader of the n-quads.
 
 **A run in progress is written to `<out>.<at>.partial`, and renamed onto `--out`
 when it finishes.** Never to `--out` directly: that file is the source of truth
@@ -1455,10 +1644,28 @@ Everything but `live_smoke` runs against a local `wiremock` server, so the
 suite is deterministic and CI never touches a stranger's endpoint. Rust 1.96,
 edition 2021, no nightly features.
 
+A bare `cargo test` is the command that has to stay green, and one rule keeps it
+so: **no test target may hold a test whose own runtime approaches the 20 s bound
+its neighbours share.** libtest runs a target's tests in parallel threads, so a
+slow test starves them and they fail reporting a deadlock. There is exactly one
+deliberately slow test, the relegation sweep, and it has a target to itself in
+`tests/dormancy_sweep.rs`; `tests/common/mod.rs` records what it cost to learn
+that.
+
 ## Looking at a run
 
-The web tier is stage 3 and does not exist yet. Until it does, render a run as a
-standalone local page:
+The web tier exists, and it is what a run is for: load the file into the store
+and serve it (`web/README.md` has both halves, and the server must be stopped
+while a run is loaded, every time).
+
+```
+web/.venv/bin/python web/load_run.py path/to/sparqlwatch.db run.nq
+cd web && SPARQLWATCH_STORE=path/to/sparqlwatch.db python -m uvicorn app:app
+```
+
+`tools/render-run.mjs` predates it and is still here, because it needs no store,
+no venv and no server, and so is the shortest way to look at a file this crate
+just wrote:
 
 ```
 cargo run -q -- --at 2026-08-20T12:00:00Z --out run.nq
@@ -1468,7 +1675,8 @@ node ../tools/render-run.mjs run.nq run.html
 It is a read-only viewer over the emitted N-Quads, using the same verdict encoding
 as the design: dashed borders mark "works but not declared" and "indeterminate",
 and `absent` has no border at all, because it is the only verdict that claims a
-negative. The real web tier will query Oxigraph rather than parse a file.
+negative. It parses one file; the web tier queries Oxigraph over every run
+loaded, which is why it and not this is where a run is read from.
 
 A run containing content samples (that is, one from an `--max-cost expensive`
 sweep) also gets a "Content samples" panel, one detail block per (endpoint,

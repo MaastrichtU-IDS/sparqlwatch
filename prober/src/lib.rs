@@ -3,6 +3,7 @@ pub mod verdict;
 pub mod budget;
 pub mod client;
 pub mod declare;
+pub mod dormancy;
 pub mod media;
 pub mod observe;
 pub mod politeness;
@@ -10,6 +11,7 @@ pub mod metrics;
 pub mod registry;
 pub mod resolve;
 pub mod seed;
+pub mod state_file;
 pub mod write;
 
 use crate::budget::{Budget, Expired};

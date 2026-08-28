@@ -65,17 +65,19 @@ one left with a silently empty graph does not know there is anything to
 re-run.
 
 One tolerance sits on top of that, for the file a crashed prober actually
-leaves. prober/src/emit.rs writes a run as a header, one self-contained
-chunk per endpoint, and a footer, each section ending in a terminator quad:
-sw:emission closes the header, sw:completedEndpoint closes a chunk,
-sw:finalised closes the footer. A crash leaves a prefix of that sequence, so
-the last section in the file may be a fragment. Refusing the whole file then
-loses every endpoint that did finish, which is the case the incremental
-write exists for; loading it whole publishes a fragment of a section as a
-whole one. So the bytes are cut back to the end of the last terminator line
-and everything after it is dropped. A file whose last statement already is a
-terminator loads exactly as before, and that includes every complete run,
-whose last line is the footer's sw:finalised and not a chunk marker.
+leaves. prober/src/emit.rs writes a run as a header, the endpoints the sweep
+declined to ask, one self-contained chunk per endpoint, and a footer, each
+section ending in a terminator quad: sw:emission closes the header,
+sw:dormantCount closes the dormancy section, sw:completedEndpoint closes a
+chunk, sw:finalised closes the footer. A crash leaves a prefix of that
+sequence, so the last section in the file may be a fragment. Refusing the
+whole file then loses every endpoint that did finish, which is the case
+the incremental write exists for; loading it whole publishes a fragment of
+a section as a whole one. So the bytes are cut back to the end of the last
+terminator line and everything after it is dropped. A file whose last
+statement already is a terminator loads exactly as before, and that
+includes every complete run, whose last line is the footer's sw:finalised
+and not a chunk marker.
 
 Two things this tolerance is not. It does not accept a file with no
 terminator anywhere and a parse error: there is nothing to cut back to, so
@@ -162,6 +164,17 @@ triples into it, and return a LoadResult with drifted=[]: the one detector for
 a broken current graph asks which pointers name a run that no longer states
 their facts, and an emptied graph holds no pointers to ask about.
 
+TWO MORE REFUSALS, for the same reason and at the same two layers. A run graph
+that both declares an endpoint dormant and states a fact current points at for
+it is self-contradicting, since a sweep either asked an endpoint or declined to,
+and is refused in _parsed_graphs, per GRAPH and not per file. And a file whose
+graph declares an endpoint dormant when the graph it is about to REPLACE holds
+such a fact is refused in load_run before remove_graph, because loading it
+deletes that fact from the store while the file has already overwritten on disk
+the run that stated it. Dormancy itself is a run-graph fact and reaches current
+never; see "DORMANCY, AND WHY current HOLDS NONE OF IT" at the end of this
+docstring, and the two _refuse_ functions for the case each one prevents.
+
 TWO POINTERS, which is the subtle half. The newest run that MEASURED an
 endpoint and the newest run that SAMPLED it are different runs the moment a
 cheap sweep declines sw:metric:classes, and that is the steady state: the
@@ -213,6 +226,13 @@ class LoadResult:
     complete run and for every file that needed no tolerance. A field rather
     than a warning because this module has no logging: main() prints it from
     here, beside the quad count.
+
+    ``dormant`` lists the endpoints (as strings, sorted, deduplicated across
+    the file's graphs) that this file declared the sweep declined to ask. It is
+    a report and nothing else: no quad of it reaches the derived current graph,
+    and no pointer moves because of it. An operator needs it because an
+    endpoint the sweep skipped is an endpoint whose page will not move this
+    week, and "loaded 115 quads" cannot say which those were.
     """
 
     replaced: list[str] = field(default_factory=list)
@@ -222,6 +242,7 @@ class LoadResult:
     advanced_samples: list[str] = field(default_factory=list)
     kept_newer: list[str] = field(default_factory=list)
     drifted: list[str] = field(default_factory=list)
+    dormant: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -932,22 +953,31 @@ def _incomplete_load(stored: int, expected: int, graph_names: set[NamedNode]) ->
     )
 
 
-# The three predicates that close a section, read off prober/src/emit.rs:
-# sw:emission is the last quad emit_header writes, sw:completedEndpoint the
-# last quad emit_endpoint writes, sw:finalised the last quad emit_footer
-# writes. All three are needed. A complete run ends at sw:finalised, a run
-# killed between endpoints ends at sw:completedEndpoint, and a run killed
-# before its first endpoint ends at sw:emission, so a set missing any one of
-# them would truncate away a section that was written whole. Leaving out
-# sw:finalised is the worst of the three: every complete run would lose its
-# footer, and a reader testing for the footer would then report that no sweep
-# this project publishes ever finished.
+# The four predicates that close a section, read off prober/src/emit.rs:
+# sw:emission is the last quad emit_header writes, sw:dormantCount the last
+# quad emit_dormancy writes, sw:completedEndpoint the last quad emit_endpoint
+# writes, sw:finalised the last quad emit_footer writes. All four are needed. A
+# complete run ends at sw:finalised, a run killed between endpoints ends at
+# sw:completedEndpoint, a run killed before its first endpoint ends at
+# sw:dormantCount, and a run killed inside the dormancy section ends at
+# sw:emission, so a set missing any one of them would truncate away a section
+# that was written whole. Leaving out sw:finalised is the worst of the four:
+# every complete run would lose its footer, and a reader testing for the footer
+# would then report that no sweep this project publishes ever finished.
+#
+# sw:dormantCount and NOT sw:dormantEndpoint, which is one character away from
+# it and is the per-endpoint predicate rather than the section's terminator.
+# The convention points both ways -- sw:completedEndpoint IS a terminator and
+# is singular -- so the trap is real: recognising the per-endpoint spelling
+# here would make every dormancy line a cut point, and a truncation would land
+# in the middle of the section rather than after it.
 #
 # These spellings are a wire format shared with the emitter (see emit.rs's
 # module docstring), so neither side may change them alone.
 _TERMINATOR_PREDICATES = frozenset(
     {
         "urn:sparqlwatch:emission",
+        "urn:sparqlwatch:dormantCount",
         "urn:sparqlwatch:completedEndpoint",
         "urn:sparqlwatch:finalised",
     }
@@ -1037,6 +1067,15 @@ def _holds_endpoint_facts(quads: list) -> bool:
     emit_header, emit_footer and emit_endpoint). So a document whose every
     subject is an activity carries the run's own metadata and no facts about
     any endpoint.
+
+    The dormancy section DOES carry endpoint subjects, and it is written after
+    the header's terminator for that reason: this function is only ever reached
+    by a file with no terminator anywhere, which is a fragment cut inside the
+    header, and a fragment holding endpoint facts would load whole, carry the
+    store's greatest prov:generatedAtTime with no sw:emission beside it, and
+    silence unfinished-run detection for every endpoint on the site.
+    emit.rs's a_header_truncated_file_still_holds_no_endpoint_facts pins that
+    from the writer's side.
     """
     return any(
         not quad.subject.value.startswith(_ACTIVITY_IRI_PREFIX) for quad in quads
@@ -1104,12 +1143,238 @@ def _quads_to_the_last_terminator(nquads: bytes) -> tuple[list, int]:
     return kept, len(nquads) - cut
 
 
+# ---------------------------------------------------------------------------
+# Dormancy, and the two refusals it needs
+# ---------------------------------------------------------------------------
+# Dormancy lives in the run graphs and NOWHERE else. current gets none of it:
+# no pointer, no widened fact set, no ordering rule. A dormant endpoint has no
+# measurements, so it is in neither _MEASURED_ENDPOINTS nor _SAMPLED_ENDPOINTS
+# for the run that declined it, its sw:currentRun does not advance, and current
+# keeps its last probe's verdicts unchanged, which is correct for it by
+# construction. Clearing needs nothing either: on its probe week the endpoint is
+# measured, its pointer advances to that run, that run carries no dormancy fact,
+# and the marker is gone with no delete and no condition. An earlier revision
+# gave dormancy its own recency pointer inside current and produced four
+# separate defects in review, every one of them two notions of "most recent"
+# disagreeing.
+#
+# What the loader does owe dormancy is two refusals, at two different layers.
+
+# The dormancy section's one predicate this module reads. emit.rs writes it on
+# the run's activity, once per endpoint the sweep declined to ask, between the
+# header's sw:emission terminator and the section's sw:dormantCount one. The
+# rest of the section (rdf:type dcat:DataService, sw:dormancyReason,
+# sw:dormantSince) is read by nothing here, because none of it belongs in
+# current. A wire format shared with the emitter, so neither side may rename it
+# alone.
+_DORMANT_ENDPOINT = "urn:sparqlwatch:dormantEndpoint"
+
+# Every shape that makes an endpoint one current holds a POINTER for, as Python
+# spellings. _MEASURED_ENDPOINTS and _SAMPLED_ENDPOINTS above are the
+# authority; they ask this question of the STORE, and the spellings here answer
+# it about PARSED QUADS instead, which is what _refuse_self_contradiction needs,
+# since it runs from _parsed_graphs where main() has not opened a store yet and
+# may never open one.
+#
+# BOTH pointers, and the first review of this code found exactly that hole: a
+# version reading only the measured shapes protected sw:currentRun and left
+# sw:currentSampleRun open, so the loss both refusals exist to prevent still
+# went through the other door. run-later-sample-only.nq is a committed fixture
+# whose graph holds a class sample for an endpoint and NOT ONE measured-shaped
+# quad, so "a graph that states nothing measured about the endpoint" is not a
+# graph that states nothing: it is the second of the two independent notions of
+# recency this module's docstring calls the subtle half.
+#
+# The class pin is deliberate and matches _SAMPLED_ENDPOINTS exactly, so
+# _governed_by_graph below and those two queries return the same set for the
+# same quads, which is what test_the_python_shapes_and_the_sparql_shapes_agree
+# asserts. A sample of another metric (run-properties-sample.nq) is therefore
+# outside both refusals, and that is correct rather than an oversight: no
+# pointer in current names it, so a graph replaced by a dormancy declaration
+# loses nothing current holds, and there is no reader to tell two things.
+_COMPUTED_ON = "http://www.w3.org/ns/dqv#computedOn"
+_NOT_MEASURED_ON = "urn:sparqlwatch:notMeasuredOn"
+_DECLARATIONS_READ = "urn:sparqlwatch:declarationsRead"
+_SAMPLED_FROM = "urn:sparqlwatch:sampledFrom"
+_SAMPLED_BY = "urn:sparqlwatch:sampledBy"
+_CLASSES_METRIC = "urn:sparqlwatch:metric:classes"
+
+
+def _dormant_by_graph(quads: list) -> dict[NamedNode, set[str]]:
+    """Which endpoints each graph in ``quads`` declares the sweep skipped.
+
+    Keyed by graph and not flattened, because both refusals below are per
+    GRAPH: one file may carry several run graphs, and the two questions
+    ("does THIS graph contradict itself", "does THIS graph replace facts")
+    are asked of one graph at a time.
+    """
+    found: dict[NamedNode, set[str]] = {}
+    for quad in quads:
+        if quad.predicate.value == _DORMANT_ENDPOINT and isinstance(
+            quad.object, NamedNode
+        ):
+            found.setdefault(quad.graph_name, set()).add(quad.object.value)
+    return found
+
+
+def _governed_by_graph(quads: list) -> dict[NamedNode, set[str]]:
+    """Which endpoints each graph in ``quads`` states a fact current holds a
+    POINTER for: a measurement, a decline, a declarations fact or a class
+    sample.
+
+    "Governed" is the docstring's word for it above: sw:currentRun governs the
+    first three shapes and sw:currentSampleRun the fourth. This is deliberately
+    the union, because a graph replaced by a dormancy declaration loses whichever
+    of the two it happened to hold.
+
+    Four shapes, three positions, which is why this cannot be one set of
+    predicates matched in one place: the endpoint is the OBJECT of
+    dqv:computedOn, sw:notMeasuredOn and sw:sampledFrom, and the SUBJECT of
+    sw:declarationsRead. The class sample also needs two quads rather than one,
+    because sw:sampledFrom alone does not say which metric was sampled, so it is
+    resolved in a second pass over the sample nodes the first pass found to
+    carry sw:sampledBy sw:metric:classes.
+    """
+    found: dict[NamedNode, set[str]] = {}
+    class_samples: set[tuple] = set()
+    sampled_from: list = []
+    for quad in quads:
+        predicate = quad.predicate.value
+        if predicate in (_COMPUTED_ON, _NOT_MEASURED_ON):
+            endpoint = quad.object
+        elif predicate == _DECLARATIONS_READ:
+            endpoint = quad.subject
+        elif predicate == _SAMPLED_BY:
+            if quad.object.value == _CLASSES_METRIC:
+                class_samples.add((quad.graph_name, quad.subject))
+            continue
+        elif predicate == _SAMPLED_FROM:
+            sampled_from.append(quad)
+            continue
+        else:
+            continue
+        if isinstance(endpoint, NamedNode):
+            found.setdefault(quad.graph_name, set()).add(endpoint.value)
+    for quad in sampled_from:
+        if (quad.graph_name, quad.subject) in class_samples and isinstance(
+            quad.object, NamedNode
+        ):
+            found.setdefault(quad.graph_name, set()).add(quad.object.value)
+    return found
+
+
+def _refuse_self_contradiction(quads: list) -> None:
+    """Refuse a run graph that both declares an endpoint dormant and states a
+    fact current holds a pointer for about it.
+
+    PER GRAPH, not per file, and that is the whole subtlety. A sweep either
+    asked an endpoint or declined to ask it, so one graph claiming both is
+    self-contradicting whichever half a reader believes. But one FILE may carry
+    several run graphs (web/tests/fixtures/run-two-sweeps.nq is two, and
+    'load_run.py STORE run-*.nq' hands the loader a directory at a time), and
+    "sweep A skipped E, sweep B probed E" is the NORMAL pair under dormancy: it
+    is how a dormant endpoint's marker clears. A per-file check would refuse
+    that legitimate concatenation.
+
+    Here rather than in main()'s loop because main() validates every input with
+    _parsed_graphs before Store() is called, and load_run() calls it too, so a
+    check in main() would be invisible to load_run() and to any caller that is
+    not the command line.
+    """
+    dormant = _dormant_by_graph(quads)
+    if not dormant:
+        return
+    governed = _governed_by_graph(quads)
+    for graph in sorted(dormant, key=lambda name: name.value):
+        both = sorted(dormant[graph] & governed.get(graph, set()))
+        if both:
+            raise ValueError(
+                f"graph {graph.value} declares {', '.join(both)} dormant and "
+                f"also records a measurement, a decline, a declarations fact or "
+                f"a class sample for the same endpoint(s). A run graph "
+                f"describes one sweep's "
+                f"outcome, and a sweep either asked an endpoint or declined to "
+                f"ask it, so whichever half of this a reader believes, the "
+                f"other half denies it. This is a claim about one GRAPH: a file "
+                f"holding one sweep that skipped an endpoint and a later sweep "
+                f"that probed it is the normal pair under dormancy and loads "
+                f"fine."
+            )
+
+
+def _refuse_rewriting_history(store: Store, quads: list) -> None:
+    """Refuse a file whose graph declares an endpoint dormant when the graph it
+    is about to REPLACE holds a fact current points at for that endpoint.
+
+    Both pointers, not just sw:currentRun: see the comment on the shape
+    spellings above for the hole a measured-only version left open.
+
+    The general case of the replay hazard, and the one that matters. Sweep D2
+    measured E; a later sweep moved the cadence's last_probed to D3; the
+    operator re-runs --at D2. Replay detection does not fire, because
+    last_probed is D3, and the cadence declines E, so the re-emitted file
+    declares E dormant under the run IRI D2. Without this refusal load_run
+    replaces graph D2 with it, and E's measurements are gone from the store
+    while the retry's file has overwritten the original on disk, so there is
+    nothing left to reload them from.
+
+    _drifted reports that only indirectly and only while current still points
+    at D2, and what it says is "a run graph has shrunk" rather than "your
+    history was rewritten".
+
+    Called after the parse and BEFORE remove_graph, which is the only window in
+    which the graph it asks about still exists.
+    """
+    for graph, endpoints in sorted(
+        _dormant_by_graph(quads).items(), key=lambda item: item[0].value
+    ):
+        if not store.contains_named_graph(graph):
+            continue
+        # BOTH pointers. _MEASURED_ENDPOINTS alone protects sw:currentRun and
+        # leaves sw:currentSampleRun open, and a graph can hold a class sample
+        # and no measured-shaped quad at all (run-later-sample-only.nq is one),
+        # so that version accepted a file that dropped the sample and drifted
+        # the pointer naming it.
+        held = _run_endpoints(store, graph.value, _MEASURED_ENDPOINTS) | (
+            _run_endpoints(store, graph.value, _SAMPLED_ENDPOINTS)
+        )
+        lost = sorted(endpoints & held)
+        if lost:
+            raise ValueError(
+                f"this file declares {', '.join(lost)} dormant in graph "
+                f"{graph.value}, and the store's {graph.value} already holds a "
+                f"measurement, a decline, a declarations fact or a class "
+                f"sample for the same endpoint(s). "
+                f"Loading it would replace that graph with one that says the "
+                f"sweep never asked, deleting those facts from the store while "
+                f"this file has already overwritten the run that stated them, "
+                f"so nothing would be left to reload them from. This is what a "
+                f"re-run of an old --at looks like once the cadence has moved "
+                f"on: the sweep skipped the endpoint because a later run "
+                f"probed it. Load the run the cadence actually declined, or "
+                f"drop the graph deliberately first if the history really is "
+                f"meant to change."
+            )
+
+
 def _parsed_graphs(nquads: bytes) -> tuple[list, set[NamedNode], int]:
     """Parse ``nquads`` and return its quads, the named graphs it names, and
     how many trailing bytes were dropped as an incomplete final section.
 
-    Raises ValueError under exactly the conditions load_run() documents: not
-    valid N-Quads, default-graph triples present, or no named graph at all.
+    Raises ValueError under six conditions, enumerated here because this is
+    the function that raises them and an earlier version of this list, which
+    deferred to load_run()'s docstring, was wrong in both directions:
+
+      - the bytes are not valid N-Quads (via _quads_to_the_last_terminator);
+      - they hold activity metadata, no endpoint fact and no section
+        terminator, so they are a fragment of a header or a run that recorded
+        nothing (also via _quads_to_the_last_terminator);
+      - they hold default-graph triples, so they are not a run at all;
+      - they name no graph;
+      - they name urn:sparqlwatch:current, which this module derives;
+      - one of their graphs both declares an endpoint dormant and states a
+        fact current holds a pointer for about it.
+
     Split out of load_run() so main() can run the same validation, below,
     against every input file before Store() is called on any of them: this
     is where a mistyped run path, an unreadable file, or a file that fails
@@ -1159,6 +1424,8 @@ def _parsed_graphs(nquads: bytes) -> tuple[list, set[NamedNode], int]:
             f"'python web/load_run.py --rebuild STORE_PATH'."
         )
 
+    _refuse_self_contradiction(quads)
+
     return quads, graph_names, discarded
 
 
@@ -1168,6 +1435,12 @@ def load_run(store: Store, nquads: bytes) -> LoadResult:
     Raises ValueError if the input is not valid N-Quads, or if it does not
     name at least one graph (see the module docstring on ordering for why
     parsing happens before any store mutation).
+
+    Raises ValueError for either of the two dormancy refusals: a graph that
+    both measures an endpoint and declares it dormant (in _parsed_graphs), and
+    a graph that declares an endpoint dormant when the graph it would replace
+    already holds facts for that endpoint (_refuse_rewriting_history, below).
+    Both happen before the store is written to.
 
     An incomplete final section is cut off first and counted in
     LoadResult.discarded_bytes, so a file a crash truncated loads as far as
@@ -1184,6 +1457,12 @@ def load_run(store: Store, nquads: bytes) -> LoadResult:
     # them. Reordering this so the store is touched first is the mutation
     # this module exists to prevent; see the module docstring.
     quads, graph_names, discarded = _parsed_graphs(nquads)
+
+    # The second refusal, and it has to sit exactly here: after the parse,
+    # because it reads the dormancy facts the file holds, and before
+    # remove_graph, because it is a question about the contents of a graph the
+    # drop below is about to destroy.
+    _refuse_rewriting_history(store, quads)
 
     replaced = sorted(
         graph.value for graph in graph_names if store.contains_named_graph(graph)
@@ -1229,6 +1508,16 @@ def load_run(store: Store, nquads: bytes) -> LoadResult:
         advanced_samples=advanced_samples,
         kept_newer=kept_newer,
         drifted=drifted,
+        # Flattened across the file's graphs, because this is a report to an
+        # operator about which endpoints this file did not ask, and an endpoint
+        # two of its graphs both skipped is still one endpoint.
+        dormant=sorted(
+            {
+                endpoint
+                for endpoints in _dormant_by_graph(quads).values()
+                for endpoint in endpoints
+            }
+        ),
     )
 
 
@@ -1354,6 +1643,17 @@ def main(argv: list[str] | None = None) -> int:
                 f"{path}: current already pointed at a newer run for "
                 f"{len(result.kept_newer)} endpoint(s), so what the site shows "
                 f"for them is unchanged by this file: {result.kept_newer}"
+            )
+        if result.dormant:
+            # An endpoint the sweep declined to ask is an endpoint whose page
+            # will not move this week, and current keeps its last probe's
+            # verdicts on purpose. Said, and exit 0: this is the cadence
+            # working, not a fault. An operator told only how many quads loaded
+            # cannot tell it from a sweep that asked everything.
+            print(
+                f"{path}: declared {len(result.dormant)} endpoint(s) dormant, "
+                f"so this sweep did not ask them and what the site shows for "
+                f"them is unchanged by this file: {result.dormant}"
             )
         if result.drifted:
             # The one case a load can report that the load cannot fix, and the

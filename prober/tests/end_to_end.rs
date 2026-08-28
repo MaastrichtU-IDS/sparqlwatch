@@ -2625,6 +2625,13 @@ fn run_header(run: &RunId) -> sparqlwatch_prober::emit::RunHeader<'_> {
         metric_revision: "test-revision",
         max_cost: Cost::Cheap,
         concurrency: NonZeroUsize::new(2).unwrap(),
+        // Nothing declined: every test in this file hands `run_sweep` its
+        // endpoint list directly rather than through `dormancy::plan_sweep`, so
+        // the dormancy section these runs carry is just its zero count. What the
+        // section holds is asserted in `emit.rs`, and that a real sweep narrows
+        // to `plan.probe` at all is asserted in `tests/binary.rs`, which is the
+        // only file here that invokes a process.
+        dormant: &[],
     }
 }
 

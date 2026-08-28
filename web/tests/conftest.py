@@ -33,6 +33,9 @@ RUN_PROBER_FAILED = FIXTURES / "run-prober-failed.nq"
 RUN_CRASHED_PARTWAY = FIXTURES / "run-crashed-partway.nq"
 RUN_REGISTRY_SAMPLE = FIXTURES / "run-registry-sample.nq"
 RUN_NO_AVAILABILITY = FIXTURES / "run-no-availability.nq"
+RUN_WITH_DORMANCY = FIXTURES / "run-with-dormancy.nq"
+RUN_DORMANCY_THEN_CRASH = FIXTURES / "run-dormancy-then-crash.nq"
+RUN_DORMANCY_AUTOMATIC = FIXTURES / "run-dormancy-automatic.nq"
 
 
 CURRENT_GRAPH = NamedNode("urn:sparqlwatch:current")
@@ -308,4 +311,86 @@ def store_no_availability_two_ways(tmp_path):
         "store-no-availability-two-ways",
         RUN_PROBER_FAILED,
         RUN_NO_AVAILABILITY,
+    )
+
+
+@pytest.fixture
+def store_dormant_newest(tmp_path):
+    """The 16:00 sweep of the trio, and a LATER sweep that finished and
+    declined to ask one of them.
+
+    run-with-dormancy.nq is 2026-08-27T10:00:00Z, so it is the newest run in
+    this store, and it is real prober output: it measured ontop and qlever,
+    published a dormancy group for data.kkg.kadaster.nl/query with
+    sw:dormancyReason "operator-hold", and wrote both terminators. A dormant
+    endpoint gets no chunk at all, so the 10:00 run records nothing for
+    kadaster and kadaster's sw:currentRun stays on the 16:00 sweep.
+
+    That is the whole shape this task exists for. Kadaster's verdicts are five
+    days old, the newest sweep in the store deliberately did not ask, it said
+    why, and the page has to date the verdicts by kadaster's OWN pointer and
+    never by the newest run: the newest run is the one that refused to look.
+    """
+    return _loaded_store(
+        tmp_path, "store-dormant-newest", RUN_WITH_SAMPLES, RUN_WITH_DORMANCY
+    )
+
+
+@pytest.fixture
+def store_dormancy_then_crash(tmp_path):
+    """The same pair with the declining sweep CUT at its dormancy terminator.
+
+    run-dormancy-then-crash.nq is run-with-dormancy.nq's first 12 quads: the
+    header, the complete dormancy section, and then nothing. So the newest run
+    in this store promised to write incrementally, never recorded finishing,
+    finished no endpoint at all, and still published a complete account of
+    which endpoint it declined to ask and why.
+
+    Both facts about kadaster are true at once and only one of them may be
+    said: the sweep did not finish, and it never intended to reach this
+    endpoint. See the fixture's header for the sentence the page used to print
+    here.
+    """
+    return _loaded_store(
+        tmp_path,
+        "store-dormancy-then-crash",
+        RUN_WITH_SAMPLES,
+        RUN_DORMANCY_THEN_CRASH,
+    )
+
+
+@pytest.fixture
+def store_dormancy_alone(tmp_path):
+    """run-with-dormancy.nq on its own, so kadaster is an endpoint the store
+    knows ONLY as dormant.
+
+    No run in this store measured it, sampled it or declined a metric on it, so
+    it has no sw:currentRun and no sw:currentSampleRun, both read queries
+    return zero rows for it, and web/app.py's knownness test 404s it. That is
+    the answer, and this store exists so the RDF can be held to the same one:
+    a description query that emitted its dormancy would describe a resource
+    the HTML representation does not serve.
+    """
+    return _loaded_store(tmp_path, "store-dormancy-alone", RUN_WITH_DORMANCY)
+
+
+@pytest.fixture
+def store_dormant_automatic(tmp_path):
+    """``store_dormant_newest`` with the OTHER reason: a machine relegation.
+
+    run-dormancy-automatic.nq is run-with-dormancy.nq with one literal changed,
+    sw:dormancyReason "automatic" rather than "operator-hold", so the store's
+    shape is identical and only the word the page has to read is different.
+
+    It exists because "automatic" had no loadable fixture. The only other
+    committed file carrying that value is run-measures-and-declares-dormant.nq,
+    which exists to be refused, so the sentence a machine relegation prints was
+    pinned on a hand-built dataclass and never rendered out of a store. It is
+    also the case a stranger meets far more often than the other: an operator
+    hold is one person's decision about one endpoint, and the automatic path is
+    what the policy does to every endpoint that costs more than the ceiling
+    while answering nothing, twice in a row.
+    """
+    return _loaded_store(
+        tmp_path, "store-dormant-automatic", RUN_WITH_SAMPLES, RUN_DORMANCY_AUTOMATIC
     )

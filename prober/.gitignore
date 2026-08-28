@@ -1,0 +1,10 @@
+# Machine-written dormancy state, not configuration. Every sweep rewrites it,
+# so committing it would put a churning file with 543 strike counts in front of
+# every review, and a merge conflict in it would be resolved by guessing. The
+# history worth keeping is in the run graphs: they publish which endpoints were
+# skipped and why, run by run, and the state file is only ever the latest view
+# of what those runs already recorded.
+#
+# `dormancy init` creates it, `dormancy` and the sweep write it. A deployment
+# that needs it to survive a restart mounts this directory.
+state/

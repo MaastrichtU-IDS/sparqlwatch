@@ -52,7 +52,7 @@ PREFIX sw: <urn:sparqlwatch:>
 SELECT ?endpoint ?run ?generatedAt ?metric ?verdict ?level ?elapsedMs ?reason
        ?emission ?finalised
        ?newestRun ?newestGeneratedAt ?newestEmission ?newestFinalised
-       ?newestCompleted
+       ?newestCompleted ?newestDormant ?newestDormancyReason
 WHERE {
   GRAPH sw:current {
     {
@@ -197,5 +197,83 @@ WHERE {
   OPTIONAL {
     GRAPH ?newestRun { ?newestActivity sw:completedEndpoint ?endpoint }
     BIND (?endpoint AS ?newestCompleted)
+  }
+
+  # Whether the newest run declared THIS row's endpoint dormant, and the reason
+  # it gave. The other way that run can hold no facts for an endpoint: the
+  # marker above says it reached the endpoint, this says it decided not to and
+  # published why. Both cannot be true of one endpoint in one run graph, because
+  # web/load_run.py refuses a graph that measures an endpoint and declares it
+  # dormant.
+  #
+  # ITS OWN TOP-LEVEL OPTIONAL, beside the marker above and NEVER inside the
+  # GRAPH ?newestRun group at the top of this branch. Every word of the twenty
+  # five lines above applies to this pattern unchanged, and it is worse here
+  # than it is there, because ?newestRun has a SECOND source of bindings: the
+  # marker OPTIONAL just above names it too. So a nested dormancy pattern does
+  # not leave the newest-run facts unbound, where a caller would see them
+  # missing. It leaves them WRONG.
+  #
+  # Measured, over a store holding run-registry-sample.nq (nine endpoints, the
+  # 2026-08-24T19:45:03Z sweep) and the newer run-with-dormancy.nq
+  # (2026-08-27T10:00:00Z, which declares one endpoint dormant):
+  #
+  #   this form   every endpoint    ?newestRun = the 10:00 run, dated, finalised
+  #   nested      the dormant one   ?newestRun = the 10:00 run, dated, finalised
+  #   nested      the other nine    ?newestRun = the 19:45 run, NO timestamp,
+  #                                 finalised False
+  #
+  # because the nested pattern binds ?endpoint inside the group, narrowing the
+  # group's solutions to the endpoints that run declared dormant, and every row
+  # about any other endpoint then loses the whole branch and falls through to
+  # the marker OPTIONAL, which binds ?newestRun to whatever run completed that
+  # endpoint. Each of those nine endpoints is then reported as its own newest
+  # run, so newest_run == run, so nothing this query publishes about a newer
+  # sweep can fire and the staleness defect goes unfixed for exactly the
+  # endpoints it is about. On a store where an endpoint's sw:currentRun and the
+  # run that completed it are different runs, two of those rows disagree about
+  # ?newestRun and endpoint_measurements.py raises "runs tie as the newest in
+  # this store" instead, which is a 500 on the index and on every one of those
+  # endpoints' pages.
+  #
+  # And with no dormancy anywhere in the store the nested form behaves
+  # identically, so no fixture written before a dormancy fixture existed can
+  # catch any of it. web/queries/endpoint_measurements.rq DOES nest it,
+  # correctly, because there ?endpoint is substituted before evaluation and is a
+  # constant, so it narrows nothing.
+  #
+  # WHAT SCOPES THIS TO THE NEWEST RUN is the join on ?newestRun and
+  # ?newestActivity, which the branch above binds. A run graph older than the
+  # newest one can hold a dormancy declaration for this endpoint (after several
+  # weekly skips, several do), and its solution here carries its own ?newestRun,
+  # which is incompatible with the row's and is dropped. That is the selection
+  # this query makes, deliberately: the newest run's declaration and no other,
+  # because an older sweep that declined to ask is this endpoint's history and
+  # the sweep that measured it last may be newer than the sweep that last
+  # declined. web/tests/fixtures/run-promotes-the-dormant.nq is that shape and
+  # test_only_the_newest_runs_declaration_is_read pins the answer.
+  #
+  # The reason is a nested OPTIONAL inside this one rather than a third
+  # top-level one: it is a fact about the declaration, so a row with no
+  # declaration must have no reason either, and a run graph is not obliged to
+  # carry one.
+  #
+  # WHAT THIS BRANCH COSTS, measured on this machine over run-registry-sample.nq
+  # and run-with-dormancy.nq plus N activity-only run graphs:
+  #
+  #                       N = 0     N = 100    N = 500
+  #   without it         0.9 ms      1.7 ms    10.5 ms
+  #   with it            0.8 ms      1.6 ms    11.4 ms
+  #
+  # 88 rows either way at every depth, which is the number that matters more
+  # than the milliseconds: this branch adds no solutions, so it cannot multiply
+  # a row set and cannot make two runs look tied as the newest. The growth in
+  # both columns belongs to the newest-run aggregate and predates it.
+  OPTIONAL {
+    GRAPH ?newestRun {
+      ?newestActivity sw:dormantEndpoint ?endpoint .
+      OPTIONAL { ?endpoint sw:dormancyReason ?newestDormancyReason }
+    }
+    BIND (?endpoint AS ?newestDormant)
   }
 }

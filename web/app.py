@@ -583,6 +583,122 @@ def _newer_unfinished_run_text(
     )
 
 
+# What each dormancy reason means in words, keyed by the slug the graph
+# carries. The slugs are prober/src/dormancy.rs's SkipReason::slug, and the
+# sentences differ in WHO decided and in what follows: "automatic" is this
+# project's cost policy relegating an endpoint that proved expensive and silent
+# over consecutive sweeps, "operator-hold" is a person putting it aside by hand.
+# Reporting the second as the first would tell a reader the machine did
+# something a person did, and would send an operator looking for a threshold to
+# change.
+#
+# "not-in-this-sweep" is neither, and it is the reason this map cannot collapse
+# into one sentence: a sweep re-running an instant that already ran asks exactly
+# the endpoints that instant asked, so an endpoint it did not reach was not
+# relegated and nothing about it was decided. Rule 3 of the admission policy
+# used to publish "automatic" for those, which every one of these pages then
+# rendered as a relegation that never happened.
+#
+# No sentence here says anything about the endpoint. Dormancy is a fact about
+# this service's rotation, which is why the vocabulary calls it dormant rather
+# than unresponsive and why it is not one of the six verdicts.
+_DORMANCY_REASONS = {
+    "automatic": (
+        "this service relegated it after consecutive sweeps that cost a great "
+        "deal and returned nothing"
+    ),
+    "operator-hold": "an operator put it aside by hand",
+    "not-in-this-sweep": (
+        "that sweep re-ran an instant that had already run, so it asked "
+        "exactly the endpoints that instant asked before and this endpoint "
+        "was not one of them, which is not a relegation and not a judgement "
+        "about the endpoint"
+    ),
+}
+
+# The clause for a reason this build has no sentence for, from a prober newer
+# or older than this page. The same shape and the same reason as
+# _UNRECOGNISED_DECLINE_DETAIL: the value is carried verbatim so a reader can
+# see which value the store holds, and nothing is claimed about what it means.
+_UNRECOGNISED_DORMANCY_REASON = "is one this page has no reading of"
+
+# And the clause for a declaration with no sw:dormancyReason beside it. Every
+# dormancy group the prober writes carries one, so this is the branch that
+# exists because the DECLARATION is the fact the page turns on: a run that said
+# it declined to ask and did not say why has still said the first half, and
+# that half is what makes the crash sentence false.
+_NO_DORMANCY_REASON = "it recorded no reason for the skip"
+
+
+def _dormancy_clause(reason: str | None) -> str:
+    """How the sentence below names the reason the newest sweep did not ask."""
+    if reason is None:
+        return _NO_DORMANCY_REASON
+    if reason in _DORMANCY_REASONS:
+        return f"{_DORMANCY_REASONS[reason]} ({reason})"
+    return (
+        f"the reason it recorded, {reason}, {_UNRECOGNISED_DORMANCY_REASON}"
+    )
+
+
+def _newest_sweep_silence_text(
+    measurements: EndpointMeasurements,
+) -> str | None:
+    """The sentence for an endpoint the NEWEST sweep recorded nothing for.
+
+    Said in the same place as the two sentences above, and for the same
+    reason: the header sentence dates every verdict on this page to one sweep,
+    and on this site an absent qualifier is a positive claim. Saying nothing
+    here asserts that the sweep named up there is the newest one this service
+    ran, and for a page that reaches this function that is false.
+
+    Two claims, and which one is made is decided by the store rather than by
+    preference:
+
+    * the newest sweep DECLARED this endpoint dormant. Then it did not ask on
+      purpose, it published why, and that is true whether or not it finished:
+      the dormancy section is written whole, before the first chunk. This
+      claim comes first because it is the more specific one and because the
+      other two would both be saying less about the same sweep.
+    * the newest sweep FINISHED and recorded nothing here, with no dormancy in
+      the store. A url dropped from the registry, one added to
+      registry/exclusions.toml and a deliberately narrowed sweep all produce
+      this, so the sentence says what happened and refuses to say why.
+
+    The third claim, a newer sweep that STOPPED before it got here, is
+    _newer_unfinished_run_text's and is mutually exclusive with the second on
+    newest_finalised. It is excluded from the first by
+    newer_run_did_not_reach_this_endpoint's own dormancy gate, so no page can
+    print a crash claim and a dormancy claim about one sweep.
+
+    BOTH TIMESTAMPS ARE NAMED, and the verdicts' one comes from
+    measurements.generated_at, which is this endpoint's own sw:currentRun. Not
+    from newest_generated_at, ever: the sweep that declined to look is
+    routinely the newest run in the store, so dating the verdicts by the
+    store's greatest prov:generatedAtTime would report them as fresher than
+    they are, by exactly the gap this sentence exists to disclose.
+    """
+    if measurements.newest_sweep_declined_to_ask_this_endpoint:
+        return (
+            f"The newest sweep, at {measurements.newest_generated_at}, did "
+            f"not ask this endpoint: it recorded the endpoint as dormant and "
+            f"{_dormancy_clause(measurements.newest_dormancy_reason)}. That "
+            f"is a fact about this service's rotation and not a verdict about "
+            f"the endpoint. Nothing above comes from that sweep. What is "
+            f"above is the newest this store holds for this endpoint, from "
+            f"the sweep at {measurements.generated_at}."
+        )
+    if measurements.newest_sweep_recorded_nothing_for_this_endpoint:
+        return (
+            f"The newest sweep, at {measurements.newest_generated_at}, "
+            f"finished and recorded nothing at all for this endpoint, and no "
+            f"run in this store says why. Nothing above comes from that "
+            f"sweep. What is above is the newest this store holds for this "
+            f"endpoint, from the sweep at {measurements.generated_at}."
+        )
+    return None
+
+
 def _legend(rows: list[dict]) -> list[dict]:
     """The seven states, with how many rows on this page are in each.
 
@@ -808,8 +924,39 @@ def _page_context(
         # a later sweep stopped before it reached this endpoint. Both can hold
         # at once, in a store holding two crashed runs, and then both are
         # true and both are said.
+        #
+        # The second and the third are mutually exclusive: a later sweep that
+        # stopped and a later sweep that recorded nothing on purpose are two
+        # readings of one sweep, and only one of them can be right.
         "unfinished_text": _unfinished_run_text(measurements),
         "newer_unfinished_text": _newer_unfinished_run_text(measurements),
+        # The third thing that can be wrong with the sweep named above, and it
+        # is not about that sweep at all: a NEWER sweep recorded nothing here,
+        # so the timestamp above is not the newest this service holds. Its own
+        # sentence, for the same reason as the two above, and the two dormancy
+        # keys beside it are the machine-readable half of it. The reason slug
+        # is passed through rather than the flag alone, so a consumer of the
+        # page reads the value the store holds and not this build's reading of
+        # it; the sentence carries the reading.
+        "newest_silence_text": _newest_sweep_silence_text(measurements),
+        "newest_declined_to_ask": (
+            measurements.newest_sweep_declined_to_ask_this_endpoint
+        ),
+        "newest_dormancy_reason": measurements.newest_dormancy_reason,
+        # And where a reader of that sentence goes next. The sentence says what
+        # happened; /about is the only surface that says what the mark claims,
+        # what it does not, and who changes it, and until this stage no page
+        # linked to it. In the header for every reader, and once more inside the
+        # dormancy sentence for the one it is addressed to.
+        "about_path": ABOUT_PATH,
+        # The way home, on every page. The logo carries it, so a reader who
+        # arrived on one endpoint from a search engine has somewhere to go
+        # other than the back button.
+        "index_path": INDEX_PATH,
+        # The endpoint itself, in a new tab, when its scheme is one a browser
+        # should follow. See _outward_link: this is the only href on this site
+        # holding a string a third party chose.
+        "outward_link": _outward_link(endpoint),
         "rows": rows,
         "legend": _legend(rows),
         "sample": _sample(measurements, content),
@@ -1000,16 +1147,154 @@ _AVAILABILITY_METRIC = _METRIC_PREFIX + "availability"
 ROW_UNFINISHED_TEXT = "from a sweep that stopped"
 ROW_NEVER_REACHED_TEXT = "a later sweep never got here"
 
+# The third qualifier, and it is a QUALIFIER and not an eighth state. Dormancy
+# is a fact about this service's rotation: the newest sweep published this
+# endpoint as one it declined to ask, and said why. So it gets no chip, no
+# metric column and no entry in _legend, which counts chip states from the
+# closed table in verdict_encoding; it sits here beside the other two things
+# that can be wrong with the instant in the page's header, and the panel that
+# explains those explains it.
+#
+# What it licenses is a sentence about how old the verdicts on the row are, and
+# nothing about the endpoint. The row stays in the group its last real probe put
+# it in, with the chips that probe produced: moving it out would file a measured
+# endpoint under a heading about us.
+ROW_DORMANT_TEXT = "the newest sweep did not ask"
+
+# The reason, twice: the clause a row carries, and the gloss the page's panel
+# explains it with. Three spellings today, and each is a different fact:
+# "automatic" is the admission policy relegating an endpoint that cost more than
+# its ceiling while answering nothing in two consecutive sweeps, "operator-hold"
+# is a person setting it aside, and "not-in-this-sweep" is a sweep replaying an
+# instant that had already run and so asking exactly the set that instant asked.
+# A row that read the same for any two of them would say less than the attribute
+# beside it already does.
+#
+# ONE MAP AND NOT TWO, because the panel used to spell these slugs out in
+# the template. The prober owns them (prober/src/dormancy.rs's
+# SkipReason::slug), so a rename there left every row telling the truth through
+# the verbatim fallback while the panel went on naming a value no run graph could
+# carry, with every test green. The keys are now pinned to that match in
+# test_about.py's test_the_dormancy_reasons_the_pages_read_are_the_probers_own,
+# and the panel renders the keys of this map rather than repeating them, so the
+# chain runs from the Rust arm to the words a reader sees.
+# The gloss carries the whole explanation, so that the panel needs no sentence of
+# its own about a named reason. It used to have one ("Automatic means the
+# endpoint cost more than its ceiling ..."), which is prose about one slug that
+# nothing pins: a third reason, or a rename, left it standing. The strike count
+# in it is a format field for the same reason the cadence is, see below.
+#
+# The cadence lives in these glosses too, and no longer in a sentence of the
+# template's own. The panel used to end "Either way the endpoint is asked at
+# most one sweep in every N days", which is true of exactly one of the three
+# reasons: a hold is asked by no sweep at all until a person lifts it, and a
+# replay that did not reach an endpoint changed nothing about how often it is
+# asked. One sentence covering three reasons is how that got written, so each
+# reason now carries what follows from it and the template covers none of them.
+_ROW_DORMANCY_REASONS = {
+    "automatic": (
+        "on cost and silence",
+        "the admission policy setting it aside after {strikes} sweeps in a row "
+        "that cost more than its ceiling and answered nothing, after which it "
+        "is asked at most one sweep in every {cadence} days and only when a "
+        "person starts one",
+    ),
+    "operator-hold": (
+        "by hand",
+        "a person setting it aside by hand, after which no sweep asks it at "
+        "all until a person lifts the hold",
+    ),
+    "not-in-this-sweep": (
+        "on a replay of an earlier sweep",
+        "a sweep re-running an instant that had already run, which asks "
+        "exactly the endpoints that instant asked before and so did not reach "
+        "this one, leaving how often it is asked exactly as it was",
+    ),
+}
+
+# The fourth thing a row can say, and it is provenance rather than a warning:
+# WHICH sweep measured this row, said whenever that is not the sweep the page's
+# header names. Until this stage nothing on a row said whether the header's
+# instant had anything to do with the verdicts beside it, and on this site an
+# absent qualifier is a positive claim, so a store whose newest sweep asked a
+# narrow subset presented every other row's older verdicts as measured then.
+#
+# WORDED AGAINST THE SWEEP, NEVER AS AN AGE FROM TODAY. Nothing in this service
+# runs on a schedule, so "six days ago" is a claim the store cannot support: it
+# holds two instants and nothing about how long is expected between two sweeps.
+# _provenance sets the rule this follows, that the two timestamps are named and
+# never ordered.
+ROW_MEASURED_BY_TEXT = "measured by the sweep at"
+
 # What an empty cell in a metric's column means. It is NOT one of the seven
 # states and it is deliberately not drawn as one: a metric this endpoint's
 # newest run recorded neither a measurement nor a decline for is a gap in what
 # the store holds, and drawing it as "not measured" would claim the run said so.
-EMPTY_CELL_TEXT = (
-    "A cell holding only a dot means this endpoint's newest run recorded "
-    "nothing at all about that metric, neither a measurement nor a decline. It "
-    "is a gap in what this service holds, not a verdict about the endpoint, "
-    "which is why it is not drawn as one of the states below."
-)
+EMPTY_CELL_TEXT = ""
+# (
+    # "A cell holding only a dot means this endpoint's newest run recorded "
+    # "nothing at all about that metric, neither a measurement nor a decline. It "
+    # "is a gap in what this service holds, not a verdict about the endpoint, "
+    # "which is why it is not drawn as one of the states below."
+#)
+
+
+def _row_dormancy_text(reason: str | None) -> str:
+    """The words a dormant row carries, reason included.
+
+    Three branches, and they are the three _dormancy_clause has on the endpoint
+    page, said in fewer words. A reason this build has no reading of is carried
+    VERBATIM rather than dropped or relabelled, because the value the store
+    holds is the fact and this build's reading of it is not; a declaration with
+    no reason at all still made the declaration, which is the half that matters
+    here, so it gets the marker and says the reason is missing.
+    """
+    if reason is None:
+        return f"{ROW_DORMANT_TEXT}, and gave no reason"
+    if reason in _ROW_DORMANCY_REASONS:
+        return f"{ROW_DORMANT_TEXT}, {_ROW_DORMANCY_REASONS[reason][0]}"
+    return f"{ROW_DORMANT_TEXT}, for a reason this page cannot read: {reason}"
+
+
+def _group_dormancy_note(dormant: int, total: int, with_reason: int) -> str:
+    """What the marker means for the group it appears in.
+
+    A note on the group rather than a group of its own, for the reason
+    ROW_DORMANT_TEXT gives: the row's verdict is the one its last real probe
+    produced, and that verdict is what this group is keyed on. It carries its
+    denominator like every other count on this page, and it points at the row
+    for the instant rather than repeating one instant for rows that may not
+    share it.
+
+    ``with_reason`` IS COUNTED AND NOT ASSUMED. This note used to end "declined
+    to ask, and said why" unconditionally, directly above rows that
+    _row_dormancy_text renders as "and gave no reason": a declaration with no
+    sw:dormancyReason beside it made the declaration, which is the half that
+    matters, and the note asserted the other half for it. The prober always
+    writes a reason, so no prober output reaches the mismatch; the branch exists
+    because _row_dormancy_text and _NO_DORMANCY_REASON both decline to assume
+    it, and on these pages a qualifier stated without a condition is a claim.
+    """
+    one = dormant == 1
+    if with_reason == dormant:
+        said = "and said why"
+    elif with_reason == 0:
+        said = "and recorded no reason" + ("" if one else " for any of them")
+    else:
+        said = f"and said why for {with_reason} of them"
+    return (
+        f"{dormant} of these {total} rows "
+        f"{'carries' if one else 'carry'} the marker "
+        f"\u201c{ROW_DORMANT_TEXT}\u201d: the newest sweep in this store "
+        f"published {'it as an endpoint' if one else 'them as endpoints'} it "
+        f"declined to ask, {said}. "
+        f"{'It is' if one else 'They are'} in this group because this is the "
+        f"verdict {'its' if one else 'their'} last real probe produced, and "
+        f"{'that row names' if one else 'each of those rows names'} the sweep "
+        f"that produced it. Whichever reason the row names, and the panel "
+        f"below spells out every reason a sweep can give, it is a fact about "
+        f"this service and not a finding about the endpoint."
+    )
 
 
 def _abbreviation(name: str, width: int) -> str:
@@ -1152,6 +1437,189 @@ def _index_chips(entry: EndpointMeasurements, metrics: list[dict]) -> list[dict]
     return cells
 
 
+# ---------------------------------------------------------------------------
+# The three facet groups above the rows
+# ---------------------------------------------------------------------------
+# Every count here is computed over the same rows the page renders, and every
+# chip filters by reading attributes the rows ALREADY carry: a cell's state is
+# its `enc-<slug>` class, a measured cell carries `data-verdict` and a declined
+# one carries `data-declined`, and a chip's text is the metric's abbreviation.
+# So faceting cost this page nothing per row, which matters because
+# web/README.md's table shows how little headroom 543 rows leave.
+#
+# WHAT EACH GROUP SELECTS was decided by the plan owner on 2026-08-27, against
+# the counts these functions return over the 2026-08-24 sweep. Two of the three
+# select very little on that data and the reason is coverage rather than the
+# facet: `classes` is the only expensive metric and every sweep so far ran at
+# the cheap ceiling, so seven metric chips match all 543 rows and one matches
+# none. That is the gap the metric chips exist to show.
+
+# The availability facet is TWO chips and not three, which is a decision with a
+# cost the plan owner took knowingly. 482 of 543 endpoints read `indeterminate`,
+# meaning no answer arrived inside the budget, and this page files them under
+# "not available" along with the 4 that answered `absent`. The six-verdict
+# vocabulary exists precisely to keep those apart, so the chip DISCLOSES ITS
+# COMPOSITION rather than leaving the reader to assume 486 servers are down:
+# the filter is what was asked for, and the label is what stops it lying.
+_POSITIVE_VERDICTS = ("verified", "undeclared-but-verified")
+
+# The one verdict inside "not available" that is not a finding about the server
+# at all: no answer arrived inside the time budget. Named here rather than
+# spelled at the one place it is counted, because the disclosure sentence below
+# is entirely about this value and a rename that missed it would leave the
+# sentence saying nothing while the chip went on counting.
+_UNREACHED_VERDICT = "indeterminate"
+
+
+# The one place this service links OUT to an endpoint, and the only place any
+# page puts a third party's string in an href. That is why it is gated on the
+# scheme rather than rendered straight from the store.
+#
+# Autoescaping does not help here. `javascript:alert(1)` contains no character
+# an HTML escaper touches, so it reaches the attribute unchanged and a browser
+# runs it on click. The spec's own note is what makes this reachable rather than
+# theoretical: the scheme allowlist deferred at stage 1d-a was found
+# "unnecessary FOR THIS DUMP, which holds only http (472) and https (76)", and
+# explicitly "not retired in general: a later source may differ". Stage 5
+# accepts public submissions, and `load_run` loads whatever run file it is
+# given. So this link is what would have turned that deferral into a hole.
+#
+# An endpoint whose scheme is anything else keeps its page and its verdicts and
+# simply gets no link. Saying nothing is right: this service has no opinion on
+# such a URL, and the page already prints it in full as text where a reader can
+# see it and decide for themselves.
+LINKABLE_SCHEMES = ("http://", "https://")
+
+
+def _outward_link(endpoint: str) -> str | None:
+    """The endpoint's own URL when it is safe to put in an href, else None."""
+    lowered = endpoint.lower()
+    if any(lowered.startswith(scheme) for scheme in LINKABLE_SCHEMES):
+        return endpoint
+    return None
+
+
+def _state_facets(groups: list[dict]) -> list[dict]:
+    """One chip per encoding state, counting rows with AT LEAST ONE chip in it.
+
+    Changed from uniform-in-that-state on 2026-08-28 by the plan owner, and the
+    numbers are why. Over the 2026-08-24 sweep the uniform reading gave
+    `indeterminate` 402 and every other state 0, because no endpoint on this
+    registry is uniform in anything else: six of the seven chips were dead.
+    Counting a row that has the state anywhere gives verified 84,
+    undeclared-but-verified 18, declared-but-wrong 7, absent 115, indeterminate
+    532, not-measured 543, declared-only 0. So one press now answers the
+    question a reader actually brings to this page, which is "who gets anything
+    wrong" rather than "who gets everything wrong".
+
+    EVERY DRAWN CHIP COUNTS, a declined one included, which is the other half of
+    the change. Under the uniform reading declines had to be excluded or every
+    count was 0; under this one they are the whole point of the `not-measured`
+    chip, and its 543 says every endpoint here has a metric no sweep has run.
+    That also makes this number and the legend's chip count populations of the
+    same thing, which is what lets the two sit in one button.
+
+    Built from the same table as `_legend`, so a chip and its swatch cannot
+    disagree about what a state looks like or is called, and it emits the
+    unrecognised state on the same condition `_legend` lists it: a cell was
+    DRAWN in it. A store carrying a verdict this build has no encoding for used
+    to give that row a blank count that then revealed rows when pressed.
+    """
+    holding: dict[str, int] = {}
+    for group in groups:
+        for row in group["rows"]:
+            for slug in {
+                cell["slug"] for cell in row["cells"] if cell["present"]
+            }:
+                holding[slug] = holding.get(slug, 0) + 1
+    states = list(verdict_encoding.STATES)
+    if holding.get(verdict_encoding.UNRECOGNISED.slug):
+        states.append(verdict_encoding.UNRECOGNISED)
+    return [
+        {
+            "slug": state.slug,
+            "label": state.label,
+            "css_class": verdict_encoding.css_class(state.slug),
+            "count": holding.get(state.slug, 0),
+        }
+        for state in states
+    ]
+
+
+def _metric_state_matrix(
+    groups: list[dict], metrics: list[dict]
+) -> list[dict]:
+    """One row per metric, one cell per state, counting the endpoints in each.
+
+    The layout the plan owner asked for on 2026-08-28, and the shape of the real
+    registry is the argument for it. Over the 2026-08-24 sweep 21 of the 56
+    cells hold anything, and the 21 are not spread evenly: `geo-functions` is
+    the ONLY metric with an undeclared-but-verified column (18) or a
+    declared-but-wrong one (7), `classes` is entirely not-measured, and
+    `declared-only` is empty everywhere. That is the survey finding this project
+    was built to reproduce, and two separate chip strips could not show it: one
+    said 18 endpoints work undeclared somewhere, the other said 543 endpoints
+    have a geo-functions verdict, and neither said the two were the same fact.
+
+    A cell counts the endpoints whose newest run put THAT metric in THAT state,
+    so the cells of one row sum to that metric's own total and never to the page
+    total. A metric the run declined lands in the not-measured column rather
+    than being left out, because the reader's question there is "did anyone
+    look", and the column answers it.
+    """
+    counted: dict[tuple[str, str], int] = {}
+    for group in groups:
+        for row in group["rows"]:
+            for cell in row["cells"]:
+                if cell["present"]:
+                    key = (cell["name"], cell["slug"])
+                    counted[key] = counted.get(key, 0) + 1
+    states = list(verdict_encoding.STATES)
+    if any(
+        slug == verdict_encoding.UNRECOGNISED.slug for _, slug in counted
+    ):
+        states.append(verdict_encoding.UNRECOGNISED)
+    return [
+        {
+            "name": metric["name"],
+            "abbr": metric["abbr"],
+            # The row's own total, so a reader can see at a glance that the
+            # cells beside it account for every endpoint and none twice.
+            "total": sum(
+                n for (name, _), n in counted.items() if name == metric["name"]
+            ),
+            "cells": [
+                {
+                    "slug": state.slug,
+                    "label": state.label,
+                    "css_class": verdict_encoding.css_class(state.slug),
+                    "count": counted.get((metric["name"], state.slug), 0),
+                    # "AV|verified". The script's predicate needs the pair and
+                    # the abbreviation is what a chip on a row already carries,
+                    # so nothing per row has to grow to support this.
+                    "value": f"{metric['abbr']}|{state.slug}",
+                }
+                for state in states
+            ],
+        }
+        for metric in metrics
+    ]
+
+
+def _matrix_states(matrix: list[dict]) -> list[dict]:
+    """The column headers, taken from the matrix so the two cannot disagree."""
+    if not matrix:
+        return []
+    return [
+        {
+            "slug": cell["slug"],
+            "label": cell["label"],
+            "css_class": cell["css_class"],
+        }
+        for cell in matrix[0]["cells"]
+    ]
+
+
 def _index_row(entry: EndpointMeasurements, metrics: list[dict]) -> dict:
     """One row: the endpoint, its link, its cells, and any qualification.
 
@@ -1161,12 +1629,44 @@ def _index_row(entry: EndpointMeasurements, metrics: list[dict]) -> dict:
     would arrive truncated, and one holding a percent sequence of its own would
     arrive as a different URL. See "The URL shape" at the top of this file.
     """
+    dormant = entry.newest_sweep_declined_to_ask_this_endpoint
+    # The condition for naming this row's own sweep, and it is deliberately the
+    # WIDEST of the four conditions on this row: any row whose facts did not
+    # come from the newest run in the store, for any reason at all. The two
+    # properties about a NEWER sweep each say something further about why that
+    # run holds nothing here, and a row can satisfy neither and still be a row
+    # of older facts under a header dated later. store_later_sample is that
+    # store: its newest run sampled one endpoint and measured nothing, so no
+    # crash claim and no "recorded nothing" claim holds of any of its three
+    # rows and all three of them are the 16:00 sweep's. Naming the sweep is true
+    # of every one of these cases, so it is asked as one question.
+    #
+    # Both halves of the guard are required, and the first is not redundant:
+    # None != entry.run is True, so a store whose newest run is unbound would
+    # otherwise read as "a run other than this one" and every row would claim a
+    # second sweep exists. This is the same guard the three properties on
+    # EndpointMeasurements state, for the same reason.
+    older_sweep = entry.newest_run is not None and entry.newest_run != entry.run
     return {
         "endpoint": entry.endpoint,
         "href": ENDPOINT_PATH + "?url=" + quote(entry.endpoint, safe=""),
         "cells": _index_chips(entry, metrics),
         "run_unfinished": entry.run_did_not_finish,
         "never_reached": entry.newer_run_did_not_reach_this_endpoint,
+        "dormant": dormant,
+        # The value the store holds, passed through beside the sentence, the
+        # same way the endpoint page passes it: a consumer of the markup reads
+        # the store's word and not this build's reading of it.
+        "dormancy_reason": entry.newest_dormancy_reason if dormant else None,
+        "dormant_text": (
+            _row_dormancy_text(entry.newest_dormancy_reason) if dormant else None
+        ),
+        # This endpoint's OWN sweep, from its own sw:currentRun pointer, and
+        # never newest_generated_at: the sweep that declined to look is
+        # routinely the newest run in the store, so dating these verdicts by the
+        # store's greatest prov:generatedAtTime would report them as fresher
+        # than they are by exactly the gap this marker exists to disclose.
+        "measured_by": entry.generated_at if older_sweep else None,
     }
 
 
@@ -1218,6 +1718,18 @@ def _index_groups(
     groups = []
     for value in values:
         rows = availability[value]
+        built = [_index_row(entry, metrics) for entry in rows]
+        # Counted off the built rows rather than asked of the entries again, so
+        # the number in the note and the markers a reader can count are the same
+        # decision read twice rather than two decisions that can differ.
+        dormant = sum(1 for row in built if row["dormant"])
+        # And how many of those carried a reason, for the same reason the count
+        # above is read off the built rows: the note says "and said why", and
+        # whether that is true is a property of these rows rather than of the
+        # marker. See _group_dormancy_note.
+        with_reason = sum(
+            1 for row in built if row["dormant"] and row["dormancy_reason"]
+        )
         if value is None:
             state = verdict_encoding.presentation(verdict_encoding.NOT_MEASURED)
             label = state.label
@@ -1252,14 +1764,17 @@ def _index_groups(
             # true of cors and of the service description and is not true of
             # availability: nothing declares that it answers queries. Printing
             # that generic gloss under an availability heading would explain the
-            # group with a sentence about a different metric. The legend at the
-            # foot of the page explains the drawing, which is what it is for.
-            meaning = (
-                f"These are the endpoints whose availability metric read "
-                f"\"{value}\" in the newest run that measured them. Nothing "
-                f"about their other metrics follows from it: every metric "
-                f"carries its own verdict, and the rows are where those are."
-            )
+            # group with a sentence about a different metric. What the drawing
+            # means is the legend's to say, and the legend is above these groups
+            # since 2026-08-27, where each of its rows is also the filter chip
+            # for that state.
+            # No per-group note. Until 2026-08-27 each group carried one
+            # sentence differing only in a quoted verdict, directly beneath a
+            # heading that already names that verdict and its denominator, and
+            # the thing it went on to say (that one metric implies nothing
+            # about another) is now said once in the facets above the rows
+            # rather than three times between them.
+            meaning = None
         groups.append(
             {
                 # Empty for the final group, so that a group keyed on a verdict
@@ -1279,7 +1794,15 @@ def _index_groups(
                 "heading": (
                     f"availability {label}: {len(rows)} of {total} endpoints"
                 ),
-                "rows": [_index_row(entry, metrics) for entry in rows],
+                # None, not an empty string, when no row here carries the
+                # marker: a note saying that some of these rows were not asked
+                # would be false of every row in a group that holds none.
+                "dormant_note": (
+                    _group_dormancy_note(dormant, len(rows), with_reason)
+                    if dormant
+                    else None
+                ),
+                "rows": built,
             }
         )
     return groups
@@ -1334,12 +1857,93 @@ def _index_context(entries: list[EndpointMeasurements]) -> dict:
         "metrics": metrics,
         "metric_count": len(metrics),
         "groups": groups,
+        # The three facet groups, above the rows. Each filters by reading
+        # attributes the rows already carry, so none of them costs a byte per
+        # row; see the block above _index_row for what each one selects and why.
+
+        # The grid: metrics down, states across, a count in every intersection.
+        # It subsumes the two chip strips it replaced, because a row header
+        # filters on the metric alone and a column header on the state alone,
+        # which is exactly what those strips did.
+        "matrix": _metric_state_matrix(groups, metrics),
+        "matrix_states": _matrix_states(_metric_state_matrix(groups, metrics)),
+        # The column headers' counts. A header carries one for the same reason
+        # every other chip does: it is the invariant that caught a chip printing
+        # 402 above an empty page. The ROW headers stopped being chips on
+        # 2026-08-28 and carry no count, because every cell in the row already
+        # filters on that metric and a chip on the name could only widen what
+        # they narrow.
+        "state_counts": {
+            facet["slug"]: facet["count"] for facet in _state_facets(groups)
+        },
+        # Keyed by slug rather than a list, because the legend it feeds is
+        # already looping over the states to draw the swatches and must not loop
+        # over a second sequence beside it. The legend shows this beside its own
+        # chip count: two numbers answering two questions, which its note
+        # explains.
+        #
+        # KEYING BY SLUG IS NOT WHAT KEEPS THE TWO IN STEP, and a comment here
+        # claimed it was until 2026-08-28. A mapping is only total over the
+        # legend if it holds a key for every entry the legend lists, and
+        # `_legend` lists an eighth when this page drew a verdict this build has
+        # no encoding for. Where it did and `_state_facets` returned seven, the
+        # template's `state_rows[state.slug]` rendered as nothing at all, which
+        # is a chip claiming to select no endpoint that then reveals one. What
+        # keeps them in step is that both functions decide on that eighth entry
+        # from the same condition over the same rows; see `_state_facets`.
+        "state_rows": {
+            facet["slug"]: facet["count"] for facet in _state_facets(groups)
+        },
         "newest_generated_at": (
             entries[0].newest_generated_at if entries else None
         ),
         "newest_sweep_note": _newest_sweep_note(entries),
+        # The one link to /about on this page, in the page header where it costs
+        # one occurrence rather than one per row. Nothing on this site linked
+        # here until this stage: a row said the newest sweep did not ask and
+        # stopped, so the contact address that changes it, and the four numbers
+        # behind the mark, were reachable only by pasting the prober's
+        # User-Agent URL into a browser.
+        "about_path": ABOUT_PATH,
+        # The way home, on every page. The logo carries it, so a reader who
+        # arrived on one endpoint from a search engine has somewhere to go
+        # other than the back button.
+        "index_path": INDEX_PATH,
         "row_unfinished_text": ROW_UNFINISHED_TEXT,
         "row_never_reached_text": ROW_NEVER_REACHED_TEXT,
+        # The two new markers' words, for the panel that explains them. The
+        # dormant marker's reason clause is per row and is built there; what the
+        # panel shows is the marker itself, so the words in the key and the words
+        # on a row cannot come apart.
+        "row_dormant_text": ROW_DORMANT_TEXT,
+        "row_measured_by_text": ROW_MEASURED_BY_TEXT,
+        # The reasons the panel names, rendered from the map the ROWS are built
+        # from rather than written out in the template. See
+        # _ROW_DORMANCY_REASONS: the slugs belong to the prober, and a template
+        # that spelled them out could go on naming one after a rename.
+        # The gloss is formatted here rather than in the template, because the
+        # numbers in it belong to DORMANCY and a template holding them would be
+        # a second copy of a constant. A gloss with no field formats to itself.
+        "dormancy_reasons": [
+            {
+                "slug": slug,
+                "gloss": gloss.format(
+                    strikes=DORMANCY["dormant-strikes"],
+                    cadence=DORMANCY["dormant-cadence-days"],
+                ),
+            }
+            for slug, (_, gloss) in _ROW_DORMANCY_REASONS.items()
+        ],
+        # No cadence of its own beside them, and that absence is the fix: the
+        # panel used to end one sentence with the cadence for all the reasons at
+        # once, which is true of the automatic one and false of the other two.
+        # The numbers now travel inside the gloss of the reason they belong to,
+        # formatted above from DORMANCY, which is defined with the /about page's
+        # constants below and held to prober/src/dormancy.rs's
+        # DEFAULT_CADENCE_DAYS by test_about.py. The template states no number
+        # of its own either way: it used to say "seven days" in words, so
+        # changing the constant self-corrected /about and left the index
+        # promising a cadence no sweep uses.
         "empty_cell_text": EMPTY_CELL_TEXT,
         "legend": _legend(drawn),
         "chip_width": verdict_encoding.CHIP_WIDTH_PX,
@@ -1498,6 +2102,51 @@ POLITENESS = {
     "requests-per-endpoint": 7,
 }
 
+# What the admission policy costs an endpoint that has proved expensive and
+# silent, as the prober's own defaults. From prober/src/dormancy.rs:
+#
+#   dormant-cost-seconds      DEFAULT_COST_MS, the default of the sweeper's
+#                             --dormant-cost-ms, DIVIDED BY 1000. The constant
+#                             is 60_000 because the flag it defaults takes
+#                             milliseconds; the number a stranger reading a
+#                             sentence about their own server is owed is 60
+#                             seconds. web/tests/test_about.py does the division
+#                             and fails on a constant that is not whole seconds.
+#   dormant-strikes           DEFAULT_STRIKES, the default of --dormant-strikes
+#   dormant-cadence-days      DEFAULT_CADENCE_DAYS, the default of
+#                             --dormant-every-days
+#   dormant-wake-grace-days   DEFAULT_GRACE_DAYS, the default of the OTHER
+#                             binary's `dormancy wake --grace-days`. It is not a
+#                             flag on the sweeper at all: main.rs fills the field
+#                             in from the constant and nothing there reads it,
+#                             because its one reader is dormancy::wake. See
+#                             thresholds_from's doc comment, which says why a
+#                             --dormant-grace-days on the sweeper was removed
+#                             rather than left to be parsed and ignored.
+#
+# A SECOND DICT rather than four more entries in POLITENESS, because these are
+# read from a different file, in a different unit, by a different reader:
+# test_about.py's prober_defaults() matches Duration::from_secs and NonZeroUsize
+# and matches none of these, which are bare u64 and u32. Merging them would put
+# a millisecond constant behind a name that says seconds. Both dicts reach the
+# page AND the RDF, which is what the union in
+# test_the_politeness_numbers_on_the_page_are_the_prober_defaults asserts.
+#
+# THESE ARE POLITENESS FIGURES, which is why the page renders them under the
+# same data-politeness attribute: they are how many requests somebody's server
+# gets. An endpoint the admission policy set aside itself is asked at most one
+# sweep in every seven days instead of one per sweep, and that is the strongest
+# single statement this service makes about the load it puts on a host that
+# never answers. All four numbers are that case and only that case: an operator
+# hold is asked by no sweep at all until a person lifts it, so no threshold here
+# describes it, which is what /about's three paragraphs on the reasons separate.
+DORMANCY = {
+    "dormant-cost-seconds": 60,
+    "dormant-strikes": 2,
+    "dormant-cadence-days": 7,
+    "dormant-wake-grace-days": 7,
+}
+
 # Two endpoints of prober/registry/lod-cloud.toml on ONE machine behind
 # different ports, in the order the page names them.
 #
@@ -1580,6 +2229,7 @@ def _about_context() -> dict:
         "exclusion_file": EXCLUSION_FILE,
         "max_redirect_hops": MAX_REDIRECT_HOPS,
         "politeness": POLITENESS,
+        "dormancy": DORMANCY,
         "same_host_different_ports": SAME_HOST_DIFFERENT_PORTS,
         "registry": REGISTRY,
         "full_sweep": FULL_SWEEP_DURATION,
@@ -1630,13 +2280,20 @@ def _about_rdf(media_type: str) -> bytes:
             NamedNode(REGISTRY["dump"]),
         ),
     ]
+    # BOTH dicts, and the dormancy figures are here rather than only in the
+    # prose for the reason the section comment above gives: the HTML renders them
+    # under data-politeness, and
+    # test_the_rdf_and_the_html_state_the_same_numbers_and_the_same_address
+    # enforces agreement by iterating exactly those elements. Left out here, the
+    # machine-readable representation of this resource would say nothing at all
+    # about the admission policy while that test kept passing.
     triples.extend(
         Triple(
             _SERVICE,
             NamedNode(_ABOUT + name),
             Literal(str(value), datatype=_XSD_INTEGER),
         )
-        for name, value in POLITENESS.items()
+        for name, value in (*POLITENESS.items(), *DORMANCY.items())
     )
     return serialize(iter(triples), format=RdfFormat.from_media_type(media_type))
 

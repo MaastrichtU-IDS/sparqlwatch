@@ -19,11 +19,24 @@
 # header's sw:emission terminator, the chunk's sw:completedEndpoint
 # terminator, and the footer's sw:finalised terminator, with
 # sw:failedEndpoints moving from the header to the footer beside the last of
-# them. This is the only committed fixture that claims to be current emitter
-# output, so it is the only one that has to move when the emitter does; the
-# captured historical sweeps (run-declined.nq and the rest) carry no
+# them. The captured historical sweeps (run-declined.nq and the rest) carry no
 # terminator on purpose, and "neither terminator" is exactly the third case
 # the scheme defines, a run from before it existed.
+#
+# WHAT THIS FIXTURE NOW PREDATES, added 2026-08-27 for the dormancy stage. The
+# emitter has since gained a fourth section, the endpoints a sweep declined to
+# ask, written between the header's sw:emission terminator and the first chunk
+# and closed by an sw:dormantCount terminator that is emitted last and always,
+# even at zero. This file has no such quad, so it is no longer a byte-for-byte
+# claim about what today's emitter writes: it is emit_nquads' output as of
+# stage 1c-b4, which remains exactly what the prober-failed tests over it need,
+# and it is still the only committed file whose eight declines are the emitter's
+# own. It was deliberately NOT regenerated: it is read by test_fixture.py,
+# test_index.py, test_page.py, test_negotiation.py, test_endpoint_measurements.py
+# and reader-golden.json, all of which assert its 51 quads and its derived
+# subjects, so a regeneration is a change to those and not to this file alone.
+# run-with-dormancy.nq is the fixture that carries all four terminators and the
+# non-empty dormancy section, and it is captured RunWriter output.
 #
 # Both reasons in one run is the point. The two are opposite claims about who
 # is responsible, so a page that renders one sentence for every decline says

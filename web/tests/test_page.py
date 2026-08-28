@@ -33,9 +33,15 @@ from starlette.testclient import TestClient
 
 import verdict_encoding
 from app import (
+    ABOUT_PATH,
     COMPLETE_TEXT,
+    INDEX_PATH,
+    LINKABLE_SCHEMES,
+    _outward_link,
     ENDPOINT_PATH,
     TRUNCATED_TEXT,
+    _DORMANCY_REASONS,
+    _newest_sweep_silence_text,
     _rows,
     _sample,
     app,
@@ -952,7 +958,7 @@ def test_the_not_measured_legend_entry_names_no_reason():
     the graph.
     """
     state = verdict_encoding.presentation(verdict_encoding.NOT_MEASURED)
-    assert state.meaning == "no measurement was taken; the row says why"
+    assert state.meaning == "not measured"
     for reason in ("cost", "ceiling", "prober", "failed", "declined"):
         assert reason not in state.meaning
 
@@ -1464,3 +1470,349 @@ def test_two_finished_historical_runs_say_nothing_about_not_finishing(
     assert with_attribute(text, UNFINISHED) == []
     assert with_attribute(text, NEWER_UNFINISHED) == []
     assert "did not finish" not in text
+
+
+# ---------------------------------------------------------------------------
+# The newest sweep did not ask this endpoint
+# ---------------------------------------------------------------------------
+# An absent qualifier on this page is a POSITIVE CLAIM: the header sentence
+# dates every verdict below to one sweep, and saying nothing else asserts that
+# the newest sweep in the store is that sweep. For an endpoint the newest sweep
+# declined to ask, that is false, and the store holds the reason.
+#
+# DORMANCY IS NOT A VERDICT and nothing below lets it become one. The six
+# verdict states and the not-measured state are the closed vocabulary of the
+# chips; what these tests read is a sentence about the age of the verdicts the
+# page already draws.
+DECLINING_SWEEP_INSTANT = "2026-08-27T10:00:00Z"
+REGISTRY_SWEEP_INSTANT = "2026-08-24T19:45:03Z"
+FAILED_SWEEP_INSTANT = "2026-08-23T02:00:00Z"
+
+SILENT = "data-newest-sweep-silent"
+DORMANT = "data-newest-sweep-dormant"
+CRASH = "data-newer-run-unfinished"
+
+
+def test_the_endpoint_page_says_the_newest_sweep_did_not_ask(
+    client_for, store_dormant_newest
+):
+    """store_dormant_newest's kadaster, which is the whole point of the task.
+
+    The newest sweep finished, measured the other two endpoints of the trio
+    and published one dormancy group naming this one. So the page carries one
+    sentence, and it has to name three things: the sweep that did not ask, the
+    reason it gives, and the sweep the verdicts above actually come from. It
+    must NOT carry the crash sentence, which is about a sweep that stopped.
+    """
+    text = page(client_for(store_dormant_newest), KADASTER)
+
+    said = texts_with(text, SILENT)
+    assert len(said) == 1, "one sentence, in the element contracted to carry it"
+    assert DECLINING_SWEEP_INSTANT in said[0], "name the sweep that did not ask"
+    assert SAMPLING_SWEEP in said[0], "and the sweep the verdicts come from"
+    assert "dormant" in said[0]
+    assert "operator-hold" in said[0]
+
+    marked = with_attribute(text, SILENT)[0]
+    assert marked[DORMANT] == "true"
+    assert marked["data-dormancy-reason"] == "operator-hold"
+    assert texts_with(text, CRASH) == [], (
+        "that sweep finished, so nothing about it stopped partway"
+    )
+
+
+def test_the_endpoint_page_links_to_about(
+    client_for, store, store_dormant_newest
+):
+    """The instruction for overruling us has to be reachable from the page that
+    marks you.
+
+    Nothing on this site linked to `/about` until this stage. The contact address
+    that lifts a hold, the four numbers behind an automatic relegation and the
+    paragraph saying dormant is not a verdict all lived on a page reachable only
+    by pasting the prober's `User-Agent` URL into a browser, so this page said
+    what happened and stopped there.
+
+    Twice, and each is a different reader. The header is for anybody who lands on
+    an endpoint page at all. The second is inside the dormancy sentence, for the
+    one operator it is addressed to, so that "who changes this" is answered in
+    the same breath as the mark rather than two scrolls away.
+    """
+    href = f'href="{ABOUT_PATH}"'
+    plain = page(client_for(store), KADASTER)
+    assert href in plain, "no link to /about in the endpoint page header"
+    assert plain.count(href) == 1, (
+        "a page with no dormancy mark has nothing further to send a reader "
+        f"to /about for: {plain.count(href)} links"
+    )
+
+    marked = page(client_for(store_dormant_newest), KADASTER)
+    assert marked.count(href) == 2, "the header's link, and the sentence's"
+    said = texts_with(marked, SILENT)[0]
+    assert "about page" in said, said
+
+
+def test_the_dormancy_sentence_is_not_drawn_as_a_verdict(
+    client_for, store_dormant_newest
+):
+    """The closed vocabulary, pinned on the page that could break it.
+
+    Dormancy carries no chip, no metric row and no legend entry: it is not a
+    finding about the endpoint, and drawing it beside the verdicts would put
+    an eighth state into an encoding whose whole value is that it has seven.
+    The verdicts the 16:00 sweep did record are still drawn, unchanged.
+    """
+    text = page(client_for(store_dormant_newest), KADASTER)
+
+    # BOTH spellings, and neither one alone. The vocabulary uses both,
+    # sw:dormantEndpoint and sw:dormancyReason, so an eighth state could be
+    # slugged either way, and neither word contains the other: "dormant" does
+    # not appear in "dormancy". This assertion has been wrong in each direction
+    # once, which is why it now names them both instead of picking the one that
+    # looks more likely.
+    for word in ("dormant", "dormancy"):
+        assert word not in str(with_attribute(text, "data-metric"))
+        assert word not in str(with_attribute(text, "data-state"))
+    assert [row["data-metric"] for row, _ in chips(text)], (
+        "the page must still draw the verdicts it has"
+    )
+    assert row_for(text, M + "availability")["data-verdict"] == "verified"
+
+
+def test_a_crashed_declining_sweep_makes_no_crash_claim(
+    client_for, store_dormancy_then_crash
+):
+    """The live defect this task fixes, end to end.
+
+    The newest run here published its dormancy list and was then killed, so
+    every conjunct of newer_run_did_not_reach_this_endpoint held and the page
+    printed "A later sweep did not finish and never recorded finishing this
+    endpoint" over an endpoint that sweep deliberately declined to ask, with
+    the true reason bound in the same row and unused.
+    """
+    text = page(client_for(store_dormancy_then_crash), KADASTER)
+
+    assert texts_with(text, CRASH) == [], (
+        "the sweep never intended to reach this endpoint, so it did not stop "
+        "short of it"
+    )
+    said = texts_with(text, SILENT)
+    assert len(said) == 1
+    assert DECLINING_SWEEP_INSTANT in said[0]
+    assert "operator-hold" in said[0]
+    assert SAMPLING_SWEEP in said[0]
+
+
+def test_the_calibration_shape_qualifies_every_page_the_narrower_run_skipped(
+    client_for, store_registry_and_failure
+):
+    """A finished, newer, NARROWER run, and no dormancy anywhere.
+
+    This is the defect on the deployed store: a 54-endpoint calibration run
+    minutes newer than the 543-endpoint sweep leaves 489 pages whose newest
+    sweep recorded nothing for them, and every one of those pages said
+    nothing at all about it. store_registry_and_failure is that shape at
+    fixture size, the registry sweep being a nine-endpoint cut that never
+    mentions kadaster.
+
+    Nothing in the store says WHY, so the sentence must not guess: no
+    dormancy attribute and no reason.
+    """
+    text = page(client_for(store_registry_and_failure), KADASTER)
+
+    said = texts_with(text, SILENT)
+    assert len(said) == 1
+    assert REGISTRY_SWEEP_INSTANT in said[0]
+    assert FAILED_SWEEP_INSTANT in said[0], "and the sweep the facts come from"
+    assert "dormant" not in said[0]
+    marked = with_attribute(text, SILENT)[0]
+    assert DORMANT not in marked
+    assert "data-dormancy-reason" not in marked
+    assert texts_with(text, CRASH) == []
+
+
+def test_a_page_no_later_sweep_passed_over_says_none_of_this(client_for, store):
+    """The control. One sweep, and it is every endpoint's own run, so there is
+    no later sweep to qualify anything and the page says nothing about one.
+
+    Without this the tests above would pass over a page that printed the
+    sentence unconditionally.
+    """
+    text = page(client_for(store), KADASTER)
+    assert with_attribute(text, SILENT) == []
+    assert with_attribute(text, CRASH) == []
+
+
+def _silence_text(**overrides):
+    """The sentence for one EndpointMeasurements, asked of app.py directly.
+
+    The two cases below have no committed fixture: every dormancy group the
+    prober writes carries a reason, and the reason it carries is one of
+    prober/src/dormancy.rs's two slugs. Inventing fixtures for them would pin
+    a run file no prober emits, which is the same call
+    test_each_decline_reason_gets_its_own_detail makes.
+    """
+    facts = dict(
+        endpoint="https://example.org/sparql",
+        assessed=True,
+        run="urn:sparqlwatch:run:2026-08-22T16:00:00Z",
+        generated_at="2026-08-22T16:00:00Z",
+        newest_run="urn:sparqlwatch:run:2026-08-27T10:00:00Z",
+        newest_generated_at=DECLINING_SWEEP_INSTANT,
+        newest_emission="incremental",
+        newest_finalised=True,
+        newest_declared_this_endpoint_dormant=True,
+        newest_dormancy_reason="operator-hold",
+    )
+    facts.update(overrides)
+    return _newest_sweep_silence_text(EndpointMeasurements(**facts))
+
+
+def test_each_dormancy_reason_gets_its_own_sentence():
+    """Every slug prober/src/dormancy.rs::SkipReason emits says something
+    different, and no two of them share a sentence.
+
+    "automatic" is this service's cost policy relegating an endpoint that proved
+    expensive and silent; "operator-hold" is a person; "not-in-this-sweep" is
+    neither, and is not a relegation at all. Reporting any of them as another
+    tells a reader that somebody or something did what it did not: the machine
+    did a person's work, or a decision was taken about their server that nobody
+    took.
+
+    Read off _DORMANCY_REASONS rather than listed here, so that a fourth slug
+    fails this test rather than passing it three out of four.
+    test_about.py's test_the_dormancy_reasons_the_pages_read_are_the_probers_own
+    holds that map's keys to the Rust match arms.
+    """
+    said = {
+        slug: _silence_text(newest_dormancy_reason=slug)
+        for slug in _DORMANCY_REASONS
+    }
+    for slug, sentence in said.items():
+        assert slug in sentence, f"{slug} is not named in its own sentence"
+        for other in said:
+            if other != slug:
+                assert other not in sentence, f"{slug}'s sentence names {other}"
+    assert len(set(said.values())) == len(said), "two reasons share a sentence"
+
+
+def test_it_says_so_without_a_reason_when_no_reason_is_bound():
+    """A declaration with no sw:dormancyReason beside it.
+
+    The declaration is the fact that matters: the sweep said it declined to
+    ask. So the sentence is still made, and it says the reason is not
+    recorded rather than borrowing either of the two above.
+    """
+    text = _silence_text(newest_dormancy_reason=None)
+    assert "dormant" in text
+    assert DECLINING_SWEEP_INSTANT in text
+    assert "no reason" in text
+    assert "automatic" not in text and "operator-hold" not in text
+
+
+def test_an_unrecognised_dormancy_reason_is_shown_verbatim():
+    """A reason from a prober newer than this page.
+
+    The same answer as an unrecognised verdict and an unrecognised decline
+    reason: claim nothing about what it means, and carry the value the store
+    holds so a reader can see which value that is. A reason has been added to
+    a closed set in this project once already.
+    """
+    text = _silence_text(newest_dormancy_reason="hibernating-2027")
+    assert "hibernating-2027" in text
+    assert "automatic" not in text and "operator-hold" not in text
+
+
+def test_a_dormancy_with_no_newer_sweep_to_attribute_it_to_says_nothing():
+    """The sentence is about a newer sweep, so it needs one.
+
+    Both of the property's own run guards, read through the sentence: an
+    absent newest run and a newest run that is this endpoint's own run each
+    leave nothing to say, and a sentence that fired anyway would name a sweep
+    the store does not hold or invent a second one. WHICH run's declaration is
+    read is a different question and
+    test_only_the_newest_runs_declaration_is_read owns it.
+    """
+    assert _silence_text(newest_run=None, newest_generated_at=None) is None
+    assert (
+        _silence_text(newest_run="urn:sparqlwatch:run:2026-08-22T16:00:00Z")
+        is None
+    )
+
+# ---------------------------------------------------------------------------
+# The way home, and the way out
+# ---------------------------------------------------------------------------
+
+
+def test_the_logo_leads_home(client_for, store):
+    """Every page's logo is a link to the index.
+
+    A reader who lands on one endpoint from a search engine had no way back
+    except the browser's own button until 2026-08-28.
+    """
+    text = page(client_for(store), KADASTER)
+    logos = [a for a in with_attribute(text, "class") if a["class"] == "logo"]
+    assert len(logos) == 1
+    assert logos[0]["href"] == INDEX_PATH
+
+
+def test_the_outward_link_opens_the_endpoint_in_a_new_tab(client_for, store):
+    """And carries both halves of rel, for two different reasons.
+
+    `noopener` is the security one. `noreferrer` is the courtesy one: without it
+    the operator of that endpoint reads this page's url in their referer log, and
+    somebody looking up their own server should not have to announce that they
+    read us first.
+    """
+    text = page(client_for(store), KADASTER)
+    links = with_attribute(text, "data-outward-link")
+    assert len(links) == 1
+    assert links[0]["href"] == KADASTER
+    assert links[0]["target"] == "_blank"
+    assert set(links[0]["rel"].split()) == {"noopener", "noreferrer"}
+
+
+def test_the_outward_link_says_a_plain_visit_sends_no_query(client_for, store):
+    """Because it does not, and the difference matters to a reader.
+
+    A GET with no query is the request `declare.rs` makes, and what comes back is
+    a form, an error, or a service description. A reader expecting results and
+    meeting an error page would read that as the endpoint being broken, which is
+    a conclusion this page has metrics for and this link does not support.
+    """
+    text = page(client_for(store), KADASTER)
+    assert "sends no query" in text
+    assert "a form, an" in text and "error, or a description of itself" in text
+
+
+def test_only_a_scheme_a_browser_should_follow_becomes_a_link():
+    """The guard that keeps a deferred allowlist from becoming a hole.
+
+    Autoescaping does not help: `javascript:alert(1)` holds no character an HTML
+    escaper touches, so it reaches the attribute unchanged and a browser runs it
+    on click. The spec records that the scheme allowlist was found unnecessary
+    FOR THE 2026-06-15 DUMP and explicitly not retired in general, stage 5
+    accepts public submissions, and `load_run` loads whatever run file it is
+    given. This link is the surface that would have paid for that.
+    """
+    assert _outward_link("https://a.example/sparql") == "https://a.example/sparql"
+    assert _outward_link("http://a.example/sparql") == "http://a.example/sparql"
+    assert _outward_link("HTTPS://A.example/sparql") == "HTTPS://A.example/sparql"
+    for hostile in (
+        "javascript:alert(1)",
+        "JavaScript:alert(1)",
+        "data:text/html,<script>alert(1)</script>",
+        "vbscript:msgbox(1)",
+        "file:///etc/passwd",
+        "urn:sparqlwatch:not-a-url",
+    ):
+        assert _outward_link(hostile) is None, hostile
+
+
+def test_an_endpoint_with_an_unlinkable_scheme_keeps_its_page(store_hostile_literals):
+    """No link, and everything else intact.
+
+    Saying nothing is the right answer: this service has no opinion on such a
+    url, and the page prints it in full as text where a reader can see it.
+    """
+    assert LINKABLE_SCHEMES == ("http://", "https://")

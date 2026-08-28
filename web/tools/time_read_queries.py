@@ -1,4 +1,4 @@
-"""Times the three read queries over a store of N replayed runs.
+"""Times the five read queries over a store of N replayed runs.
 
 Run from web/:
 
@@ -21,6 +21,14 @@ rather than about the shape.
 --before DIR times the .rq files in DIR as well as the ones in web/queries,
 which is how the before-and-after pair is produced from one store: point it at
 a checkout of the previous commit's queries.
+
+THE TWO INDEX QUERIES ARE ASKED OF EVERY ENDPOINT AT ONCE, so they take no
+?endpoint substitution and are timed once per store rather than once per
+endpoint. They were missing from this tool through three stages that were each
+told to run it and each wrote a throwaway script instead, and the numbers those
+scripts produced are the numbers in web/queries/index.rq's header. Timing them
+here means the index and the endpoint page are measured by one command over one
+store, which is the only way their costs are comparable.
 """
 
 from __future__ import annotations
@@ -45,10 +53,20 @@ from pyoxigraph import (
 
 from load_run import load_run, rebuild_current
 
+# The per-endpoint readers, timed once per endpoint with ?endpoint substituted.
 QUERY_NAMES = (
     "endpoint_measurements",
     "endpoint_content",
     "endpoint_description",
+)
+
+# The whole-registry readers. Nothing is substituted into either: the question is
+# about every endpoint the derived graph knows, so there is no ?endpoint to bind,
+# and one solution set is the whole answer rather than one endpoint's. Timed with
+# their own repeat count because one of them is a single query rather than 20.
+INDEX_QUERY_NAMES = (
+    "index",
+    "index_description",
 )
 SOURCE_INSTANT = "2026-08-24T19:45:03Z"
 ENDPOINT = Variable("endpoint")
@@ -125,6 +143,30 @@ def build(source: Path, runs: int, samples: int) -> tuple[Store, Path, list[str]
     return store, directory, endpoints, elapsed
 
 
+def time_index_query(store: Store, text: str, repeats: int) -> tuple[float, int]:
+    """Median milliseconds for one whole-registry answer, and its size.
+
+    No substitution, which is the difference from time_query below: these two
+    queries bind ?endpoint themselves, one row or one triple per endpoint per
+    metric, so substituting into them would ask a different question. The result
+    is drained for the reason given there, and the row count comes back because
+    it is the number that says whether a change to the query changed the answer:
+    index.rq's header records 4,344 rows over the 543-endpoint sweep, and a
+    branch that multiplied the row set would be a defect no timing shows.
+    """
+    times = []
+    size = 0
+    for _ in range(repeats):
+        started = time.perf_counter()
+        result = store.query(text)
+        if isinstance(result, QueryTriples):
+            size = len(serialize(result, format=RdfFormat.N_TRIPLES))
+        else:
+            size = len(list(result))
+        times.append((time.perf_counter() - started) * 1000)
+    return statistics.median(times), size
+
+
 def time_query(store: Store, text: str, endpoints: list[str], repeats: int) -> float:
     """Median milliseconds for one endpoint's answer, over ``repeats`` endpoints.
 
@@ -154,6 +196,12 @@ def main() -> int:
     parser.add_argument("--samples", type=int, default=0)
     parser.add_argument("--before", type=Path, default=None)
     parser.add_argument("--endpoints", type=int, default=20)
+    parser.add_argument(
+        "--index-repeats",
+        type=int,
+        default=5,
+        help="how many times each whole-registry query is asked (default 5)",
+    )
     args = parser.parse_args()
 
     here = Path(__file__).resolve().parent.parent / "queries"
@@ -202,6 +250,24 @@ def main() -> int:
             if name in before:
                 cell += f" / before {before[name]:.2f} ms"
             row.append(cell)
+
+        # The two whole-registry queries, after the per-endpoint ones and after
+        # the --before pass has put nothing back: they are timed against the
+        # current graph, which the --before pass above removes and the rebuild
+        # below restores. So current is rebuilt first where it was dropped, or
+        # index.rq would be timed against a graph that is not there and report a
+        # cost for zero rows.
+        if before:
+            rebuild_current(store)
+        for name in INDEX_QUERY_NAMES:
+            milliseconds, size = time_index_query(
+                store,
+                (here / f"{name}.rq").read_text(),
+                args.index_repeats,
+            )
+            unit = "bytes" if name.endswith("description") else "rows"
+            row.append(f"{name} {milliseconds:.2f} ms ({size} {unit})")
+
         started = time.perf_counter()
         rebuilt = rebuild_current(store)
         row.append(

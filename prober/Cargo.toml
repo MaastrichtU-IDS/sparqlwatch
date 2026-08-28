@@ -3,10 +3,10 @@ name = "sparqlwatch-prober"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.96"
-# The sweeper, so a bare `cargo run` stays the sweeper after `seed-registry` was
-# added as a second `[[bin]]`. Without this key cargo refuses to choose, and
-# README.md:69 and :1276 and src/bin/seed-registry.rs:11 all instruct a bare
-# `cargo run`.
+# The sweeper, so a bare `cargo run` stays the sweeper now that `seed-registry`
+# and `dormancy` are `[[bin]]` targets beside it. Without this key cargo refuses
+# to choose, and README.md:69 and :1622 and src/bin/seed-registry.rs:11 all
+# instruct a bare `cargo run`.
 default-run = "sparqlwatch-prober"
 
 [dependencies]
@@ -40,3 +40,11 @@ path = "src/main.rs"
 [[bin]]
 name = "seed-registry"
 path = "src/bin/seed-registry.rs"
+
+# The operator's override. A third binary and not a flag on the prober, for the
+# reason the seeder gives above: a plain sweep must not be one flag away from
+# mutating the decisions a person took. It is also the only thing that creates
+# the state file, so a fresh checkout runs this once before it can sweep at all.
+[[bin]]
+name = "dormancy"
+path = "src/bin/dormancy.rs"

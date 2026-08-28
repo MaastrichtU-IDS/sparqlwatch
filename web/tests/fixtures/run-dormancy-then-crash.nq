@@ -1,0 +1,39 @@
+# A BYTE PREFIX of run-with-dormancy.nq, cut at the sw:dormantCount terminator
+# and at no other point. Every byte below is therefore still what
+# prober/src/emit.rs's RunWriter wrote, and the cut is one a crash really makes:
+# the dormancy section sits between the header's sw:emission terminator and the
+# first chunk, so a sweep killed after publishing which endpoints it declined
+# to ask and before probing the first one it kept leaves exactly this file.
+#
+# 12 quads, one run graph (urn:sparqlwatch:run:2026-08-27T10:00:00Z), the same
+# run IRI and the same instant as run-with-dormancy.nq, because it IS that
+# file's first 12 quads. Never load the two together: they are one run.
+#
+# WHAT THIS FIXTURE IS FOR, and it is a defect that no other committed file can
+# stage. The run carries sw:emission and no sw:finalised, so it is a run that
+# did not finish, and it carries no sw:completedEndpoint at all, so it finished
+# no endpoint. Loaded beside an older sweep that measured kadaster, every
+# conjunct of EndpointMeasurements.newer_run_did_not_reach_this_endpoint holds
+# for kadaster: there is a newer run, it is not kadaster's run, it promised to
+# write incrementally, it never recorded finishing, and it never marked
+# kadaster. So the endpoint page said "a later sweep did not finish and never
+# recorded finishing this endpoint", which is a crash claim, about an endpoint
+# that same sweep DELIBERATELY declined to ask and said so in the four quads
+# below. Its dormancy declaration is complete: the section's own
+# sw:dormantCount terminator is the last line of the file.
+#
+# A FINISHED declining sweep does not reach that sentence, because
+# newest_finalised gates it, which is why run-with-dormancy.nq cannot stage
+# this and why the defect survived stage 1c-b4's tests.
+<urn:sparqlwatch:activity:2026-08-27T10:00:00Z> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/prov#Activity> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-27T10:00:00Z> <http://www.w3.org/ns/prov#generatedAtTime> "2026-08-27T10:00:00Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-27T10:00:00Z> <urn:sparqlwatch:proberVersion> "0.1.0" <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-27T10:00:00Z> <urn:sparqlwatch:metricDefinitionRevision> "fnv1a64:5988db00fe7498fd" <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-27T10:00:00Z> <urn:sparqlwatch:maxCost> "cheap" <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-27T10:00:00Z> <urn:sparqlwatch:concurrency> "4"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-27T10:00:00Z> <urn:sparqlwatch:emission> "incremental" <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-27T10:00:00Z> <urn:sparqlwatch:dormantEndpoint> <https://data.kkg.kadaster.nl/query> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<https://data.kkg.kadaster.nl/query> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dcat#DataService> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<https://data.kkg.kadaster.nl/query> <urn:sparqlwatch:dormancyReason> "operator-hold" <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<https://data.kkg.kadaster.nl/query> <urn:sparqlwatch:dormantSince> "2026-08-27T09:30:00Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-27T10:00:00Z> <urn:sparqlwatch:dormantCount> "1"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .

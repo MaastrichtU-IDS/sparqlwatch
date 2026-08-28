@@ -36,6 +36,59 @@
 #     dqv:computedOn or sw:notMeasuredOn object below, which is exactly the set
 #     the HTML lists.
 #
+# THE DORMANCY PATTERN IS A BRANCH OF THE NEWEST-ACTIVITY ARM'S OWN UNION, and
+# not a fourth OPTIONAL in that arm's group nor a fourth top-level arm. Both of
+# those were written, measured and rejected, and one of them was shipped for a
+# commit. The store the numbers are about is the DEPLOYED shape, which no
+# committed fixture has: 543 endpoints, an older sweep that measured all of
+# them, and a newest sweep that completes 486 and declares the other 57 dormant,
+# 77,209 quads.
+#
+# Timed interleaved in one process, best of fifteen, so the columns are
+# comparable to each other. The absolute level moves with what else this machine
+# is doing (an earlier session measured the first three at 99, 491 and 94 ms);
+# the multiplier is what reproduces, and it is the claim:
+#
+#                                          min      vs baseline   triples
+#   no dormancy branch at all            320 ms         1.0x       26,615
+#   an OPTIONAL in the same group      1,927 ms         6.0x       26,786
+#   its own fourth top-level arm         331 ms         1.0x       26,786
+#   a branch of this arm's UNION         282 ms         0.9x       26,786
+#
+# The last three emit exactly the same 26,786 triples, verified triple for
+# triple over this store and over 28 stores built from the committed fixtures.
+# So the only question the three shapes answer differently is cost, and one of
+# them also answers a question about what stays pinned:
+#
+#   * THE SAME-GROUP OPTIONAL shares with that group only variables that are
+#     constant within it, so nothing joins and the group's solutions become its
+#     completion markers TIMES its dormancy declarations: 486 x 57 = 27,702
+#     solutions where the facts wanted are 543. Six times the cost for 171 extra
+#     triples. This repository rejects shapes on exactly this basis;
+#     web/queries/index.rq refuses an 1,832 ms one and
+#     web/queries/endpoint_description.rq a 2,183 ms one.
+#   * THE FOURTH TOP-LEVEL ARM is correct and as fast, and it was what this file
+#     shipped for one commit. What it costs is a SECOND copy of the newest-run
+#     aggregate, and a copy is a place the selection can drift. Mutating MAX to
+#     MIN one copy at a time: the fourth arm's copy reddened
+#     test_the_index_turtle_carries_it_too and the original arm's copy reddened
+#     NOTHING, so which run supplied sw:emission, sw:finalised and
+#     sw:completedEndpoint to this document was pinned by no test at all.
+#     Splitting the arms handed the dormancy test the new copy and left the
+#     older one bare.
+#   * THE NESTED UNION keeps one copy, which cannot drift from itself, and the
+#     same mutation reddens that test again. That is why it is the shape here
+#     rather than a third test over the fourth arm.
+#
+# The aggregate's own cost is 0.4 ms at 402 runs and 1.0 ms at 1002, measured in
+# web/queries/endpoint_measurements.rq beside its own copy of it.
+#
+# web/queries/endpoint_description.rq and web/queries/index.rq needed none of
+# this: both scope the dormancy pattern to a single ?endpoint, substituted in the
+# first and bound per row in the second, so it multiplies nothing there. This
+# file is the one place the pattern is asked of every endpoint at once, which is
+# what makes the cross product available at all.
+#
 # Measured on this machine over the 543-endpoint registry sweep: 26,103 triples
 # serialised to about 2.2 MB of Turtle in 130 ms. The byte count moves by a few
 # tens of KB between runs while the triple count does not, because a CONSTRUCT's
@@ -84,7 +137,13 @@ CONSTRUCT {
                   prov:generatedAtTime ?newestGeneratedAt ;
                   sw:emission ?newestEmission ;
                   sw:finalised ?newestFinalised ;
-                  sw:completedEndpoint ?newestCompleted .
+                  sw:completedEndpoint ?newestCompleted ;
+                  sw:dormantEndpoint ?newestDormant .
+  # The declaration's own two facts. Their subject is ?newestDormant, which is
+  # bound only in the arm below, so they drop everywhere else. See that arm on
+  # why the variable is a fresh one rather than ?endpoint.
+  ?newestDormant sw:dormancyReason ?newestDormancyReason ;
+                 sw:dormantSince ?newestDormantSince .
 }
 WHERE {
   {
@@ -159,15 +218,22 @@ WHERE {
   }
   UNION
   {
-    # The newest activity in the store, selected with the same aggregate
-    # subquery as web/queries/index.rq and endpoint_measurements.rq, because the
-    # three have to agree about which run is newest.
+    # THE NEWEST ACTIVITY IN THE STORE: its three run-level facts, the endpoints
+    # it recorded finishing, and the endpoints it declared dormant. ONE arm, with
+    # the aggregate and the activity match hoisted above a NESTED UNION that
+    # separates the last two lists.
     #
-    # Its sw:completedEndpoint is emitted for EVERY endpoint it names here,
-    # unlike in endpoint_description.rq where it is scoped to the one endpoint
-    # that document describes. That is not a widening of what is claimed: this
-    # document describes every endpoint in the index, so every completion marker
-    # of that run is a fact about a resource it describes.
+    # THE SHAPE IS MEASURED AND THIS FILE'S HEADER HOLDS THE NUMBERS. In short:
+    # the dormancy pattern as a fourth OPTIONAL in the group below costs six
+    # times this because the group's solutions become its completion markers
+    # TIMES its dormancy declarations, and as a fourth top-level arm it costs
+    # nothing but needs a second copy of the aggregate, which is a place the
+    # selection of "newest" can drift and which was measurably pinned by no test.
+    #
+    # The aggregate subquery is the same shape as web/queries/index.rq's and
+    # web/queries/endpoint_measurements.rq's, because the three have to agree
+    # about which run is newest or the representations of one resource disagree
+    # about which run a fact came from.
     {
       SELECT (MAX(?anyGeneratedAt) AS ?newestGeneratedAt) WHERE {
         GRAPH ?anyRun {
@@ -176,12 +242,61 @@ WHERE {
         }
       }
     }
+    # Hoisted, so that both branches below are about the same activity and the
+    # aggregate is asked once. Its prov:generatedAtTime is what makes everything
+    # below dateable, the dormancy declarations included: a dormant endpoint's
+    # verdicts come from an OLDER run, so this document holds two activities, and
+    # a declaration that named neither would invite a consumer to date it to the
+    # sweep that took the measurements rather than to the sweep that took none.
     GRAPH ?newestRun {
       ?newestActivity a prov:Activity ;
                       prov:generatedAtTime ?newestGeneratedAt .
-      OPTIONAL { ?newestActivity sw:emission ?newestEmission }
-      OPTIONAL { ?newestActivity sw:finalised ?newestFinalised }
-      OPTIONAL { ?newestActivity sw:completedEndpoint ?newestCompleted }
+    }
+    {
+      # What that run said about itself, and which endpoints it recorded
+      # finishing. All three OPTIONAL, because a run captured before stage
+      # 1c-b4 carries none of them and its facts are still the answer.
+      #
+      # Its sw:completedEndpoint is emitted for EVERY endpoint it names here,
+      # unlike in endpoint_description.rq where it is scoped to the one endpoint
+      # that document describes. That is not a widening of what is claimed: this
+      # document describes every endpoint in the index, so every completion
+      # marker of that run is a fact about a resource it describes.
+      GRAPH ?newestRun {
+        OPTIONAL { ?newestActivity sw:emission ?newestEmission }
+        OPTIONAL { ?newestActivity sw:finalised ?newestFinalised }
+        OPTIONAL { ?newestActivity sw:completedEndpoint ?newestCompleted }
+      }
+    }
+    UNION
+    {
+      # Which endpoints that run declared dormant, with the reason and the
+      # instant it published for each. A SEPARATE BRANCH of this arm's UNION
+      # and not a fourth OPTIONAL beside the three above: that is the 27,702
+      # solutions named at the top of this arm.
+      #
+      # A FRESH VARIABLE, mirroring ?newestCompleted above, and NOT ?endpoint.
+      # The other two arms of the outer UNION use that name for the endpoint a
+      # measurement or a decline is about, so binding it here would give one
+      # name two meanings across the arms of one query.
+      #
+      # KEYED ON sw:currentRun, which is what makes "a resource it describes"
+      # true of a dormancy. An endpoint the newest run ONLY declared dormant has
+      # no measurement and no decline, so no row of web/queries/index.rq
+      # mentions it and the index does not list it. Unkeyed, this branch would
+      # carry a dormancy for a resource the index omits, and both
+      # representations of this one resource have to describe the same set of
+      # endpoints. See the comment above web/app.py's knownness test for why the
+      # omission is right and is not widened here.
+      #
+      # Only the newest run's declaration is read, for the reason
+      # web/queries/index.rq gives at the same point.
+      GRAPH ?newestRun {
+        ?newestActivity sw:dormantEndpoint ?newestDormant .
+        OPTIONAL { ?newestDormant sw:dormancyReason ?newestDormancyReason }
+        OPTIONAL { ?newestDormant sw:dormantSince ?newestDormantSince }
+      }
+      GRAPH sw:current { ?newestDormant sw:currentRun ?dormantEndpointIsListed }
     }
   }
 }

@@ -1,0 +1,146 @@
+# DERIVED fixture, one literal away from run-with-dormancy.nq: its
+# sw:dormancyReason reads "automatic" rather than "operator-hold". Every other
+# byte of the 115 quads is that file's, which is emitter output copied from
+# prober/state/task-4-e2e/run-2.nq. So this is NOT a captured run of its own,
+# and the one edit is named here rather than left for a reader to diff.
+#
+# It exists because "automatic" had no loadable fixture at all. The only
+# committed file carrying that value is run-measures-and-declares-dormant.nq,
+# which exists to be REFUSED by web/load_run.py, so the sentence this page
+# prints for a machine relegation was unit-tested against a hand-built
+# dataclass and had never been rendered through a real store. That is the case
+# a stranger meets in production far more often than the operator-hold case:
+# an operator hold is one person's decision about one endpoint, and the
+# automatic path is what the policy does to every endpoint that costs more
+# than the ceiling while answering nothing, twice in a row.
+#
+# WHY THE EDIT IS SOUND. The dormancy group's shape does not depend on the
+# reason: prober/src/emit.rs writes sw:dormantEndpoint, sw:dormancyReason and
+# sw:dormantSince for either value, and prober/src/dormancy.rs decides which
+# word goes in. The sw:dormantSince here is 2026-08-27T09:30:00Z, which the
+# emitter took from the state file, and for an automatic relegation that is the
+# instant of the sweep that recorded the second strike rather than the instant
+# an operator typed a command. Nothing in web/ reads it, and both readings are
+# an instant in the past, so the value stands unchanged.
+#
+# 115 quads, one run graph (urn:sparqlwatch:run:2026-08-27T10:00:00Z), the same
+# instant and the same trio as run-with-dormancy.nq. The two files therefore
+# cannot be loaded into one store: they are two spellings of one run, not two
+# runs, and a store holding both would hold one run graph saying the reason is
+# both words. Load this one BESIDE run-with-samples.nq, which is what
+# conftest's store_dormant_automatic does.
+<urn:sparqlwatch:activity:2026-08-27T10:00:00Z> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/prov#Activity> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-27T10:00:00Z> <http://www.w3.org/ns/prov#generatedAtTime> "2026-08-27T10:00:00Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-27T10:00:00Z> <urn:sparqlwatch:proberVersion> "0.1.0" <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-27T10:00:00Z> <urn:sparqlwatch:metricDefinitionRevision> "fnv1a64:5988db00fe7498fd" <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-27T10:00:00Z> <urn:sparqlwatch:maxCost> "cheap" <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-27T10:00:00Z> <urn:sparqlwatch:concurrency> "4"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-27T10:00:00Z> <urn:sparqlwatch:emission> "incremental" <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-27T10:00:00Z> <urn:sparqlwatch:dormantEndpoint> <https://data.kkg.kadaster.nl/query> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<https://data.kkg.kadaster.nl/query> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dcat#DataService> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<https://data.kkg.kadaster.nl/query> <urn:sparqlwatch:dormancyReason> "automatic" <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<https://data.kkg.kadaster.nl/query> <urn:sparqlwatch:dormantSince> "2026-08-27T09:30:00Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-27T10:00:00Z> <urn:sparqlwatch:dormantCount> "1"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<https://ontop.certain.ai.ustp.at/sparql> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dcat#DataService> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:availability> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:availability> <http://www.w3.org/ns/dqv#computedOn> <https://ontop.certain.ai.ustp.at/sparql> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:availability> <http://www.w3.org/ns/dqv#isMeasurementOf> <urn:sparqlwatch:metric:availability> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:availability> <http://www.w3.org/ns/dqv#value> "indeterminate" <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:availability> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-08-27T10:00:00Z> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:availability> <urn:sparqlwatch:elapsedMs> "70"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:cors> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:cors> <http://www.w3.org/ns/dqv#computedOn> <https://ontop.certain.ai.ustp.at/sparql> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:cors> <http://www.w3.org/ns/dqv#isMeasurementOf> <urn:sparqlwatch:metric:cors> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:cors> <http://www.w3.org/ns/dqv#value> "verified" <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:cors> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-08-27T10:00:00Z> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:cors> <urn:sparqlwatch:elapsedMs> "71"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:cors-preflight> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:cors-preflight> <http://www.w3.org/ns/dqv#computedOn> <https://ontop.certain.ai.ustp.at/sparql> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:cors-preflight> <http://www.w3.org/ns/dqv#isMeasurementOf> <urn:sparqlwatch:metric:cors-preflight> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:cors-preflight> <http://www.w3.org/ns/dqv#value> "verified" <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:cors-preflight> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-08-27T10:00:00Z> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:cors-preflight> <urn:sparqlwatch:elapsedMs> "44"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:geo-functions> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:geo-functions> <http://www.w3.org/ns/dqv#computedOn> <https://ontop.certain.ai.ustp.at/sparql> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:geo-functions> <http://www.w3.org/ns/dqv#isMeasurementOf> <urn:sparqlwatch:metric:geo-functions> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:geo-functions> <http://www.w3.org/ns/dqv#value> "indeterminate" <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:geo-functions> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-08-27T10:00:00Z> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:geo-functions> <urn:sparqlwatch:elapsedMs> "76"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:geo-data> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:geo-data> <http://www.w3.org/ns/dqv#computedOn> <https://ontop.certain.ai.ustp.at/sparql> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:geo-data> <http://www.w3.org/ns/dqv#isMeasurementOf> <urn:sparqlwatch:metric:geo-data> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:geo-data> <http://www.w3.org/ns/dqv#value> "indeterminate" <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:geo-data> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-08-27T10:00:00Z> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:geo-data> <urn:sparqlwatch:elapsedMs> "68"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:service-description> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:service-description> <http://www.w3.org/ns/dqv#computedOn> <https://ontop.certain.ai.ustp.at/sparql> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:service-description> <http://www.w3.org/ns/dqv#isMeasurementOf> <urn:sparqlwatch:metric:service-description> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:service-description> <http://www.w3.org/ns/dqv#value> "indeterminate" <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:service-description> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-08-27T10:00:00Z> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:service-description> <urn:sparqlwatch:elapsedMs> "197"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:has-classes> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:has-classes> <http://www.w3.org/ns/dqv#computedOn> <https://ontop.certain.ai.ustp.at/sparql> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:has-classes> <http://www.w3.org/ns/dqv#isMeasurementOf> <urn:sparqlwatch:metric:has-classes> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:has-classes> <http://www.w3.org/ns/dqv#value> "indeterminate" <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:has-classes> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-08-27T10:00:00Z> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:has-classes> <urn:sparqlwatch:elapsedMs> "69"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:classes> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <urn:sparqlwatch:NotMeasured> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:classes> <urn:sparqlwatch:notMeasuredOn> <https://ontop.certain.ai.ustp.at/sparql> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:classes> <urn:sparqlwatch:notMeasuredMetric> <urn:sparqlwatch:metric:classes> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:classes> <urn:sparqlwatch:notMeasuredReason> "cost-ceiling" <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-27T10:00:00Z:https%3A%2F%2Fontop.certain.ai.ustp.at%2Fsparql:classes> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-08-27T10:00:00Z> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<https://ontop.certain.ai.ustp.at/sparql> <urn:sparqlwatch:declarationsRead> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-27T10:00:00Z> <urn:sparqlwatch:completedEndpoint> <https://ontop.certain.ai.ustp.at/sparql> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<https://qlever.dev/api/osm-planet> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dcat#DataService> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:availability> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:availability> <http://www.w3.org/ns/dqv#computedOn> <https://qlever.dev/api/osm-planet> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:availability> <http://www.w3.org/ns/dqv#isMeasurementOf> <urn:sparqlwatch:metric:availability> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:availability> <http://www.w3.org/ns/dqv#value> "verified" <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:availability> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-08-27T10:00:00Z> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:availability> <urn:sparqlwatch:elapsedMs> "512"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:cors> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:cors> <http://www.w3.org/ns/dqv#computedOn> <https://qlever.dev/api/osm-planet> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:cors> <http://www.w3.org/ns/dqv#isMeasurementOf> <urn:sparqlwatch:metric:cors> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:cors> <http://www.w3.org/ns/dqv#value> "verified" <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:cors> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-08-27T10:00:00Z> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:cors> <urn:sparqlwatch:elapsedMs> "488"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:cors-preflight> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:cors-preflight> <http://www.w3.org/ns/dqv#computedOn> <https://qlever.dev/api/osm-planet> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:cors-preflight> <http://www.w3.org/ns/dqv#isMeasurementOf> <urn:sparqlwatch:metric:cors-preflight> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:cors-preflight> <http://www.w3.org/ns/dqv#value> "verified" <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:cors-preflight> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-08-27T10:00:00Z> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:cors-preflight> <urn:sparqlwatch:elapsedMs> "31"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:geo-functions> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:geo-functions> <http://www.w3.org/ns/dqv#computedOn> <https://qlever.dev/api/osm-planet> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:geo-functions> <http://www.w3.org/ns/dqv#isMeasurementOf> <urn:sparqlwatch:metric:geo-functions> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:geo-functions> <http://www.w3.org/ns/dqv#value> "indeterminate" <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:geo-functions> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-08-27T10:00:00Z> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:geo-functions> <urn:sparqlwatch:elapsedMs> "33"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:geo-data> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:geo-data> <http://www.w3.org/ns/dqv#computedOn> <https://qlever.dev/api/osm-planet> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:geo-data> <http://www.w3.org/ns/dqv#isMeasurementOf> <urn:sparqlwatch:metric:geo-data> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:geo-data> <http://www.w3.org/ns/dqv#value> "verified" <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:geo-data> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-08-27T10:00:00Z> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:geo-data> <urn:sparqlwatch:elapsedMs> "192"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:service-description> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:service-description> <http://www.w3.org/ns/dqv#computedOn> <https://qlever.dev/api/osm-planet> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:service-description> <http://www.w3.org/ns/dqv#isMeasurementOf> <urn:sparqlwatch:metric:service-description> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:service-description> <http://www.w3.org/ns/dqv#value> "absent" <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:service-description> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-08-27T10:00:00Z> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:service-description> <urn:sparqlwatch:elapsedMs> "146"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:service-description> <urn:sparqlwatch:level> "0"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:has-classes> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:has-classes> <http://www.w3.org/ns/dqv#computedOn> <https://qlever.dev/api/osm-planet> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:has-classes> <http://www.w3.org/ns/dqv#isMeasurementOf> <urn:sparqlwatch:metric:has-classes> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:has-classes> <http://www.w3.org/ns/dqv#value> "verified" <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:has-classes> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-08-27T10:00:00Z> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:measurement:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:has-classes> <urn:sparqlwatch:elapsedMs> "111"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:classes> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <urn:sparqlwatch:NotMeasured> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:classes> <urn:sparqlwatch:notMeasuredOn> <https://qlever.dev/api/osm-planet> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:classes> <urn:sparqlwatch:notMeasuredMetric> <urn:sparqlwatch:metric:classes> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:classes> <urn:sparqlwatch:notMeasuredReason> "cost-ceiling" <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:not-measured:2026-08-27T10:00:00Z:https%3A%2F%2Fqlever.dev%2Fapi%2Fosm-planet:classes> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-08-27T10:00:00Z> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<https://qlever.dev/api/osm-planet> <urn:sparqlwatch:declarationsRead> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-27T10:00:00Z> <urn:sparqlwatch:completedEndpoint> <https://qlever.dev/api/osm-planet> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-27T10:00:00Z> <urn:sparqlwatch:failedEndpoints> "0"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .
+<urn:sparqlwatch:activity:2026-08-27T10:00:00Z> <urn:sparqlwatch:finalised> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> <urn:sparqlwatch:run:2026-08-27T10:00:00Z> .

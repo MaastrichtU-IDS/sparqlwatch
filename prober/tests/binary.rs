@@ -26,58 +26,21 @@
 //! two `sparqlwatch-prober` processes still alive minutes after `cargo test`
 //! was killed. So the child is waited on under `common::NO_DEADLOCK`, the same
 //! bound every in-process test uses, and killed on the way out either way.
+//! `common::ran_without_hanging` is where both live, shared with
+//! `tests/dormancy_sweep.rs`.
+//!
+//! Nothing in this file may be deliberately slow. Every test here shares one
+//! wall-clock bound across libtest's parallel threads, so a slow neighbour
+//! starves them into reporting a deadlock; that is why the relegation sweep,
+//! which cannot run in under 30 s, is a target of its own. `common::NO_DEADLOCK`
+//! records what that cost.
 
 mod common;
 
 use std::path::Path;
-use std::process::{Command, Output, Stdio};
+use std::process::Command;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
-
-/// A spawned child that is killed when it goes out of scope.
-///
-/// `std::process::Child::drop` deliberately does not kill, so without this a
-/// test that panics or times out while the prober is hung leaves the process
-/// running after the suite has gone.
-struct Reaped(std::process::Child);
-
-impl Drop for Reaped {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
-
-/// Run `command` to completion under `common::NO_DEADLOCK`, or fail by name.
-///
-/// `try_wait` in a poll loop rather than `output()`, because `output()` blocks
-/// the thread and no timeout can interrupt it. Only stderr is piped, and it is
-/// read after the child has exited: the assertions here quote stderr, and a
-/// piped stdout would be one more pipe to keep from filling.
-async fn ran_without_hanging(command: &mut Command) -> Output {
-    let mut child = Reaped(
-        command
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("the built binary must be runnable"),
-    );
-    let status = common::without_deadlocking(async {
-        loop {
-            if let Some(status) = child.0.try_wait().expect("the child must be waitable") {
-                return status;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
-    })
-    .await;
-    let mut stderr = Vec::new();
-    if let Some(mut pipe) = child.0.stderr.take() {
-        use std::io::Read;
-        pipe.read_to_end(&mut stderr).expect("the child's stderr must be readable");
-    }
-    Output { status, stdout: Vec::new(), stderr }
-}
 
 /// A mock that records that a request reached this host and then answers after
 /// a fixed server-side delay.
@@ -183,18 +146,26 @@ async fn sweep(dir: &Path, concurrency: u32) -> (String, Vec<&'static str>) {
     let out = dir.join(format!("run-{concurrency}.nq"));
     let list = dir.join(format!("endpoints-{concurrency}.toml"));
     let defs = dir.join("metrics.toml");
+    // A state file of its own per concurrency, because these run in parallel
+    // and a shared one would have two sweeps merging into one file. `--state` is
+    // required in the sense that matters: the sweep reads the state before it
+    // probes anything and fails closed on a missing file, since a state read as
+    // empty would re-admit every relegated endpoint.
+    let state = dir.join(format!("state-{concurrency}")).join("dormancy.toml");
     std::fs::write(&list, endpoints).unwrap();
     std::fs::write(&defs, METRICS).unwrap();
+    sparqlwatch_prober::state_file::init_state(&state).unwrap();
 
     let mut command = Command::new(env!("CARGO_BIN_EXE_sparqlwatch-prober"));
     command
         .args(["--endpoints", list.to_str().unwrap()])
         .args(["--metrics", defs.to_str().unwrap()])
+        .args(["--state", state.to_str().unwrap()])
         .args(["--out", out.to_str().unwrap()])
         .args(["--at", "2026-08-23T12:00:00Z"])
         .args(["--min-gap-ms", "0"])
         .args(["--concurrency", &concurrency.to_string()]);
-    let status = ran_without_hanging(&mut command).await;
+    let status = common::ran_without_hanging(&mut command).await;
     assert!(
         status.status.success(),
         "the sweep must exit zero when it failed on no endpoint, got {:?}: {}",
@@ -217,17 +188,20 @@ fn overlapped(arrivals: &[&str]) -> bool {
 
 /// A bare `cargo run` in `prober/` has to be the sweeper.
 ///
-/// Two `[[bin]]` targets and no `default-run` key make `cargo run` an error
-/// instead of a sweep, and a bare `cargo run` is what `README.md:69`, `:1276`
-/// and `src/bin/seed-registry.rs:11` instruct. No test can invoke `cargo run`
-/// itself without running cargo inside cargo, so this asserts the manifest key
-/// those instructions depend on.
+/// THREE `[[bin]]` targets and no `default-run` key make `cargo run` an error
+/// instead of a sweep, and a bare `cargo run` is what `README.md:69`, `:1622`
+/// and `src/bin/seed-registry.rs:11` instruct. The third target is `dormancy`,
+/// the operator's override, added with stage 2's dormancy work; the assertion
+/// below did not have to change for it, but the count in this sentence is part
+/// of the wire between `Cargo.toml` and those instructions. No test can invoke
+/// `cargo run` itself without running cargo inside cargo, so this asserts the
+/// manifest key they depend on.
 #[test]
 fn a_bare_cargo_run_in_this_crate_is_the_sweeper() {
     let manifest = include_str!("../Cargo.toml");
     assert!(
         manifest.contains("\ndefault-run = \"sparqlwatch-prober\"\n"),
-        "prober/Cargo.toml has two [[bin]] targets, so it must name one as \
+        "prober/Cargo.toml has three [[bin]] targets, so it must name one as \
          default-run or `cargo run` is an error: {manifest}"
     );
 }
@@ -339,6 +313,7 @@ async fn an_excluded_host_is_never_contacted_by_the_binary() {
     let defs = dir.join("metrics.toml");
     let exclusions = dir.join("exclusions.toml");
     let out = dir.join("run.nq");
+    let state = dir.join("state").join("dormancy.toml");
     std::fs::write(&list, format!("endpoint = [{excluded:?}, {kept:?}]\n")).unwrap();
     std::fs::write(&defs, METRICS).unwrap();
     std::fs::write(
@@ -346,16 +321,18 @@ async fn an_excluded_host_is_never_contacted_by_the_binary() {
         "[[exclusion]]\nhost = \"localhost\"\nreason = \"a person asked, 2026-08-25\"\n",
     )
     .unwrap();
+    sparqlwatch_prober::state_file::init_state(&state).unwrap();
 
     let mut command = Command::new(env!("CARGO_BIN_EXE_sparqlwatch-prober"));
     command
         .args(["--endpoints", list.to_str().unwrap()])
         .args(["--metrics", defs.to_str().unwrap()])
         .args(["--exclusions", exclusions.to_str().unwrap()])
+        .args(["--state", state.to_str().unwrap()])
         .args(["--out", out.to_str().unwrap()])
         .args(["--at", "2026-08-25T12:00:00Z"])
         .args(["--min-gap-ms", "0"]);
-    let status = ran_without_hanging(&mut command).await;
+    let status = common::ran_without_hanging(&mut command).await;
     assert!(
         status.status.success(),
         "the sweep must exit zero when it failed on no endpoint, got {:?}: {}",
@@ -403,7 +380,7 @@ async fn a_sweep_whose_exclusion_list_cannot_be_read_refuses_to_start() {
         .args(["--exclusions", missing.to_str().unwrap()])
         .args(["--out", out.to_str().unwrap()])
         .args(["--at", "2026-08-25T12:00:00Z"]);
-    let status = ran_without_hanging(&mut command).await;
+    let status = common::ran_without_hanging(&mut command).await;
 
     assert!(
         !status.status.success(),

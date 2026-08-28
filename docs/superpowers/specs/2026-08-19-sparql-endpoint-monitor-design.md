@@ -437,7 +437,7 @@ that each end in something demonstrable, and each gets its own plan.
 | **1c-b2** | **DELIVERED 2026-08-21**: Per-host politeness (concurrency cap of 1, configurable `--min-gap-ms` between requests), `Retry-After` handling (delta-seconds within `--retry-after-cap-s`), and honest User-Agent. | stage 1c-b1 |
 | **1c-b3** | **DELIVERED 2026-08-24**: Stable measurement identifiers and bounded concurrency across hosts. Every run-scoped fact's subject is derived from (run, endpoint, metric) rather than from a row index, so reordering the registry renames nothing and one endpoint's facts can be written alone; a metric id that would make a subject ambiguous is refused both at load and in the subject builder, a registry URL carrying userinfo is dropped with a warning, and a repeated (endpoint, metric) with conflicting facts publishes **nothing** about that pair rather than a contradiction. `--concurrency` (default 4) bounds how many **hosts** are talked to at once: endpoints group by host, one sequential task per group, so per-host concurrency stays at 1. A panicked group publishes `NotMeasured` with reason `prober-failed` for every metric it held, the activity publishes `sw:concurrency` and `sw:failedEndpoints`, and the run exits non-zero after writing its output. Measured on the three committed endpoints: 14.4s at `--concurrency 4` against 38.7s at 1, both producing 156 quads. This delivered only the **first half** of the per-endpoint isolation rule above. "Results are written per endpoint as they complete" was **not built here**: `run_sweep` joined every group before returning and the whole sweep was buffered and written once, so one endpoint burning its 600s budget still delayed the run's output by that much, and a crash lost the file. Concurrency shrank the constant, not the shape. Stage 1c-b4 built the missing half. | stage 1c-b2 |
 | **1c-b4** | **DELIVERED 2026-08-24**: Crash-safe incremental writing, so output survives a crash at endpoint 500 of 548 and the second half of the per-endpoint isolation rule is met. A run is emitted as a header, one self-contained chunk per endpoint written and flushed as that endpoint completes, and a footer, each section closed by its own terminator quad on the run's activity: `sw:emission "incremental"` for the header, `sw:completedEndpoint <endpoint>` for a chunk, and `sw:finalised true` for the footer, which is the last line a finished run ever writes. No fact family publishes its own summary before the things it summarises, so `sw:sampleSize` follows its values and `sw:failedEndpoints` moved into the footer. A run in progress is written to `<out>.<at>.partial` and renamed onto `--out` at the end, so a crash cannot touch the previous complete run, and a retry sharing an `--at` is **refused** rather than overwriting the earlier attempt's partial. `web/load_run.py` cuts an incomplete file back to its last terminator line, matched in predicate position rather than by substring, and reports the bytes it discarded; a file corrupted before that line is still refused whole. The read tier says both "this run did not finish" and "a later run did not finish and never reached this endpoint", in HTML and in RDF, carrying the inputs to that derivation rather than a derived flag. As predicted, the file's order is now **completion** order, deliberately breaking the old input-order property; the `Sweep` returned in memory is still input order, and those are two different properties. Measured: a `SIGKILL` mid-sweep left a 25,634-byte partial that loaded as 114 quads with 0 discarded, marked unfinished, one completed endpoint with its 8 verdicts intact, and the previous `--out` byte-identical; a retry at the same `--at` exited 1 and left that partial byte-identical. The guarantee is bounded at process death: there is no `fsync` per chunk, so a power loss can still lose a flushed chunk, and the zeroed tail such a loss can leave is refused whole rather than rescued. | stage 1c-b3 |
-| **1d. Registry seeding** | Ingest LOD Cloud + YummyData candidates, resolve front-ends to real endpoints, probe with politeness, admit responders. **PARTLY DELIVERED 2026-08-24** (stage 1d-a): ingest from LOD Cloud alone, plus the first registry-scale sweep. `seed::candidates` turns the 2026-06-15 dump (1683 datasets, 725 `access_url` entries, 548 distinct URLs) into **543 seeded candidates**, refusing 5 with a count per reason, and `seed-registry` writes `prober/registry/lod-cloud.toml` beside a parseable provenance file naming the dump, its SHA-256 (which the tool computes itself, refusing to write if `--sha256` disagrees) and every count. Endpoint-list policy has one implementation, because the seeder calls `registry.rs`, and the two refusals added there are split by the question each answers: `without_unroutable_hosts` in the seeder alone, since an operator may legitimately probe their own machine and this suite does so through wiremock, while `without_reserved_names` and `without_unpublishable_iris` are wired into `load_endpoints` so they hold whoever supplied the list. The dump's own `status` field gates nothing and a test pins that. The sweep: 543 candidates, cheap ceiling, `--concurrency 4`, **1h26m21s**, 3801 measurements, 0 failed endpoints, 6.3 MB, `finalised=true`, so 1c-b4's incremental protocol held at registry scale; 57 of 543 answered a query where the survey found 65 of 548, and **26** published a parseable service description (`service-description` `verified`; 30 returned some parseable RDF to the queryless GET, which is the weaker `declarationsRead` claim). Among the living, 24 of the 57 carry a description, 42.1%, against the survey's 28 of 65, 43.1%, so this sweep is slightly lower on both. Of the 26, **23 are at level 1, 2 at level 2 and one at level 4**, which is the survey's Virtuoso-stub finding reproduced by the graded metric. **Not built: front-end resolution, YummyData's list, and the admission policy**, so nothing yet stops the dead being re-probed and the registry is **not operable on a daily cadence**. The three deferrals with their reasons, the two items the measurement retired, and an answer to each of the four questions this row used to ask are under [Endpoint registry](#endpoint-registry). | stage 1c-b4 |
+| **1d. Registry seeding** | Ingest LOD Cloud + YummyData candidates, resolve front-ends to real endpoints, probe with politeness, admit responders. **PARTLY DELIVERED 2026-08-24** (stage 1d-a): ingest from LOD Cloud alone, plus the first registry-scale sweep. `seed::candidates` turns the 2026-06-15 dump (1683 datasets, 725 `access_url` entries, 548 distinct URLs) into **543 seeded candidates**, refusing 5 with a count per reason, and `seed-registry` writes `prober/registry/lod-cloud.toml` beside a parseable provenance file naming the dump, its SHA-256 (which the tool computes itself, refusing to write if `--sha256` disagrees) and every count. Endpoint-list policy has one implementation, because the seeder calls `registry.rs`, and the two refusals added there are split by the question each answers: `without_unroutable_hosts` in the seeder alone, since an operator may legitimately probe their own machine and this suite does so through wiremock, while `without_reserved_names` and `without_unpublishable_iris` are wired into `load_endpoints` so they hold whoever supplied the list. The dump's own `status` field gates nothing and a test pins that. The sweep: 543 candidates, cheap ceiling, `--concurrency 4`, **1h26m21s**, 3801 measurements, 0 failed endpoints, 6.3 MB, `finalised=true`, so 1c-b4's incremental protocol held at registry scale; 57 of 543 answered a query where the survey found 65 of 548, and **26** published a parseable service description (`service-description` `verified`; 30 returned some parseable RDF to the queryless GET, which is the weaker `declarationsRead` claim). Among the living, 24 of the 57 carry a description, 42.1%, against the survey's 28 of 65, 43.1%, so this sweep is slightly lower on both. Of the 26, **23 are at level 1, 2 at level 2 and one at level 4**, which is the survey's Virtuoso-stub finding reproduced by the graded metric. **Not built: front-end resolution, YummyData's list, and any name for an endpoint** (opened 2026-08-27; see the fourth deferral under [Endpoint registry](#endpoint-registry), which is a question about whether this service will assert a third party's label for somebody else's endpoint). The third deferral, the admission policy, was **DELIVERED 2026-08-27**: the dead are no longer re-probed on every sweep, so the registry is operable on a cadence, and what each cadence costs is arithmetic given under [Admission policy: dormancy](#admission-policy-dormancy) rather than a single headline figure. The three deferrals with their reasons, the two items the measurement retired, and an answer to each of the four questions this row used to ask are under [Endpoint registry](#endpoint-registry). | stage 1c-b4 |
 | **2. Scoring as queries** | Score computation as pure SPARQL/functions over stored measurements, with recomputation over history proven. **PARTLY DELIVERED 2026-08-22** (stage 2-1): Storage in Oxigraph is in place, and one read query (`endpoint_content.rq`) is implemented and tested. Score computation is not built. | stage 1b |
 | **2b. Content metadata + examples** | Tiered VoID extraction, SIB example ingestion, `/.well-known/sparql-examples` discovery. **PARTLY DELIVERED 2026-08-22** (stage 2b-1): distinct classes are sampled and published as a `ContentSample` fact, deliberately not as VoID; see the tier-2 status note under [1b](#1b-content-metadata-extraction-tiered). Properties per class, counts, SIB ingestion, and example discovery are not built. | stage 1d |
 | **3. Web read tier** | Faceted search, browse, endpoint pages, metric pages, charts, content negotiation, read-only public SPARQL endpoint. **PARTLY DELIVERED 2026-08-23** (stage 3-1): One endpoint resource served at `GET /endpoint?url=...` with content negotiation returning HTML or any of four RDF serialisations (Turtle, N-Triples, RDF/XML, JSON-LD), the HTML and the RDF agreeing on every verdict the run recorded. **MORE DELIVERED 2026-08-25** (stage 3-2): an index at `GET /` listing all 543 endpoints in one page of 424.6 KiB, grouped by the availability verdict's own values with a denominator on every count; `GET /about`, the page the prober's `User-Agent` points at, saying who is querying, how often, how politely, why that endpoint, and how to ask to be left alone; and all three read paths moved onto the derived `urn:sparqlwatch:current` graph, which is what makes a whole-registry page a flat scan. All three resources negotiate. Leaderboard, per-metric pages, history, evidence per measurement, embedded query editor, and read-only public SPARQL endpoint are still not built. **Faceted search is blocked rather than unbuilt**: faceting by vocabulary or class needs content data, and stage 2b has produced no vocabulary or property data and one class sample per endpoint at best, since `sw:metric:classes` is declined at the default cost ceiling. | stage 2, 2b |
@@ -555,10 +555,11 @@ Seeded from two sources, then probed before admission:
 2. **YummyData's** curated biomedical list.
 
 Only URLs that answer a trivial query are admitted as monitored endpoints. The rest are
-retained as an `unreachable-candidates` list, which is data worth publishing but is not
-re-probed daily. This matters at the observed rates: **only 65 of 548 LOD Cloud URLs
-(11.9%) answer at all**, so importing everything would leave a directory that is ~88%
-tombstones and waste most of every sweep.
+retained rather than discarded, which is data worth publishing but is not re-probed on
+every sweep. (As built, "retained" is not a separate list: see deferral 3 below.) This
+matters at the observed rates: **only 65 of 548 LOD Cloud URLs (11.9%) answer at all**, so
+importing everything would leave a directory that is ~88% tombstones and waste most of
+every sweep.
 
 Two resolution steps are mandatory before admission, both from measured failure modes:
 
@@ -599,14 +600,76 @@ held at registry scale.
 2. **Front-end resolution.** Turning the 114 HTML responders above into endpoints is a
    judgement capability with its own failure modes: guessing a path, following a form
    action, mistaking a console for an endpoint. None of it is built.
-3. **The admission policy and the `unreachable-candidates` list.** What makes a daily sweep
+3. **The admission policy and the `unreachable-candidates` list. DELIVERED 2026-08-27, one
+   half as asked and one half by a different mechanism.** What makes a daily sweep
    affordable is not re-probing the dead, and that policy should be written against the
-   first sweep's real numbers rather than ahead of them. Those numbers now exist, which is
-   what makes this the next slice: **486 of 543 answered nothing**, and the 43 candidates
+   first sweep's real numbers rather than ahead of them. Those numbers existed, which is
+   what made this the next slice: **486 of 543 answered nothing**, and the 43 candidates
    the dump had marked timed-out cost **two thirds of the sweep's serial probe time**,
-   2.28 of its 3.46 serial hours. Until it is built the
-   seeded registry is **not operable on a daily cadence**, because nothing stops the dead
-   being re-probed on every sweep.
+   2.28 of its 3.46 serial hours.
+
+   **The admission policy is built**, and [Admission policy: dormancy](#admission-policy-dormancy)
+   is both the decision and the record of what landed. **The `unreachable-candidates` list
+   is not, deliberately**: a separate list of the dead is a second place for the same fact
+   to be wrong, so what replaced it is publication inside **every** run graph, which names
+   the endpoints that run declined to ask, why, and since when. Rule 5 below is satisfied by
+   that and not by a list. Revision 3 of the plan also removed the `sw:currentDormancyRun`
+   pointer it had proposed, so nothing names a current dormant set either: each run carries
+   its own, and a reader takes the newest run. "Published, not internal" therefore holds
+   through a mechanism this deferral did not imagine, and the list it did imagine should not
+   be built later out of deference to this sentence.
+
+**A fourth deferral, opened 2026-08-27: no endpoint has a name.**
+
+Every endpoint on this site is identified by its URL and nothing else. Asked for a title or a
+label, the answer today is that there is none: `grep` for `rdfs:label`, `dct:title` and
+`foaf:name` across the 543-endpoint sweep returns zero, and nothing in `registry/lod-cloud.toml`,
+the run graphs or the derived `current` graph carries one. A reader scanning the index reads 543
+URLs, and `http://139.91.183.97:8890/sparql` tells them nothing about whose data that is.
+
+**Two sources exist, and they are not equivalent.** Which one this project should use is the
+question, and it is a question about what this service is willing to assert.
+
+1. **The endpoint's own service description, which is a first-party claim.** `declare.rs`
+   already fetches and parses it, and `Declarations` already keeps `sd:feature`,
+   `sd:extensionFunction`, `sd:supportedLanguage`, a triple count and three booleans. It does
+   not look for a label. Adding one is a small change in a place that already exists, and what
+   it yields is a name **the endpoint gives itself**, which this service can publish without
+   asserting anything of its own: the claim belongs to the publisher and the provenance says so.
+   The cost is coverage. Stage 1d-a measured 26 endpoints publishing a parseable service
+   description and 30 returning any parseable RDF at all, so a first-party label reaches
+   **at most about 5% of the registry** and probably fewer, since a description that exists need
+   not name itself.
+
+2. **The LOD Cloud dump's `title`, which is a third-party claim.** The dump carries a title per
+   dataset and per SPARQL entry (`{"access_url": ..., "status": ..., "title": ...}`), and
+   `seed::candidates` reads `access_url` and discards the rest (`prober/src/seed.rs:134`). So the
+   name was in our hands and we threw it away. Coverage is every endpoint the dump named, which
+   is all 543. The cost is that publishing it means **this service asserting a name for someone
+   else's endpoint on a stranger's behalf**, from a dump dated 2026-06-15 that the endpoint's
+   operator did not write and may not have seen. A stale or wrong name attached to a URL on a
+   public page is a small harm and it is a harm this project's whole vocabulary is built to
+   avoid making by accident.
+
+**What it would take.** Source 1 is a field on `Declarations`, a predicate to look for, and a
+fact to publish. Source 2 is a re-seed, which means a new `registry/lod-cloud.toml` and a new
+provenance file, plus a decision about where the label lives: the registry is hand-auditable TOML
+and a label is not policy, so it may belong in the provenance file or in a third file rather than
+beside the URLs the loader reads.
+
+**What it would unlock.** The index's search box filters on URL text alone, so an endpoint
+findable by name is not findable at all today. The 2026-08-27 facets sharpen the same point: a
+reader can now filter by availability, by metric and by drawing, and still cannot answer "where
+is the German National Library's endpoint" without knowing its host. It also bears on stage 5,
+where a public submission arrives with a name attached and this project will have to decide
+whether to publish it.
+
+**Recommendation when this is picked up: source 1 first, alone, and measure the coverage before
+touching source 2.** A name an endpoint gives itself costs this service no assertion, and the
+number it reaches is worth knowing before deciding whether a third party's label is worth the
+harm it risks. If source 2 is then taken, the label must carry its provenance to the page and
+not merely into the store, so a reader can see that the name came from a dump and not from the
+endpoint.
 
 **Two things the measurement retired.**
 
@@ -653,6 +716,194 @@ One finding qualifies the paragraph this note follows. The `status` field is a b
 the same time a good **cost** predictor for one bucket, since its 43 timed-out candidates
 accounted for 66% of the sweep's serial cost. Both are true, and this project gates on the field in
 neither direction.
+
+### The named-graph branch: answered 2026-08-26
+
+**The deferral standing since stage 1c-a is retired, and the answer is that the branch is
+never exercised by this registry.**
+
+`classes` and `has-classes` both query
+`{ ?s a ?c } UNION { GRAPH ?anyg { ?s a ?c } }`, and the second half had never been shown to
+do anything. `prober/tests/live_smoke.rs:52-62` records why the smoke test cannot show it:
+kadaster behaves as a union-default-graph store, so its default graph answers both halves
+and that test passes with the `GRAPH` branch deleted.
+
+Two measurements, both on 2026-08-26, using the prober with purpose-built metric files.
+
+**First, the six candidates stage 1d-a nominated**, probed with the two halves of `classes`
+as separate expensive metrics. Five answered, and every one returned an **identical class
+set** from both halves: 50 and 50 for `data.cervantesvirtual.com`, 105 and 105 for
+`dati.camera.it`, 90 and 90 for `ldf.fi/warsa`, 86 and 86 for `ldf.fi/ww1lod`, 200 and 200
+for `dbpedia.org`. Four of those sets are complete rather than truncated at the 200 cap.
+`data.bnf.fr` was `indeterminate` on both.
+
+That reframes the question. **Stage 1d-a selected its candidates on the wrong criterion**: it
+looked for endpoints that USE named graphs, and the branch can only do work where the
+default graph does NOT SEE the named graphs, which is a different and much rarer property.
+
+**Second, the discriminating test across the 84 endpoints that answered anything in the
+2026-08-24 sweep**, using the two halves of `has-classes` as cheap metrics. An endpoint that
+needs the branch answers `absent` to the default half and a positive verdict to the named
+half.
+
+| default graph | named graphs | endpoints | what it means |
+|---|---|---|---|
+| `verified` | `verified` | 52 | union default graph; the branch adds nothing |
+| `verified` | `absent` | 4 | no named graphs at all; the branch adds nothing |
+| `indeterminate` | `indeterminate` | 27 | timed out on both halves; says nothing |
+| `verified` | `indeterminate` | 1 | says nothing |
+
+**Zero endpoints need the branch.** Of 57 conclusive results, 56 show it is unnecessary and
+one is half inconclusive.
+
+**The branch stays.** It costs a UNION on a `LIMIT 1` or `LIMIT 200` query, it is correct for
+a store whose default graph is empty, and stage 5 accepts public submissions from sources
+this dump does not cover. What changes is the honesty of the claim: the branch is **retained
+for correctness against a store type this registry does not contain**, and it is no longer
+described as unverified for want of trying.
+
+**One measurement error worth recording, because the codebase predicted it.** The first
+attempt at the second test defined both metrics as `kind = "AskData"` with `var = "o"` over
+`{ ?s ?p ?o }`. `AskData` routes through `Client::ask_literal`, which applies a literal
+guard, and `?o` usually binds an IRI, so 49 of 84 endpoints came back `absent` and appeared
+to hold no triples at all. `metrics.toml:97-102` documents exactly this trap on
+`has-classes` itself and is the reason that metric is `SelectIris`. Re-run with `SelectIris`,
+those 49 became `verified`. The lesson is in the comment already; this is a record that it
+was earned twice.
+
+### Admission policy: dormancy
+
+**Decided 2026-08-26 against two measured sweeps, and BUILT 2026-08-27** (plan
+`docs/superpowers/plans/2026-08-26-dormancy.md`, branch `dormancy`, seven tasks). The
+deferral above asked for this policy to be written against real numbers rather than ahead
+of them, and the numbers that decide its shape are these. What landed:
+`prober/src/dormancy.rs` decides a sweep's plan with no clock, disk or network;
+`prober/src/state_file.rs` reads and writes the state under a lock and an atomic replace; the sweep is narrowed to what the plan
+admits and every run graph publishes the endpoints it declined to ask, with a reason and a
+count; `dormancy init | list | wake | sleep | prune` is the operator's override; and the
+pages say, per endpoint, that the newest sweep did not ask. The rules below are the
+decision, and `prober/README.md` and `web/README.md` are what the implementation is
+documented against.
+
+From the 2026-08-24 sweep of all 543 candidates, splitting endpoints by whether any metric
+returned a positive verdict (`verified` or `undeclared-but-verified`):
+
+| | endpoints | serial cost |
+|---|---|---|
+| answered something | 84 | 0.11 h |
+| silent, under 5s | 339 | 0.05 h |
+| silent, 5 to 30s | 59 | 0.14 h |
+| silent, 30 to 60s | 4 | 0.04 h |
+| **silent, over 60s** | **57** | **3.12 h** |
+
+So **57 endpoints are 90% of the sweep's entire serial cost and produce nothing**, while
+339 equally silent ones cost 0.05 h between them. The cost is not spread across the dead:
+it is concentrated in a set that accepts a connection and then never answers. **48 of the 57 spent between
+210,010 and 210,021 ms**, an 11 ms spread across 48 endpoints, which is what seven cheap
+metrics each running out its 30 s `Budget::request` sums to: 348 of the 399 individual
+measurements sit at 30,000 ms and the median is 30,002. They are not failing fast, and they
+are not hitting the 60 s `Budget::metric` or the 600 s `Budget::endpoint`. They accept the
+connection and hold it open until each individual request is cancelled.
+
+One detail matters for any implementation. **Every one of those 399 measurements published an
+`elapsedMs`**, none was absent and none was zero, so the calibration contains no instance of
+the expired-metric-budget case that `emit.rs` represents as `None`. A cost rule must still
+handle it, but as a precaution rather than something this data measured.
+
+A single sweep cannot say whether that set is stable, so those 57 were re-probed alone on
+2026-08-26, 39 hours later. **56 of 57 were over 60s again**, the group cost 3.07 h against
+3.12 h, the median per-endpoint change was 0.0 s, and **not one produced a positive verdict
+in either sweep** (397 `indeterminate`, 2 `absent`). One endpoint recovered:
+`data.datahub.kr` went from 210.0s to 5.7s. The expensive set does not churn.
+
+**The policy this argues for is cost-weighted, not failure-weighted.** Relegating on
+failure would relegate 459 endpoints to save 0.34 h; relegating on cost saves 3.12 h by
+touching 57. The 339 free ones stay in every sweep, so an endpoint coming back to life is
+noticed on the day it happens rather than up to a week later, and watching them costs
+nothing worth naming.
+
+**Both conditions are required, and cost alone is not sufficient.** Three endpoints that do
+answer cost 61s, 67s and 89s. A cost-only rule relegates working endpoints; a rule
+requiring silence as well cannot, whatever the threshold.
+
+The rules:
+
+1. An endpoint becomes **dormant** when, in **two consecutive sweeps that probed it**, it
+   produced no positive verdict AND cost more than **60 s**. Both conditions in both
+   sweeps.
+2. Two bounds, and the second is proportional rather than absolute. **Per endpoint:** a
+   dormant endpoint is probed **at least once every seven days**. **Per sweep:** a sweep
+   takes a slice of the due set sized to the gap since the last sweep,
+   `clamp(ceil(governed * gap_days / 7), 1, governed)`. Daily sweeps therefore carry 9 of
+   57 and a sweep run a week after the last one carries **all** 57, which is the same
+   weekly work either way and is the correct reading of the per-endpoint bound. Dividing by
+   a constant 7 instead would assume a daily schedule that nothing here has: weekly sweeps
+   would then probe 9 at a time and give each dormant endpoint a probe every 6.3 weeks.
+3. Any positive verdict **promotes it immediately**, on the sweep that produced it.
+4. An operator may **wake** or **sleep** an endpoint by hand. A wake clears its strikes and
+   makes it immune from automatic relegation for seven days; `--pin` makes that permanent.
+   A sleep is always permanent until a human wakes it, because an operator may sleep an
+   endpoint for reasons no verdict expresses.
+5. Dormancy is **published, not internal**. Every run graph records which endpoints it did
+   not probe and why, and every page showing a verdict says how old that verdict is.
+
+**Thresholds, and why they are not delicate.** 56 of the 57 also clear 30 s, so any
+threshold between 30 s and 180 s selects essentially the same set: 60 s is the **lowest**
+threshold that still leaves the 4 silent endpoints in the 30-60 s band alone, and their
+0.04 h is not worth relegating anything for. **What it is not is a guard on the three
+endpoints that answer.** Measured, they cost 60.8 s (`caligraph.org/sparql`), 67.3 s
+(`trackloaded.com`) and 88.8 s (`es.dbpedia.org`), so all three are over 60 s and the cost
+condition admits every one of them. The silence condition is the whole of what protects
+them, which is what the paragraph above means by both conditions being required.
+
+Two strikes rather than one is not what the stability data demands (98% would justify one)
+but it costs one extra probe per endpoint and it is exactly the `data.datahub.kr` case.
+
+**`dormant`, not `unresponsive`.** The evidence supports a claim about our schedule, not a
+claim about the endpoint. What is known is that seven probes, each cancelled at 30 s, went
+unanswered on two occasions; a client waiting longer than 30 s per request might get an
+answer. `unresponsive` would overclaim in the same way
+the six-verdict vocabulary exists to prevent, and this project does not report a confident
+answer it cannot support. `dormant` describes where the endpoint sits in our rotation, which
+is a fact about us.
+
+**Two limits of this evidence, stated because the policy rests on it.**
+
+1. **Churn was measured in one direction only.** The re-probe covered the 57 expensive
+   endpoints, so it establishes that expensive endpoints stay expensive. It says nothing
+   about how often a cheap endpoint turns expensive. Under these rules such an endpoint
+   costs one full budget to discover and two sweeps to confirm, which is the correct price,
+   but it means the dormant set grows sweep over sweep and the saving below is a
+   first-sweep figure, not a steady state.
+2. **The saving is serial-cost arithmetic, not a measured sweep, and its size is a
+   function of a cadence nobody has chosen.** The 77% figure assumes a **daily** sweep, and
+   an earlier version of this paragraph stated it without that condition. The structure
+   underneath it does not depend on the schedule and is the better claim: **the dormant set
+   costs a fixed 3.12 serial hours per seven days at any sweep frequency**, because each of
+   its members is asked once a week and costs a full budget when it is asked, while the
+   other 486 cost 0.345 h **per sweep**. A week of sweeping is therefore
+   `sweeps_per_week * 0.345 h + 3.12 h`:
+
+   | cadence | without the policy | with it | cut | worst single sweep |
+   |---|---|---|---|---|
+   | weekly | 3.46 h | 3.46 h | **0%** | 3.46 h, the slice being all 57 |
+   | daily | 24.2 h | 5.54 h | 77% | 0.84 h, the slice being 9 |
+   | every 90 min | 388 h | 41.8 h | 89% | 0.84 h |
+
+   At a weekly cadence the policy saves nothing at all, and weekly is close to what this
+   project's own `/about` describes: no schedule, sweeps started by hand, "a burst of
+   requests and then nothing, possibly for weeks". So the honest headline is the fixed
+   3.12 h per week rather than any percentage. What weekly still buys is a bounded worst
+   sweep, and the percentage arrives as soon as anything sweeps more often than the cadence.
+
+   Two further facts the arithmetic hides. **Relegation needs two strikes, so the first
+   sweep that saves anything is the third**: sweeps one and two pay the full 3.46 h each.
+   And the 2026-08-26 re-probe found **56 of 57 still expensive** (`data.datahub.kr` had
+   recovered), so the steady dormant set starts at **56, not 57**, and grows from there as
+   cheap endpoints turn expensive, per limit 1 above.
+
+   At `--concurrency 4` the 2026-08-24 sweep's 3.46 serial hours ran in 1h26m21s; the
+   policy has not been run, so no wall clock is claimed for it.
 
 ## Deliberately out of scope for v1
 

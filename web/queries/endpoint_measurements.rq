@@ -112,7 +112,7 @@ PREFIX sw: <urn:sparqlwatch:>
 SELECT ?endpoint ?run ?generatedAt ?metric ?verdict ?level ?elapsedMs ?reason
        ?emission ?finalised
        ?newestRun ?newestGeneratedAt ?newestEmission ?newestFinalised
-       ?newestCompleted
+       ?newestCompleted ?newestDormant ?newestDormancyReason
 # THE rdf:type PATTERNS BELOW ARE WRITTEN AS A BOUND VARIABLE PLUS A FILTER,
 # AND THAT IS LOAD-BEARING RATHER THAN A STYLE. A triple pattern with an
 # unbound subject and a BOUND object, "?m a dqv:QualityMeasurement", is
@@ -254,6 +254,41 @@ WHERE {
       OPTIONAL {
         ?newestActivity sw:completedEndpoint ?endpoint .
         BIND (?endpoint AS ?newestCompleted)
+      }
+      # Whether the newest run declared THIS endpoint dormant, which is the
+      # other reason it can hold no facts for an endpoint. sw:completedEndpoint
+      # above says the run reached this endpoint; this says the run decided not
+      # to, and published why. The two are mutually exclusive in any graph
+      # web/load_run.py accepts: it refuses a run graph that both measures an
+      # endpoint and declares it dormant.
+      #
+      # NESTED inside this group, and here that is correct: ?endpoint is
+      # substituted before evaluation and is a constant, exactly as it is for
+      # sw:completedEndpoint above, so binding it inside the group narrows
+      # nothing. web/queries/index.rq has to write the same question as its own
+      # top-level OPTIONAL, and its comment at that point explains at length why
+      # the two files differ here. Do not copy this shape there.
+      #
+      # ?newestDormant exists for the same reason ?newestCompleted does: the
+      # match has to be visible in the result. It cannot be read off
+      # ?newestDormancyReason, because a run graph is not obliged to carry the
+      # reason and the DECLARATION is the fact the read tier turns on.
+      #
+      # The reason is read from the newest run's GRAPH and nowhere else. It is
+      # not in the derived urn:sparqlwatch:current graph and deliberately never
+      # will be: load_run keeps dormancy in run graphs only, so a dormancy fact
+      # always carries the sweep that declared it and can always be dated.
+      #
+      # Only the newest run's declaration is read. After several weekly skips
+      # more than one run graph declares the same endpoint dormant, and the
+      # older declarations are that endpoint's history rather than its present:
+      # the sweep that measured it last may be newer than the sweep that last
+      # declined to ask, and reporting the older declaration would say the
+      # service is not asking an endpoint it has since asked.
+      OPTIONAL {
+        ?newestActivity sw:dormantEndpoint ?endpoint .
+        BIND (?endpoint AS ?newestDormant)
+        OPTIONAL { ?endpoint sw:dormancyReason ?newestDormancyReason }
       }
     }
   }

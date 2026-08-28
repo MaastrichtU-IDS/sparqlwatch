@@ -31,14 +31,19 @@ readers answer, not what the old ones did. Do not read a pass over one of those
 as evidence that the move preserved anything.
 
 AND ONLY THE DATACLASS FIELDS. The comparison is over ``asdict()``, which walks
-fields and not properties, so EndpointMeasurements.run_did_not_finish and
-.newer_run_did_not_reach_this_endpoint are outside the freeze. Their INPUTS are
-inside it, since every field the two read is a frozen field, and the properties
+fields and not properties, so all FOUR of EndpointMeasurements' properties are
+outside the freeze: ``run_did_not_finish``,
+``newer_run_did_not_reach_this_endpoint``,
+``newest_sweep_recorded_nothing_for_this_endpoint`` and
+``newest_sweep_declined_to_ask_this_endpoint``. Their INPUTS are inside it,
+since every field the four read is a frozen field, and the properties
 themselves are pinned conjunct by conjunct in
 web/tests/test_endpoint_measurements.py. So this is not a hole; it is a
 narrower claim than "all three readers' answers" sounds, and it is written down
-here so a later reader does not lean on it for the two sentences the page
-derives from those properties.
+here so a later reader does not lean on it for the sentences the pages derive
+from those properties. The same is true of the index's own four row qualifiers,
+which web/app.py derives from the same fields: they are pinned in
+web/tests/test_index.py and not here.
 """
 
 from __future__ import annotations
@@ -91,6 +96,19 @@ STORES: dict[str, tuple[Path, ...]] = {
         conftest.RUN_PROBER_FAILED,
         conftest.RUN_NO_AVAILABILITY,
     ),
+    "store_dormant_newest": (
+        conftest.RUN_WITH_SAMPLES,
+        conftest.RUN_WITH_DORMANCY,
+    ),
+    "store_dormant_automatic": (
+        conftest.RUN_WITH_SAMPLES,
+        conftest.RUN_DORMANCY_AUTOMATIC,
+    ),
+    "store_dormancy_then_crash": (
+        conftest.RUN_WITH_SAMPLES,
+        conftest.RUN_DORMANCY_THEN_CRASH,
+    ),
+    "store_dormancy_alone": (conftest.RUN_WITH_DORMANCY,),
 }
 
 _DESCRIPTION = read_query("endpoint_description")

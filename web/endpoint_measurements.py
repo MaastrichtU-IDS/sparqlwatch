@@ -84,13 +84,16 @@ class EndpointMeasurements:
     ``run`` and ``generated_at`` say which sweep the answer came from, the
     same way as ``EndpointContent``.
 
-    The seven fields after them say whether that sweep, and the newest sweep
-    in the store, actually finished. They are the raw facts stage 1c-b4's prober
-    writes, not a conclusion: ``run_did_not_finish`` and
-    ``newer_run_did_not_reach_this_endpoint`` below are the two conclusions,
-    and they are kept separate from the facts so that the RDF representation
-    can serve the same facts and reach the same conclusions without this
-    module's help. See web/queries/endpoint_measurements.rq's header.
+    The nine fields after them say whether that sweep, and the newest sweep
+    in the store, actually finished, and whether that newest sweep declined
+    to ask this endpoint at all. They are the raw facts the prober writes, not
+    a conclusion: the four conclusions are the properties below,
+    ``run_did_not_finish``, ``newer_run_did_not_reach_this_endpoint``,
+    ``newest_sweep_recorded_nothing_for_this_endpoint`` and
+    ``newest_sweep_declined_to_ask_this_endpoint``, and they are kept separate
+    from the facts so that the RDF representation can serve the same facts and
+    reach the same conclusions without this module's help. See
+    web/queries/endpoint_measurements.rq's header.
     """
 
     endpoint: str
@@ -118,6 +121,28 @@ class EndpointMeasurements:
     newest_finalised: bool = False
     newest_completed_this_endpoint: bool = False
 
+    # The other thing that run can have decided about this endpoint: that it
+    # would not ask. ``newest_declared_this_endpoint_dormant`` is True when the
+    # newest run published an sw:dormantEndpoint naming it, and
+    # ``newest_dormancy_reason`` is the sw:dormancyReason beside it where the
+    # graph carries one. Two fields rather than one, because the DECLARATION is
+    # what the read tier turns on and a run graph is not obliged to carry the
+    # reason: reading dormancy off the reason alone would let a declaration with
+    # no reason fall through to the crash sentence, which is the exact wrong
+    # answer this pair exists to prevent.
+    #
+    # DORMANCY IS NOT A VERDICT, and neither field may be rendered as one. The
+    # six-verdict vocabulary is closed and dormancy is a fact about this
+    # service's rotation: what it licenses is a sentence about how old the
+    # verdicts on this page are, and nothing about the endpoint.
+    #
+    # The reason comes from the newest run's own graph, which is the only place
+    # it exists: web/load_run.py deliberately keeps no dormancy in the derived
+    # current graph, so a dormancy fact always arrives with the sweep that
+    # declared it and can always be dated.
+    newest_declared_this_endpoint_dormant: bool = False
+    newest_dormancy_reason: str | None = None
+
     @property
     def run_did_not_finish(self) -> bool:
         """The run whose facts these are stopped before writing its footer.
@@ -141,10 +166,12 @@ class EndpointMeasurements:
         run's and they are complete and current as far as this endpoint's own
         facts go.
 
-        All five conjuncts below are required, and they are not
-        interchangeable. ``newest_run is not None`` is first because
-        ``None != self.run`` is True, so an absent newest run would otherwise
-        read as "a run other than this one".
+        The five conjuncts of fact below are required, and they are not
+        interchangeable. (The sixth is a gate rather than a fact about the
+        run, and the paragraph after these five is about it.)
+        ``newest_run is not None`` is first because ``None != self.run`` is
+        True, so an absent newest run would otherwise read as "a run other
+        than this one".
         ``newest_run != run`` is what stops this firing on a finished run's own
         page, where the newest run in the store IS the run being shown.
         ``newest_emission is not None`` is the same requirement as above, for
@@ -160,6 +187,21 @@ class EndpointMeasurements:
         OPTIONAL and a chunk's sw:completedEndpoint is in the same chunk as
         its measurements. They are pinned on this dataclass instead, one test
         per conjunct, in test_endpoint_measurements.py.
+
+        THE SIXTH CONJUNCT IS A GATE AND NOT A FACT ABOUT THE RUN, and it is
+        the one a real store turns on. The prober writes the dormancy section
+        BEFORE the first chunk, so it survives every truncation that keeps the
+        header: a sweep that publishes which endpoints it declined to ask and
+        is then killed satisfies all five conjuncts above for every one of
+        them. The sentence they license is a crash claim, and it is false about
+        an endpoint that same run graph says the sweep declined to ask, with
+        the reason bound in the same row. The two claims are mutually exclusive
+        on newest_finalised, so there is no precedence to fall back on and the
+        false one has to be refused here.
+
+        A FINISHED declining sweep never reached that sentence, because
+        ``not self.newest_finalised`` already excluded it, which is why this was
+        invisible until a store held an unfinalised run with a dormancy section.
         """
         return (
             self.newest_run is not None
@@ -167,6 +209,87 @@ class EndpointMeasurements:
             and self.newest_emission is not None
             and not self.newest_finalised
             and not self.newest_completed_this_endpoint
+            and not self.newest_declared_this_endpoint_dormant
+        )
+
+    @property
+    def newest_sweep_recorded_nothing_for_this_endpoint(self) -> bool:
+        """A newer run FINISHED and recorded nothing here.
+
+        The mirror of newer_run_did_not_reach_this_endpoint: that one is a
+        crash, this one is a decision, and newest_finalised being TRUE tells
+        them apart. Either way this endpoint's own facts are complete and
+        current and the page dates them to a sweep that is not the newest one,
+        which is the claim a reader needs qualified.
+
+        Deliberately NOT gated on dormancy: a url dropped from the registry,
+        one added to registry/exclusions.toml, and a deliberately narrowed
+        sweep all produce it, and the claim stands without knowing which. Only
+        dormancy publishes a reason, so the reason is a separate field and the
+        sentence built from the two says less when there is no reason to give.
+
+        Four conjuncts. The first three are the same requirements as above and
+        are required for the same reasons: ``None != self.run`` is True, so an
+        absent newest run would read as "a run other than this one"; and the
+        newest run being this run is a finished run's own page, where its facts
+        are what is being shown. The fourth is what makes the claim a fact,
+        rather than an inference from an absence of measurements: an endpoint
+        the run recorded finishing is one it did record something for.
+        """
+        return (
+            self.newest_run is not None
+            and self.newest_run != self.run
+            and self.newest_finalised
+            and not self.newest_completed_this_endpoint
+        )
+
+    @property
+    def newest_sweep_declined_to_ask_this_endpoint(self) -> bool:
+        """The newest run published a dormancy declaration naming this one.
+
+        Separate from the property above because it does NOT depend on whether
+        that run finished. The dormancy section is written whole, before the
+        first chunk, and terminated by its own sw:dormantCount, so a
+        declaration in the store is a complete decision whatever became of the
+        sweep that made it. A crashed declining sweep therefore licenses this
+        claim and neither of the other two.
+
+        WHICH DECLARING RUN, decided here and implemented in all four
+        queries: the newest run in the store, and no other. After several
+        weekly skips more than one run graph declares the same endpoint
+        dormant, so the question is real. The alternatives were the newest run
+        that DECLARED it dormant, and trusting sw:dormantSince.
+
+        Reading the newest declaring run would mean a declaration outliving
+        the sweep that contradicted it: dormancy clears itself by the probe
+        week measuring the endpoint, which writes no dormancy fact and needs no
+        delete, so an endpoint promoted last night would still read as dormant
+        from the sweep that skipped it the night before. It also costs a scan
+        over the whole history, which is the cost the derived current graph
+        exists to remove. sw:dormantSince is not an alternative selection at
+        all: it says when dormancy BEGAN, so it cannot be read without first
+        choosing a declaring run, and it says nothing about whether the
+        declaration still holds. It is published in both RDF representations
+        and drawn in neither sentence.
+
+        What the newest run's declaration means is exactly what this property
+        claims: the last sweep this service ran did not ask. If the newest run
+        never mentioned this endpoint, no dormancy claim is made and
+        newest_sweep_recorded_nothing_for_this_endpoint's weaker, true claim is
+        what the page says instead.
+
+        The two run guards are the same as above and are not redundant:
+        web/load_run.py refuses a run graph that both measures an endpoint and
+        declares it dormant, so a bound declaration already implies the newest
+        run is not this endpoint's run in any store the loader accepts. They
+        are stated anyway because this property is read off a dataclass whose
+        fields a caller can set, and "the newest run is this endpoint's own
+        run" must never produce a sentence about a second sweep.
+        """
+        return (
+            self.newest_run is not None
+            and self.newest_run != self.run
+            and self.newest_declared_this_endpoint_dormant
         )
 
 
@@ -286,6 +409,14 @@ def measurements_from_rows(endpoint: str, rows: list) -> EndpointMeasurements:
         newest_emission=_value(first, "newestEmission"),
         newest_finalised=first["newestFinalised"] is not None,
         newest_completed_this_endpoint=first["newestCompleted"] is not None,
+        # Read as "the newest run's graph holds this declaration", the same way
+        # as the two above. The declaration and its reason are read separately
+        # because the reason is optional in the vocabulary and the declaration
+        # is what the read tier turns on.
+        newest_declared_this_endpoint_dormant=(
+            first["newestDormant"] is not None
+        ),
+        newest_dormancy_reason=_value(first, "newestDormancyReason"),
         # Sorted by metric id so a caller rendering the list gets a stable
         # order: SPARQL solution order is not specified, and an unstable list
         # looks like the endpoint's verdicts changed between two identical

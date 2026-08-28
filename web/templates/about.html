@@ -38,7 +38,13 @@
   a:hover { color: var(--accent); text-decoration: underline; }
   header { display: flex; align-items: center; gap: 12px; padding: 14px 24px;
            background: var(--bg-secondary); border-bottom: 1px solid var(--border); }
-  .logo { display: flex; align-items: center; gap: 9px; font-weight: 600; color: var(--text-bright); }
+  /* A link on every page, including the index, so the way home is always
+     in the same place. Undecorated because it is a mark rather than a
+     phrase in a sentence, and the index's copy carries aria-current so a
+     screen reader says it leads to the page already open. */
+  .logo { display: flex; align-items: center; gap: 9px; font-weight: 600;
+          color: var(--text-bright); text-decoration: none; }
+  .logo:hover { color: var(--accent); }
   .run { margin-left: auto; font-size: 12px; color: var(--text-dim); }
   /* Narrower than the index's 1120px, because this page is prose and the
      index is a table: a 1120px measure is a hard line to read a paragraph
@@ -76,12 +82,12 @@
 </head>
 <body>
 <header>
-  <span class="logo">
+  <a class="logo" href="{{ index_path }}">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)"
          stroke-width="2" stroke-linecap="round" aria-hidden="true">
       <circle cx="11" cy="11" r="6"/><path d="M15.5 15.5 21 21"/><path d="M8 11h6"/></svg>
     sparqlwatch
-  </span>
+  </a>
   <span class="run"><a href="{{ index_path }}">every endpoint measured</a></span>
 </header>
 <main>
@@ -196,6 +202,148 @@
   </section>
 
   <section class="panel">
+    {# The second reason a stranger arrives here. The first is the User-Agent in
+       their logs; this one is following a row on the index that says the newest
+       sweep did not ask their endpoint. That route is a LINK now, in the header
+       of the index and of the endpoint page and in the two places that explain
+       the marker: until this stage nothing on the site pointed here, so the
+       address below and the four numbers were reachable only by pasting a
+       User-Agent URL into a browser.
+
+       THREE REASONS AND NOT ONE, and this section was the last of four surfaces
+       to say so. The index panel and the endpoint page both read the slug the
+       run graph carries; this page described the automatic case and presented it
+       as what "dormant" means, which is false for a hold in three ways. Nothing
+       was observed, because prober/src/dormancy.rs skips a Dormant hold before
+       it sends anything. The cadence does not apply, because a held endpoint is
+       asked by no sweep until a person lifts the hold. And answering cannot end
+       it, because an endpoint never asked cannot answer and the same module
+       suppresses the promotion regardless. The only real prober output in this
+       repository carries operator-hold.
+
+       TWO WORDS THIS SECTION MAY NOT USE. "Weekly" would promise a sweep every
+       week, and the section above says no sweep runs on a timer; the cadence is
+       a bound on how often an endpoint set aside automatically is asked WHEN
+       somebody runs one. "Unresponsive" is the word prober/src/dormancy.rs's
+       header refuses, for the reason the six-verdict vocabulary exists: what was
+       observed is cancelled probes, not a broken server. Both are pinned in
+       web/tests/test_about.py.
+
+       The four numbers carry data-politeness rather than an attribute of their
+       own, and that is deliberate: they ARE politeness figures, they belong in
+       the RDF representation beside the other eight, and the test that holds the
+       two representations to the same numbers iterates exactly that attribute.
+       All four belong to the automatic case, and the paragraph after them says
+       so rather than leaving a held operator to hunt for the threshold that
+       caught them.
+    #}
+    <h2>If your endpoint is marked dormant</h2>
+    <p data-dormancy="what-it-is">
+      <b>Dormant is a place in this service's rotation</b>, and it is nothing
+      else. An endpoint marked that way is not asked in every sweep. It
+      stays on the list, its page stays up, and the verdicts on that page stay
+      exactly as the last sweep that really asked recorded them, with that
+      sweep's own instant printed beside them.
+    </p>
+    <p class="warn-note" data-dormancy="not-a-verdict">
+      <b>It is not a verdict, and it is not a claim that your server is at
+      fault.</b> The checks this site publishes have a closed set of six values
+      and dormant is not one of them: it says something about us. It is not
+      drawn as a finding, it gets no mark against any check, and nothing here
+      concludes from it that your endpoint does not work.
+    </p>
+    <p data-dormancy="which-of-them">
+      <b>Three different things put an endpoint here, and the page that sent you
+      says which.</b> <code>automatic</code> is this service's own admission
+      policy setting an endpoint aside on cost and silence.
+      <code>operator-hold</code> is a person setting one aside by hand.
+      <code>not-in-this-sweep</code> is neither, and it is described last. These
+      are not three wordings of one thing: they differ in what was observed, in
+      how often the endpoint is asked afterwards, and in what ends it. Read the
+      one your row or your endpoint page names, and not the others.
+    </p>
+    <p data-dormancy="what-was-measured">
+      <b>Set aside automatically, and what was actually observed</b> is narrower
+      than the word may sound. In each of {{ dormancy['dormant-strikes'] }}
+      sweeps in a row, the checks sent to that endpoint together
+      spent longer than the first number below, and not one of them came back
+      with something that could be counted as an answer: the time went on checks
+      that were cancelled when their own budget ran out. A server that accepts
+      the connection and then holds it open produces exactly that, and so does
+      one that is merely slower than the budgets allow. Which it was is not
+      something this project measured, and the mark does not say. An endpoint set
+      aside this way is asked at most one sweep in every
+      {{ dormancy['dormant-cadence-days'] }} days, and only when a person starts
+      one, rather than in every sweep.
+    </p>
+    <p>These four numbers are that case, and only that case:</p>
+    <ul class="facts">
+      <li data-politeness="dormant-cost-seconds" data-value="{{ dormancy['dormant-cost-seconds'] }}">
+        <b>{{ dormancy['dormant-cost-seconds'] }} seconds</b> of cancelled
+        checks, added up over one endpoint in one sweep, is what counts that
+        sweep against it. The threshold was chosen to sit clear of the endpoints
+        on this list that do answer slowly, which are the ones a lower number
+        would have caught.
+      </li>
+      <li data-politeness="dormant-strikes" data-value="{{ dormancy['dormant-strikes'] }}">
+        <b>{{ dormancy['dormant-strikes'] }} sweeps</b> in a row have to look
+        like that. One would have been enough for almost all of them; the second
+        is bought for the endpoint that spent minutes in one sweep and seconds in
+        the next, which one sweep would have set aside for a bad afternoon.
+      </li>
+      <li data-politeness="dormant-cadence-days" data-value="{{ dormancy['dormant-cadence-days'] }}">
+        <b>{{ dormancy['dormant-cadence-days'] }} days</b> at least between two
+        sweeps that ask an endpoint this service set aside itself. A bound and
+        not a timetable: if nobody starts a sweep for a month then nobody asks
+        for a month. When the endpoint does answer one of those sweeps it goes
+        straight back into every sweep, with no request from anybody and no edit
+        by anybody. An endpoint held by hand is not on this clock at all.
+      </li>
+      <li data-politeness="dormant-wake-grace-days" data-value="{{ dormancy['dormant-wake-grace-days'] }}">
+        <b>{{ dormancy['dormant-wake-grace-days'] }} days</b> is how long an
+        endpoint put back into every sweep by hand cannot be set aside again
+        automatically, whatever it costs in the meantime. That is what the
+        message below buys, if what you want is to be probed.
+      </li>
+    </ul>
+    <p data-dormancy="set-aside-by-hand">
+      <b>Set aside by hand, and then nothing at all was observed.</b> A hold is
+      not a measurement and it is not a threshold: a sweep skips a held endpoint
+      before it sends it anything, so no cancelled check and no cost figure lies
+      behind the mark, and none of the four numbers above is what put it there.
+      Neither is the cadence. A held endpoint is <b>never asked</b>, by any
+      sweep, until a person lifts the hold, and it cannot answer its way back in
+      because it is not asked. A hold put on by hand comes off by hand, at the
+      address below. This site publishes that a person set the endpoint aside and
+      not what for, because the reason may be one no verdict here expresses, and
+      guessing at it on your behalf is the one thing this page will not do.
+    </p>
+    <p data-dormancy="not-a-relegation">
+      <b>Not asked by a sweep that was repeating an earlier one, which is not a
+      relegation at all.</b> A sweep can be told to re-run an instant that has
+      already run. It then asks exactly the endpoints that instant asked, so an
+      endpoint it did not reach is one that was not in the earlier sweep either,
+      and the run graph records that with the reason
+      <code>not-in-this-sweep</code>. Nothing was observed, nothing was decided,
+      no threshold was crossed and how often the endpoint is asked is exactly
+      what it was before. If that is the reason your page names, none of the four
+      numbers above applies to you and there is nothing here to overrule; a page
+      that reported it as either of the two cases above would be describing a
+      decision about your server that nobody took.
+    </p>
+    <p data-dormancy="how-to-change-it">
+      <b>A person changes it, either way, at the address this page already
+      publishes.</b> Email
+      <a href="mailto:{{ contact }}">{{ contact }}</a> and say which endpoint and
+      which way. Nothing watches that mailbox: somebody reads the message and
+      runs a command on the machine that holds the file, by hand, and there is no
+      automation between the two and no service level attached. There is no
+      button on this site, because this site is read-only and the decision lives
+      on that machine and not here.
+    </p>
+  </section>
+
+  <section class="panel">
     <h2>Why your endpoint is on the list</h2>
     <p>
       Because a public dump of dataset metadata named it. Nobody opted in.
@@ -229,12 +377,21 @@
 
   <section class="panel">
     <h2>How to ask not to be probed</h2>
-    <p class="warn-note" data-blocking="not-a-signal">
-      Blocking the requests does not stop them. An endpoint that refuses
-      everything is recorded as unreachable and asked again on the next sweep,
-      at the same rate, because nothing yet drops an endpoint from the list for
-      failing. So a firewall rule costs you the requests and gains you
-      nothing, and the list below is the thing that works.
+    <p class="warn-note" data-blocking="two-kinds">
+      Blocking the requests may or may not reduce them, and which kind of rule
+      you write is what decides that. An endpoint that <b>refuses</b> us
+      quickly, with a reset or an HTTP error, costs this project nothing, so
+      nothing about it sets the endpoint aside: it is recorded as unreachable
+      and asked again on the next sweep, at the same rate. An endpoint that
+      silently <b>drops</b> our packets is the case the admission policy above
+      notices, because every check then runs until it is cancelled, which is
+      exactly what that policy measures: after
+      {{ dormancy['dormant-strikes'] }} such sweeps in a row the
+      endpoint is marked dormant and asked at most one sweep in every
+      {{ dormancy['dormant-cadence-days'] }} days rather than once per sweep. That is fewer requests. It is not none of
+      them, it takes two sweeps to arrive, and it is a decision about our own
+      rotation that we can change without telling you. The list below is the
+      thing that works.
     </p>
     <p>
       Email <a class="contact" data-contact="{{ contact }}" href="mailto:{{ contact }}">{{ contact }}</a>

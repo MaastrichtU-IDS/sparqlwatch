@@ -139,6 +139,74 @@ def prober_defaults() -> dict[str, int]:
     }
 
 
+def const_int(source: str, name: str) -> int:
+    """`pub const NAME: u64 = N;`, as N, with Rust's digit separators dropped.
+
+    The dormancy thresholds are bare `u64` and `u32` constants rather than
+    `Duration`s or `NonZero`s, so neither reader above matches them:
+    `const_secs` wants `Duration::from_secs` and `const_nonzero` wants
+    `NonZeroUsize::new`. The type is required in the pattern so that a constant
+    that changed type, and therefore changed unit, reds here instead of being
+    read as the same number.
+    """
+    found = re.search(
+        r"const\s+" + name + r"\s*:\s*u(?:32|64)\s*=\s*([\d_]+)\s*;", source
+    )
+    assert found, f"{name} is not a bare u32/u64 integer constant any more"
+    return int(found.group(1).replace("_", ""))
+
+
+def dormancy_defaults() -> dict[str, int]:
+    """The four numbers the admission policy is calibrated against, read from
+    `prober/src/dormancy.rs`.
+
+    THE UNIT CONVERSION IS HERE AND IT IS THE POINT OF THIS READER.
+    `DEFAULT_COST_MS` is 60_000, in milliseconds, because the flag that carries
+    it (`--dormant-cost-ms`) takes milliseconds; the honest number for a
+    stranger reading a sentence about their own server is 60 seconds. So the
+    page states seconds and this divides, and a constant that stops being a
+    whole number of seconds fails here rather than being rounded onto the page.
+
+    `DEFAULT_GRACE_DAYS` is the odd one of the four: it is not a flag on the
+    sweeper. `main.rs` fills it in from the constant and nothing in that binary
+    reads it, because its one reader is `dormancy::wake`, whose flag lives on
+    the `dormancy` binary. See `thresholds_from`'s doc comment, which says why a
+    `--dormant-grace-days` on the sweeper was removed rather than left to
+    mislead. It is on the page because it is the number a person who asked to be
+    left alone gets: a hand wake is immune from automatic relegation for that
+    many days.
+    """
+    dormancy = rust("dormancy.rs")
+    cost_ms = const_int(dormancy, "DEFAULT_COST_MS")
+    assert cost_ms % 1000 == 0, (
+        f"DEFAULT_COST_MS is {cost_ms} ms, which is not whole seconds, so the "
+        "page cannot state it in seconds"
+    )
+    return {
+        "dormant-cost-seconds": cost_ms // 1000,
+        "dormant-strikes": const_int(dormancy, "DEFAULT_STRIKES"),
+        "dormant-cadence-days": const_int(dormancy, "DEFAULT_CADENCE_DAYS"),
+        "dormant-wake-grace-days": const_int(dormancy, "DEFAULT_GRACE_DAYS"),
+    }
+
+
+def skip_reason_slugs() -> set[str]:
+    """`SkipReason::slug`'s match arms, as the strings a run graph can carry.
+
+    The prober is the source of truth for these two words: it writes them into
+    every dormancy group, `web/load_run.py` carries them through, and both HTML
+    pages render them. Read out of the `match` rather than out of the enum's
+    variant names, because the slug is what crosses the wire and a variant can
+    be renamed without changing it.
+    """
+    source = rust("dormancy.rs")
+    body = source[source.index("pub fn slug(&self)") :]
+    body = body[: body.index("\n    }")]
+    found = re.findall(r'SkipReason::\w+\s*=>\s*"([^"]+)"', body)
+    assert found, "SkipReason::slug is no longer a match over string literals"
+    return set(found)
+
+
 def user_agent() -> str:
     """The User-Agent the prober really sends, rebuilt from `client.rs`'s
     `concat!` and the crate version `env!("CARGO_PKG_VERSION")` expands to."""
@@ -364,7 +432,13 @@ def test_the_politeness_numbers_on_the_page_are_the_prober_defaults(client):
     """
     html = page(client)
     shown = attributes_by(html, "data-politeness")
-    expected = prober_defaults()
+    # BOTH dicts, and the page states their union or it states a different set.
+    # The dormancy thresholds are politeness figures in exactly the sense this
+    # section is about: they are how many requests somebody's server gets. They
+    # are read from a different file, in a different unit, by a different
+    # reader, so they are a second dict rather than four more entries in the
+    # first, and the page has to carry all of them.
+    expected = prober_defaults() | dormancy_defaults()
 
     assert set(shown) == set(expected), "the page states a different set of numbers"
     for key, value in expected.items():
@@ -561,24 +635,50 @@ def test_the_page_says_nothing_is_on_a_schedule_and_nothing_is(client):
     assert duration.group(0) in (PROBER / "README.md").read_text()
 
 
-def test_the_page_says_that_blocking_us_does_not_stop_the_requests(client):
-    """The reader's own first instinct, answered honestly.
+def test_the_page_says_which_kind_of_block_changes_anything_and_which_does_not(
+    client,
+):
+    """The reader's own first instinct, answered honestly now that half of the
+    old answer is false.
 
-    Nothing yet drops an endpoint from the list for failing: an admission
-    policy is a later slice, and until it exists a blocked endpoint is probed
-    again at the same rate on the next sweep. `prober/README.md` records that
-    under "Not yet operable on a daily cadence", and this test holds the page
-    to it: when the dead stop being re-probed, this claim stops being true and
-    the page has to change.
+    The page used to say a firewall rule "costs you the requests and gains you
+    nothing, because nothing yet drops an endpoint from the list for failing".
+    The admission policy drops one, so the second half is gone, and what
+    replaced it is the distinction that decides which half of the old sentence
+    still holds: WHICH KIND OF RULE.
+
+    A fast refusal, a reset or an HTTP error, costs this project nothing, so it
+    is never a strike and the endpoint is asked again on the next sweep at the
+    same rate. Silently dropping the packets is exactly what the policy measures,
+    because holding the connections open until each probe is cancelled is what
+    made 57 endpoints 90% of one sweep's cost, so a blackhole earns dormancy and
+    buys at most one probe in every seven days instead of one per sweep. Saying
+    "blocking gains you nothing" would now be wrong for one of the two and
+    saying "blocking works" would be wrong for the other.
+
+    `prober/README.md` carried the same claim under "Not yet operable on a
+    daily cadence" and this test holds both to the new one.
     """
     # Whitespace-collapsed, because the sentence is wrapped in the README and
     # a line break is not a change of claim.
     readme = " ".join((PROBER / "README.md").read_text().split())
-    assert "nothing yet stops the dead being re-probed on every sweep" in readme
+    assert "nothing yet stops the dead being re-probed on every sweep" not in readme, (
+        "the README still says the dead are re-probed on every sweep, which the "
+        "admission policy is what changed"
+    )
+    assert "the dead are no longer re-probed on every sweep" in readme
+    assert "a fast refusal costs nothing and so earns no relegation" in readme
 
     text = " ".join(texts_with(page(client), "data-blocking")).lower()
     assert "block" in text
     assert "next sweep" in text
+    # The two kinds, and the page may not describe one without the other: a
+    # reader deciding what rule to write acts on exactly this distinction.
+    assert "refus" in text, text
+    assert "drop" in text, text
+    assert "dormant" in text, text
+    # The old promise, which is now false of one of the two kinds.
+    assert "gains you nothing" not in text, text
 
 
 # ---------------------------------------------------------------------------
@@ -766,3 +866,231 @@ def test_the_content_facets_are_recorded_as_blocked_rather_than_unbuilt(client):
     assert "stage-2b" in shown
     text = " ".join(texts_with(html, "data-blocked-on")).lower()
     assert "vocabular" in text or "class" in text
+
+
+# ---------------------------------------------------------------------------
+# What dormant means, for the reader who finds their own endpoint marked
+# ---------------------------------------------------------------------------
+#
+# This is the second reason a stranger arrives here. The first is the User-Agent
+# in their logs; the second is following a row on the index that says the newest
+# sweep did not ask their endpoint, which became a route a reader can take when
+# the two pages grew a link to this one: test_index.py's
+# test_the_index_links_to_about_once_and_not_once_per_row and test_page.py's
+# test_the_endpoint_page_links_to_about. What they need is what that word
+# claims, what it does not claim, and who changes it.
+#
+# The wording rules are not stylistic. "Weekly" is the one word this section may
+# not use, because `test_the_page_says_nothing_is_on_a_schedule_and_nothing_is`
+# pins that no sweep runs on a timer: a cadence measured in days is a bound on
+# how often a dormant endpoint is asked WHEN somebody runs a sweep, and calling
+# it weekly promises a sweep every week. And "unresponsive" is the word the
+# prober's own module header refuses, for the reason the six-verdict vocabulary
+# exists: what was observed is seven cancelled probes, not a broken server.
+DORMANCY_CLAIMS = {
+    # What it is: a place in this service's rotation, bounded in days. The
+    # bound itself is asserted against the constant in
+    # test_the_cadence_the_pages_state_is_the_constant_and_not_a_word, and not
+    # spelled out here, because a number written twice is a number that can
+    # drift.
+    "what-it-is": ("rotation",),
+    # What it is not: a verdict, and not a claim about the server.
+    "not-a-verdict": ("not a verdict",),
+    # WHICH of them put the endpoint here, said before any is described. This
+    # section described the automatic case alone and presented it as what the
+    # word means, on the one surface a stranger is sent to, while the index
+    # panel and the endpoint page both read the slug the run graph carries. The
+    # slugs themselves are asserted rather than glossed, because the reader
+    # arrives holding one of them, and all of them are asserted because a page
+    # naming two of three is the same false claim in a smaller size.
+    "which-of-them": ("automatic", "operator-hold", "not-in-this-sweep"),
+    # What was actually observed, in the terms the probe was run in, and whose
+    # case that is.
+    "what-was-measured": ("cancel", "set aside automatically"),
+    # And the hand case, where the answer to "what was observed" is nothing.
+    # Three claims this section used to make of every dormant endpoint are false
+    # of a hold: that checks were sent and cancelled, that it is asked once in
+    # the cadence, and that answering puts it back. prober/src/dormancy.rs skips
+    # a Dormant hold before it sends anything, keeps it out of every sweep until
+    # a person wakes it, and suppresses the promotion regardless, and the only
+    # real prober output in this repository carries operator-hold.
+    "set-aside-by-hand": (
+        "nothing at all was observed",
+        "never asked",
+        "comes off by hand",
+    ),
+    # And the third reason, which is not a relegation in either direction. Rule 3
+    # of the admission policy published "automatic" for endpoints a replayed
+    # `--at` merely did not reach, so this page and both others reported a
+    # decision about somebody's server that nobody took. What the reader with
+    # this slug needs to be told is that none of the four thresholds is theirs.
+    "not-a-relegation": (
+        "not a relegation",
+        "nothing was observed",
+        "none of the four numbers above applies",
+    ),
+    # Who changes it, and the same honesty about the mailbox as the exclusion
+    # list gets: nothing watches it.
+    "how-to-change-it": ("person", "hand"),
+}
+
+
+def test_the_page_says_what_dormant_means_and_what_it_does_not(client):
+    """One claim per element, because a reader who finds their own endpoint
+    marked will read this section and nothing else.
+
+    Seven of them now, and the three added ones are the fix for a section that
+    was true of one reason and false of the others on all three of its
+    substantive claims.
+    """
+    html = page(client)
+    shown = attributes_by(html, "data-dormancy")
+    assert set(shown) == set(DORMANCY_CLAIMS), "the page states a different set"
+
+    texts = {
+        attrs["data-dormancy"]: text.lower()
+        for attrs, text in zip(
+            with_attribute(html, "data-dormancy"),
+            texts_with(html, "data-dormancy"),
+        )
+    }
+    for slug, wanted in DORMANCY_CLAIMS.items():
+        for word in wanted:
+            assert word in texts[slug], f"{slug}: {texts[slug]!r} does not say {word!r}"
+
+
+def test_the_dormant_cadence_is_stated_as_a_bound_and_never_as_a_schedule(client):
+    """"At most one sweep in every seven days, and only when a person starts
+    one", and never "weekly".
+
+    Nothing here runs on a timer, which the cadence paragraph says and
+    `test_the_page_says_nothing_is_on_a_schedule_and_nothing_is` pins against
+    this repository's own workflows. "Weekly" would contradict it on the one
+    page a server operator reads to decide whether to expect us, and it would
+    overstate a cadence in the direction that gets somebody's server probed
+    more often than they were told.
+    """
+    html = page(client)
+    lowered = html.lower()
+    assert "weekly" not in lowered, "the page calls the dormant cadence weekly"
+    assert "every week" not in lowered
+    # The bound, whole, in one element rather than assembled by a reader out of
+    # two sentences in different sections. The number comes from the constant
+    # for the reason test_the_cadence_the_pages_state_is_the_constant_and_not_a_word
+    # gives; what this test owns is that the bound is stated as a bound at all.
+    cadence = dormancy_defaults()["dormant-cadence-days"]
+    said = " ".join(texts_with(html, "data-dormancy")).lower()
+    assert f"at most one sweep in every {cadence} days" in said, said
+    assert "only when a person starts one" in said, said
+
+
+def test_the_page_does_not_call_a_dormant_endpoint_unresponsive(client):
+    """The word `prober/src/dormancy.rs` refuses, refused here too.
+
+    Its module header says why: what is known is that seven probes, each
+    cancelled at 30 s, went unanswered. "Dormant" describes where the endpoint
+    sits in our rotation, which is a fact about us; "unresponsive", "broken",
+    "dead" and "down" are all claims about somebody else's server that this
+    service did not establish. The prober's own source is read here so the two
+    cannot drift apart.
+    """
+    header = rust("dormancy.rs")
+    assert "`dormant`, not `unresponsive`" in header, (
+        "dormancy.rs no longer argues for the word, so this test is pinning "
+        "the page against something that moved"
+    )
+    lowered = page(client).lower()
+    for overclaim in ("unresponsive", "broken", "is dead", "is down"):
+        assert overclaim not in lowered, overclaim
+
+
+def test_the_dormancy_numbers_come_from_the_flags_that_carry_them():
+    """The four constants the reader above reads are the flag defaults.
+
+    The same claim `test_the_flag_defaults_still_come_from_those_constants`
+    makes about the politeness figures, and it is needed for the same reason: a
+    constant nothing defaults to pins nothing, and the page would then be quoting
+    a number no sweep uses.
+
+    `DEFAULT_GRACE_DAYS` is checked on the OTHER binary, because that is where
+    its only reader's flag is: `dormancy wake --grace-days`. A grace flag on the
+    sweeper was removed rather than left to be parsed and ignored.
+    """
+    main = rust("main.rs")
+    for attribute in (
+        "default_value_t = DEFAULT_COST_MS",
+        "default_value_t = DEFAULT_DORMANT_STRIKES",
+        "default_value_t = DEFAULT_DORMANT_CADENCE",
+    ):
+        assert attribute in main, attribute
+    assert "NonZeroU32::new(DEFAULT_STRIKES)" in main
+    assert "NonZeroU64::new(DEFAULT_CADENCE_DAYS)" in main
+
+    wake = (PROBER / "src" / "bin" / "dormancy.rs").read_text()
+    assert "default_value_t = DEFAULT_GRACE" in wake
+    assert "dormancy::DEFAULT_GRACE_DAYS" in wake
+
+
+def test_the_dormancy_reasons_the_pages_read_are_the_probers_own():
+    """Both reason maps in `web/app.py`, against `SkipReason::slug`.
+
+    Nothing else holds these two words together. The prober pins them on its
+    own side (`the_two_reason_slugs_are_stable`), and until this test the Python
+    side pinned nothing: renaming `operator-hold` in Rust left every row telling
+    the truth through the verbatim fallback while the index panel and the
+    endpoint page went on asserting, in prose, that there are two reasons and
+    naming a value no run graph could carry. That is a positive false claim on
+    pages whose whole doctrine is that a stale qualifier is a claim, and it
+    passed 304 tests.
+
+    Set equality in both directions, so a slug the prober adds fails here as
+    loudly as one it renames: a third reason with no reading on either page
+    would fall through to "a reason this page cannot read", which is honest
+    about the row and silently wrong in the panel that says there are two.
+
+    `not-in-this-sweep` is that third reason, and this test is what made the two
+    sides land together. Rule 3 of the admission policy published `automatic`
+    for endpoints a replayed `--at` merely did not reach, and both pages
+    rendered that as a relegation on cost and silence that never happened. The
+    Python maps carried sentences for the new slug before `SkipReason` carried
+    the variant, and this assertion was red for exactly that window, which is
+    the direction it was written for.
+    """
+    from app import _DORMANCY_REASONS, _ROW_DORMANCY_REASONS
+
+    slugs = skip_reason_slugs()
+    assert slugs == {"automatic", "operator-hold", "not-in-this-sweep"}, (
+        "the prober's reason slugs changed; both pages' prose has to change "
+        "with them, which is what the two assertions below are about"
+    )
+    assert set(_DORMANCY_REASONS) == slugs, (
+        "the endpoint page's reason sentences and the prober's slugs differ"
+    )
+    assert set(_ROW_DORMANCY_REASONS) == slugs, (
+        "the index row's reason clauses and the prober's slugs differ"
+    )
+
+
+def test_the_numbers_in_the_prose_are_the_constants_and_not_words(client):
+    """Every place the prose states the cadence or the strike count.
+
+    The `<li>` items in the numbers list render `DORMANCY` and self-correct. The
+    prose beside them spelled both numbers out in words, so changing
+    `DEFAULT_CADENCE_DAYS` to 10 left three sentences promising seven days,
+    green, on the one page a server operator reads to decide what to expect, and
+    changing `DEFAULT_STRIKES` left two more describing a policy nobody runs.
+    This asserts the prose against the same constants the list renders.
+    """
+    defaults = dormancy_defaults()
+    cadence = defaults["dormant-cadence-days"]
+    strikes = defaults["dormant-strikes"]
+    html = page(client)
+
+    said = " ".join(texts_with(html, "data-dormancy")).lower()
+    assert f"at most one sweep in every {cadence} days" in said, said
+    assert "only when a person starts one" in said, said
+    assert f"in each of {strikes} sweeps in a row" in said, said
+
+    blocking = " ".join(texts_with(html, "data-blocking")).lower()
+    assert f"{cadence} days" in blocking, blocking
+    assert f"after {strikes} such sweeps" in blocking, blocking

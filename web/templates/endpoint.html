@@ -24,9 +24,23 @@
          font: 14px/1.5 system-ui, -apple-system, 'Segoe UI', sans-serif; }
   header { display: flex; align-items: center; gap: 12px; padding: 14px 24px;
            background: var(--bg-secondary); border-bottom: 1px solid var(--border); }
-  .logo { display: flex; align-items: center; gap: 9px; font-weight: 600; color: var(--text-bright); }
+  /* A link on every page, including the index, so the way home is always
+     in the same place. Undecorated because it is a mark rather than a
+     phrase in a sentence, and the index's copy carries aria-current so a
+     screen reader says it leads to the page already open. */
+  .logo { display: flex; align-items: center; gap: 9px; font-weight: 600;
+          color: var(--text-bright); text-decoration: none; }
+  .logo:hover { color: var(--accent); }
   .run { margin-left: auto; font-family: var(--mono); font-size: 12px; color: var(--text-dim); }
+  /* The header's link to /about, in the same token as every other link on the
+     page. Present on all three pages, so that a stranger who lands on their own
+     endpoint's page can reach what the marks mean and who changes them without
+     already knowing the address. */
+  header a { font-family: var(--mono); font-size: 12px; }
   main { padding: 22px 24px; max-width: 1120px; }
+  .outward { margin: 6px 0 0; font-size: 12.5px; }
+  .outward a::after { content: " \2197"; }
+  .note-inline { color: var(--text-muted); }
   h1 { margin: 0; font-family: var(--mono); font-size: 18px; font-weight: 600;
        color: var(--text-bright); letter-spacing: -0.01em; word-break: break-all; }
   .sub { margin: 6px 0 22px; font-size: 13px; color: var(--text-muted); }
@@ -105,16 +119,42 @@
 </head>
 <body>
 <header>
-  <span class="logo">
+  <a class="logo" href="{{ index_path }}">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)"
          stroke-width="2" stroke-linecap="round" aria-hidden="true">
       <circle cx="11" cy="11" r="6"/><path d="M15.5 15.5 21 21"/><path d="M8 11h6"/></svg>
     sparqlwatch
-  </span>
+  </a>
   <span class="run">{% if run %}run {{ generated_at }}{% else %}no measurement sweep{% endif %}</span>
+  <a href="{{ about_path }}">why we queried your server</a>
 </header>
 <main>
   <h1>{{ endpoint }}</h1>
+  {% if outward_link %}
+  {# The endpoint itself, in a new tab. NOT the h1, which stays plain text: the
+     url is the thing a reader most often wants to select and copy, and a click
+     landing on somebody else's server by accident is the wrong outcome for a
+     mis-aimed double click.
+
+     rel carries both halves for two reasons. `noopener` is the security one.
+     `noreferrer` is the courtesy one: without it the operator of that endpoint
+     sees this page's url in their referer log, and a reader looking up their own
+     server should not have to announce to it that they read us first.
+
+     The sentence says what a browser will actually do, because a GET to a SPARQL
+     endpoint with no query is not a query: what comes back is a form, an error,
+     or a service description, which is the same request `declare.rs` makes and
+     the reason `sw:declarationsRead` is a weaker claim than a verdict. A reader
+     who expects results and gets an error page would otherwise read that as the
+     endpoint being broken, which is a conclusion this page has metrics for. #}
+  <p class="outward">
+    <a href="{{ outward_link }}" target="_blank" rel="noopener noreferrer"
+       data-outward-link="{{ outward_link }}">open this endpoint in a new tab</a>
+    <span class="note-inline">and a plain visit sends no query, so what comes
+      back is whatever the endpoint answers a bare request with: a form, an
+      error, or a description of itself.</span>
+  </p>
+  {% endif %}
   <p class="sub"{% if run %} data-run="{{ run }}"{% endif %}>
     {% if run and not sample.from_another_sweep -%}
       Everything below is what one probe sweep observed, at {{ generated_at }}.
@@ -142,6 +182,26 @@
      claim from the one above, so a second sentence rather than a longer
      first one, and both appear when both are true. #}
   <p class="note warn-note" data-newer-run-unfinished="true">{{ newer_unfinished_text }}</p>
+  {% endif %}
+  {% if newest_silence_text %}
+  {# A later sweep recorded nothing for this endpoint, either on purpose or
+     because it never intended to ask. Said here for the same reason as the two
+     above: it qualifies that timestamp and nothing else on the page.
+
+     The two attributes are the machine-readable half of the sentence, not a
+     drawing: dormancy gets no chip, no metric row and no legend entry, because
+     it is not a finding about the endpoint and the seven states of
+     docs/design/verdict-encoding.md are a closed set.
+
+     The link is inside this paragraph rather than only in the header because
+     this is the sentence an endpoint's own operator was sent here by, and it is
+     the one place on the page where knowing what the mark claims, what it does
+     not, and who lifts it is the reader's next question. It appears only for the
+     dormancy case: the other sentence in this element is about a sweep that
+     recorded nothing, and /about has nothing further to tell that reader. #}
+  <p class="note warn-note" data-newest-sweep-silent="true"
+     {%- if newest_declined_to_ask %} data-newest-sweep-dormant="true"{% endif %}
+     {%- if newest_dormancy_reason %} data-dormancy-reason="{{ newest_dormancy_reason }}"{% endif %}>{{ newest_silence_text }}{% if newest_declined_to_ask %} What dormant claims, what it does not, and how a person changes it either way are set out on <a href="{{ about_path }}">this service's about page</a>.{% endif %}</p>
   {% endif %}
 
   <section>

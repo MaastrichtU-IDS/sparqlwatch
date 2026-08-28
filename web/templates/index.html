@@ -25,8 +25,20 @@
   a:hover { color: var(--accent); text-decoration: underline; }
   header { display: flex; align-items: center; gap: 12px; padding: 14px 24px;
            background: var(--bg-secondary); border-bottom: 1px solid var(--border); }
-  .logo { display: flex; align-items: center; gap: 9px; font-weight: 600; color: var(--text-bright); }
+  /* A link on every page, including the index, so the way home is always
+     in the same place. Undecorated because it is a mark rather than a
+     phrase in a sentence, and the index's copy carries aria-current so a
+     screen reader says it leads to the page already open. */
+  .logo { display: flex; align-items: center; gap: 9px; font-weight: 600;
+          color: var(--text-bright); text-decoration: none; }
+  .logo:hover { color: var(--accent); }
   .run { margin-left: auto; font-family: var(--mono); font-size: 12px; color: var(--text-dim); }
+  /* The header's link to /about, in the same token as every other link on the
+     page. One occurrence per page and not one per row: at 543 rows anything
+     per-row costs 543 times what it reads, and web/README.md's table is the
+     record of how little headroom that leaves. A link repeated 543 times is the
+     version of this fix that spends 1,227 bytes as 24,000. */
+  header a { font-family: var(--mono); font-size: 12px; }
   main { padding: 22px 24px; max-width: 1120px; }
   h1 { margin: 0; font-size: 18px; font-weight: 600; color: var(--text-bright);
        letter-spacing: -0.01em; }
@@ -37,6 +49,10 @@
   .panel { border: 1px solid var(--border); border-radius: var(--radius);
            background: var(--bg-secondary); padding: 14px 16px; }
   .note { margin: 11px 0 0; font-size: 12.5px; color: var(--text-muted); max-width: 860px; }
+  /* The two reason values in the marked-row panel, in the token
+     web/templates/about.html gives a literal from the store or the source: they
+     are strings a reader can look for in the n-quads, not prose. */
+  code { font-family: var(--mono); font-size: 12.5px; }
   /* A sentence about the sweep rather than about an endpoint, drawn in the same
      token the endpoint page uses for the same kind of claim: what you are
      reading is bounded in a way the rows do not show. It is a colour on text
@@ -52,15 +68,68 @@
     background: var(--bg-secondary); color: var(--text); font: inherit; outline: none; }
   .shown { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 
-  /* The metric key. Every chip on this page carries an abbreviation, so this is
-     where the abbreviation is written out in full. */
-  ul.mkey { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
-            gap: 5px 22px; list-style: none; margin: 0; padding: 0; }
-  ul.mkey li { display: flex; align-items: center; gap: 9px; font-size: 12.5px; color: var(--text); }
+  /* The abbreviation, drawn the size of a chip. Every cell on a row carries one
+     instead of the metric's name, so the metric chips are where each one is
+     written out in full. The ul.mkey rules that used to lay that list out went
+     with the list on 2026-08-27, when the metric key became the chips. */
   .mabbr { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
     width: {{ chip_width }}px; height: {{ chip_height }}px; border-radius: var(--radius-sm);
     border: 1px solid var(--border); font-family: var(--mono); font-size: 10px;
     font-weight: 700; color: var(--text-muted); }
+
+  /* The facet chips. A button and not a link: it changes what this page shows
+     and does not name another resource, so a link would promise a URL that
+     does not exist. Every one of them is inert until the script at the foot
+     runs, which is why they are styled as pressed or not rather than as
+     enabled or disabled: with no script every chip is simply unpressed and
+     every row is on the page, which is the state this page is correct in. */
+  ul.facets { display: flex; flex-wrap: wrap; gap: 6px 8px;
+              list-style: none; margin: 0; padding: 0; }
+  .facet { display: inline-flex; align-items: center; gap: 7px; height: 26px;
+    padding: 0 10px; border: 1px solid var(--border); border-radius: 13px;
+    background: none; font: inherit; font-size: 12.5px; color: var(--text);
+    cursor: pointer; }
+  .facet:hover { border-color: var(--text-muted); }
+  .facet[aria-pressed="true"] { border-color: var(--text-bright);
+    color: var(--text-bright); box-shadow: inset 0 0 0 1px var(--text-bright); }
+  /* Zero is not greyed out and not hidden. A metric chip reading 0 is the page
+     saying no sweep has measured this, which is the coverage gap these chips
+     exist to show, and dimming it would hide the finding. */
+  .facet .f-count { font-family: var(--mono); font-size: 11px;
+    color: var(--text-dim); font-variant-numeric: tabular-nums; }
+  .facet[aria-pressed="true"] .f-count { color: var(--text-bright); }
+  /* The legend's rows are buttons too, so they keep the grid the list already
+     had rather than becoming pills: the meaning column is a sentence and does
+     not fit in one. */
+  .facet-row { display: grid; grid-template-columns: 20px minmax(112px, auto) 1fr auto auto;
+    gap: 10px; align-items: center; width: 100%; height: auto; min-height: 26px;
+    padding: 4px 8px; border-radius: var(--radius-sm); text-align: left; }
+  .facet-row .l-mean { color: var(--text-muted); font-size: 12.5px; }
+  .facet-row .l-count, .facet-row .f-count { white-space: nowrap; }
+  /* The grid. Tabular numbers so the columns read as columns, and the state
+     columns narrow because a count is at most three digits. */
+  table.matrix { border-collapse: collapse; margin: 0; font-size: 12.5px; }
+  table.matrix th { font-weight: 500; text-align: left; padding: 2px 4px 2px 0;
+    color: var(--text-muted); font-size: 11px; vertical-align: bottom; }
+  table.matrix td { padding: 2px 4px 2px 0; text-align: center;
+    font-variant-numeric: tabular-nums; }
+  table.matrix tbody th { text-align: left; padding-right: 14px; }
+  .facet-head { height: auto; min-height: 22px; padding: 2px 6px;
+    border-radius: var(--radius-sm); font-size: 11px; gap: 6px; }
+  .f-head-label { writing-mode: vertical-rl; transform: rotate(180deg);
+    text-align: left; }
+  /* The cell IS the chip: it carries the state's own border and fill through
+     the enc- class, so the grid draws the encoding rather than describing it,
+     and a reader sees the shape of the registry in the borders. */
+  .facet-cell { min-width: 42px; justify-content: center; height: 22px;
+    padding: 0 6px; font-family: var(--mono); font-size: 11px; }
+  /* The cell's whole content is its count, so it takes the page's text colour
+     rather than the dimmed one a count beside a label gets. */
+  .facet-cell .f-count { color: inherit; font-size: 11px; }
+  .matrix-none { display: inline-block; min-width: 42px; text-align: center;
+    color: var(--text-dim); }
+  .facet-detail { margin: 8px 0 0; font-size: 12px; color: var(--text-muted); }
+  .facet-empty { margin: 18px 0 0; font-size: 13px; color: var(--text); }
 
   .group { margin-top: 26px; }
   .g-head { display: flex; align-items: center; gap: 9px; margin: 0 0 4px;
@@ -100,11 +169,22 @@
   .cells > span.gap { border: none; background: none; color: var(--text-dim); }
   .qual { font-size: 11.5px; color: var(--warn); border: 1px dashed var(--warn);
           border-radius: 3px; padding: 1px 7px; white-space: nowrap; }
+  /* Which sweep measured this row, drawn differently from the markers above on
+     purpose. Those two are things that went wrong with a sweep; this is
+     provenance, and it is true of every row in a store whose newest sweep asked
+     a subset, which can be almost all of them. In the warn token and a dashed
+     box it would read as 543 warnings about a service working as designed. It
+     is mono because it is an instant, and it reads identically with no styling
+     at all. */
+  .when { font-size: 11.5px; font-family: var(--mono); color: var(--text-dim);
+          white-space: nowrap; }
 
+  /* The legend, whose rows are the state filter chips. Each li holds one button
+     and nothing else, so the row's own columns are .facet-row's above and this
+     list lays out the rows alone: the four-column grid this rule carried until
+     2026-08-28 had no multi-child element left to lay out. */
   .legend { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
             gap: 7px 26px; list-style: none; margin: 0; padding: 0; }
-  .legend li { display: grid; grid-template-columns: 20px minmax(112px, auto) 1fr 3ch;
-               align-items: center; gap: 9px; font-size: 12.5px; color: var(--text-muted); }
   .legend .swatch { display: inline-block; width: 20px; height: 15px; border-radius: 3px; }
   .legend .l-label { color: var(--text); }
   .legend .l-count { text-align: right; font-variant-numeric: tabular-nums; color: var(--text-dim); }
@@ -123,24 +203,31 @@
 </head>
 <body>
 <header>
-  <span class="logo">
+  <a class="logo" href="{{ index_path }}" aria-current="page">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)"
          stroke-width="2" stroke-linecap="round" aria-hidden="true">
       <circle cx="11" cy="11" r="6"/><path d="M15.5 15.5 21 21"/><path d="M8 11h6"/></svg>
     sparqlwatch
-  </span>
+  </a>
   <span class="run">{% if newest_generated_at %}newest sweep {{ newest_generated_at }}{% else %}no measurement sweep{% endif %}</span>
+  <a href="{{ about_path }}">why we queried your server</a>
 </header>
 <main>
-  <h1>Public SPARQL endpoints this service has measured</h1>
+  <h1>SPARQL Watch - Public SPARQL endpoint monitoring service</h1>
   <p class="sub" data-endpoint-count="{{ endpoint_count }}" data-metric-count="{{ metric_count }}">
     {% if endpoint_count %}
-      {{ endpoint_count }} endpoint{{ "" if endpoint_count == 1 else "s" }}, and
-      {{ metric_count }} metric{{ "" if metric_count == 1 else "s" }} measured across
-      them. No score and no ranking: each endpoint carries one verdict per metric,
-      and the groups below are the availability verdict's own values rather than a
-      judgement about which of them is better. Follow a row to see every verdict
-      written out in words.
+      {# The endpoint and metric counts used to open this paragraph and were
+         removed on 2026-08-27: every facet chip below now carries its own count
+         and the group headings carry the denominator, so the sentence was
+         repeating in prose what the page states in numbers. The counts stay in
+         the data- attributes on this element, which is where the tests read
+         them and where a machine reading the HTML can still find them. #}
+      {# Removed by the plan owner on 2026-08-28, as a Jinja comment so the
+         sentence is not shipped to every reader:
+         No score and no ranking: each endpoint carries one verdict per metric,
+         and the groups below are the availability verdict's own values rather
+         than a judgement about which of them is better. Follow a row to see
+         every verdict written out in words. #}
     {% else %}
       No run in this store has recorded a measurement or a decline for any
       endpoint, so there is nothing to list. That is a fact about this store and
@@ -157,18 +244,98 @@
     <span class="shown" id="shown"></span>
   </div>
 
+
   {% if metrics %}
-  <section class="panel">
-    <h2>The metrics, and what each chip's letters mean</h2>
-    <ul class="mkey">
-      {% for metric in metrics %}
-      <li data-metric-column="{{ metric.name }}" data-abbr="{{ metric.abbr }}">
-        <span class="mabbr">{{ metric.abbr }}</span>{{ metric.name }}
-      </li>
-      {% endfor %}
-    </ul>
-    <p class="note">{{ empty_cell_text }}</p>
+  {# The grid. Metrics down, states across, and a count in every intersection.
+
+     A TABLE and not a div grid, because it has two axes of meaning and that is
+     what a table is for: a screen reader on a cell announces "geo-functions,
+     declared but wrong, 7" from the row and column headers, where a grid of
+     divs would announce "7" and leave the reader to remember where they are.
+
+     The headers are buttons too, and they are the two chip strips this panel
+     replaced: a row header filters on the metric whatever its state, a column
+     header on the state whatever the metric, and a cell on the pair. So the
+     panel adds the intersection without taking anything away.
+
+     An EMPTY cell is not a button. 35 of the 56 are empty on the measured
+     sweep, and a button that selects nothing is a thing to press twice before
+     believing it; the dot keeps the grid aligned and shows the shape, which is
+     most of what this layout is for. #}
+  <section class="panel" data-facet-group="matrix">
+    <h2>Metrics and states</h2>
+    <table class="matrix">
+      <thead>
+        <tr>
+          <th scope="col">metric</th>
+          {% for state in matrix_states %}
+          <th scope="col">
+            <button type="button" class="facet facet-head" aria-pressed="false"
+                    data-facet="state" data-facet-value="{{ state.slug }}"
+                    data-state="{{ state.slug }}">
+              <span class="f-swatch {{ state.css_class }}" aria-hidden="true"></span>
+              <span class="f-head-label">{{ state.label }}</span>
+              <span class="f-count">{{ state_counts[state.slug] }}</span>
+            </button>
+          </th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in matrix %}
+        <tr data-matrix-row="{{ row.name }}">
+          {# A label and not a button. The metric alone was selectable until
+             2026-08-28 and the plan owner took it out: every cell in the row
+             already filters on that metric, so a chip on the name could only
+             widen what the cells beside it narrow. data-metric-column stays,
+             because it is how the tests and any other reader of this HTML learn
+             which abbreviation belongs to which metric. #}
+          <th scope="row" data-metric-column="{{ row.name }}"
+              data-abbr="{{ row.abbr }}">
+            <span class="mabbr">{{ row.abbr }}</span> {{ row.name }}
+          </th>
+          {% for cell in row.cells %}
+          <td>
+            {% if cell.count %}
+            <button type="button" class="facet facet-cell {{ cell.css_class }}"
+                    aria-pressed="false" data-facet="matrix"
+                    data-facet-value="{{ cell.value }}"
+                    data-matrix-cell="{{ cell.value }}"><span
+              class="f-count">{{ cell.count }}</span></button>
+            {% else %}
+            <span class="matrix-none" data-matrix-empty="{{ cell.value }}"
+                  aria-hidden="true">&#183;</span>
+            {% endif %}
+          </td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p class="note">
+      A cell is the endpoints whose newest sweep put that metric in that state,
+      so a row's cells account for every endpoint once. Press a cell for that pair, or a
+      column header for the state whatever the metric, and each says how many it
+      selects. The metric names are labels: every cell in a row already filters
+      on that metric, so a chip on the name could only widen what the cells
+      beside it narrow.
+    </p>
+    <p class="note">
+      A filled chip means we have positive evidence the capability works;
+      a dashed border means no declaration was seen for it;
+      a heavier border means something is actively wrong rather;
+      a dotted border means we did not look;
+      and no border at all means nothing was there.
+    </p>
   </section>
+  {% endif %}
+
+
+  {% if endpoint_count %}
+  <p class="facet-empty" id="nothing" data-facet-empty="true" hidden>
+    No endpoint in this store matches every filter selected above. That is a
+    fact about the filters and not about any endpoint: clear one to widen it.
+  </p>
   {% endif %}
 
   {% for group in groups %}
@@ -177,7 +344,17 @@
         data-group-count="{{ group.count }}" data-group-of="{{ group.of }}">
       <span class="swatch {{ group.css_class }}" aria-hidden="true"></span>{{ group.heading }}<span class="g-shown"></span>
     </h2>
+    {% if group.meaning %}
     <p class="g-note" data-group-note="{{ group.availability }}">{{ group.meaning }}</p>
+    {% endif %}
+    {% if group.dormant_note %}
+    {# A note on the group, not a group of its own: a dormant row keeps the
+       verdict its last real probe produced, and that verdict is what this group
+       is keyed on. Drawn in the warn token because it bounds what the rows
+       below report, which is the same kind of claim as the store-level note at
+       the top of the page. #}
+    <p class="g-note warn-note" data-group-dormant="{{ group.availability }}">{{ group.dormant_note }}</p>
+    {% endif %}
     <ul class="rows">
       {% for row in group.rows %}
 {# ONE LINE PER ROW, AND EVERY BYTE OF IT IS COUNTED. 543 rows times eight
@@ -193,50 +370,52 @@
    data-metric, cost 165 KB of the 610 KB this page measured before they came
    out, and bought a second and third spelling of one fact. A machine that wants
    the metric IRI itself asks this resource for RDF, which is what the
-   negotiation is for. #}
-      <li data-endpoint="{{ row.endpoint }}"{% if row.run_unfinished %} data-run-unfinished="true"{% endif %}{% if row.never_reached %} data-newer-run-unfinished="true"{% endif %}><a href="{{ row.href }}">{{ row.endpoint }}</a>{% if row.run_unfinished %}<span class="qual">{{ row_unfinished_text }}</span>{% endif %}{% if row.never_reached %}<span class="qual">{{ row_never_reached_text }}</span>{% endif %}<span class="cells">{% for cell in row.cells %}{% if cell.present %}<span class="{{ cell.css_class }}"{% if cell.verdict is not none %} data-verdict="{{ cell.verdict }}"{% else %} data-declined="{{ cell.reason }}"{% endif %}>{{ cell.abbr }}</span>{% else %}<span class="gap" data-gap="true">&#183;</span>{% endif %}{% endfor %}</span></li>
+   negotiation is for.
+
+   WHAT THESE MARKERS COST. In UTF-8 bytes of the served page over the
+   543-endpoint sweep: 438,652 with no row marked, 501,609 with all 543 naming
+   their own sweep (a two-endpoint newer run on top), 510,188 with 57 of those
+   also dormant, which is the realistic near-term shape, and 580,357 with all
+   543 dormant, which is the worst case for these markers. 808, 924, 940 and
+   1,069 bytes a row. The render cost of the whole change was 10.50 ms against
+   11.08 ms, HEAD and this tree back to back in one process over one store.
+
+   ALL FOUR ARE INSIDE THE BUDGET, WHICH IS 750,000 BYTES AND WAS 500,000 UNTIL
+   2026-08-27. Three of the four were outside the old number, and the plan owner
+   raised it rather than take markup out of these rows, because measuring the
+   overrun showed what it really was: at 808 bytes a row with nothing marked,
+   500,000 runs out at 619 endpoints, and the registry is 543 with two more
+   sources still to ingest. The limit was sized for the markup and not for a
+   list that only grows. NOTHING TESTS IT, which is how a 0.5% overrun survived
+   a commit; the form to pin is bytes per row, not a total. Deleting the markers
+   was never the alternative: that is 543 rows of one sweep's verdicts under a
+   header naming another sweep, which is one wrong answer 543 times. Roughly 11
+   KB of the marked figure is the instant's second spelling in
+   data-measured-by-sweep, kept for now because a script filtering these rows
+   needs the instant as a value and the RDF representation is a second request,
+   and it is the cheapest thing to give up if something has to go. #}
+      <li data-endpoint="{{ row.endpoint }}"{% if row.run_unfinished %} data-run-unfinished="true"{% endif %}{% if row.never_reached %} data-newer-run-unfinished="true"{% endif %}{% if row.dormant %} data-newest-sweep-dormant="true"{% if row.dormancy_reason %} data-dormancy-reason="{{ row.dormancy_reason }}"{% endif %}{% endif %}{% if row.measured_by %} data-measured-by-sweep="{{ row.measured_by }}"{% endif %}><a href="{{ row.href }}">{{ row.endpoint }}</a>{% if row.run_unfinished %}<span class="qual">{{ row_unfinished_text }}</span>{% endif %}{% if row.never_reached %}<span class="qual">{{ row_never_reached_text }}</span>{% endif %}{% if row.dormant %}<span class="qual">{{ row.dormant_text }}</span>{% endif %}{% if row.measured_by %}<span class="when">{{ row_measured_by_text }} {{ row.measured_by }}</span>{% endif %}<span class="cells">{% for cell in row.cells %}{% if cell.present %}<span class="{{ cell.css_class }}"{% if cell.verdict is not none %} data-verdict="{{ cell.verdict }}"{% else %} data-declined="{{ cell.reason }}"{% endif %}>{{ cell.abbr }}</span>{% else %}<span class="gap" data-gap="true">&#183;</span>{% endif %}{% endfor %}</span></li>
       {% endfor %}
     </ul>
   </section>
   {% endfor %}
 
-  <section class="panel">
-    <h2>What the drawing means</h2>
-    <ul class="legend">
-      {% for state in legend %}
-      <li data-state="{{ state.slug }}">
-        <span class="swatch {{ state.css_class }}" aria-hidden="true"></span>
-        <span class="l-label">{{ state.label }}</span>
-        <span>{{ state.meaning }}</span>
-        <span class="l-count">{{ state.count }}</span>
-      </li>
-      {% endfor %}
-    </ul>
-    <p class="note">
-      The drawing never rests on colour: a filled chip means we have positive
-      evidence the capability works; a dashed border means no declaration was
-      seen for it; a heavier border means something is actively wrong rather than
-      merely missing; a dotted border means we did not look; and no border at all
-      means nothing was there. The count beside each state is how many chips on
-      this page are in it.
-    </p>
-    <p class="note">
-      A chip on this page carries no words, so this is the one page where a state
-      is drawn and not written out. Every row links to that endpoint's own page,
-      where each verdict is named in words beside the metric it belongs to.
-    </p>
-  </section>
+{# Commented out by the plan owner on 2026-08-28. A JINJA comment and not an
+   HTML one: `<!-- -->` leaves all 3,393 bytes of this panel in every response,
+   which on a page with a byte budget is paying for markup nobody is shown. The
+   markers themselves still render on the rows, and /about carries what they
+   mean, what they do not, and who changes it.
 
   <section class="panel">
     <h2>What a marked row means</h2>
-    <p class="note" style="margin-top: 0">
+    <p class="note" style="margin-top: 0" data-row-marker="run-unfinished">
       <span class="qual">{{ row_unfinished_text }}</span>
       The sweep this row's facts came from recorded that it was being written one
       endpoint at a time and never recorded that it was complete. This endpoint's
       own chunk was written whole, which is how its facts got here, so what the
       row says is what that sweep had written for it when it stopped.
     </p>
-    <p class="note">
+    <p class="note" data-row-marker="never-reached">
       <span class="qual">{{ row_never_reached_text }}</span>
       A later sweep exists, stopped, and never recorded finishing this endpoint,
       so none of this row comes from it. Everything in the row is still the
@@ -244,15 +423,61 @@
       may well have finished; what is not true is that this row reports the
       latest sweep.
     </p>
+    <p class="note" data-row-marker="dormant">
+      <span class="qual">{{ row_dormant_text }}</span>
+      The newest sweep published this endpoint as one it declined to ask. Where
+      it gave a reason the row carries it, and where it gave none the row says
+      that instead. The reasons a sweep can give, and the slugs are the prober's
+      own rather than this template's:
+      {% for reason in dormancy_reasons %}<code>{{ reason.slug }}</code>, {{ reason.gloss }}{% if not loop.last %}; {% endif %}{% endfor %}.
+      How often the endpoint is asked next is part of the reason and not the
+      marker, which is why each reason above carries its own and this panel
+      states none. One of them is not a change in our rotation at all, and a row
+      marked with that reason was not relegated and was not judged. Every one of
+      them is a fact about this service and none is a verdict about the endpoint:
+      dormancy is not a verdict, it has no chip and no entry in the key above,
+      and the chips on the row are the ones its last real probe produced. A
+      reason this build has no
+      reading of is printed on the row exactly as the store holds it, and nothing
+      is claimed about what it means. What the mark claims, what it does not, and
+      how a person changes it are set out on
+      <a href="{{ about_path }}">this service's about page</a>.
+    </p>
+    <p class="note" data-row-marker="measured-by">
+      <span class="when">{{ row_measured_by_text }} &hellip;</span>
+      The sweep whose facts this row states, named on the row because it is not
+      the sweep in this page's header. Both instants are printed and neither is
+      given as a distance from the other: no sweep here runs on a timer, so how
+      much may have changed in between is not something this service knows. What
+      the row says is what that sweep recorded, and it is still the newest this
+      service holds for that endpoint.
+    </p>
   </section>
+#}
 </main>
 <script>
-/* The filter, and the page does not depend on it. Every row is in the document
-   already: this hides the ones that do not match and keeps the counts honest
-   while it does, which is the only reason it is more than three lines. A group
-   heading reading "4 of 10 endpoints" beside two visible rows would be a wrong
-   number of exactly the kind this page is built to avoid, so filtering appends
-   what is shown rather than editing what was counted.
+/* The filter and the facets, and the page does not depend on either. Every row
+   is in the document already: this hides the ones that do not match and keeps
+   the counts honest while it does, which is the only reason it is more than
+   three lines. A group heading reading "4 of 10 endpoints" beside two visible
+   rows would be a wrong number of exactly the kind this page is built to avoid,
+   so filtering appends what is shown rather than editing what was counted.
+
+   THE FACETS COST NOTHING PER ROW, which is the reason they read the DOM the
+   way they do. A chip already carries its state in an `enc-<slug>` class, its
+   metric in its own text, and `data-verdict` when a verdict was recorded or
+   `data-declined` when the sweep declined to look. So every question a facet
+   asks is answerable from markup the rows carried before facets existed, and
+   web/README.md's byte table did not move. Adding one summary attribute per
+   row would have been easier to read and cost about 20 KB.
+
+   WITHIN a group the chips are OR and ACROSS groups they are AND, which is what
+   a reader of any faceted list expects. A metric chip matches a row that
+   recorded a verdict for that metric, and a DECLINED metric does not match: a
+   chip reading 0 means no sweep measured it. A state chip matches a row whose
+   every recorded verdict is that one state, declines excluded, which is the
+   only reading that is not empty by construction; app.py's `_state_facets`
+   says why at more length.
 
    Inline rather than a file because it is the only script on the page and it is
    smaller than the request that would fetch it. web/README.md notes that a
@@ -260,27 +485,219 @@
 (function () {
   var box = document.getElementById("q");
   var shown = document.getElementById("shown");
-  if (!box) { return; }
+  var buttons = [].slice.call(document.querySelectorAll("[data-facet]"));
+  if (!box && !buttons.length) { return; }
   var groups = [].slice.call(document.querySelectorAll("[data-availability]"));
   var total = document.querySelectorAll("[data-endpoint]").length;
-  function apply() {
-    var q = box.value.trim().toLowerCase();
-    var matched = 0;
-    groups.forEach(function (group) {
-      var here = 0;
-      [].slice.call(group.querySelectorAll("[data-endpoint]")).forEach(function (row) {
-        var hit = !q || row.getAttribute("data-endpoint").toLowerCase().indexOf(q) >= 0;
-        row.hidden = !hit;
-        if (hit) { here += 1; }
-      });
-      matched += here;
-      group.hidden = q && here === 0;
-      var note = group.querySelector(".g-shown");
-      if (note) { note.textContent = q ? ", " + here + " shown" : ""; }
+  var empty = document.getElementById("nothing");
+  /* The facet groups, read off the CHIPS rather than off the panels. Both are
+     in the document and only one is right: a panel's data-facet-group names the
+     panel, and since the grid landed one panel holds chips of three different
+     groups (a row header filters on the metric, a column header on the state, a
+     cell on the pair). Reading the panels gave NAMES = availability, matrix,
+     so pressing a row or column header set aria-pressed and changed nothing,
+     because the loop that hides rows never asked about a group it had not
+     heard of. Every chip declares its own group and that is the list. */
+  var NAMES = [];
+  buttons.forEach(function (el) {
+    var name = el.getAttribute("data-facet");
+    if (NAMES.indexOf(name) < 0) { NAMES.push(name); }
+  });
+
+  /* One row's facts, read once. Re-reading the DOM per keystroke per chip per
+     row is 543 rows times 8 chips, and the page is meant to answer a keystroke
+     faster than a reader notices.
+
+     Two fields went on 2026-08-28 with the chips that read them: `available`,
+     which the availability panel used, and `metrics`, which the row headers
+     used before they became labels. The group element is no longer needed here
+     at all, which retires the parentNode walk this function used to do and the
+     comment that explained why it was a hazard: it read
+     row.parentNode.parentNode, correct for the nesting the template writes and
+     silently wrong the moment anyone wrapped the rows in one more element. */
+  function facts(row) {
+    var drawn = {}, pairs = {};
+    [].slice.call(row.querySelectorAll(".cells > span")).forEach(function (cell) {
+      /* EVERY drawn chip is tallied, a declined one included, because the state
+         columns count a row that carries the state anywhere and the grid's
+         not-measured column is the endpoints with a metric no sweep ran. */
+      var cls = cell.className.replace(/^enc-/, "");
+      drawn[cls] = (drawn[cls] || 0) + 1;
+      /* The grid's key, built from what the chip already carries: its own text
+         is the metric's abbreviation and its class is the state. Nothing per
+         row grew to support the grid. */
+      pairs[cell.textContent.trim() + "|" + cls] = 1;
     });
-    shown.textContent = q ? "showing " + matched + " of " + total + " endpoints" : "";
+    return {
+      url: row.getAttribute("data-endpoint").toLowerCase(),
+      drawn: drawn,
+      pairs: pairs
+    };
   }
-  box.addEventListener("input", apply);
+  var rows = [];
+  groups.forEach(function (group) {
+    [].slice.call(group.querySelectorAll("[data-endpoint]")).forEach(function (el) {
+      rows.push({ el: el, group: group, f: facts(el) });
+    });
+  });
+
+  /* How many chips are drawn in one state among the rows a filter leaves, which
+     is the legend's other number. Counted over the same rows the row count is
+     conditioned on, so the two move together and mean the same population. */
+  function drawn(chip, q, picked) {
+    var seen = 0;
+    rows.forEach(function (r) {
+      if (!survives(r, q, picked, chip.name)) { return; }
+      seen += r.f.drawn[chip.value] || 0;
+    });
+    return seen;
+  }
+
+  /* Each chip with the count span it prints into, and the words after the
+     number kept exactly as the server wrote them: the state chips print
+     "402 rows" and the other two groups a bare number, and which it is belongs
+     to the template rather than being spelled here a second time. */
+  var chips = buttons.map(function (el) {
+    var span = el.querySelector(".f-count");
+    /* The legend's rows carry a SECOND number, the chips drawn in that state,
+       which used to be written once by the server and then sat still while the
+       number beside it moved. One filtered row read "3373 chips 0 rows": two
+       counts over two different populations in one button, with nothing saying
+       so. Both are live now, and both are over the rows currently shown. */
+    var chipSpan = el.querySelector(".l-count");
+    return {
+      el: el,
+      span: span,
+      chipSpan: chipSpan,
+      suffix: span ? span.textContent.replace(/^\s*\d*/, "") : "",
+      chipSuffix: chipSpan ? chipSpan.textContent.replace(/^\s*\d*/, "") : "",
+      name: el.getAttribute("data-facet"),
+      value: el.getAttribute("data-facet-value")
+    };
+  });
+
+  function selected(name) {
+    return chips.filter(function (c) {
+      return c.name === name && c.el.getAttribute("aria-pressed") === "true";
+    }).map(function (c) { return c.value; });
+  }
+
+  /* Does one row satisfy one group's selection? Asked by the filter and by the
+     counts, so what a chip's number means and what pressing it does cannot come
+     apart into two tests that agree today. */
+  /* One predicate per group, and NO fall-through: a name this function does
+     not know matches nothing rather than being treated as a state, so a group
+     added to the template without a predicate here hides every row instead of
+     quietly filtering none of them. Failing visibly is the whole difference. */
+  function inGroup(f, name, values) {
+    if (name === "availability") { return values.indexOf(f.available) >= 0; }
+    if (name === "metric") {
+      return values.some(function (abbr) { return f.metrics[abbr]; });
+    }
+    /* AT LEAST ONE chip in that state, not every chip: pressing
+       "declared but wrong" finds every endpoint that gets anything wrong,
+       across all eight metrics at once, which is the question a reader brings
+       to this page. `drawn` counts every chip drawn on the row including a
+       declined one, so this and app.py's _state_facets ask the same thing of
+       the same cells. */
+    if (name === "state") {
+      return values.some(function (slug) { return f.drawn[slug]; });
+    }
+    /* A grid cell: this metric in this state, which is the intersection the
+       row and column headers cannot express on their own. */
+    if (name === "matrix") {
+      return values.some(function (pair) { return f.pairs[pair]; });
+    }
+    return false;
+  }
+
+  /* The number one chip prints: the rows matching the text box and every OTHER
+     group that this one chip selects. That is the faceted-count contract every
+     such list keeps, and here it is what makes the page's own sentence true.
+     Rendered once and never recomputed, the state panel's "which is what
+     pressing it filters to" was false the moment a second group was pressed:
+     availability/available and then state/indeterminate left a chip reading 402
+     above a page reading "showing 0 of 543 endpoints".
+
+     Its own group is skipped rather than intersected, so a chip's number does
+     not fall to 0 because a sibling chip beside it is pressed. */
+  /* Whether one row survives everything EXCEPT the group a chip belongs to,
+     which is the standard faceted-count contract: a chip says how many rows it
+     would add, not how many are showing. Shared by both counters so they can
+     never condition on different rows. */
+  function survives(r, q, picked, skip) {
+    if (q && r.f.url.indexOf(q) < 0) { return false; }
+    for (var i = 0; i < NAMES.length; i += 1) {
+      var other = NAMES[i];
+      if (other !== skip && picked[other].length &&
+          !inGroup(r.f, other, picked[other])) { return false; }
+    }
+    return true;
+  }
+
+  function count(chip, q, picked) {
+    var n = 0;
+    rows.forEach(function (r) {
+      if (survives(r, q, picked, chip.name) &&
+          inGroup(r.f, chip.name, [chip.value])) { n += 1; }
+    });
+    return n;
+  }
+
+  function apply() {
+    var q = box ? box.value.trim().toLowerCase() : "";
+    var picked = {}, filtering = !!q;
+    NAMES.forEach(function (name) {
+      picked[name] = selected(name);
+      if (picked[name].length) { filtering = true; }
+    });
+    var matched = 0;
+    rows.forEach(function (r) {
+      var hit = !q || r.f.url.indexOf(q) >= 0;
+      for (var i = 0; hit && i < NAMES.length; i += 1) {
+        if (picked[NAMES[i]].length &&
+            !inGroup(r.f, NAMES[i], picked[NAMES[i]])) { hit = false; }
+      }
+      r.el.hidden = !hit;
+      r.hit = hit;
+      if (hit) { matched += 1; }
+    });
+    groups.forEach(function (group) {
+      var here = rows.filter(function (r) { return r.group === group && r.hit; }).length;
+      group.hidden = filtering && here === 0;
+      var note = group.querySelector(".g-shown");
+      if (note) { note.textContent = filtering ? ", " + here + " shown" : ""; }
+    });
+    /* Recounted on every change, including the first call below, where nothing
+       is pressed and every chip therefore has to arrive at the number the
+       server already rendered. A page that flickered on load would be this
+       function and app.py's three builders disagreeing. */
+    chips.forEach(function (chip) {
+      if (chip.span) {
+        chip.span.textContent = count(chip, q, picked) + chip.suffix;
+      }
+      if (chip.chipSpan) {
+        chip.chipSpan.textContent = drawn(chip, q, picked) + chip.chipSuffix;
+      }
+    });
+    if (shown) {
+      shown.textContent = filtering
+        ? "showing " + matched + " of " + total + " endpoints" : "";
+    }
+    /* A filter that matches nothing says so. An empty page under a header
+       reading "543 endpoints" would leave a reader to guess whether the page
+       broke or the question has no answer here. */
+    if (empty) { empty.hidden = !(filtering && matched === 0); }
+  }
+
+  chips.forEach(function (chip) {
+    chip.el.addEventListener("click", function () {
+      var on = chip.el.getAttribute("aria-pressed") === "true";
+      chip.el.setAttribute("aria-pressed", on ? "false" : "true");
+      apply();
+    });
+  });
+  if (box) { box.addEventListener("input", apply); }
   apply();
 })();
 </script>

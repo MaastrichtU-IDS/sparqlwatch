@@ -534,10 +534,95 @@ the top of the page writes every abbreviation out in full. The abbreviations are
 generated from the metric names the store holds, so they change with the metric
 set rather than being a list in the template. That is the page's size budget at
 work: 543 rows carrying full metric names, or the metric repeated in an
-attribute beside each chip, measured 610 KB against the 500 KB the page is
-allowed. It is 434,193 bytes as it stands, which is 424.0 KiB and 434 KB. An earlier
+attribute beside each chip, measured 610 KB against the 750 KB the page is
+allowed. It is 452,136 bytes as it stands, which is 441.5 KiB and 452 KB. An earlier
 sentence here said 424.6 KiB, which is 434,790 bytes and no measurement anyone
-took.
+took, and another said 437,404, which was a real measurement of a page two
+commits older than this one.
+
+**EVERY MEASURED SHAPE IS INSIDE THE BUDGET, AND THE BUDGET IS NOT DECIDED
+HERE.** Every row whose facts are not the newest run's carries the
+instant of the sweep that measured it, in words and in `data-measured-by-sweep`,
+and a row the newest sweep declined to ask carries about 144 bytes more. Measured
+over the same 543 endpoints, in UTF-8 bytes of the served page, against the
+decimal 750,000 the budget is written in. It was 500,000 until 2026-08-27, and three of the
+four shapes below were outside that number, which is why it moved: at the 808 bytes a row
+the page measured before the facet chips landed, 500,000 runs out at **619
+endpoints**, so it was sized for the markup and not for a registry that only grows. The plan
+that sets it records the change and the reasoning.
+
+| Store shape | Rows marked | Dormant | Bytes | Per row | Against 750,000 |
+| --- | --- | --- | --- | --- | --- |
+| one sweep, the shape above | 0 | 0 | 462,748 | 852 | under by 287,252 |
+| a two-endpoint newer sweep | 541 | 0 | 515,433 | 949 | under by 234,567 |
+| the same, plus 57 of the rest declared dormant | 541 | 57 | 525,080 | 967 | under by 224,920 |
+| every row marked and dormant | 543 | 543 | 593,841 | 1,094 | under by 156,159 |
+
+The last row is the worst case FOR THIS MARKER and the third is the realistic
+near-term shape: a narrow re-probe plus the endpoints the cadence has taken.
+
+**Row 1 was re-measured on 2026-08-28 and rows 2 to 4 were not.** Three changes
+have moved every shape by the same fixed amount since they were taken: the six
+fixes to the facet counts, the logo becoming a link on every page, and the
+endpoint page's outward link. Row 1 went 452,136 to 455,542 across them, so rows
+2 to 4 are each about 3,400 bytes low. Every shape stays inside 750,000 either
+way, and the construction below is what makes re-measuring the other three a
+matter of running it rather than guessing.
+
+**How the four stores are built**, written down here because the table was not
+re-measurable without it and its middle two rows could not be reproduced. One
+replay of `~/code/sparqlwatch-runs/run-2026-08-24T19-45-03Z-lod-cloud-543.nq`;
+then a second run at a later instant built from that file's header, two of its
+543 endpoint sections and its footer, so 541 rows name the sweep that measured
+them; then the same second run with a dormancy section declaring 57 more of the
+543 dormant with the reason `automatic`; then the same declaring all 543 dormant
+and measuring nothing. Rows 1 and 4 reproduce the 2026-08-27 measurement to the
+byte. Rows 2 and 3 came out 398 and 1,466 bytes above what it recorded, so its
+second and third stores differed slightly from these and no one wrote down how
+they were built, which is what this paragraph is for.
+
+**The facet chips cost 13,426 bytes, fixed rather than per row.** Measured as the
+difference between `5353d5a`, the commit they landed on, and this tree, in all
+four shapes: it is the same number to the byte in each of them, because every
+chip filters by reading attributes the rows already carried and none of them
+added markup to a row. 9,842 of that landed with the chips on 2026-08-27 and
+3,584 with their fixes on 2026-08-28, most of the second figure being the
+recount that keeps a chip's number equal to what pressing it shows, and the
+comments explaining a script no test in CI runs. An earlier version of this
+paragraph said 9,900, which is the distance to the commit BEFORE the one the
+chips landed on: `5353d5a` renders 438,710 bytes in the first shape and its
+parent 438,652.
+
+Two things the table does not say and a reader should know. **The page is 92 to
+94% rows**: the 543 row elements are 416,620 bytes of the 452,136 byte first
+shape and 556,714 of the 593,841 byte last one, against 35,516 and 37,127 for
+everything else, which is the head, the CSS, the three facet panels, the group
+headings and all four explanation panels together. So per-row markup is the only
+lever with leverage, at 767 bytes a row unmarked and 1,025 marked and dormant.
+And **the chips are 578 of that 1,018 byte row element, 57%**, more
+than half the row before this stage touched it, so the cheap reductions all live
+outside them: dropping the visible instant saves 71 bytes a row, the
+`data-measured-by-sweep` attribute 45, halving the marker text 37, about 184
+bytes a row or 100 KB in total, none of it taken. What it is not is a decision
+that was taken here:
+`docs/superpowers/plans/2026-08-25-a-ui-you-can-use.md` sets the budget and says
+an overrun comes back to the plan owner rather than being decided in a task, so
+the markup stands as written and the number is with them. The alternative to the
+marker is 543 rows of one sweep's verdicts under a header naming another sweep,
+which is the same wrong answer 543 times, so the fix is not simply to delete it.
+Roughly 11 KB of the marked figure is the instant's second spelling in
+`data-measured-by-sweep`, which is the cheapest thing to give up if something has
+to go. See "Rows whose facts are not the newest sweep's" below.
+
+**The link to `/about` costs 1,227 bytes and not one byte per row.** Measured on
+the served index of `store_registry_sample`, nine rows, against the same page
+before it: 27,449 to 28,676 bytes, and the identical 1,227 on a store with no rows
+at all, which is what makes it fixed. Almost all of it is the marked-row panel's
+prose and the CSS comment beside the header rule; the `href` itself appears twice
+per page, once in the header and once in that panel, and
+`test_the_index_links_to_about_once_and_not_once_per_row` asserts the count. A
+link in each row would have been the version of this fix that made the overrun
+above worse by roughly 25 KB.
 
 **The row filter is an inline `<script>`, and the page does not depend on it.**
 Every row is in the document as served; with JavaScript off or blocked, all of
@@ -547,13 +632,50 @@ script raises the same question one stage early: under a policy that forbids
 inline script it will need a nonce or to become a static file, and nothing about
 what the page says changes either way.
 
+**NOTHING IN THE SUITE RUNS THAT SCRIPT**, and one of its claims can only be
+checked by running it: that every chip's count is what pressing that chip shows,
+which holds because the script recomputes each count against the rows the other
+groups leave. `pytest` reads the counts the server rendered, which is the state
+the page arrives in, and `test_every_chip_count_is_the_rows_the_page_renders`
+pins those against the rows the page actually contains, applying the same
+predicate the script applies. The recount itself was driven by hand over the real
+served 543-endpoint page in jsdom, pressing availability/available and then
+state/indeterminate, which is the pair that used to leave a chip reading 402
+above a page reading "showing 0 of 543 endpoints". Two things that verified
+beyond the fix: on load every recomputed count equals the server-rendered one, so
+the script and `app.py`'s three builders agree over 543 real rows; and a chip's
+own group is skipped in its count, so a chip does not read 0 because the chip
+beside it is pressed.
+
 ### `/about`, and how somebody asks to be left alone
 
 `GET /about` is the page the prober's `User-Agent` points at: `client.rs` sends
 `sparqlwatch/0.1.0 (+https://sparqlwatch.dev.k8s.semanticscience.org/about)` with
 every request, so this page is where a sysadmin arrives after finding an
 unfamiliar agent in their own log. It answers, in that order,
-who is querying, how often, how politely, why this endpoint, and how to stop it.
+who is querying, how often, how politely, what "dormant" means if their endpoint
+is marked that way, why this endpoint, and how to stop it.
+
+**Both other pages link to it, and until this stage neither did.** The page
+asserts that a reader arrives two ways, the second being a row on the index saying
+the newest sweep did not ask their endpoint, and no template held an `href` to
+`/about`: the marked row said what happened and stopped, so the contact address
+that changes it and the four thresholds behind it were reachable only by pasting
+the `User-Agent` URL into a browser. There are now four links: the header of the
+index and of an endpoint page, the index's marked-row panel, and the endpoint
+page's own dormancy sentence, the last two being the places a reader who followed
+the mark is standing when the question becomes "who changes this".
+
+**The dormancy section states each reason separately, because one description of
+it was false of the others.** The section described the automatic case and
+presented it as what the word means, which is wrong for `operator-hold` in three
+ways: nothing was observed (`dormancy.rs` skips a `Dormant` hold before it sends
+anything), the cadence does not apply (a held endpoint is asked by no sweep until a
+person lifts it), and answering cannot end it (an endpoint never asked cannot
+answer, and the promotion is suppressed regardless). The four `data-politeness`
+numbers belong to the automatic case alone and the page now says so. It was the
+last of four surfaces to distinguish the reasons, and the only real prober output
+in this repository carries `operator-hold`.
 
 **It takes no store dependency.** `about_resource` has no `store` parameter, and
 that absence is deliberate: the one page a stranger needs is the one page that must
@@ -775,6 +897,62 @@ flag could be built for the HTML and not for the RDF and the two would disagree 
 exactly the run this exists for. A consumer draws the same two conclusions from the
 same quads.
 
+### Rows whose facts are not the newest sweep's
+
+The index prints one timestamp in its header, the newest sweep in the store, and on
+this site an absent qualifier is a positive claim. A row that says nothing therefore
+says its verdicts were measured then. Four things a row can say, and each is a
+different claim about a different run:
+
+- **`from a sweep that stopped`.** This row's own run carries `sw:emission` and no
+  `sw:finalised`. The endpoint's chunk was written whole, which is how its facts got
+  here, so the row is what that sweep had written for it when it stopped.
+- **`a later sweep never got here`.** A newer run stopped and recorded no
+  `sw:completedEndpoint` for this endpoint. Nothing in the row is out of date: it is
+  the newest the store holds. What is not true is that it reports the latest sweep.
+- **`the newest sweep did not ask`**, with the reason the run published:
+  `automatic` for the admission policy, `operator-hold` for a person,
+  `not-in-this-sweep` for a sweep replaying an instant that had already run and so
+  asking exactly the set that instant asked, the value verbatim for anything else,
+  and "gave no reason" for a declaration with none. The three slugs are
+  `SkipReason::slug`'s match arms, and `test_about.py` asserts set equality
+  between them and both of `app.py`'s reason maps, so a slug the prober adds or
+  renames fails here rather than degrading quietly into the verbatim branch while
+  the prose goes on naming a value no run graph can carry. **What follows from the
+  reason travels with the reason**: the cadence is inside the `automatic` gloss, a
+  hold is asked by no sweep until a person lifts it, and `not-in-this-sweep`
+  changes how often the endpoint is asked not at all. The panel used to close with
+  one sentence covering all of them ("Either way the endpoint is asked at most one
+  sweep in every 7 days"), which is true of the first and false of the other two.
+  The **group note counts the reasons rather than assuming them**: it reads "and
+  said why" only where every marked row in the group carries one, because
+  `_row_dormancy_text` renders "and gave no reason" for a declaration with none and
+  the two used to appear one above the other. Carried in
+  `data-newest-sweep-dormant` and `data-dormancy-reason`. **Dormancy is
+  not a verdict**: it gets no chip, no column and no entry in the legend, which
+  counts states from the closed table in `verdict_encoding.py` and is shared with the
+  endpoint page. The row keeps the verdict its last real probe produced and stays in
+  that verdict's group; the group carries a note saying how many of its rows are
+  marked, because moving them out would file a measured endpoint under a heading
+  about this service's rotation.
+- **`measured by the sweep at <instant>`**, in `data-measured-by-sweep`. The widest
+  of the four: any row whose facts did not come from the newest run in the store, for
+  any reason at all. The three above each say something further about why; a row can
+  satisfy none of them and still be older, which is what `store_later_sample` is (its
+  newest run sampled one endpoint and measured nothing, so all three of its rows are
+  the earlier sweep's and none of the other markers fires).
+
+**Worded against the sweep, never as an age from today.** No sweep here runs on a
+timer, so "six days ago" is a claim the store cannot support: it holds two instants
+and nothing about the gap expected between two of them. Both are printed and neither
+is given as a distance from the other, which is the rule `_provenance` states for the
+endpoint page's two timestamps.
+
+All four are explained in full sentences in the page's own "What a marked row means"
+panel, because a marker only a test can read qualifies nothing, and three words on a
+row cannot carry the reasoning. The RDF representation of the index carries the inputs
+and never the conclusions, for the reason the section above gives.
+
 ### RDF and HTML agreement
 
 The HTML and RDF are two representations of one resource, derived independently:
@@ -821,8 +999,9 @@ vocabularies and the classes they hold is the part that needs content data, and 
 store holds no vocabulary or property data at all and one class sample per endpoint at
 best, since `sw:metric:classes` is expensive and declined at the default cost ceiling.
 The spec's stage 3 row already depends on stage 2b for exactly this reason, so these
-facets wait on 2b producing something to facet on rather than on UI work. Grouping by
-verdict does exist: the index groups by the availability verdict's own values.
+facets wait on 2b producing something to facet on rather than on UI work. Faceting by
+verdict does exist: the index groups its rows by the availability verdict's own values,
+and carries filter chips for availability, for each metric, and for each encoding state.
 
 ### Known gaps in what this service tells a stranger
 
