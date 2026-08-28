@@ -1615,6 +1615,80 @@ def _state_facets(groups: list[dict]) -> list[dict]:
     ]
 
 
+def _metric_state_matrix(
+    groups: list[dict], metrics: list[dict]
+) -> list[dict]:
+    """One row per metric, one cell per state, counting the endpoints in each.
+
+    The layout the plan owner asked for on 2026-08-28, and the shape of the real
+    registry is the argument for it. Over the 2026-08-24 sweep 21 of the 56
+    cells hold anything, and the 21 are not spread evenly: `geo-functions` is
+    the ONLY metric with an undeclared-but-verified column (18) or a
+    declared-but-wrong one (7), `classes` is entirely not-measured, and
+    `declared-only` is empty everywhere. That is the survey finding this project
+    was built to reproduce, and two separate chip strips could not show it: one
+    said 18 endpoints work undeclared somewhere, the other said 543 endpoints
+    have a geo-functions verdict, and neither said the two were the same fact.
+
+    A cell counts the endpoints whose newest run put THAT metric in THAT state,
+    so the cells of one row sum to that metric's own total and never to the page
+    total. A metric the run declined lands in the not-measured column rather
+    than being left out, because the reader's question there is "did anyone
+    look", and the column answers it.
+    """
+    counted: dict[tuple[str, str], int] = {}
+    for group in groups:
+        for row in group["rows"]:
+            for cell in row["cells"]:
+                if cell["present"]:
+                    key = (cell["name"], cell["slug"])
+                    counted[key] = counted.get(key, 0) + 1
+    states = list(verdict_encoding.STATES)
+    if any(
+        slug == verdict_encoding.UNRECOGNISED.slug for _, slug in counted
+    ):
+        states.append(verdict_encoding.UNRECOGNISED)
+    return [
+        {
+            "name": metric["name"],
+            "abbr": metric["abbr"],
+            # The row's own total, so a reader can see at a glance that the
+            # cells beside it account for every endpoint and none twice.
+            "total": sum(
+                n for (name, _), n in counted.items() if name == metric["name"]
+            ),
+            "cells": [
+                {
+                    "slug": state.slug,
+                    "label": state.label,
+                    "css_class": verdict_encoding.css_class(state.slug),
+                    "count": counted.get((metric["name"], state.slug), 0),
+                    # "AV|verified". The script's predicate needs the pair and
+                    # the abbreviation is what a chip on a row already carries,
+                    # so nothing per row has to grow to support this.
+                    "value": f"{metric['abbr']}|{state.slug}",
+                }
+                for state in states
+            ],
+        }
+        for metric in metrics
+    ]
+
+
+def _matrix_states(matrix: list[dict]) -> list[dict]:
+    """The column headers, taken from the matrix so the two cannot disagree."""
+    if not matrix:
+        return []
+    return [
+        {
+            "slug": cell["slug"],
+            "label": cell["label"],
+            "css_class": cell["css_class"],
+        }
+        for cell in matrix[0]["cells"]
+    ]
+
+
 def _index_row(entry: EndpointMeasurements, metrics: list[dict]) -> dict:
     """One row: the endpoint, its link, its cells, and any qualification.
 
@@ -1857,6 +1931,28 @@ def _index_context(entries: list[EndpointMeasurements]) -> dict:
         # row; see the block above _index_row for what each one selects and why.
         "availability_facets": _availability_facets(groups),
         "metric_facets": _metric_facets(groups, metrics),
+        # The grid: metrics down, states across, a count in every intersection.
+        # It subsumes the two chip strips it replaced, because a row header
+        # filters on the metric alone and a column header on the state alone,
+        # which is exactly what those strips did.
+        "matrix": _metric_state_matrix(groups, metrics),
+        "matrix_states": _matrix_states(_metric_state_matrix(groups, metrics)),
+        # The header counts, keyed so the template can put each beside the
+        # header it belongs to. They are the metric and state facet counts
+        # unchanged, because a header IS that facet's chip: the grid did not
+        # invent a filter, it gave the two strips a shape.
+        #
+        # A header carries a count for the same reason every other chip does. It
+        # is the invariant that caught a chip printing 402 above an empty page,
+        # and dropping it for the fifteen headers to keep the grid quiet would
+        # trade the page's strongest property for tidiness.
+        "metric_counts": {
+            facet["abbr"]: facet["count"]
+            for facet in _metric_facets(groups, metrics)
+        },
+        "state_counts": {
+            facet["slug"]: facet["count"] for facet in _state_facets(groups)
+        },
         # Keyed by slug rather than a list, because the legend it feeds is
         # already looping over the states to draw the swatches and must not loop
         # over a second sequence beside it. The legend shows this beside its own

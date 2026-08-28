@@ -106,6 +106,28 @@
     padding: 4px 8px; border-radius: var(--radius-sm); text-align: left; }
   .facet-row .l-mean { color: var(--text-muted); font-size: 12.5px; }
   .facet-row .l-count, .facet-row .f-count { white-space: nowrap; }
+  /* The grid. Tabular numbers so the columns read as columns, and the state
+     columns narrow because a count is at most three digits. */
+  table.matrix { border-collapse: collapse; margin: 0; font-size: 12.5px; }
+  table.matrix th { font-weight: 500; text-align: left; padding: 2px 4px 2px 0;
+    color: var(--text-muted); font-size: 11px; vertical-align: bottom; }
+  table.matrix td { padding: 2px 4px 2px 0; text-align: center;
+    font-variant-numeric: tabular-nums; }
+  table.matrix tbody th { text-align: left; padding-right: 14px; }
+  .facet-head { height: auto; min-height: 22px; padding: 2px 6px;
+    border-radius: var(--radius-sm); font-size: 11px; gap: 6px; }
+  .f-head-label { writing-mode: vertical-rl; transform: rotate(180deg);
+    text-align: left; }
+  /* The cell IS the chip: it carries the state's own border and fill through
+     the enc- class, so the grid draws the encoding rather than describing it,
+     and a reader sees the shape of the registry in the borders. */
+  .facet-cell { min-width: 42px; justify-content: center; height: 22px;
+    padding: 0 6px; font-family: var(--mono); font-size: 11px; }
+  /* The cell's whole content is its count, so it takes the page's text colour
+     rather than the dimmed one a count beside a label gets. */
+  .facet-cell .f-count { color: inherit; font-size: 11px; }
+  .matrix-none { display: inline-block; min-width: 42px; text-align: center;
+    color: var(--text-dim); }
   .facet-detail { margin: 8px 0 0; font-size: 12px; color: var(--text-muted); }
   .facet-empty { margin: 18px 0 0; font-size: 13px; color: var(--text); }
 
@@ -268,53 +290,85 @@
   {% endif %}
 
   {% if metrics %}
-  <section class="panel" data-facet-group="metric">
-    <h2>Metrics</h2>
-    <ul class="facets">
-      {% for facet in metric_facets %}
-      <li><button type="button" class="facet" aria-pressed="false"
-                  data-facet="metric" data-facet-value="{{ facet.abbr }}"
-                  data-metric-column="{{ facet.name }}" data-abbr="{{ facet.abbr }}">
-        <span class="mabbr">{{ facet.abbr }}</span> {{ facet.name }} <span
-          class="f-count">{{ facet.count }}</span>
-      </button></li>
-      {% endfor %}
-    </ul>
-    <p class="note">
-      {{ empty_cell_text }}
-    </p>
-  </section>
-  {% endif %}
+  {# The grid. Metrics down, states across, and a count in every intersection.
 
-  {# Guarded on the endpoint count like the other two panels, and it was not
-     until 2026-08-28. On a store whose runs measured nothing this rendered
-     seven pressable chips reading "0 chips 0 rows", and pressing one said "No
-     endpoint in this store matches every filter selected above ... clear one to
-     widen it", which invites a reader to widen a filter to reveal rows on a
-     store the paragraph at the top has just said holds none. There is nothing
-     to explain the drawing of, either: no chip on the page is in any state. #}
-  {% if endpoint_count %}
-  <section class="panel" data-facet-group="state">
-    <h2>States</h2>
-    <ul class="legend">
-      {% for state in legend %}
-      <li data-state="{{ state.slug }}">
-        <button type="button" class="facet facet-row" aria-pressed="false"
-                data-facet="state" data-facet-value="{{ state.slug }}">
-          <span class="swatch {{ state.css_class }}" aria-hidden="true"></span>
-          <span class="l-label">{{ state.label }}</span>
-          <span class="l-mean">{{ state.meaning }}</span>
-          <span class="l-count">{{ state.count }} chips</span>
-          <span class="f-count">{{ state_rows[state.slug] }} rows</span>
-        </button>
-      </li>
-      {% endfor %}
-    </ul>
+     A TABLE and not a div grid, because it has two axes of meaning and that is
+     what a table is for: a screen reader on a cell announces "geo-functions,
+     declared but wrong, 7" from the row and column headers, where a grid of
+     divs would announce "7" and leave the reader to remember where they are.
+
+     The headers are buttons too, and they are the two chip strips this panel
+     replaced: a row header filters on the metric whatever its state, a column
+     header on the state whatever the metric, and a cell on the pair. So the
+     panel adds the intersection without taking anything away.
+
+     An EMPTY cell is not a button. 35 of the 56 are empty on the measured
+     sweep, and a button that selects nothing is a thing to press twice before
+     believing it; the dot keeps the grid aligned and shows the shape, which is
+     most of what this layout is for. #}
+  <section class="panel" data-facet-group="matrix">
+    <h2>Metrics and states</h2>
+    <table class="matrix">
+      <thead>
+        <tr>
+          <th scope="col">metric</th>
+          {% for state in matrix_states %}
+          <th scope="col">
+            <button type="button" class="facet facet-head" aria-pressed="false"
+                    data-facet="state" data-facet-value="{{ state.slug }}"
+                    data-state="{{ state.slug }}">
+              <span class="f-swatch {{ state.css_class }}" aria-hidden="true"></span>
+              <span class="f-head-label">{{ state.label }}</span>
+              <span class="f-count">{{ state_counts[state.slug] }}</span>
+            </button>
+          </th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in matrix %}
+        <tr data-matrix-row="{{ row.name }}">
+          <th scope="row">
+            <button type="button" class="facet facet-head" aria-pressed="false"
+                    data-facet="metric" data-facet-value="{{ row.abbr }}"
+                    data-metric-column="{{ row.name }}" data-abbr="{{ row.abbr }}">
+              <span class="mabbr">{{ row.abbr }}</span> {{ row.name }} <span
+                class="f-count">{{ metric_counts[row.abbr] }}</span>
+            </button>
+          </th>
+          {% for cell in row.cells %}
+          <td>
+            {% if cell.count %}
+            <button type="button" class="facet facet-cell {{ cell.css_class }}"
+                    aria-pressed="false" data-facet="matrix"
+                    data-facet-value="{{ cell.value }}"
+                    data-matrix-cell="{{ cell.value }}"><span
+              class="f-count">{{ cell.count }}</span></button>
+            {% else %}
+            <span class="matrix-none" data-matrix-empty="{{ cell.value }}"
+                  aria-hidden="true">&#183;</span>
+            {% endif %}
+          </td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
     <p class="note">
-      A filled chip means we have positive evidence the capability works; 
-      a dashed border means no declaration was seen for it; 
+      A cell is the endpoints whose newest sweep put that metric in that state,
+      so a row's cells account for every endpoint once. Press a cell for the
+      intersection, a row header for the metric whatever its state, or a column
+      header for the state whatever the metric, and each says how many it
+      selects. A row header counts the endpoints with a VERDICT for that metric,
+      which is why the classes header reads 0 beside a row whose cells sum to
+      every endpoint: the sweep declined it 543 times and a decline is not a
+      finding.
+    </p>
+    <p class="note">
+      A filled chip means we have positive evidence the capability works;
+      a dashed border means no declaration was seen for it;
       a heavier border means something is actively wrong rather;
-      a dotted border means we did not look; 
+      a dotted border means we did not look;
       and no border at all means nothing was there.
     </p>
   </section>
@@ -481,12 +535,19 @@
   var total = document.querySelectorAll("[data-endpoint]").length;
   var empty = document.getElementById("nothing");
   var POSITIVE = { "verified": 1, "undeclared-but-verified": 1 };
-  /* The facet groups, read off the document rather than written here. A
-     fourth group added to the template used to be counted as a state by
-     inGroup's fall-through and would have filtered nothing, silently: the
-     same shape as the parentNode walk this script no longer does. */
-  var NAMES = [].slice.call(document.querySelectorAll("[data-facet-group]"))
-    .map(function (section) { return section.getAttribute("data-facet-group"); });
+  /* The facet groups, read off the CHIPS rather than off the panels. Both are
+     in the document and only one is right: a panel's data-facet-group names the
+     panel, and since the grid landed one panel holds chips of three different
+     groups (a row header filters on the metric, a column header on the state, a
+     cell on the pair). Reading the panels gave NAMES = availability, matrix,
+     so pressing a row or column header set aria-pressed and changed nothing,
+     because the loop that hides rows never asked about a group it had not
+     heard of. Every chip declares its own group and that is the list. */
+  var NAMES = [];
+  buttons.forEach(function (el) {
+    var name = el.getAttribute("data-facet");
+    if (NAMES.indexOf(name) < 0) { NAMES.push(name); }
+  });
 
   /* One row's facts, read once. Re-reading the DOM per keystroke per chip per
      row is 543 rows times 8 chips times three questions, and the page is meant
@@ -503,7 +564,7 @@
      still a lookup for something the caller knows. */
   function facts(row, group) {
     var cells = [].slice.call(row.querySelectorAll(".cells > span"));
-    var measured = {}, drawn = {};
+    var measured = {}, drawn = {}, pairs = {};
     cells.forEach(function (cell) {
       /* EVERY drawn chip is tallied, including a declined one. It answers
          both of the legend's numbers and the state filter, which since
@@ -512,6 +573,10 @@
          there means no sweep measured it. */
       var cls = cell.className.replace(/^enc-/, "");
       drawn[cls] = (drawn[cls] || 0) + 1;
+      /* The grid's key, built from what the chip already carries: its own text
+         is the metric's abbreviation and its class is the state. Nothing per
+         row grew to support the grid. */
+      pairs[cell.textContent.trim() + "|" + cls] = 1;
       if (!cell.hasAttribute("data-verdict")) { return; }
       measured[cell.textContent.trim()] = 1;
     });
@@ -520,6 +585,7 @@
       url: row.getAttribute("data-endpoint").toLowerCase(),
       metrics: measured,
       drawn: drawn,
+      pairs: pairs,
       available: POSITIVE[av] ? "available" : "not-available"
     };
   }
@@ -591,6 +657,11 @@
        the same cells. */
     if (name === "state") {
       return values.some(function (slug) { return f.drawn[slug]; });
+    }
+    /* A grid cell: this metric in this state, which is the intersection the
+       row and column headers cannot express on their own. */
+    if (name === "matrix") {
+      return values.some(function (pair) { return f.pairs[pair]; });
     }
     return false;
   }

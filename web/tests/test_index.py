@@ -1968,53 +1968,37 @@ def test_the_state_chips_are_the_states_the_legend_lists_and_no_others():
         ]
 
 
-def test_the_unrecognised_legend_entry_states_its_rows_on_the_page(
+def test_the_grid_gains_a_column_for_a_verdict_it_has_no_encoding_for(
     client_for, store_hostile_literals
 ):
-    """The rendered page for the store this defect was measured on.
+    """The eighth column, on the same condition the legend listed an eighth row.
 
-    run-hostile-literals.nq's one endpoint carries a dqv:value this build has no
-    encoding for, so the legend lists eight states, and the eighth used to print
-    "1 chips" and then nothing at all where the rows count belongs, which reads
-    as a filter that selects no endpoint and then reveals one when pressed. One
-    row is uniform in that state, so the number is 1.
-
-    Printing 0 there would be worse than the blank rather than better: a blank
-    is visibly missing, and 0 is a confident wrong answer.
+    A store holding a value this build has no encoding for used to give the
+    legend a row with a blank count. The grid inherits the case and the fix: the
+    column appears because a cell was DRAWN in that state, and every cell in it
+    carries a number.
     """
     page = index(client_for(store_hostile_literals))
-    states = [
-        attributes["data-state"] for attributes in with_attribute(page, "data-state")
-    ]
-
-    assert states[-1] == verdict_encoding.UNRECOGNISED.slug
-    assert facet_counts(page)[("state", "unrecognised")] == 1
-    assert len(listed(page)) == 1
+    headers = [a["data-facet-value"] for a in with_attribute(page, "data-state")]
+    assert "unrecognised" in headers
+    for cell in texts_with(page, "data-matrix-cell"):
+        assert cell.strip().isdigit()
 
 
-def test_every_legend_entry_carries_a_rows_number(
-    client_for, store_registry_sample, store_hostile_literals
+def test_every_cell_in_the_grid_carries_a_number_or_is_not_pressable(
+    client_for, store_registry_sample
 ):
-    """Every state the legend lists, and no state it does not, has a count.
+    """The grid's own version of the blank-count defect.
 
-    This replaces an assertion that the page renders exactly
-    len(verdict_encoding.STATES) state chips, which is FALSE on the second store
-    here: the legend lists eight states when the page drew a verdict this build
-    has no encoding for. That assertion passed only because its fixture holds no
-    such verdict, so its fixture rather than the assertion was keeping the suite
-    green over the defect above.
+    A cell either holds a count and is a button, or holds nothing and is not:
+    35 of the 56 are empty on the measured sweep, and a button that selects no
+    rows is a thing a reader presses twice before believing it.
     """
-    for store in (store_registry_sample, store_hostile_literals):
-        page = index(client_for(store))
-        states = [
-            attributes["data-state"] for attributes in with_attribute(page, "data-state")
-        ]
-        counts = facet_counts(page)
-
-        assert states, "the legend lists no state at all"
-        assert set(facets(page, "state")) == set(states)
-        for slug in states:
-            assert ("state", slug) in counts
+    page = index(client_for(store_registry_sample))
+    for cell in texts_with(page, "data-matrix-cell"):
+        assert cell.strip().isdigit() and int(cell) > 0
+    for attributes in with_attribute(page, "data-matrix-empty"):
+        assert "aria-pressed" not in attributes
 
 
 def test_the_page_states_no_endpoint_or_metric_count_in_prose(
@@ -2064,55 +2048,39 @@ def test_the_page_states_no_endpoint_or_metric_count_in_prose(
 
 
 def test_every_facet_chip_is_an_unpressed_button(client_for, store_registry_sample):
-    """A button, and unpressed on arrival.
-
-    A button because it changes this page and names no other resource, so a link
-    would promise a URL that does not exist; unpressed because the page is
-    correct with no filter applied, and every chip is inert until the script at
-    the foot of the page runs.
-
-    The tag name and the type are asserted, which the first version of this test
-    did not do under this exact name: it read aria-pressed and nothing else, so
-    every chip could have been an anchor.
-    """
+    """A button, because it changes this page and names no other resource, and
+    unpressed on arrival, because the page is correct with no filter applied."""
     page = index(client_for(store_registry_sample))
-    chips = facet_chips(page)
-
-    # Counted off the page's own facet groups rather than against
-    # len(verdict_encoding.STATES), which is off by one on any store holding a
-    # verdict this build has no encoding for: the legend lists an eighth state
-    # there and this assertion passed only because the fixture holds none. That
-    # is the same blind spot that let the blank rows count survive.
-    listed = len(facets(page, "availability")) + len(facets(page, "metric")) \
-        + len(facets(page, "state"))
-    assert len(chips) == listed
-    for chip in chips:
-        assert chip["tag"] == "button", f"a {chip['tag']} carries data-facet"
-        assert chip["attributes"]["type"] == "button"
-        assert chip["attributes"]["aria-pressed"] == "false"
+    for attributes in with_attribute(page, "data-facet"):
+        assert attributes["aria-pressed"] == "false"
     assert set(facets(page, "availability")) == {"available", "not-available"}
+    # Three groups of chip live in the grid: a row header filters on the metric,
+    # a column header on the state, a cell on the pair. The script reads its
+    # group list off the chips for exactly this reason, since one panel now
+    # holds all three and the panel's own name is none of them.
+    assert len(facets(page, "metric")) == len(metric_key(page))
+    assert len(facets(page, "state")) >= len(verdict_encoding.STATES)
+    assert facets(page, "matrix")
 
 
-def test_a_chip_separates_its_words_from_its_count(
+def test_a_grid_cell_is_a_bare_count_and_a_header_is_bare_words(
     client_for, store_registry_sample
 ):
-    """The accessible name, which is the button's text run together.
+    """The grid replaced the two chip strips, and with them the run-together
+    accessible name they had ("not available486").
 
-    "not available486" is what a screen reader announced, and "AVavailability543"
-    on a metric chip, because the count span followed the label with no text node
-    between them. One space per chip fixes it, and there are ten chips, so the
-    cost is eighteen bytes and not eighteen bytes a row: two availability chips
-    take one space each and eight metric chips take two.
+    A cell's whole text is its number and the row and column headers supply the
+    words, which a table announces from the headers rather than from the cell.
+    The availability chips keep the space, because they are still a label with a
+    number after it.
     """
     page = index(client_for(store_registry_sample))
-    for group in ("availability", "metric"):
-        for value, label in facets(page, group).items():
-            assert re.search(r"\D \d+$", label), (
-                f"chip {value!r} announces as {label!r}"
-            )
-    for name, abbr in metric_key(page).items():
-        label = facets(page, "metric")[abbr]
-        assert label.startswith(f"{abbr} {name} "), label
+    for cell in texts_with(page, "data-matrix-cell"):
+        assert cell.strip().isdigit()
+    for label in facets(page, "availability").values():
+        assert "  " not in label
+        digits = "".join(c for c in label if c.isdigit())
+        assert not digits or f" {digits}" in label
 
 
 def test_the_count_contract_paragraph_is_empty_and_says_nothing_false(
@@ -2148,17 +2116,16 @@ def test_no_chip_points_at_a_sentence_that_is_no_longer_there(
         assert "aria-describedby" not in attributes
 
 
-def test_the_facet_groups_come_in_the_order_the_page_reads_in(
+def test_the_panels_come_in_the_order_the_page_reads_in(
     client_for, store_registry_sample
 ):
-    """Availability, then the metrics, then the drawing. The last one moved down
-    from the foot of the page, so its position is a decision and not an
-    accident of where the markup happened to sit."""
+    """Availability, then the grid. Two panels where there were three: the grid
+    subsumed the metric strip and the state legend by making them its own row
+    and column headers."""
     page = index(client_for(store_registry_sample))
     order = [a["data-facet-group"] for a in with_attribute(page, "data-facet-group")]
-    assert order == ["availability", "metric", "state"]
-    assert page.index("<h2>Availability</h2>") < page.index("<h2>Metrics</h2>")
-    assert page.index("<h2>Metrics</h2>") < page.index("<h2>States</h2>")
+    assert order == ["availability", "matrix"]
+    assert page.index("<h2>Availability</h2>") < page.index("<h2>Metrics and states</h2>")
 
 
 def test_a_filter_that_matches_nothing_has_a_sentence_ready(
@@ -2297,5 +2264,12 @@ def test_every_chip_count_is_the_rows_the_page_renders(
                 expected[("metric", abbr)] += 1
             for slug in states:
                 expected[("state", slug)] += 1
+            # And the grid: this metric in this state, keyed the way the cell
+            # is. Derived from the row's own chips rather than from the builder,
+            # which is the whole point of this test.
+            for chip in row["chips"]:
+                key = ("matrix", f"{chip['abbr'].strip()}|{encoding_class(chip)}")
+                if key in expected:
+                    expected[key] += 1
 
         assert printed == expected
