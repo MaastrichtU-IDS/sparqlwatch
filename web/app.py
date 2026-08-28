@@ -949,6 +949,14 @@ def _page_context(
         # linked to it. In the header for every reader, and once more inside the
         # dormancy sentence for the one it is addressed to.
         "about_path": ABOUT_PATH,
+        # The way home, on every page. The logo carries it, so a reader who
+        # arrived on one endpoint from a search engine has somewhere to go
+        # other than the back button.
+        "index_path": INDEX_PATH,
+        # The endpoint itself, in a new tab, when its scheme is one a browser
+        # should follow. See _outward_link: this is the only href on this site
+        # holding a string a third party chose.
+        "outward_link": _outward_link(endpoint),
         "rows": rows,
         "legend": _legend(rows),
         "sample": _sample(measurements, content),
@@ -1462,6 +1470,34 @@ _POSITIVE_VERDICTS = ("verified", "undeclared-but-verified")
 _UNREACHED_VERDICT = "indeterminate"
 
 
+# The one place this service links OUT to an endpoint, and the only place any
+# page puts a third party's string in an href. That is why it is gated on the
+# scheme rather than rendered straight from the store.
+#
+# Autoescaping does not help here. `javascript:alert(1)` contains no character
+# an HTML escaper touches, so it reaches the attribute unchanged and a browser
+# runs it on click. The spec's own note is what makes this reachable rather than
+# theoretical: the scheme allowlist deferred at stage 1d-a was found
+# "unnecessary FOR THIS DUMP, which holds only http (472) and https (76)", and
+# explicitly "not retired in general: a later source may differ". Stage 5
+# accepts public submissions, and `load_run` loads whatever run file it is
+# given. So this link is what would have turned that deferral into a hole.
+#
+# An endpoint whose scheme is anything else keeps its page and its verdicts and
+# simply gets no link. Saying nothing is right: this service has no opinion on
+# such a URL, and the page already prints it in full as text where a reader can
+# see it and decide for themselves.
+LINKABLE_SCHEMES = ("http://", "https://")
+
+
+def _outward_link(endpoint: str) -> str | None:
+    """The endpoint's own URL when it is safe to put in an href, else None."""
+    lowered = endpoint.lower()
+    if any(lowered.startswith(scheme) for scheme in LINKABLE_SCHEMES):
+        return endpoint
+    return None
+
+
 def _availability_facets(groups: list[dict]) -> list[dict]:
     """Two chips over the availability verdict, with the second one's makeup.
 
@@ -1546,58 +1582,47 @@ def _metric_facets(groups: list[dict], metrics: list[dict]) -> list[dict]:
 
 
 def _state_facets(groups: list[dict]) -> list[dict]:
-    """One chip per encoding state, counting rows uniformly in that state.
+    """One chip per encoding state, counting rows with AT LEAST ONE chip in it.
 
-    "Uniformly" means every cell that carries a verdict, and NOT every cell.
-    Counting the declined cells too returns zero for all seven states over the
-    2026-08-24 sweep, because `classes` is declined on all 543 rows and no row
-    can then be uniform in anything: a facet that is empty by construction is
-    not a facet. Excluding them, `indeterminate` selects 402 rows and the other
-    six select none, which is a true statement about that sweep.
+    Changed from uniform-in-that-state on 2026-08-28 by the plan owner, and the
+    numbers are why. Over the 2026-08-24 sweep the uniform reading gave
+    `indeterminate` 402 and every other state 0, because no endpoint on this
+    registry is uniform in anything else: six of the seven chips were dead.
+    Counting a row that has the state anywhere gives verified 84,
+    undeclared-but-verified 18, declared-but-wrong 7, absent 115, indeterminate
+    532, not-measured 543, declared-only 0. So one press now answers the
+    question a reader actually brings to this page, which is "who gets anything
+    wrong" rather than "who gets everything wrong".
+
+    EVERY DRAWN CHIP COUNTS, a declined one included, which is the other half of
+    the change. Under the uniform reading declines had to be excluded or every
+    count was 0; under this one they are the whole point of the `not-measured`
+    chip, and its 543 says every endpoint here has a metric no sweep has run.
+    That also makes this number and the legend's chip count populations of the
+    same thing, which is what lets the two sit in one button.
 
     Built from the same table as `_legend`, so a chip and its swatch cannot
-    disagree about what a state looks like or is called.
-
-    AND FROM THE SAME CONDITION FOR THE EIGHTH ENTRY. `_legend` lists an eighth
-    state, `verdict_encoding.UNRECOGNISED`, whenever a cell on this page was
-    drawn in it, and the template reads each legend entry's rows count out of
-    this function's result. So a result that stopped at the closed seven leaves
-    that eighth row stating NO COUNT AT ALL, which reads as a filter selecting
-    nothing and then reveals a row when it is pressed. That is what shipped on
-    2026-08-27 and what web/tests/fixtures/run-hostile-literals.nq measures.
-
-    The condition is the legend's, verbatim: any cell present on the page whose
-    slug is the unrecognised one. Not "any row uniform in it", which is the
-    narrower fact this function otherwise counts: a page can draw an
-    unrecognised verdict on a row that is uniform in nothing, and the legend
-    lists the state either way, so the mapping has to carry it either way. The
-    count there is 0 rows, which is true and is not the same claim as a blank.
+    disagree about what a state looks like or is called, and it emits the
+    unrecognised state on the same condition `_legend` lists it: a cell was
+    DRAWN in it. A store carrying a verdict this build has no encoding for used
+    to give that row a blank count that then revealed rows when pressed.
     """
-    uniform: dict[str, int] = {}
-    drawn_unrecognised = False
+    holding: dict[str, int] = {}
     for group in groups:
         for row in group["rows"]:
-            slugs = set()
-            for cell in row["cells"]:
-                if not cell["present"]:
-                    continue
-                if cell["slug"] == verdict_encoding.UNRECOGNISED.slug:
-                    drawn_unrecognised = True
-                if cell.get("verdict") is not None:
-                    slugs.add(cell["slug"])
-            if len(slugs) == 1:
-                only = next(iter(slugs))
-                uniform[only] = uniform.get(only, 0) + 1
-
+            for slug in {
+                cell["slug"] for cell in row["cells"] if cell["present"]
+            }:
+                holding[slug] = holding.get(slug, 0) + 1
     states = list(verdict_encoding.STATES)
-    if drawn_unrecognised:
+    if holding.get(verdict_encoding.UNRECOGNISED.slug):
         states.append(verdict_encoding.UNRECOGNISED)
     return [
         {
             "slug": state.slug,
             "label": state.label,
             "css_class": verdict_encoding.css_class(state.slug),
-            "count": uniform.get(state.slug, 0),
+            "count": holding.get(state.slug, 0),
         }
         for state in states
     ]
@@ -1874,6 +1899,10 @@ def _index_context(entries: list[EndpointMeasurements]) -> dict:
         # behind the mark, were reachable only by pasting the prober's
         # User-Agent URL into a browser.
         "about_path": ABOUT_PATH,
+        # The way home, on every page. The logo carries it, so a reader who
+        # arrived on one endpoint from a search engine has somewhere to go
+        # other than the back button.
+        "index_path": INDEX_PATH,
         "row_unfinished_text": ROW_UNFINISHED_TEXT,
         "row_never_reached_text": ROW_NEVER_REACHED_TEXT,
         # The two new markers' words, for the panel that explains them. The

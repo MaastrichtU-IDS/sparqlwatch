@@ -1935,17 +1935,27 @@ def test_a_metric_chip_counts_a_group_whose_rows_differ_row_by_row():
     by_abbr = {f["abbr"]: f["count"] for f in _metric_facets(groups, metrics)}
     assert by_abbr == {"AV": 3, "CO": 2, "CL": 1}
     by_slug = {f["slug"]: f["count"] for f in _state_facets(groups)}
-    assert by_slug["verified"] == 2, "the middle row is one verdict, verified"
-    assert by_slug["absent"] == 0
+    # All three rows carry a verified chip somewhere, and only the third carries
+    # an absent one. Under the uniform reading these were 2 and 0, which is the
+    # reading the plan owner replaced on 2026-08-28.
+    assert by_slug["verified"] == 3
+    assert by_slug["absent"] == 1
 
 
-def test_a_state_chip_counts_rows_uniform_in_that_state_ignoring_declines():
-    """Counting the declined chip too makes every count 0 by construction.
+def test_a_state_chip_counts_the_rows_carrying_at_least_one_of_that_state():
+    """At least one chip in that state, not every chip, and declines count.
 
-    `classes` is declined on all 543 rows of the measured sweep, so no row is
-    uniform in anything once the decline counts, and all seven chips would read
-    0 forever. That is a fact about the arithmetic rather than about any
-    endpoint, so the test excludes declines and this asserts it.
+    Changed on 2026-08-28 and the measured numbers are the argument. Over the
+    2026-08-24 sweep the old uniform reading gave `indeterminate` 402 and every
+    other state 0, because no endpoint on this registry is uniform in anything
+    else: six of the seven chips were dead and the seventh answered a question
+    nobody asks. At least one gives verified 84, undeclared-but-verified 18,
+    declared-but-wrong 7, absent 115, indeterminate 532, not-measured 543, and
+    declared-only 0, which is genuinely none rather than an artefact.
+
+    A row with three different chips counts once towards each of the three, and
+    a declined chip counts too: that is what makes the "we did not look" chip
+    mean the endpoints with a metric no sweep has run.
     """
     groups = [
         rows_of("indeterminate", 4, availability="indeterminate",
@@ -1954,8 +1964,10 @@ def test_a_state_chip_counts_rows_uniform_in_that_state_ignoring_declines():
     ]
     by_slug = {f["slug"]: f["count"] for f in _state_facets(groups)}
     assert by_slug["indeterminate"] == 4
-    assert by_slug["verified"] == 0, "a row of verified and absent is uniform in neither"
-    assert by_slug[verdict_encoding.NOT_MEASURED] == 0
+    assert by_slug["verified"] == 2, "the row has a verified chip, whatever else it has"
+    assert by_slug["absent"] == 2, "and an absent one, so it counts towards both"
+    assert by_slug[verdict_encoding.NOT_MEASURED] == 6, "every row declined classes"
+    assert by_slug["declared-only"] == 0, "no row carries one, which is a true 0"
 
 
 def test_the_state_chips_are_the_states_the_legend_lists_and_no_others():
@@ -1986,9 +1998,14 @@ def test_the_state_chips_are_the_states_the_legend_lists_and_no_others():
     # eighth state because a chip on the page is in it, so the mapping carries
     # it too, at the count that is true, which is no rows.
     assert [f["slug"] for f in _state_facets([mixed])] == eight
+    # 1 and not 0: the row carries an unrecognised chip beside a verified one,
+    # and at-least-one counts it. Under the uniform reading this was 0, and the
+    # point of the case is unchanged: the eighth entry is emitted because a cell
+    # was DRAWN in that state, which is the same condition _legend lists it on,
+    # so neither sequence can grow an entry the other lacks.
     assert {f["slug"]: f["count"] for f in _state_facets([mixed])}[
         "unrecognised"
-    ] == 0
+    ] == 1
     # The other direction, which is what catches an eighth entry always drawn.
     assert [f["slug"] for f in _state_facets([known])] == seven
     # And the condition is the legend's own, over the same rows.
@@ -2352,18 +2369,17 @@ def test_every_chip_count_is_the_rows_the_page_renders(
                 for chip in row["chips"]
                 if "data-verdict" in chip
             }
-            states = {
-                encoding_class(chip)
-                for chip in row["chips"]
-                if "data-verdict" in chip
-            }
+            # EVERY drawn chip, a declined one included, because the state
+            # filter counts a row that carries the state anywhere. The metric
+            # set above is the one that skips a decline.
+            states = {encoding_class(chip) for chip in row["chips"]}
             available = (
                 "available" if row["availability"] in positive else "not-available"
             )
             expected[("availability", available)] += 1
             for abbr in measured:
                 expected[("metric", abbr)] += 1
-            if len(states) == 1:
-                expected[("state", next(iter(states)))] += 1
+            for slug in states:
+                expected[("state", slug)] += 1
 
         assert printed == expected

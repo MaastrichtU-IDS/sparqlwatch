@@ -553,13 +553,21 @@ that sets it records the change and the reasoning.
 
 | Store shape | Rows marked | Dormant | Bytes | Per row | Against 750,000 |
 | --- | --- | --- | --- | --- | --- |
-| one sweep, the shape above | 0 | 0 | 452,136 | 833 | under by 297,864 |
+| one sweep, the shape above | 0 | 0 | 455,542 | 839 | under by 294,458 |
 | a two-endpoint newer sweep | 541 | 0 | 515,433 | 949 | under by 234,567 |
 | the same, plus 57 of the rest declared dormant | 541 | 57 | 525,080 | 967 | under by 224,920 |
 | every row marked and dormant | 543 | 543 | 593,841 | 1,094 | under by 156,159 |
 
 The last row is the worst case FOR THIS MARKER and the third is the realistic
 near-term shape: a narrow re-probe plus the endpoints the cadence has taken.
+
+**Row 1 was re-measured on 2026-08-28 and rows 2 to 4 were not.** Three changes
+have moved every shape by the same fixed amount since they were taken: the six
+fixes to the facet counts, the logo becoming a link on every page, and the
+endpoint page's outward link. Row 1 went 452,136 to 455,542 across them, so rows
+2 to 4 are each about 3,400 bytes low. Every shape stays inside 750,000 either
+way, and the construction below is what makes re-measuring the other three a
+matter of running it rather than guessing.
 
 **How the four stores are built**, written down here because the table was not
 re-measurable without it and its middle two rows could not be reproduced. One

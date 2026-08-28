@@ -35,6 +35,9 @@ import verdict_encoding
 from app import (
     ABOUT_PATH,
     COMPLETE_TEXT,
+    INDEX_PATH,
+    LINKABLE_SCHEMES,
+    _outward_link,
     ENDPOINT_PATH,
     TRUNCATED_TEXT,
     _DORMANCY_REASONS,
@@ -1735,3 +1738,81 @@ def test_a_dormancy_with_no_newer_sweep_to_attribute_it_to_says_nothing():
         _silence_text(newest_run="urn:sparqlwatch:run:2026-08-22T16:00:00Z")
         is None
     )
+
+# ---------------------------------------------------------------------------
+# The way home, and the way out
+# ---------------------------------------------------------------------------
+
+
+def test_the_logo_leads_home(client_for, store):
+    """Every page's logo is a link to the index.
+
+    A reader who lands on one endpoint from a search engine had no way back
+    except the browser's own button until 2026-08-28.
+    """
+    text = page(client_for(store), KADASTER)
+    logos = [a for a in with_attribute(text, "class") if a["class"] == "logo"]
+    assert len(logos) == 1
+    assert logos[0]["href"] == INDEX_PATH
+
+
+def test_the_outward_link_opens_the_endpoint_in_a_new_tab(client_for, store):
+    """And carries both halves of rel, for two different reasons.
+
+    `noopener` is the security one. `noreferrer` is the courtesy one: without it
+    the operator of that endpoint reads this page's url in their referer log, and
+    somebody looking up their own server should not have to announce that they
+    read us first.
+    """
+    text = page(client_for(store), KADASTER)
+    links = with_attribute(text, "data-outward-link")
+    assert len(links) == 1
+    assert links[0]["href"] == KADASTER
+    assert links[0]["target"] == "_blank"
+    assert set(links[0]["rel"].split()) == {"noopener", "noreferrer"}
+
+
+def test_the_outward_link_says_a_plain_visit_sends_no_query(client_for, store):
+    """Because it does not, and the difference matters to a reader.
+
+    A GET with no query is the request `declare.rs` makes, and what comes back is
+    a form, an error, or a service description. A reader expecting results and
+    meeting an error page would read that as the endpoint being broken, which is
+    a conclusion this page has metrics for and this link does not support.
+    """
+    text = page(client_for(store), KADASTER)
+    assert "sends no query" in text
+    assert "a form, an" in text and "error, or a description of itself" in text
+
+
+def test_only_a_scheme_a_browser_should_follow_becomes_a_link():
+    """The guard that keeps a deferred allowlist from becoming a hole.
+
+    Autoescaping does not help: `javascript:alert(1)` holds no character an HTML
+    escaper touches, so it reaches the attribute unchanged and a browser runs it
+    on click. The spec records that the scheme allowlist was found unnecessary
+    FOR THE 2026-06-15 DUMP and explicitly not retired in general, stage 5
+    accepts public submissions, and `load_run` loads whatever run file it is
+    given. This link is the surface that would have paid for that.
+    """
+    assert _outward_link("https://a.example/sparql") == "https://a.example/sparql"
+    assert _outward_link("http://a.example/sparql") == "http://a.example/sparql"
+    assert _outward_link("HTTPS://A.example/sparql") == "HTTPS://A.example/sparql"
+    for hostile in (
+        "javascript:alert(1)",
+        "JavaScript:alert(1)",
+        "data:text/html,<script>alert(1)</script>",
+        "vbscript:msgbox(1)",
+        "file:///etc/passwd",
+        "urn:sparqlwatch:not-a-url",
+    ):
+        assert _outward_link(hostile) is None, hostile
+
+
+def test_an_endpoint_with_an_unlinkable_scheme_keeps_its_page(store_hostile_literals):
+    """No link, and everything else intact.
+
+    Saying nothing is the right answer: this service has no opinion on such a
+    url, and the page prints it in full as text where a reader can see it.
+    """
+    assert LINKABLE_SCHEMES == ("http://", "https://")
