@@ -278,12 +278,13 @@ throughout, for the reason given in Ruling 2.
     sw:profileDenominator    12554 ;          # subjects in the sample
     sw:profileSampling       "sha256-prefix" ; # or "exact"
     sw:profileSamplingPrefix "0" ;             # absent when exact
-    sw:profileProperty       [
-        sw:property          <predicate> ;
-        sw:subjectCount      11897 ;
-        sw:datatypeCount     1 ;
-        sw:anyDatatype       xsd:string
-    ] .
+    sw:profileProperty       <urn:sparqlwatch:profileprop:RUN:ENDPOINT:METRIC:CLASS:PREDICATE> .
+
+<urn:sparqlwatch:profileprop:RUN:ENDPOINT:METRIC:CLASS:PREDICATE>
+    sw:property              <predicate> ;
+    sw:subjectCount          11897 ;
+    sw:datatypeCount         1 ;
+    sw:anyDatatype           xsd:string .
 ```
 
 Subject IRI derivation follows `subject_iri` in `prober/src/emit.rs`, extended
@@ -295,6 +296,61 @@ rule 2 of the section protocol at the top of `emit.rs`: a chunk cut inside the
 property list must lose the profile rather than leave a denominator standing
 beside three properties, which a reader would take for a complete profile.
 
+## The recency pointer has to become per metric
+
+The spec above lists "generalise the read path off `sw:metric:classes`" as a
+precondition. Attempting it revealed that this is not a mechanical rename, and
+the design question it raises has to be settled here rather than in the edit.
+
+`sw:currentSampleRun` today means "the newest run that published a
+`sw:metric:classes` sample for this endpoint". It exists as a **second** pointer
+beside `sw:currentRun` because the newest run that MEASURED an endpoint and the
+newest that SAMPLED it are different runs the moment a cheap sweep declines
+`classes`, which `endpoint_content.rq` records as the steady state and not an
+edge case: the 543-endpoint registry sweep declined `classes` for every one of
+them. Deciding recency at query time was the original mistake, and the measured
+cost of the `FILTER NOT EXISTS` shape it replaced was 6,488.5 ms at 30 runs
+against 1.2 ms at one.
+
+The same argument applies once more, one level down. With several sampling
+metrics, a run may profile `classes` and decline `properties`, or reach 40 of an
+endpoint's 105 classes before its budget expires. So:
+
+**A single pointer per endpoint is wrong for the same reason a single notion of
+recency was wrong.** If run B sampled classes and run A sampled properties,
+one pointer naming B loses the properties sample outright. That is precisely the
+defect stage 3-1 exists to have fixed, reintroduced one level down.
+
+**Ruling 3: the pointer is keyed on (endpoint, metric), with a derived IRI.**
+
+```
+GRAPH sw:current {
+  <urn:sparqlwatch:sampleptr:ENDPOINT:METRIC>
+      sw:sampleRunFor    <endpoint> ;
+      sw:sampleRunMetric sw:metric:classes ;
+      sw:sampleRunIs     <run> .
+}
+```
+
+A derived IRI rather than a blank node, for the reason open decision 3 raises
+about `sw:profileProperty` and which is settled here: this project diffs runs,
+and `load_run.py` maintains the derived graph with one `DELETE WHERE` plus
+`INSERT DATA` per pointer. A blank node cannot be addressed by that `DELETE`
+without a `WHERE` clause that matches on its properties, which is both slower
+and fragile against a partial write. The derivation follows `emit::subject_iri`'s
+existing constraint that every component be reversibly encoded.
+
+This subsumes open decision 3: `sw:profileProperty` takes a derived IRI too, on
+the same grounds.
+
+**What this costs.** Three call sites change rather than one, and the migration
+is not a pure addition: `sw:currentSampleRun` triples already in a store must be
+rewritten, and the store is a derived artefact rebuilt from the `.nq` files,
+which `load_run.py` states are the source of truth. So the migration is a
+reload, not an in-place rewrite, and it is cheap for that reason. The pointer
+predicates are new names rather than a reinterpretation of the old one, so a
+store carrying both is unambiguous during the reload.
+
 ## What this requires of the existing code
 
 - **A new metric kind** in `prober/src/metrics.rs`. Existing kinds resolve to a
@@ -304,9 +360,14 @@ beside three properties, which a reader would take for a complete profile.
   `sw:metric:classes`** in three places (`endpoint_content.rq:84`, and
   `load_run.py:314` and `:360`, the two pointer-maintenance queries). A
   properties metric would be written correctly by the prober and be invisible
-  to the web tier. The generalisation is a precondition of this work, not a
-  follow-up. A `run-properties-sample.nq` fixture using
+  to the web tier. A `run-properties-sample.nq` fixture using
   `sw:metric:properties` already exists, so the intent predates this design.
+  Generalising these is governed by Ruling 3 above and is a precondition of
+  this work, not a follow-up. It is also the largest single piece of it: it
+  touches the derived-graph maintenance in `load_run.py`, whose commentary on
+  transactionality and pointer semantics is the most carefully reasoned in the
+  web tier, so it belongs in an implementation plan rather than in a
+  free-handed edit.
 - **`metrics.rs::without_sparql_comments` truncates each line at the first
   `#`**, which is also the IRI fragment separator, so a metric whose query
   carries a full IRI and a `LIMIT` on one line is refused with a message saying
@@ -340,6 +401,7 @@ beside three properties, which a reader would take for a complete profile.
 2. Whether an exact profile of a small class should be preferred over a sampled
    profile of a large one when the budget only allows a few, or whether the
    ordering should be by how much a consumer would use the class.
-3. Whether `sw:profileProperty` should be a blank node, as written above, or a
-   derived IRI. Blank nodes are cheaper to emit and harder to diff across runs,
-   and this project diffs runs.
+3. ~~Whether `sw:profileProperty` should be a blank node or a derived IRI.~~
+   Settled by Ruling 3: a derived IRI, on the grounds that this project diffs
+   runs and `load_run.py` addresses derived-graph rows by subject in a
+   `DELETE WHERE`.
