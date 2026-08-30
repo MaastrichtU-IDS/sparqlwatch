@@ -2,40 +2,71 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make the web tier read a content sample from ANY sampling metric, by keying the recency pointer on (endpoint, metric) instead of hardcoding `sw:metric:classes`.
+**Goal:** Let the web tier read a content sample from any sampling metric. Today it can only read `classes`, because the metric is hardcoded.
 
-**Architecture:** `sw:currentSampleRun`, one triple per endpoint, is replaced by a derived-IRI pointer resource carrying `sw:sampleRunFor`, `sw:sampleRunMetric` and `sw:sampleRunIs`. The write side in `web/load_run.py` maintains one such resource per (endpoint, metric) pair a run sampled; the four read queries hop through it with the metric either bound by substitution or left free. Nothing in the prober changes.
+**Architecture:** Today one triple per endpoint says which run took its sample:
+
+    <endpoint> sw:currentSampleRun <run>
+
+That cannot say "classes from run A, properties from run B". Replace it with a small pointer resource per endpoint AND metric:
+
+    <ptr> sw:sampleRunFor    <endpoint> ;
+          sw:sampleRunMetric <metric> ;
+          sw:sampleRunIs     <run> .
+
+`web/load_run.py` writes one of these per (endpoint, metric) pair a run sampled. The four read queries follow it. The prober does not change.
 
 **Tech Stack:** Python 3.12 (`web/.venv`), pyoxigraph 0.5.9, pytest, FastAPI, SPARQL 1.1.
 
-**Spec:** `docs/superpowers/specs/2026-08-29-content-profiles-design.md`, Ruling 3 and the section "The recency pointer has to become per metric". Its parent is `docs/superpowers/specs/2026-08-19-sparql-endpoint-monitor-design.md` section 1b.
+**Spec:** `docs/superpowers/specs/2026-08-29-content-profiles-design.md`. Read Ruling 3 and the section "The recency pointer has to become per metric". The parent spec is `docs/superpowers/specs/2026-08-19-sparql-endpoint-monitor-design.md`, section 1b.
 
 ## Why this is its own plan
 
-The spec's other half, deriving property profiles in the prober, cannot be read by anything until this lands: a `properties` sample is written correctly by the prober today and is invisible to the web tier. This plan delivers working, testable software on its own, and the proof is an existing fixture, `web/tests/fixtures/run-properties-sample.nq`, which exists precisely to pin the current pin and which this plan makes visible.
+The spec has two halves. The other half derives property profiles in the prober. Nothing could read those profiles until this half lands.
+
+That is not hypothetical. The prober can already write a `properties` sample correctly, and the web tier cannot see it. There is even a test fixture for it, `web/tests/fixtures/run-properties-sample.nq`, committed to prove the sample stays invisible. This plan makes it visible, so that fixture is the proof this plan works.
 
 ## Global Constraints
 
-- **Never use an em-dash** in any output: code, comments, docstrings, test names, commit messages, template copy. This is absolute and applies to every file this plan touches.
+- **Never use an em-dash.** Not in code, comments, docstrings, test names, commit messages or page copy. No exceptions.
 - **Never `git add -A`.** Stage files by name.
 - Commit messages end with `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`.
-- **The governing rule:** never report a confident wrong answer. A missing sample and a sample that found nothing are different answers and must stay distinguishable.
-- **`urn:sparqlwatch:current` is derived and reconstructible from the run graphs alone.** Nothing in this plan may put a triple in it that no run graph supports, and `rebuild_current` must reproduce exactly what incremental loading produces.
-- **`Store.update()` in pyoxigraph 0.5.9 does not accept `substitutions`.** Values reach an update as prefix declarations with an empty local name (`endpoint:`, `run:`). Adding a value means adding a prefix. `Store.query()` does accept SEP-0007 `substitutions`, and only projected variables can be substituted.
-- **An update body carries no `PREFIX` prologue of its own.** pyoxigraph accepts a prologue only before the first operation, so bodies are combined by `_update_text`, which prepends one.
-- **The test-fixture convention is one named pytest fixture per store scenario, and there is no generic loader.** `web/tests/conftest.py` declares a module-level `RUN_<NAME> = FIXTURES / "run-<name>.nq"` path constant and a `@pytest.fixture def store_<name>(tmp_path)` returning `_loaded_store(tmp_path, "store-<name>", RUN_<NAME>, ...)`. Every store a test needs is built that way, through `load_run()` and never through `Store.load()`, because a raw load leaves no derived `current` graph and so produces a store shape the deployment never has. A new scenario means a new constant and a new fixture, both added to `conftest.py`. Do not invent a `load_fixture` helper; an earlier draft of this plan did and every test in it was unrunnable.
-- Run `python -m pytest -q` from `web/` with `.venv` activated. The suite is 342 tests before this plan and must stay green throughout.
+- **The governing rule: never report a confident wrong answer.** In particular, these two are different answers and must stay tellable apart:
+  - we have no sample for this metric
+  - we sampled, and found nothing
+- **`urn:sparqlwatch:current` is derived.** It can always be rebuilt from the run graphs alone. Two rules follow:
+  - never put a triple in it that no run graph supports
+  - `rebuild_current` must produce exactly what normal loading produces
+- **`Store.update()` cannot take `substitutions` in pyoxigraph 0.5.9.** So a value gets into an update as a prefix with an empty local name, written `endpoint:` or `run:`. To pass a new value, add a new prefix.
+- **`Store.query()` CAN take `substitutions`,** but only for variables the query projects. So a variable you substitute must appear in the `SELECT`.
+- **An update body has no `PREFIX` lines of its own.** pyoxigraph only allows them before the first operation. `_update_text` joins the bodies and adds one prologue for all of them.
+- **Test fixtures: one named pytest fixture per store, and no generic loader.** In `web/tests/conftest.py` each scenario gets two things:
+
+  ```python
+  RUN_TWO_SWEEPS = FIXTURES / "run-two-sweeps.nq"      # a path constant
+
+  @pytest.fixture
+  def store_two_sweeps(tmp_path):                       # and a fixture
+      return _loaded_store(tmp_path, "store-two-sweeps", RUN_TWO_SWEEPS)
+  ```
+
+  Always build through `_loaded_store`, which calls `load_run()`. Never call `Store.load()`: that skips the derived `current` graph, giving a store shape the real deployment never has.
+
+  Need a new scenario? Add a constant and a fixture to `conftest.py`.
+
+  **Do not invent a `load_fixture(...)` helper.** There isn't one. An earlier draft of this plan assumed there was, and every test in it was unrunnable.
+- Run tests with `cd web && source .venv/bin/activate && python -m pytest -q`. There are 342 before this plan. Keep them green.
 
 ## File structure
 
 | File | Responsibility after this plan |
 |---|---|
-| `web/load_run.py` | Owns the pointer's identity (`_sample_pointer_iri`), its predicates, its per-pair maintenance, its drift detection and its rebuild. The only writer. |
-| `web/queries/endpoint_content.rq` | One endpoint's sample for a GIVEN metric, substituted. No metric hardcoded. |
-| `web/queries/endpoint_description.rq` | Same hop, for the RDF representation of one endpoint. |
-| `web/queries/index_description.rq` | Same hop, for the index's RDF representation. |
-| `web/app.py` | Passes the metric to `endpoint_content.rq`; its prose about `sw:currentSampleRun` is updated. |
-| `web/tests/fixtures/run-two-metrics-sampled.nq` | NEW. Two sampling metrics in one run, so a pair-keyed pointer has something to be right about. |
+| `web/load_run.py` | The only writer. Owns the pointer's name, its predicates, keeping it up to date, spotting when it goes stale, and rebuilding it. |
+| `web/queries/endpoint_content.rq` | One endpoint's sample for one metric, passed in. No metric hardcoded. |
+| `web/queries/endpoint_description.rq` | Follows the same pointer, for one endpoint's RDF. |
+| `web/queries/index_description.rq` | Follows the same pointer, for the index's RDF. |
+| `web/app.py` | Passes the metric down. Its comment about the old pointer needs updating. |
+| `web/tests/fixtures/run-two-metrics-sampled.nq` | NEW. One run, two sampling metrics. Gives the new pointer something to get right. |
 | `web/tests/fixtures/run-properties-later.nq` | NEW. A later run sampling only `properties`, so the two pointers must name different runs. |
 
 
@@ -43,28 +74,32 @@ The spec's other half, deriving property profiles in the prober, cannot be read 
 
 ### Task 1: The pointer's identity and the write side
 
-Replace the one-per-endpoint `sw:currentSampleRun` triple with one pointer resource per (endpoint, metric) pair, and make `load_run` maintain it.
+Swap the one-triple-per-endpoint pointer for one pointer resource per (endpoint, metric) pair, and teach `load_run` to maintain it.
 
 **Files:**
-- Modify: `web/load_run.py`. Removed: `CURRENT_SAMPLE_RUN`, `_SAMPLED_ENDPOINTS`. Added: the three `SAMPLE_RUN_*` predicates, `_sample_pointer_iri`, `_SAMPLED_PAIRS`, `_run_sampled_pairs`, `_pair_run`. Rewritten: `_POINTERS`, `_REPLACE_SAMPLED`, the sample half of `load_run`'s per-run loop, and the docstring's QUAD SHAPE and TWO POINTERS sections. `_endpoint_run` is left alone: the measured half still uses it unchanged.
+- Modify: `web/load_run.py`
+  - delete: `CURRENT_SAMPLE_RUN`, `_SAMPLED_ENDPOINTS`
+  - add: the three `SAMPLE_RUN_*` predicates, `_sample_pointer_iri`, `_SAMPLED_PAIRS`, `_run_sampled_pairs`, `_pair_run`
+  - rewrite: `_POINTERS`, `_REPLACE_SAMPLED`, the sample half of `load_run`'s per-run loop, and two docstring sections (QUAD SHAPE and TWO POINTERS)
+  - leave alone: `_endpoint_run`. The measurement half still uses it as is.
 - Create: `web/tests/fixtures/run-two-metrics-sampled.nq`
 - Create: `web/tests/fixtures/run-properties-later.nq`
 - Modify: `web/tests/conftest.py` (two path constants and three fixtures, per the convention in Global Constraints)
 - Test: `web/tests/test_load_run.py`
 
 **Interfaces:**
-- Consumes: nothing from earlier tasks.
+- Consumes: nothing. This is the first task.
 - Produces, for Tasks 2 to 4:
   - `SAMPLE_RUN_FOR = "urn:sparqlwatch:sampleRunFor"`
   - `SAMPLE_RUN_METRIC = "urn:sparqlwatch:sampleRunMetric"`
   - `SAMPLE_RUN_IS = "urn:sparqlwatch:sampleRunIs"`
   - `def _sample_pointer_iri(endpoint: str, metric: str) -> str`
-  - `_run_sampled_pairs(store, run) -> set[tuple[str, str]]` replacing `_run_endpoints(store, run, _SAMPLED_ENDPOINTS)`
-  - `_newest_per_endpoint` returns `(measured, sampled)` where `sampled` is now `dict[tuple[str, str], tuple[str, str]]` keyed by (endpoint, metric)
+  - `_run_sampled_pairs(store, run) -> set[tuple[str, str]]`, which replaces `_run_endpoints(store, run, _SAMPLED_ENDPOINTS)`
+  - `_newest_per_endpoint` still returns `(measured, sampled)`, but `sampled` is now keyed by (endpoint, metric): `dict[tuple[str, str], tuple[str, str]]`
 
 - [ ] **Step 1: Write the two fixtures**
 
-`web/tests/fixtures/run-two-metrics-sampled.nq`. One run, one endpoint, two sampling metrics. Modelled on `run-properties-sample.nq`, which already uses `sw:metric:properties`, so the vocabulary is not new.
+First, `web/tests/fixtures/run-two-metrics-sampled.nq`: one run, one endpoint, two sampling metrics. Copy the style of `run-properties-sample.nq`, which already uses `sw:metric:properties`, so nothing here is a new vocabulary.
 
 ```
 <urn:sparqlwatch:activity:2026-01-01T00:00:00Z> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/prov#Activity> <urn:sparqlwatch:run:2026-01-01T00:00:00Z> .
@@ -84,7 +119,14 @@ Replace the one-per-endpoint `sw:currentSampleRun` triple with one pointer resou
 <urn:sparqlwatch:sample:2026-01-01T00:00:00Z:http%3A%2F%2Fexample.org%2Fsparql:properties> <urn:sparqlwatch:sampleSize> "1"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-01-01T00:00:00Z> .
 ```
 
-`web/tests/fixtures/run-properties-later.nq`. A STRICTLY LATER run that samples ONLY `properties` for the same endpoint. This is the fixture that makes the whole plan necessary: after loading both, the classes pointer must still name the earlier run while the properties pointer names this one. Copy the block above, change every `2026-01-01T00:00:00Z` to `2026-02-01T00:00:00Z`, delete the six `:classes` lines, and change the `sampledValue` to `<http://xmlns.com/foaf/0.1/mbox>`.
+Second, `web/tests/fixtures/run-properties-later.nq`: a later run that samples only `properties`, for the same endpoint.
+
+This fixture is the reason the plan exists. Load both files, and the classes pointer must still name the January run while the properties pointer names the February one. One pointer per endpoint cannot do that.
+
+Build it from the block above:
+- change every `2026-01-01T00:00:00Z` to `2026-02-01T00:00:00Z`
+- delete the six `:classes` lines
+- change the `sampledValue` to `<http://xmlns.com/foaf/0.1/mbox>`
 
 - [ ] **Step 2: Declare the fixtures in conftest.py**
 
@@ -128,7 +170,7 @@ def store_two_metrics_reloaded(tmp_path):
 
 - [ ] **Step 3: Write the failing test**
 
-Add to `web/tests/test_load_run.py`, taking the fixtures declared above. `ENDPOINT` below is `http://example.org/sparql`, the endpoint the two new run files describe; use whatever spelling that file's own tests already use for a fixture endpoint if one is established.
+Add these to `web/tests/test_load_run.py`. They take the fixtures from the last step. The endpoint is `http://example.org/sparql`, which is what both new run files describe. If that file already has a constant for a fixture endpoint, use it.
 
 ```python
 def test_two_metrics_sampled_in_different_runs_both_keep_a_pointer(store_metrics_diverged):
@@ -219,17 +261,19 @@ def test_no_currentsamplerun_triple_survives(store_two_metrics):
     assert n == 0, f"sw:currentSampleRun is retired: {n} left"
 ```
 
-`load_run_module` in the second test is however `test_load_run.py` already reaches the module's private names; check its imports and follow them rather than adding a second style. If it imports names directly, import `_sample_pointer_iri` directly.
+In the second test, `load_run_module` is a placeholder. Check how `test_load_run.py` already reaches private names in that module and match it. If it imports them directly, import `_sample_pointer_iri` directly.
 
 - [ ] **Step 4: Run the tests to verify they fail**
 
 Run: `cd web && source .venv/bin/activate && python -m pytest tests/test_load_run.py -k "pointer or metrics_sampled or currentsamplerun" -v`
 
-Expected: FAIL. The first three with an empty result set or `ImportError` on `_sample_pointer_iri`; the fourth with `1 left`, because the current code writes exactly that triple.
+Expected: all four FAIL.
+- the first three: an empty result set, or `ImportError` on `_sample_pointer_iri`
+- the fourth: `1 left`, because today's code writes exactly that one triple
 
 - [ ] **Step 5: Add the pointer's identity and predicates**
 
-In `web/load_run.py`, beside `CURRENT_RUN`, replace the `CURRENT_SAMPLE_RUN` constant with the three new predicates and the derivation. Delete `CURRENT_SAMPLE_RUN` entirely rather than leaving it unused.
+In `web/load_run.py`, next to `CURRENT_RUN`, delete `CURRENT_SAMPLE_RUN` and put this in its place. Delete it outright; do not leave it sitting there unused.
 
 ```python
 CURRENT_RUN = "urn:sparqlwatch:currentRun"
@@ -335,7 +379,9 @@ def _pair_run(endpoint: str, metric: str, run: str) -> dict[str, str]:
 
 - [ ] **Step 8: Move the bookkeeping to pair keys**
 
-In `load_run`, the sample half of the per-run loop currently reads `sampled = _run_endpoints(store, run, _SAMPLED_ENDPOINTS)` and keys `live` on `(endpoint, CURRENT_SAMPLE_RUN)`. It becomes:
+In `load_run`'s per-run loop, the sample half currently does two things this step changes. It calls `_run_endpoints(store, run, _SAMPLED_ENDPOINTS)`, and it keys `live` on `(endpoint, CURRENT_SAMPLE_RUN)`.
+
+Make it this:
 
 ```python
         sampled_pairs = _run_sampled_pairs(store, run)
@@ -357,7 +403,13 @@ In `load_run`, the sample half of the per-run loop currently reads `sampled = _r
                 kept_newer.add(endpoint)
 ```
 
-Note the consequence and do not paper over it: the sample pointer no longer moves inside the same `store.update()` as the endpoint's measurements. It cannot, because a per-pair update needs a per-pair prefix binding. `_REPLACE_MEASURED` keeps its own single-call guarantee, so an endpoint's measurements are still never half-updated; what is no longer atomic is measurements-and-samples together. That is the same tradeoff `rebuild_current` already documents and accepts for its two units, and the drift detector in Task 2 is what finds a partial result.
+**This costs something, and the plan is not hiding it.** The sample pointer no longer moves in the same `store.update()` call as the endpoint's measurements. It cannot: each pair needs its own prefix bindings, so each pair needs its own call.
+
+What is still safe: `_REPLACE_MEASURED` is one call, so an endpoint's measurements are never half-updated.
+
+What is no longer safe: measurements and sample pointers moving together as one unit.
+
+`rebuild_current` already accepts the same tradeoff for its own two steps, and Task 2's drift detector is what catches a load that stopped halfway.
 
 Update `_POINTERS` so the sample pointers come back too:
 
@@ -381,11 +433,13 @@ SELECT ?endpoint ?which ?run ?instant WHERE {
 """
 ```
 
-`?which` is the metric IRI for a sample pointer and `sw:currentRun` for the run pointer, so the dict `_pointers` builds is keyed `(endpoint, CURRENT_RUN)` for one and `(endpoint, metric)` for the other with no further change to that function. A metric can never be spelled `urn:sparqlwatch:currentRun`, because `metrics.rs` restricts a metric id to `[a-z0-9][a-z0-9-]*` and prefixes it with `urn:sparqlwatch:metric:`, so the two key spaces cannot collide.
+`?which` now holds one of two things: `sw:currentRun` for a run pointer, or the metric IRI for a sample pointer. So the dict `_pointers` builds ends up keyed `(endpoint, CURRENT_RUN)` for one and `(endpoint, metric)` for the other. `_pointers` itself needs no change.
+
+The two key spaces cannot collide. A metric IRI always starts `urn:sparqlwatch:metric:`, and `metrics.rs` limits a metric id to `[a-z0-9][a-z0-9-]*`, so no metric can ever be spelled `urn:sparqlwatch:currentRun`.
 
 - [ ] **Step 9: Update the module docstring**
 
-Two passages state the old shape and would now be wrong. In QUAD SHAPE, replace the `E sw:currentSampleRun <run>` line with:
+Two passages in the docstring describe the old shape and are now wrong. In QUAD SHAPE, replace the `E sw:currentSampleRun <run>` line with this:
 
 ```
   <ptr> sw:sampleRunFor E       one pointer resource per (E, metric) pair,
@@ -393,7 +447,7 @@ Two passages state the old shape and would now be wrong. In QUAD SHAPE, replace 
         sw:sampleRunIs <run>    M sample of E. See _sample_pointer_iri.
 ```
 
-In TWO POINTERS, keep the existing argument and extend it, because the argument is what generalises:
+In TWO POINTERS, keep the argument that is already there and add to it. The argument itself is what carries over:
 
 ```
 TWO KINDS OF POINTER, which is the subtle half. The newest run that MEASURED an
@@ -413,13 +467,20 @@ docs/superpowers/specs/2026-08-29-content-profiles-design.md.
 
 Run: `cd web && source .venv/bin/activate && python -m pytest tests/test_load_run.py -v`
 
-Expected: the four new tests PASS. Other tests in this file that assert on `sw:currentSampleRun` will FAIL, and that is correct: they pin the shape being replaced. Update each to the new shape, preserving what it was checking. Do not delete a test to make the suite green; if a test's subject no longer exists, say so in its comment and re-point it at the equivalent fact.
+Expected: the four new tests PASS.
+
+Other tests in this file that check `sw:currentSampleRun` will FAIL. That is correct: they pin the shape being replaced. Update each one to the new shape, keeping whatever it was actually checking.
+
+Do not delete a test to get a green suite. If a test's subject is genuinely gone, say so in its comment and point it at the fact that replaced it.
 
 - [ ] **Step 11: Run the whole suite**
 
 Run: `cd web && source .venv/bin/activate && python -m pytest -q`
 
-Expected: Tasks 2 to 4 own the read side, so failures confined to `test_endpoint_content.py`, `test_reader_golden.py`, `test_negotiation.py` and `test_page.py` are expected here. Record which fail, and their count, in the task report. A failure anywhere else is in scope for this task.
+Expected: some failures, and only in these four files, which Tasks 2 to 4 fix:
+`test_endpoint_content.py`, `test_reader_golden.py`, `test_negotiation.py`, `test_page.py`.
+
+Write down which failed and how many, in the task report. A failure in any other file belongs to this task, so fix it here.
 
 - [ ] **Step 12: Commit**
 
@@ -434,28 +495,27 @@ git commit -m "Key the sample pointer on the metric, not just the endpoint"
 
 ### Task 2: Drift detection and rebuild for the new shape
 
-`load_run` reports a `current` graph that has drifted from its run graphs, and `rebuild_current` repairs one. Both know the old pointer shape and must learn the new one, keyed per pair, or a drifted sample pointer becomes undetectable and a rebuild silently produces a different graph from incremental loading.
+Two things know the old pointer shape and must learn the new one.
+
+`load_run` reports a `current` graph that has drifted away from its run graphs. `rebuild_current` repairs one.
+
+Skip this and two things break quietly. A stale sample pointer stops being detectable, and a rebuild starts producing a different graph from the one normal loading produces.
 
 **Files:**
 - Modify: `web/load_run.py` (`_DRIFTED_SAMPLE_POINTERS`, `_newest_per_endpoint`, `rebuild_current`, and the verification block near line 910)
 - Test: `web/tests/test_load_run.py`
 
 **Interfaces:**
-- Consumes from Task 1: `SAMPLE_RUN_FOR`, `SAMPLE_RUN_METRIC`, `SAMPLE_RUN_IS`, `_sample_pointer_iri`, `_run_sampled_pairs`, `_REPLACE_SAMPLED`, `_pair_run`.
-- Produces: `_newest_per_endpoint` returning `sampled` keyed `(endpoint, metric)`; `LoadResult.drifted` entries naming the metric.
+- Consumes from Task 1: the three `SAMPLE_RUN_*` predicates, plus `_sample_pointer_iri`, `_run_sampled_pairs`, `_REPLACE_SAMPLED` and `_pair_run`.
+- Produces: `_newest_per_endpoint` with `sampled` keyed `(endpoint, metric)`. `LoadResult.drifted` keeps its existing shape, a list of endpoint strings.
 
 - [ ] **Step 1: Write the failing test**
 
-Drift is not exposed as a public `detect_drift`. It is computed by the private
-`_drifted(store)`, which unions the two drift queries and returns a sorted list
-of ENDPOINT strings, and it reaches a caller through `LoadResult.drifted` and the
-operator through `_drift_advice`. Do not add a public entry point for this
-plan's convenience; call what exists.
+**There is no public `detect_drift`.** Drift comes from the private `_drifted(store)`, which runs both drift queries and returns a sorted list of endpoint strings. It reaches callers as `LoadResult.drifted` and reaches operators through `_drift_advice`. Call what exists; do not add a public entry point just for this plan.
 
-The discriminating case is a run that sampled ONLY a non-classes metric. Under
-the old shape no sample pointer was written for it at all, so there was nothing
-to drift and nothing to detect. `run-properties-sample.nq` is exactly that run
-and is already declared as `store_properties_sample`.
+**Pick the case that actually discriminates.** It is a run that sampled only a non-classes metric. Under the old shape such a run got no sample pointer at all, so there was nothing to go stale and nothing to detect.
+
+`run-properties-sample.nq` is exactly that run, and `conftest.py` already declares it as `store_properties_sample`.
 
 ```python
 def test_a_dropped_run_graph_drifts_a_non_classes_sample_pointer(store_properties_sample):
@@ -491,8 +551,7 @@ def test_rebuild_reproduces_what_incremental_loading_produced(store_metrics_dive
     )
 ```
 
-Add the helper to `web/tests/test_load_run.py` beside them, unless the file
-already has an equivalent, in which case use that one:
+Add this helper next to them in `web/tests/test_load_run.py`. If the file already has an equivalent, use that instead:
 
 ```python
 def _current_triples(store) -> set[tuple[str, str, str]]:
@@ -505,15 +564,19 @@ def _current_triples(store) -> set[tuple[str, str, str]]:
     }
 ```
 
-Confirm the run IRI in the first test against the fixture file rather than
-trusting the spelling above, and confirm `NamedNode` and `_drifted` are imported
-in that module; add them to its existing import lines if not.
+Two things to check before running:
+- the run IRI in the first test. Read it out of the fixture file rather than trusting the spelling above.
+- that `NamedNode` and `_drifted` are imported in that module. Add them to the existing import lines if not.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `cd web && source .venv/bin/activate && python -m pytest tests/test_load_run.py -k "drift_naming or reproduces" -v`
 
-Expected: FAIL. The drift test returns `[]`, because after Task 1 a properties pointer exists but the detector's `FILTER NOT EXISTS` still asks whether the run sampled `sw:metric:classes`, which it never did, so the pointer looks satisfied. The rebuild test fails because `rebuild_current` still writes `sw:currentSampleRun` while loading now writes pointer resources, so the two graphs differ on every sample pointer.
+Expected: both FAIL.
+
+The drift test returns `[]`. After Task 1 there IS a properties pointer, but the detector still asks "did this run sample `sw:metric:classes`?" It never did, so the pointer looks fine.
+
+The rebuild test fails because `rebuild_current` still writes `sw:currentSampleRun` while loading now writes pointer resources. The two graphs differ on every sample pointer.
 
 - [ ] **Step 3: Generalise the drift detector**
 
@@ -537,9 +600,18 @@ SELECT ?endpoint ?metric WHERE {
 """
 ```
 
-The `FILTER NOT EXISTS` now joins on `?metric` rather than on a literal IRI, which is what makes it ask the right question: not "did this run sample classes" but "did this run sample the metric this pointer claims it did".
+The important change is in the `FILTER NOT EXISTS`. It now joins on `?metric` instead of a fixed IRI, so the question changes from:
 
-`_drifted` reads `row["endpoint"].value` from both queries and unions them, so adding a projected `?metric` column does not change its contract and it needs no edit. Leave it alone. The metric is projected because the `FILTER NOT EXISTS` has to JOIN on it, which is the substantive fix; having it available for a future, more specific message is a side benefit and not a reason to widen `LoadResult.drifted` now. Repair is per endpoint (rebuild the graph), so reporting the endpoint once is the right granularity even when two of its pointers drifted.
+- "did this run sample classes?" to
+- "did this run sample the metric this pointer claims it did?"
+
+The second is the question that was always meant.
+
+**`_drifted` needs no edit. Leave it alone.** It reads `row["endpoint"].value` from both queries and unions the results, so an extra `?metric` column changes nothing for it.
+
+`?metric` is projected because the `FILTER NOT EXISTS` has to join on it. That is the real fix. Having the column available for a better message later is a bonus, not a reason to change `LoadResult.drifted` now.
+
+And the reporting granularity is already right: the repair is per endpoint, since you rebuild the graph. Naming the endpoint once is correct even when two of its pointers went stale.
 
 - [ ] **Step 4: Generalise `_newest_per_endpoint`**
 
@@ -554,7 +626,9 @@ Its `sampled` return becomes keyed `(endpoint, metric)`:
                 pointers[(endpoint, metric)] = (run, instant)
 ```
 
-`_tie_message` takes an endpoint and two runs. A tie is now per pair, so its message should name the metric as well, or two different metrics tying on the same endpoint produce the same message twice and a reader cannot tell them apart. Extend the signature; it has one other caller and both are in this module.
+`_tie_message` currently takes an endpoint and two runs. A tie is now per pair, so add the metric to it.
+
+Without that, two different metrics tying on one endpoint print the same message twice and nobody can tell them apart. Extend the signature. There is one other caller, and both are in this module.
 
 - [ ] **Step 5: Generalise `rebuild_current`**
 
@@ -582,17 +656,25 @@ Its `sampled` return becomes keyed `(endpoint, metric)`:
         )
 ```
 
-The existing loop iterates `sorted(set(measured) | set(sampled))` and branches inside. That union no longer type-checks, because the two dicts are keyed differently. Two loops is also clearer about what it does, and the comment about the two units naming different runs moves to where it is now true.
+The old loop does `sorted(set(measured) | set(sampled))` and branches inside it. That union no longer works, because the two dicts are keyed differently now.
+
+Two separate loops are clearer anyway. Move the comment about the two units naming different runs down to the second loop, where it is now the point.
 
 - [ ] **Step 6: Generalise the post-load verification**
 
-The block near line 910 asserts that every endpoint the run sampled has a pointer naming the expected run, and raises naming `sw:currentSampleRun` when it does not. Re-point it at the pair-keyed dict and at the new predicates, keeping both messages: the "no pointer at all" case and the "pointer names the wrong run" case are different failures and both messages should name the metric.
+The block near line 910 checks that every endpoint the run sampled has a pointer naming the run you expect, and raises an error mentioning `sw:currentSampleRun` when it does not.
+
+Point it at the pair-keyed dict and the new predicates. Keep both of its messages, because they are different failures:
+- there is no pointer at all
+- there is a pointer, and it names the wrong run
+
+Add the metric to both messages.
 
 - [ ] **Step 7: Run the tests**
 
 Run: `cd web && source .venv/bin/activate && python -m pytest tests/test_load_run.py -v`
 
-Expected: PASS, all of them. This file is the write side's whole test surface, so it must be green before the read side is touched.
+Expected: all PASS. This file is the entire test surface for the write side, so get it green before touching the read side.
 
 - [ ] **Step 8: Commit**
 
@@ -605,7 +687,11 @@ git commit -m "Detect and repair a drifted sample pointer per metric"
 
 ### Task 3: `endpoint_content.rq` reads any metric's sample
 
-The HTML path. `endpoint_content` currently answers "what classes did the newest sampling run find", with the metric hardcoded in the query. It becomes "what did the newest run that sampled THIS METRIC find", with the metric a parameter.
+This is the HTML path.
+
+Today `endpoint_content` answers: "what classes did the newest sampling run find?" The metric is baked into the query.
+
+After this task it answers: "what did the newest run that sampled THIS metric find?" The metric is an argument.
 
 **Files:**
 - Modify: `web/queries/endpoint_content.rq`
@@ -615,16 +701,17 @@ The HTML path. `endpoint_content` currently answers "what classes did the newest
 
 **Interfaces:**
 - Consumes from Task 1: the three pointer predicates.
-- Produces: `endpoint_content(store, endpoint, metric="urn:sparqlwatch:metric:classes") -> EndpointContent`, and `EndpointContent.metric` carrying which metric the answer is about.
+- Produces: `endpoint_content(store, endpoint, metric="urn:sparqlwatch:metric:classes")`, plus a new `EndpointContent.metric` field saying which metric the answer is about.
 
-The default keeps every existing caller working unchanged and keeps this task's diff small; Task 4's callers pass the metric explicitly. A default is defensible here and not a hedge, because `classes` is the only sampling metric the shipped `metrics.toml` declares, so it is the answer to "the sample" until a second one ships.
+The default keeps every existing caller working and keeps this diff small. Task 4's callers pass the metric explicitly.
+
+The default is honest rather than a hedge: `classes` is the only sampling metric the shipped `metrics.toml` declares, so it really is what "the sample" means until a second one ships.
 
 - [ ] **Step 1: Write the failing test**
 
-Add to `web/tests/test_endpoint_content.py`, using the fixtures the file already
-declares plus the two Task 1 added. Check the attribute name for the sampled
-values on `EndpointContent` before writing `content.values` and use whatever the
-dataclass already calls it; do not rename it in this task.
+Add these to `web/tests/test_endpoint_content.py`. They use fixtures the file already has, plus the two Task 1 added.
+
+Before writing `content.values`, check what `EndpointContent` actually calls that field and use its name. Do not rename it in this task.
 
 ```python
 def test_a_properties_sample_is_now_visible(store_properties_sample):
@@ -699,7 +786,7 @@ Expected: FAIL with `TypeError: endpoint_content() got an unexpected keyword arg
 
 - [ ] **Step 3: Parameterise the query**
 
-In `web/queries/endpoint_content.rq`, the pointer hop becomes:
+In `web/queries/endpoint_content.rq`, change the pointer lookup to this:
 
 ```sparql
   # The run that took this endpoint's sample OF THIS METRIC. Two quads now
@@ -712,7 +799,7 @@ In `web/queries/endpoint_content.rq`, the pointer hop becomes:
   }
 ```
 
-and inside the hop, the hardcoded filter becomes a join on the same variable:
+Then inside the hop, drop the hardcoded filter and join on the same variable instead:
 
 ```sparql
       ?sample sw:sampledFrom ?endpoint ;
@@ -721,11 +808,17 @@ and inside the hop, the hardcoded filter becomes a join on the same variable:
               sw:sampledBy ?metric .
 ```
 
-Delete the `FILTER (?sampledBy = sw:metric:classes)` and the `?sampledBy` variable with it. The comment above it explains why `sw:sampledBy` was a bound variable plus a FILTER rather than a bound object, and that reasoning still applies to `?metric`, which IS bound by substitution: keep the comment, re-pointed at `?metric`.
+Delete `FILTER (?sampledBy = sw:metric:classes)`, and the `?sampledBy` variable with it.
 
-`?metric` must be added to the SELECT projection, because pyoxigraph only substitutes projected variables. That is the same reason `?endpoint` is projected and the header already says so; extend that sentence rather than adding a second one.
+Keep the comment above it, pointed at `?metric` instead. It explains why this is a bound variable plus a filter rather than a bound object, and that reasoning still holds: `?metric` is bound too, by substitution.
 
-Update the header's "Most recent IS NOT COMPUTED HERE" paragraph: it names `sw:currentSampleRun` and describes a per-endpoint pointer. The measured figures in it are still valid and must not be touched, because they measure the hop shape and not the pointer's key.
+Add `?metric` to the `SELECT`. pyoxigraph only substitutes variables a query projects.
+
+That is exactly why `?endpoint` is projected, and the header already explains it. Extend that sentence rather than writing a second one.
+
+Update the header's "Most recent IS NOT COMPUTED HERE" paragraph. It names `sw:currentSampleRun` and describes a per-endpoint pointer.
+
+Leave the timing figures in it alone. They measure the shape of the hop, not the pointer's key, so they are still correct.
 
 - [ ] **Step 4: Parameterise the reader**
 
@@ -766,25 +859,33 @@ def endpoint_content(
     ...
 ```
 
-Add `metric: str` to `EndpointContent` and set it on both return paths. Every existing construction of `EndpointContent` in the codebase and its tests needs the new field; find them all rather than relying on a default, because a default would let a caller publish a sample without saying what it is a sample of.
+Add `metric: str` to `EndpointContent` and set it on both return paths.
 
-Update the tie message to name the metric, for the same reason Task 2 updated `_tie_message`.
+Then find every place that constructs an `EndpointContent`, in the code and in the tests, and give it the new field. Do not add a default for it: a default would let a caller publish a sample without saying what the sample is of.
+
+Add the metric to the tie message, for the same reason Task 2 did it to `_tie_message`.
 
 - [ ] **Step 5: Run the tests**
 
 Run: `cd web && source .venv/bin/activate && python -m pytest tests/test_endpoint_content.py -v`
 
-Expected: PASS. Existing tests in this file that assert the classes sample keep passing through the default.
+Expected: PASS. The existing tests in this file check the classes sample, and the default keeps them working.
 
 - [ ] **Step 6: Update app.py's prose**
 
-`web/app.py:359` explains the reader hop through `sw:currentSampleRun` in a comment or in page copy. Re-point it. If the text is user-facing, it must stay accurate about what the site does and not acquire jargon: prefer naming the fact ("the newest sweep that sampled this") over the predicate.
+`web/app.py:359` describes the lookup through `sw:currentSampleRun`, either in a comment or in page copy. Point it at the new shape.
+
+If it is text a visitor reads, keep it plain and accurate. Say the fact, not the predicate: "the newest sweep that sampled this" beats naming an IRI.
 
 - [ ] **Step 7: Run the whole suite**
 
 Run: `cd web && source .venv/bin/activate && python -m pytest -q`
 
-Expected: `test_load_run.py` and `test_endpoint_content.py` green. `test_reader_golden.py`, `test_negotiation.py` and `test_page.py` may still fail on the RDF path, which is Task 4. Record the count.
+Expected:
+- green: `test_load_run.py`, `test_endpoint_content.py`
+- may still fail: `test_reader_golden.py`, `test_negotiation.py`, `test_page.py`. Those are the RDF path, which is Task 4.
+
+Record the count in the report.
 
 - [ ] **Step 8: Commit**
 
@@ -798,7 +899,9 @@ git commit -m "Read a content sample by metric instead of assuming classes"
 
 ### Task 4: The RDF representations read it too
 
-`endpoint_description.rq` and `index_description.rq` are CONSTRUCTs serialised straight out of the store, and both hop through the old pointer. Until they are updated the HTML and the RDF for one endpoint disagree, which is exactly what `test_negotiation.py` exists to catch.
+`endpoint_description.rq` and `index_description.rq` are CONSTRUCTs, serialised straight out of the store. Both still follow the old pointer.
+
+So until this task lands, the HTML and the RDF for one endpoint say different things. That disagreement is exactly what `test_negotiation.py` exists to catch.
 
 **Files:**
 - Modify: `web/queries/endpoint_description.rq` (the sample branch, near line 255)
@@ -806,7 +909,7 @@ git commit -m "Read a content sample by metric instead of assuming classes"
 - Test: `web/tests/test_negotiation.py`, `web/tests/test_reader_golden.py`
 
 **Interfaces:**
-- Consumes from Task 1: the three pointer predicates. From Task 3: the convention that a sample is identified by (endpoint, metric).
+- Consumes from Task 1: the three pointer predicates. From Task 3: the idea that a sample is identified by an endpoint AND a metric.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -827,19 +930,31 @@ def test_the_rdf_and_the_html_agree_about_a_properties_sample(store_two_metrics)
     )
 ```
 
-`_serve` above is a stand-in, NOT an API to add. Read `test_negotiation.py` first: it already has a way to obtain both representations of one endpoint and compare them, and this case belongs inside that comparison rather than beside it if it can express it. Use that helper and that file's own request convention verbatim. An earlier draft of this plan invented both a `load_fixture` fixture and a `client` fixture that do not exist, and every test using them was unrunnable; do not repeat it by inventing `_serve`.
+**`_serve` above is a placeholder. Do not add it.**
 
-The second assertion is the substantive one and is a genuine design question this task must settle: the pointer resource lives in the derived `current` graph, and the published RDF is about the endpoint. A CONSTRUCT that emitted `sw:sampleRunIs` would publish our internal bookkeeping as though it described somebody's server. It must not. Confirm the same is true of the old shape before assuming this is a regression: if `sw:currentSampleRun` was already excluded from both CONSTRUCTs, preserve that; if it leaked, say so in the report because that is a pre-existing defect this task can close.
+Read `test_negotiation.py` first. It already has a way to fetch both representations of one endpoint and compare them. If that helper can express this case, put the case inside it rather than next to it. Either way, use that file's own helper and its own request convention exactly as written.
+
+An earlier draft of this plan invented a `load_fixture` fixture and a `client` fixture, neither of which exists, and every test using them was unrunnable. Do not repeat that by inventing `_serve`.
+
+The second assertion is the important one, and it settles a real design question.
+
+The pointer lives in the derived `current` graph. It is our bookkeeping. The published RDF is about somebody else's endpoint. A CONSTRUCT that emitted `sw:sampleRunIs` would publish our bookkeeping as though it were a fact about their server. It must not.
+
+Check the old shape before assuming this is a new problem:
+- if `sw:currentSampleRun` was already kept out of both CONSTRUCTs, keep it that way
+- if it leaked, say so in the report. That is a pre-existing bug this task can close.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `cd web && source .venv/bin/activate && python -m pytest tests/test_negotiation.py -v`
 
-Expected: FAIL. Both CONSTRUCTs still match `sw:currentSampleRun`, which Task 1 stopped writing, so their sample branches bind nothing and the RDF carries no sample at all.
+Expected: FAIL.
+
+Both CONSTRUCTs still look for `sw:currentSampleRun`. Task 1 stopped writing it. So their sample branches match nothing and the RDF carries no sample at all.
 
 - [ ] **Step 3: Update `endpoint_description.rq`**
 
-The sample branch near line 255 reads:
+The sample branch near line 255 currently reads:
 
 ```sparql
     GRAPH sw:current { ?endpoint sw:currentSampleRun ?sampleRun }
@@ -855,23 +970,40 @@ It becomes:
     }
 ```
 
-and the hop into `?sampleRun` joins its `sw:sampledBy` to `?sampleMetric` rather than to a literal IRI, exactly as Task 3 did for the SELECT.
+Then, inside the hop into `?sampleRun`, join `sw:sampledBy` to `?sampleMetric` instead of to a fixed IRI. Same change Task 3 made to the SELECT.
 
-This query is a CONSTRUCT, so unlike Task 3 it does not need `?sampleMetric` projected. It is a description of one endpoint and now emits every metric's sample rather than only the classes sample. That is the intended change and it is what makes the RDF agree with the HTML once the HTML shows more than one. The header comment at line 75 states the sample branch reads `sw:currentSampleRun`; update it.
+This is a CONSTRUCT, so unlike Task 3 it does not need `?sampleMetric` projected.
+
+The behaviour change is intended: this query describes one endpoint, and it now emits every metric's sample instead of only the classes sample. That is what keeps the RDF agreeing with the HTML once the HTML shows more than one.
+
+The header comment at line 75 says the sample branch reads `sw:currentSampleRun`. Update it.
 
 - [ ] **Step 4: Update `index_description.rq`**
 
-Same change to its sample branch. Its header comment at line 24 describes the hop and must be updated with it.
+Make the same change to its sample branch. Its header comment at line 24 describes the lookup, so update that too.
 
-Check the query's cost commentary before and after: `index_description.rq` is the one with the measured 28x regression in its history and a mutation guard, so it is the query in this codebase where an innocuous-looking extra triple pattern has already cost the most. Time it against the committed store the way `web/tools/time_read_queries.py` does, and put the before and after figures in the task report. If the pointer's two extra patterns cost materially more than the one they replace, say so rather than absorbing it.
+**Time this one.** `index_description.rq` is the query with a measured 28x cost regression in its history, and a mutation guard because of it. It is where an innocent-looking extra triple pattern has already cost the most in this codebase.
+
+The new pointer adds two patterns where there was one. Time the query before and after, the way `web/tools/time_read_queries.py` does, against the committed store. Put both figures in the report.
+
+If it got materially slower, say so rather than absorbing it.
 
 - [ ] **Step 5: Run the tests**
 
 Run: `cd web && source .venv/bin/activate && python -m pytest -q`
 
-Expected: all green, 342 plus the tests added across Tasks 1 to 4.
+Expected: all green. That is 342 plus whatever Tasks 1 to 4 added.
 
-If `test_reader_golden.py` fails, read why before regenerating anything. A golden file records what the readers produced at a known-good moment; this plan legitimately changes that output, so the golden must be recaptured with `web/tools/capture_reader_golden.py`. Recapture it only after the diff has been read line by line and every changed line is one this plan intended, and put that diff in the report. A golden regenerated without reading it stops being evidence of anything.
+If `test_reader_golden.py` fails, read why before regenerating anything.
+
+A golden file records what the readers produced at a known-good moment. This plan does legitimately change that output, so the golden does need recapturing, with `web/tools/capture_reader_golden.py`.
+
+But recapture it in this order:
+1. read the diff line by line
+2. confirm every changed line is one this plan intended
+3. then recapture, and put the diff in the report
+
+A golden regenerated without reading it stops being evidence of anything.
 
 - [ ] **Step 6: Commit**
 
@@ -881,20 +1013,22 @@ git add web/queries/endpoint_description.rq web/queries/index_description.rq \
 git commit -m "Publish every metric's sample in the RDF, not only classes"
 ```
 
-If the golden was recaptured, commit it separately with a message saying what changed in it and why, so the recapture is reviewable on its own.
+If you recaptured the golden, commit it on its own, with a message saying what changed in it and why. That keeps the recapture reviewable by itself.
 
 ---
 
 ## Verification of the whole plan
 
 - [ ] `cd web && source .venv/bin/activate && python -m pytest -q` is green.
-- [ ] `grep -rn 'currentSampleRun' web/ --include='*.py' --include='*.rq' | grep -v .venv` returns only historical commentary that says the predicate was replaced, and nothing that reads or writes it.
-- [ ] `grep -rn 'metric:classes' web/queries/ web/*.py | grep -v .venv` returns only `CLASSES_METRIC`'s definition and its documented default. No query names it.
-- [ ] The two-metric fixture round-trips: load both fixtures into a scratch store, serve `/endpoint` for the endpoint in HTML and in all four RDF forms, and confirm each shows both samples.
+- [ ] `grep -rn 'currentSampleRun' web/ --include='*.py' --include='*.rq' | grep -v .venv` finds only comments explaining that the predicate was replaced. Nothing reads or writes it.
+- [ ] `grep -rn 'metric:classes' web/queries/ web/*.py | grep -v .venv` finds only `CLASSES_METRIC` and its documented default. No query names it.
+- [ ] Both samples survive a round trip. Load both fixtures into a scratch store, serve `/endpoint` for that endpoint as HTML and in all four RDF forms, and check each one shows both samples.
 - [ ] No em-dash was introduced. The check cannot contain the character it looks for, so spell it: `git diff main | grep "$(printf '\u2014')"` is empty.
 
 ## What this plan does NOT do
 
-- It adds no metric and probes nothing. The prober is untouched, and `metrics.toml` still declares one sampling metric. The properties sample this plan makes visible exists only in a test fixture.
-- It does not render a second sample in the HTML template. Task 3 makes `endpoint_content` answer for any metric; deciding what the endpoint page shows when there are two is the next plan's, because it is a design question about the page and not about the pointer.
-- It does not migrate a deployed store. `load_run.py` states the `.nq` files are the source of truth and the store is derived, so the migration is a reload. Note in the final report that the live store at `~/code/sparqlwatch-runs/store.db` holds zero content samples, so for this deployment the migration is empty in practice.
+- **It adds no metric and probes nothing.** The prober is untouched and `metrics.toml` still declares one sampling metric. The properties sample this plan makes visible exists only in a test fixture.
+- **It does not show a second sample on the page.** Task 3 makes `endpoint_content` answer for any metric. What the endpoint page should display when there are two samples is a design question about the page, not about the pointer, so it belongs to the next plan.
+- **It does not migrate a deployed store.** `load_run.py` says the `.nq` files are the source of truth and the store is derived from them, so migrating means reloading.
+
+  Note in the final report that the live store at `~/code/sparqlwatch-runs/store.db` holds zero content samples today, so for this deployment the migration is empty in practice.
