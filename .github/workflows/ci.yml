@@ -6,6 +6,9 @@ on:
   push:
   pull_request:
 
+# Two jobs, one per tier, matching the split the tiers actually have: they share
+# no code and no database, so neither needs the other's toolchain and they run in
+# parallel.
 jobs:
   prober:
     runs-on: ubuntu-latest
@@ -23,3 +26,35 @@ jobs:
       # Warnings are errors here, matching the local contract. The live_smoke
       # test stays #[ignore]d: CI must not hit third-party endpoints.
       - run: cargo clippy --all-targets -- -D warnings
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          # 3.12 to the minor only. requirements.txt pins every dependency
+          # exactly, so the patch level is the one thing left to float, and
+          # pinning it here would mean editing this file whenever the runner
+          # image moves.
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      # Run from web/, because web/pytest.ini sets `pythonpath = .` so that
+      # `import load_run` resolves: the application modules live directly under
+      # web/ and the tests live under web/tests/.
+      #
+      # No network, and that is a property of the suite rather than a hope. The
+      # tests drive the app through starlette's TestClient, which is in-process,
+      # and every store they read is built from a committed .nq fixture. The
+      # real hostnames in those fixtures are RDF data, never dereferenced.
+      #
+      # Two tests read the OTHER tier's files, to check the site does not
+      # describe the prober wrongly: one compares every published metric fact
+      # against prober/metrics.toml, and one asserts the User-Agent in
+      # prober/src/client.rs still names a URL this site answers. Both anchor
+      # their paths to __file__, so the working-directory above does not reach
+      # them, and both need the full checkout rather than a sparse one.
+      - run: python -m pytest -q
