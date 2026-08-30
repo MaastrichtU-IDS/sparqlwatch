@@ -185,7 +185,7 @@ fn sparql_code_only(query: &str) -> String {
     let mut i = 0;
 
     // Blank one char, keeping newlines so line structure survives.
-    let mut blank = |out: &mut String, c: char| out.push(if c == '\n' { '\n' } else { ' ' });
+    let blank = |out: &mut String, c: char| out.push(if c == '\n' { '\n' } else { ' ' });
 
     while i < chars.len() {
         match chars[i] {
