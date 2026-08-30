@@ -5,6 +5,8 @@ Oxigraph store and holds the read queries against it. The Rust prober is
 untouched by anything here; it keeps writing N-Quads files, and this side
 starts where that file leaves off.
 
+For how this component sits beside the other one, see `docs/architecture.md`.
+
 ## The interpreter must be 3.12
 
 Use `python3.12`, not the system `python3`.
@@ -553,7 +555,7 @@ that sets it records the change and the reasoning.
 
 | Store shape | Rows marked | Dormant | Bytes | Per row | Against 750,000 |
 | --- | --- | --- | --- | --- | --- |
-| one sweep, the shape above | 0 | 0 | 462,748 | 852 | under by 287,252 |
+| one sweep, the shape above | 0 | 0 | 460,923 | 849 | under by 289,077 |
 | a two-endpoint newer sweep | 541 | 0 | 515,433 | 949 | under by 234,567 |
 | the same, plus 57 of the rest declared dormant | 541 | 57 | 525,080 | 967 | under by 224,920 |
 | every row marked and dormant | 543 | 543 | 593,841 | 1,094 | under by 156,159 |

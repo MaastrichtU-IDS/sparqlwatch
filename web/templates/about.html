@@ -88,7 +88,11 @@
       <circle cx="11" cy="11" r="6"/><path d="M15.5 15.5 21 21"/><path d="M8 11h6"/></svg>
     sparqlwatch
   </a>
-  <span class="run"><a href="{{ index_path }}">every endpoint measured</a></span>
+  {# This page is the third document in the /docs section and is reached from
+     its index, so the nav points back there rather than only home. It keeps its
+     own url because the prober's User-Agent carries it; see app.py's /docs
+     section comment. #}
+  <span class="run"><a href="{{ docs_path }}" data-nav="docs">docs</a></span>
 </header>
 <main>
   <h1>What this is, and why it queried your server</h1>

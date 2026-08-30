@@ -194,12 +194,21 @@ the idea but is unusable here: it is Java 17, and its own documentation says to 
 locally on the endpoint without a proxy in between, which is impossible for third-party
 endpoints.
 
-Class discovery is split into two metrics: `has-classes` (cheap, answerable as a fast existence check) and `classes` (expensive, enumerating up to 200 distinct types). Both are measured at tiers 1 and 2 according to this plan.
+Class discovery is one metric, `classes` (expensive, enumerating up to 200
+distinct types), measured at tiers 1 and 2 according to this plan.
+
+**Updated 2026-08-28.** It was two metrics until then: a cheap `has-classes`
+existence check beside the expensive enumeration. `has-classes` was removed
+because probing whether an endpoint responds and computing what it contains are
+different questions, and the cheap half was answering the first while being
+priced and read as the second. Passages further down this document that describe
+measurements taken with `has-classes` are dated records of what was actually run
+and are left as written; the metric no longer exists.
 
 | Tier | Method | Cost | Recorded as |
 |---|---|---|---|
 | 1 | Fetch what the endpoint publishes: `/.well-known/void`, a VoID graph, the SPARQL service description | one or two requests | authoritative, and its presence is itself a metric |
-| 2 | Bounded sampling: distinct classes (`classes` metric), properties per class, counts, each under a hard cancellable budget. `has-classes` is a fast existence check that always completes at this tier. | tens of queries, capped | **explicitly marked sampled and incomplete** |
+| 2 | Bounded sampling: distinct classes (`classes` metric), properties per class, counts, each under a hard cancellable budget | tens of queries, capped | **explicitly marked sampled and incomplete** |
 | 3 | Give up | none | `not measured`, never a zero |
 
 Tier 3 is not a failure mode to be embarrassed about, it is a required outcome. During
@@ -230,10 +239,24 @@ cannot honestly assert about an arbitrary endpoint. This project has already
 shipped that class of defect once, when the `NotMeasured` fact reused
 `dqv:computedOn` and thereby entailed that 548 deliberately declined pairs
 were quality measurements that never happened, with nothing visibly wrong
-until a consumer ran inference. Whether derived VoID is still worth building
-alongside the sample, rather than instead of it, is an open question for
-whichever stage revisits tier 1's "derive and serve VoID" idea from the
-Purpose section above.
+until a consumer ran inference.
+
+**The open question that stood here is answered, 2026-08-29.** It asked whether
+derived VoID is still worth building alongside the sample rather than instead of
+it. It is worth building, and it is the primary path rather than a fallback,
+because almost nobody publishes content-level VoID: of the 57 endpoints whose
+newest sweep recorded availability `verified`, 21 name a `void:Dataset`, 4 name
+class partitions, and 3 name property partitions, and two of those three are one
+service reached over http and https. Two distinct hosts out of 56, one of them
+`void-generator`'s own authors at UniProt. Tier 1 remains worth doing and its
+presence remains worth reporting, but it will supply content metadata for
+approximately nobody.
+
+What to derive, and how, is specified in
+[Content profiles](2026-08-29-content-profiles-design.md), which completes this
+tier's missing half. It also records why the derived facts are not VoID and
+carry no threshold, and the benchmark of `shexer` and `void-generator` that
+decided against both as probes.
 
 ### 1c. Query editor and autocomplete
 
@@ -439,7 +462,7 @@ that each end in something demonstrable, and each gets its own plan.
 | **1c-b4** | **DELIVERED 2026-08-24**: Crash-safe incremental writing, so output survives a crash at endpoint 500 of 548 and the second half of the per-endpoint isolation rule is met. A run is emitted as a header, one self-contained chunk per endpoint written and flushed as that endpoint completes, and a footer, each section closed by its own terminator quad on the run's activity: `sw:emission "incremental"` for the header, `sw:completedEndpoint <endpoint>` for a chunk, and `sw:finalised true` for the footer, which is the last line a finished run ever writes. No fact family publishes its own summary before the things it summarises, so `sw:sampleSize` follows its values and `sw:failedEndpoints` moved into the footer. A run in progress is written to `<out>.<at>.partial` and renamed onto `--out` at the end, so a crash cannot touch the previous complete run, and a retry sharing an `--at` is **refused** rather than overwriting the earlier attempt's partial. `web/load_run.py` cuts an incomplete file back to its last terminator line, matched in predicate position rather than by substring, and reports the bytes it discarded; a file corrupted before that line is still refused whole. The read tier says both "this run did not finish" and "a later run did not finish and never reached this endpoint", in HTML and in RDF, carrying the inputs to that derivation rather than a derived flag. As predicted, the file's order is now **completion** order, deliberately breaking the old input-order property; the `Sweep` returned in memory is still input order, and those are two different properties. Measured: a `SIGKILL` mid-sweep left a 25,634-byte partial that loaded as 114 quads with 0 discarded, marked unfinished, one completed endpoint with its 8 verdicts intact, and the previous `--out` byte-identical; a retry at the same `--at` exited 1 and left that partial byte-identical. The guarantee is bounded at process death: there is no `fsync` per chunk, so a power loss can still lose a flushed chunk, and the zeroed tail such a loss can leave is refused whole rather than rescued. | stage 1c-b3 |
 | **1d. Registry seeding** | Ingest LOD Cloud + YummyData candidates, resolve front-ends to real endpoints, probe with politeness, admit responders. **PARTLY DELIVERED 2026-08-24** (stage 1d-a): ingest from LOD Cloud alone, plus the first registry-scale sweep. `seed::candidates` turns the 2026-06-15 dump (1683 datasets, 725 `access_url` entries, 548 distinct URLs) into **543 seeded candidates**, refusing 5 with a count per reason, and `seed-registry` writes `prober/registry/lod-cloud.toml` beside a parseable provenance file naming the dump, its SHA-256 (which the tool computes itself, refusing to write if `--sha256` disagrees) and every count. Endpoint-list policy has one implementation, because the seeder calls `registry.rs`, and the two refusals added there are split by the question each answers: `without_unroutable_hosts` in the seeder alone, since an operator may legitimately probe their own machine and this suite does so through wiremock, while `without_reserved_names` and `without_unpublishable_iris` are wired into `load_endpoints` so they hold whoever supplied the list. The dump's own `status` field gates nothing and a test pins that. The sweep: 543 candidates, cheap ceiling, `--concurrency 4`, **1h26m21s**, 3801 measurements, 0 failed endpoints, 6.3 MB, `finalised=true`, so 1c-b4's incremental protocol held at registry scale; 57 of 543 answered a query where the survey found 65 of 548, and **26** published a parseable service description (`service-description` `verified`; 30 returned some parseable RDF to the queryless GET, which is the weaker `declarationsRead` claim). Among the living, 24 of the 57 carry a description, 42.1%, against the survey's 28 of 65, 43.1%, so this sweep is slightly lower on both. Of the 26, **23 are at level 1, 2 at level 2 and one at level 4**, which is the survey's Virtuoso-stub finding reproduced by the graded metric. **Not built: front-end resolution, YummyData's list, and any name for an endpoint** (opened 2026-08-27; see the fourth deferral under [Endpoint registry](#endpoint-registry), which is a question about whether this service will assert a third party's label for somebody else's endpoint). The third deferral, the admission policy, was **DELIVERED 2026-08-27**: the dead are no longer re-probed on every sweep, so the registry is operable on a cadence, and what each cadence costs is arithmetic given under [Admission policy: dormancy](#admission-policy-dormancy) rather than a single headline figure. The three deferrals with their reasons, the two items the measurement retired, and an answer to each of the four questions this row used to ask are under [Endpoint registry](#endpoint-registry). | stage 1c-b4 |
 | **2. Scoring as queries** | Score computation as pure SPARQL/functions over stored measurements, with recomputation over history proven. **PARTLY DELIVERED 2026-08-22** (stage 2-1): Storage in Oxigraph is in place, and one read query (`endpoint_content.rq`) is implemented and tested. Score computation is not built. | stage 1b |
-| **2b. Content metadata + examples** | Tiered VoID extraction, SIB example ingestion, `/.well-known/sparql-examples` discovery. **PARTLY DELIVERED 2026-08-22** (stage 2b-1): distinct classes are sampled and published as a `ContentSample` fact, deliberately not as VoID; see the tier-2 status note under [1b](#1b-content-metadata-extraction-tiered). Properties per class, counts, SIB ingestion, and example discovery are not built. | stage 1d |
+| **2b. Content metadata + examples** | Tiered VoID extraction, SIB example ingestion, `/.well-known/sparql-examples` discovery. **PARTLY DELIVERED 2026-08-22** (stage 2b-1): distinct classes are sampled and published as a `ContentSample` fact, deliberately not as VoID; see the tier-2 status note under [1b](#1b-content-metadata-extraction-tiered). Properties per class and counts are specified as of 2026-08-29 in [Content profiles](2026-08-29-content-profiles-design.md) and not yet built; SIB ingestion and example discovery are neither specified nor built. | stage 1d |
 | **3. Web read tier** | Faceted search, browse, endpoint pages, metric pages, charts, content negotiation, read-only public SPARQL endpoint. **PARTLY DELIVERED 2026-08-23** (stage 3-1): One endpoint resource served at `GET /endpoint?url=...` with content negotiation returning HTML or any of four RDF serialisations (Turtle, N-Triples, RDF/XML, JSON-LD), the HTML and the RDF agreeing on every verdict the run recorded. **MORE DELIVERED 2026-08-25** (stage 3-2): an index at `GET /` listing all 543 endpoints in one page of 424.6 KiB, grouped by the availability verdict's own values with a denominator on every count; `GET /about`, the page the prober's `User-Agent` points at, saying who is querying, how often, how politely, why that endpoint, and how to ask to be left alone; and all three read paths moved onto the derived `urn:sparqlwatch:current` graph, which is what makes a whole-registry page a flat scan. All three resources negotiate. Leaderboard, per-metric pages, history, evidence per measurement, embedded query editor, and read-only public SPARQL endpoint are still not built. **Faceted search is blocked rather than unbuilt**: faceting by vocabulary or class needs content data, and stage 2b has produced no vocabulary or property data and one class sample per endpoint at best, since `sw:metric:classes` is declined at the default cost ceiling. | stage 2, 2b |
 | **3b. Embedded editor** | `@sib-swiss/sparql-editor` per endpoint, fed autocomplete metadata from our origin | stage 2b, 3 |
 | **4. ids3 deployment** | `sparqlwatch-dev` project-env: prober CronJob, web, Oxigraph, ingress, egress policy | stage 3 |
@@ -766,8 +789,11 @@ described as unverified for want of trying.
 attempt at the second test defined both metrics as `kind = "AskData"` with `var = "o"` over
 `{ ?s ?p ?o }`. `AskData` routes through `Client::ask_literal`, which applies a literal
 guard, and `?o` usually binds an IRI, so 49 of 84 endpoints came back `absent` and appeared
-to hold no triples at all. `metrics.toml:97-102` documents exactly this trap on
-`has-classes` itself and is the reason that metric is `SelectIris`. Re-run with `SelectIris`,
+to hold no triples at all. `prober/metrics.toml` documents exactly this trap, in the
+comment on the `classes` metric's `kind`, and it is the reason that metric is
+`SelectIris`. The comment lived on `has-classes` when this was written and moved
+with the warning when that metric was removed on 2026-08-28; cited by section
+rather than by line number because the line number was already wrong once. Re-run with `SelectIris`,
 those 49 became `verified`. The lesson is in the comment already; this is a record that it
 was earned twice.
 

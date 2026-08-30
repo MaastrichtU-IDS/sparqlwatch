@@ -109,6 +109,12 @@ ENDPOINT_PATH = "/endpoint"
 # one route and reaching it meant knowing an endpoint URL and percent-encoding
 # it by hand.
 INDEX_PATH = "/"
+# The documentation section. Three pages, and the third is /about, which keeps
+# its own url because the prober's User-Agent points at it; see the /docs
+# section comment further down.
+DOCS_PATH = "/docs"
+DOCS_METRICS_PATH = "/docs/metrics"
+DOCS_STATES_PATH = "/docs/states"
 
 # This path is not a choice. Every request the prober makes carries
 # `sparqlwatch/<version> (+https://<host>/about)` in its User-Agent
@@ -388,6 +394,25 @@ _ENDPOINT_VARIABLE = Variable("endpoint")
 app = FastAPI(
     title="sparqlwatch",
     description="What this service observed of public SPARQL endpoints.",
+    # FastAPI serves a Swagger UI at /docs and a ReDoc at /redoc unless told
+    # not to, and both are off for two reasons.
+    #
+    # The first is that /docs is this site's documentation section as of
+    # 2026-08-28 and the framework's route wins a collision silently: the page
+    # rendered, the tests failed, and what came back was an API explorer.
+    #
+    # The second is the better reason and would stand on its own. That explorer
+    # is a third-party script: the served page carries
+    # `src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"`,
+    # so every reader who opened it fetched code from a CDN this project has no
+    # relationship with and told that CDN which page they were on. This site puts
+    # `rel="noreferrer"` on its one outward link so that a person looking up
+    # their own endpoint does not announce to it that they read us first, and
+    # shipping a CDN bundle nobody asked for is the same leak with the argument
+    # reversed. The schema itself stays at /openapi.json, which is ours, static
+    # and machine-readable.
+    docs_url=None,
+    redoc_url=None,
 )
 
 
@@ -895,6 +920,25 @@ def _provenance(
     return None
 
 
+def _page_dormancy_note(rows: list[dict]) -> str | None:
+    """One sentence for the whole listing, or None when no row is marked.
+
+    None and not an empty string, for the reason the per-group version gave: a
+    note saying some of these rows were not asked is false of every row on a
+    page that holds none.
+    """
+    marked = [row for row in rows if row.get("dormant")]
+    if not marked:
+        return None
+    # A COUNT and not a set of reasons. _group_dormancy_note compares it against
+    # the marked count to choose between "and said why", "and said why for N of
+    # them" and saying nothing, so a set of the distinct reasons would compare
+    # two unlike things and pick the wrong clause: two reasons across fifty
+    # marked rows would read as two rows having said why.
+    with_reason = sum(1 for row in marked if row.get("dormancy_reason"))
+    return _group_dormancy_note(len(marked), len(rows), with_reason)
+
+
 def _page_context(
     endpoint: str,
     measurements: EndpointMeasurements,
@@ -953,6 +997,7 @@ def _page_context(
         # arrived on one endpoint from a search engine has somewhere to go
         # other than the back button.
         "index_path": INDEX_PATH,
+        "docs_path": DOCS_PATH,
         # The endpoint itself, in a new tab, when its scheme is one a browser
         # should follow. See _outward_link: this is the only href on this site
         # holding a string a third party chose.
@@ -1499,7 +1544,7 @@ def _outward_link(endpoint: str) -> str | None:
     return None
 
 
-def _state_facets(groups: list[dict]) -> list[dict]:
+def _state_facets(rows: list[dict]) -> list[dict]:
     """One chip per encoding state, counting rows with AT LEAST ONE chip in it.
 
     Changed from uniform-in-that-state on 2026-08-28 by the plan owner, and the
@@ -1526,12 +1571,9 @@ def _state_facets(groups: list[dict]) -> list[dict]:
     to give that row a blank count that then revealed rows when pressed.
     """
     holding: dict[str, int] = {}
-    for group in groups:
-        for row in group["rows"]:
-            for slug in {
-                cell["slug"] for cell in row["cells"] if cell["present"]
-            }:
-                holding[slug] = holding.get(slug, 0) + 1
+    for row in rows:
+        for slug in {cell["slug"] for cell in row["cells"] if cell["present"]}:
+            holding[slug] = holding.get(slug, 0) + 1
     states = list(verdict_encoding.STATES)
     if holding.get(verdict_encoding.UNRECOGNISED.slug):
         states.append(verdict_encoding.UNRECOGNISED)
@@ -1546,8 +1588,34 @@ def _state_facets(groups: list[dict]) -> list[dict]:
     ]
 
 
+# What each metric asks, for the tooltip on its name in the grid.
+#
+# THE SOURCE OF TRUTH IS prober/metrics.toml, whose `label` field these are, and
+# the run graphs do not carry it: a measurement names its metric by IRI and
+# nothing publishes a label for that IRI, so the web tier cannot read these out
+# of the store the way it reads everything else it says. The choices were to
+# teach the prober to publish them, which shows nothing until a new sweep runs,
+# to read the prober's file from the web tier at runtime, which couples the
+# service to a layout it otherwise never touches, or this: keep the words here
+# and PIN THEM WITH A TEST that reads prober/metrics.toml and fails when the two
+# drift. The last is what test_about.py already does for the politeness numbers
+# and the dormancy slugs, so it is this project's answer to exactly this shape.
+#
+# A metric with no entry here gets no tooltip rather than an invented one.
+METRIC_DESCRIPTIONS = {
+    "availability": "Answers a trivial query",
+    "cors": "Sends access-control-allow-origin on a simple GET",
+    "cors-preflight": "Answers a CORS preflight for a cross-origin GET",
+    "geo-functions": "GeoSPARQL relation functions",
+    "geo-data": "Holds WKT geometry",
+    "service-description": "Service description informativeness",
+    "has-classes": "Holds typed resources",
+    "classes": "Distinct classes",
+}
+
+
 def _metric_state_matrix(
-    groups: list[dict], metrics: list[dict]
+    rows: list[dict], metrics: list[dict]
 ) -> list[dict]:
     """One row per metric, one cell per state, counting the endpoints in each.
 
@@ -1568,12 +1636,11 @@ def _metric_state_matrix(
     look", and the column answers it.
     """
     counted: dict[tuple[str, str], int] = {}
-    for group in groups:
-        for row in group["rows"]:
-            for cell in row["cells"]:
-                if cell["present"]:
-                    key = (cell["name"], cell["slug"])
-                    counted[key] = counted.get(key, 0) + 1
+    for row in rows:
+        for cell in row["cells"]:
+            if cell["present"]:
+                key = (cell["name"], cell["slug"])
+                counted[key] = counted.get(key, 0) + 1
     states = list(verdict_encoding.STATES)
     if any(
         slug == verdict_encoding.UNRECOGNISED.slug for _, slug in counted
@@ -1583,6 +1650,7 @@ def _metric_state_matrix(
         {
             "name": metric["name"],
             "abbr": metric["abbr"],
+            "description": METRIC_DESCRIPTIONS.get(metric["name"]),
             # The row's own total, so a reader can see at a glance that the
             # cells beside it account for every endpoint and none twice.
             "total": sum(
@@ -1615,6 +1683,11 @@ def _matrix_states(matrix: list[dict]) -> list[dict]:
             "slug": cell["slug"],
             "label": cell["label"],
             "css_class": cell["css_class"],
+            # The meaning verdict_encoding already carries. It was printed as
+            # prose under the legend until the grid replaced it, and the prose
+            # under the grid went on 2026-08-28, so this is where it lives now:
+            # on the thing it describes rather than in a paragraph beneath it.
+            "description": verdict_encoding.presentation(cell["slug"]).meaning,
         }
         for cell in matrix[0]["cells"]
     ]
@@ -1670,142 +1743,36 @@ def _index_row(entry: EndpointMeasurements, metrics: list[dict]) -> dict:
     }
 
 
-def _index_groups(
+def _index_rows(
     entries: list[EndpointMeasurements], metrics: list[dict]
 ) -> list[dict]:
-    """The rows, grouped by the availability verdict's own value.
+    """Every row, alphabetical by endpoint. One listing.
 
-    One group per value PRESENT, in verdict_encoding.STATES' order, then any
-    value this build has no encoding for, then one final group for endpoints
-    whose newest run recorded no availability verdict at all.
+    This grouped rows by the availability verdict's own value until 2026-08-28,
+    one section per value present in verdict_encoding.STATES' order, with a
+    heading naming the value and its denominator. The plan owner removed the
+    headings, and with nothing rendering the grouping the whole apparatus was
+    vestigial: the template used none of the eight fields a group carried except
+    its rows, and no reader could see the availability value a row was filed
+    under. What survives the removal is where that information now comes from,
+    which is better than a heading: the grid's availability ROW states 57
+    verified, 482 indeterminate and 4 absent, keeping apart the two the
+    headings' own available-or-not reading merged.
 
-    The order is the encoding table's and not any notion of better or worse.
-    Ranking the groups would be this service's opinion about the endpoints; the
-    table's order is a fact about the vocabulary.
-
-    The final group is merged with nothing, and its key is not a verdict value:
-    an endpoint whose run declined every metric it applied has no availability
-    verdict, and web/tests/fixtures/run-prober-failed.nq is a whole run of
-    exactly that shape, which stage 1c-b3 makes the normal outcome for a host
-    group whose probe task panicked. Merging it into "absent" would turn
-    "nobody looked" into "we established nothing was there"; merging it into
-    "indeterminate" would claim a measurement nobody took.
+    ALPHABETICAL, which the removal forces as a decision rather than leaving as
+    a residue. The old comment here said the group order "is the encoding
+    table's and not any notion of better or worse", because "ranking the groups
+    would be this service's opinion about the endpoints". That was true while
+    the groups were labelled and the page said as much. Unlabelled, the same
+    order is an unexplained ranking with the sentence that excused it deleted,
+    so the honest flattening is the one that ranks nothing: the endpoint's own
+    url, which is also what the search box above filters on and what a reader
+    scanning for one is scanning for.
     """
-    availability: dict[str | None, list[EndpointMeasurements]] = {}
-    for entry in entries:
-        verdict = next(
-            (
-                measured.verdict
-                for measured in entry.verdicts
-                if measured.metric == _AVAILABILITY_METRIC
-            ),
-            None,
-        )
-        availability.setdefault(verdict, []).append(entry)
-
-    order = {state.slug: index for index, state in enumerate(verdict_encoding.STATES)}
-    # A value the table has no entry for sorts after every value it has, and
-    # ties among such values are broken by the value itself so the page is
-    # stable. None sorts last of all, and it is not a value: see the docstring.
-    values = sorted(
-        (value for value in availability if value is not None),
-        key=lambda value: (order.get(value, len(order)), value),
+    return sorted(
+        (_index_row(entry, metrics) for entry in entries),
+        key=lambda row: row["endpoint"],
     )
-    if None in availability:
-        values.append(None)
-
-    total = len(entries)
-    groups = []
-    for value in values:
-        rows = availability[value]
-        built = [_index_row(entry, metrics) for entry in rows]
-        # Counted off the built rows rather than asked of the entries again, so
-        # the number in the note and the markers a reader can count are the same
-        # decision read twice rather than two decisions that can differ.
-        dormant = sum(1 for row in built if row["dormant"])
-        # And how many of those carried a reason, for the same reason the count
-        # above is read off the built rows: the note says "and said why", and
-        # whether that is true is a property of these rows rather than of the
-        # marker. See _group_dormancy_note.
-        with_reason = sum(
-            1 for row in built if row["dormant"] and row["dormancy_reason"]
-        )
-        if value is None:
-            state = verdict_encoding.presentation(verdict_encoding.NOT_MEASURED)
-            label = state.label
-            # What the grouping criterion IS, and not one of the two ways of
-            # meeting it. There are two, they are opposite claims, and both are
-            # reachable: a run that DECLINED availability recorded an
-            # sw:NotMeasured fact naming the metric and a reason, and a run at a
-            # different metric revision recorded nothing about availability in
-            # either direction. Saying every metric was declined rather than
-            # measured is false of the second on both counts, and it contradicts
-            # EMPTY_CELL_TEXT above, which says a metric a run recorded nothing
-            # about is a gap in what this service holds and not a verdict. So the
-            # sentence says which two cases are here and sends a reader to the
-            # row, where the availability column is a chip in the first case and
-            # a gap in the second.
-            meaning = (
-                "The newest run for these endpoints recorded no availability "
-                "verdict at all: either it declined the metric, or it recorded "
-                "nothing about it. Each row's availability column says which, a "
-                "chip for a decline and a dot for a gap. Neither is a verdict "
-                "about the endpoint, and neither is merged with one."
-            )
-        else:
-            state = verdict_encoding.presentation(value)
-            recognised = state is not verdict_encoding.UNRECOGNISED
-            # An unrecognised value is shown verbatim in the heading, the same
-            # way the endpoint page shows it in a row's state text.
-            label = state.label if recognised else value
-            # What the group IS, and deliberately not what the state means in
-            # general. verdict_encoding's meanings are written for a metric that
-            # can be declared ("works, and the endpoint declares it"), which is
-            # true of cors and of the service description and is not true of
-            # availability: nothing declares that it answers queries. Printing
-            # that generic gloss under an availability heading would explain the
-            # group with a sentence about a different metric. What the drawing
-            # means is the legend's to say, and the legend is above these groups
-            # since 2026-08-27, where each of its rows is also the filter chip
-            # for that state.
-            # No per-group note. Until 2026-08-27 each group carried one
-            # sentence differing only in a quoted verdict, directly beneath a
-            # heading that already names that verdict and its denominator, and
-            # the thing it went on to say (that one metric implies nothing
-            # about another) is now said once in the facets above the rows
-            # rather than three times between them.
-            meaning = None
-        groups.append(
-            {
-                # Empty for the final group, so that a group keyed on a verdict
-                # and the group keyed on no verdict stay distinguishable to a
-                # reader of the markup even where a store carried the literal
-                # value "not-measured" as a dqv:value.
-                "availability": "" if value is None else value,
-                "label": label,
-                "meaning": meaning,
-                "css_class": verdict_encoding.css_class(state.slug),
-                "count": len(rows),
-                "of": total,
-                # The heading a reader sees. It names the metric, because
-                # "verified: 3 of 9" on a page of eight metrics does not say
-                # verified at what, and it carries the denominator, because
-                # "verified 3" invites the question stage 1d-a got wrong.
-                "heading": (
-                    f"availability {label}: {len(rows)} of {total} endpoints"
-                ),
-                # None, not an empty string, when no row here carries the
-                # marker: a note saying that some of these rows were not asked
-                # would be false of every row in a group that holds none.
-                "dormant_note": (
-                    _group_dormancy_note(dormant, len(rows), with_reason)
-                    if dormant
-                    else None
-                ),
-                "rows": built,
-            }
-        )
-    return groups
 
 
 def _newest_sweep_note(entries: list[EndpointMeasurements]) -> str | None:
@@ -1835,20 +1802,19 @@ def _index_context(entries: list[EndpointMeasurements]) -> dict:
     """Everything the index template renders, decided here rather than in the
     page.
 
-    The template loops and formats. What a group is, what order the groups come
-    in, what a missing metric means and how a state is drawn are all decisions
-    with a right answer, and they belong where they can be tested.
+    The template loops and formats. What order the rows come in, what a missing
+    metric means, how a state is drawn and what each cell of the grid counts are
+    all decisions with a right answer, and they belong where they can be tested.
     """
     metrics = _index_metrics(entries)
-    groups = _index_groups(entries, metrics)
+    rows = _index_rows(entries, metrics)
     # The legend counts the chips on this page, and it is built by the same
     # function as the endpoint page's legend from the same table, so the two
     # pages cannot explain the encoding differently. A cell that is a gap
     # rather than a chip is not counted: it is not one of the states.
     drawn = [
         {"slug": cell["slug"]}
-        for group in groups
-        for row in group["rows"]
+        for row in rows
         for cell in row["cells"]
         if cell["present"]
     ]
@@ -1856,7 +1822,6 @@ def _index_context(entries: list[EndpointMeasurements]) -> dict:
         "endpoint_count": len(entries),
         "metrics": metrics,
         "metric_count": len(metrics),
-        "groups": groups,
         # The three facet groups, above the rows. Each filters by reading
         # attributes the rows already carry, so none of them costs a byte per
         # row; see the block above _index_row for what each one selects and why.
@@ -1865,8 +1830,28 @@ def _index_context(entries: list[EndpointMeasurements]) -> dict:
         # It subsumes the two chip strips it replaced, because a row header
         # filters on the metric alone and a column header on the state alone,
         # which is exactly what those strips did.
-        "matrix": _metric_state_matrix(groups, metrics),
-        "matrix_states": _matrix_states(_metric_state_matrix(groups, metrics)),
+        # ONE LISTING, alphabetical by endpoint, replacing the three sections
+        # headed "availability verified: 57 of 543 endpoints" and so on. The
+        # plan owner removed those headings on 2026-08-28 because the grid's
+        # availability row states the same three counts and states them better:
+        # 57, 482 and 4 rather than the two-way split the headings implied a
+        # reader should care about.
+        #
+        # ALPHABETICAL AND NOT IN THE ENCODING TABLE'S ORDER, which is a
+        # decision the removal forces. _index_groups' own comment says the
+        # group order "is the encoding table's and not any notion of better or
+        # worse", because "ranking the groups would be this service's opinion
+        # about the endpoints". That held while the groups were LABELLED and the
+        # page said so. Unlabelled, the same order is an unexplained ranking
+        # with the sentence that excused it deleted, so the honest flattening is
+        # the one that ranks nothing.
+        "rows": rows,
+        # The dormancy note, once for the page where it was once per group. A
+        # group that held no marked row correctly carried none, so three notes
+        # could say three different things; one listing says it once.
+        "dormant_note": _page_dormancy_note(rows),
+        "matrix": _metric_state_matrix(rows, metrics),
+        "matrix_states": _matrix_states(_metric_state_matrix(rows, metrics)),
         # The column headers' counts. A header carries one for the same reason
         # every other chip does: it is the invariant that caught a chip printing
         # 402 above an empty page. The ROW headers stopped being chips on
@@ -1874,7 +1859,7 @@ def _index_context(entries: list[EndpointMeasurements]) -> dict:
         # filters on that metric and a chip on the name could only widen what
         # they narrow.
         "state_counts": {
-            facet["slug"]: facet["count"] for facet in _state_facets(groups)
+            facet["slug"]: facet["count"] for facet in _state_facets(rows)
         },
         # Keyed by slug rather than a list, because the legend it feeds is
         # already looping over the states to draw the swatches and must not loop
@@ -1892,7 +1877,7 @@ def _index_context(entries: list[EndpointMeasurements]) -> dict:
         # keeps them in step is that both functions decide on that eighth entry
         # from the same condition over the same rows; see `_state_facets`.
         "state_rows": {
-            facet["slug"]: facet["count"] for facet in _state_facets(groups)
+            facet["slug"]: facet["count"] for facet in _state_facets(rows)
         },
         "newest_generated_at": (
             entries[0].newest_generated_at if entries else None
@@ -1909,6 +1894,7 @@ def _index_context(entries: list[EndpointMeasurements]) -> dict:
         # arrived on one endpoint from a search engine has somewhere to go
         # other than the back button.
         "index_path": INDEX_PATH,
+        "docs_path": DOCS_PATH,
         "row_unfinished_text": ROW_UNFINISHED_TEXT,
         "row_never_reached_text": ROW_NEVER_REACHED_TEXT,
         # The two new markers' words, for the panel that explains them. The
@@ -2001,6 +1987,235 @@ def index_resource(
         content=_index_rdf(store, media_type),
         media_type=media_type,
     )
+
+
+# ---------------------------------------------------------------------------
+# /docs: the documentation section
+# ---------------------------------------------------------------------------
+# Three pages, and the third one is not here. `/docs/metrics` describes what
+# each metric asks, `/docs/states` what each verdict means and how it is drawn,
+# and monitoring stays at `/about`.
+#
+# WHY MONITORING KEEPS ITS OWN URL rather than moving under /docs. Every request
+# this prober makes to a stranger's server carries
+# `sparqlwatch/<version> (+https://<host>/about)` in its User-Agent
+# (prober/src/client.rs:169), and the spec records that stage 3 "owed an /about"
+# at that address. That URL is a promise printed in traffic we have already
+# sent, so it is the one URL on this site that is not ours to tidy. The docs
+# index names it Monitoring and links to it, which costs a reader nothing and
+# costs the promise nothing either.
+#
+# WHAT IS PINNED AND WHAT IS NOT. `label`, `dimension` and `cost` are
+# prober/metrics.toml's own values, and a test reads that file and fails when
+# they drift, the same way test_about.py pins the politeness numbers. `explains`
+# is documentation: prose nothing can check, written here rather than implied by
+# a label. The run graphs carry none of this, because a measurement names its
+# metric by IRI and nothing publishes a description for that IRI, which is why
+# this table exists at all.
+METRIC_DOCS = {
+    "availability": {
+        "label": "Answers a trivial query",
+        "dimension": "availability",
+        "cost": "cheap",
+        "explains": (
+            "Whether a query reaches the endpoint and comes back. The probe is "
+            "one SELECT for a single triple, which is the smallest question a "
+            "SPARQL endpoint can be asked, so a failure here is about reaching "
+            "the service rather than about anything in its data. A timeout is "
+            "indeterminate and never absent: what was observed is that no "
+            "answer arrived inside the budget, which is not the same as an "
+            "endpoint that answered and had nothing."
+        ),
+    },
+    "cors": {
+        "label": "Sends access-control-allow-origin on a simple GET",
+        "dimension": "interoperability",
+        "cost": "cheap",
+        "explains": (
+            "Whether a script in a browser could read this endpoint's answer. "
+            "This is what a curl user sees: the header on a plain GET. It is "
+            "deliberately separate from the preflight below, because an "
+            "endpoint can have one and not the other and neither implies the "
+            "other."
+        ),
+    },
+    "cors-preflight": {
+        "label": "Answers a CORS preflight for a cross-origin GET",
+        "dimension": "interoperability",
+        "cost": "cheap",
+        "explains": (
+            "Whether a browser would even attempt a real query. Before sending "
+            "a cross-origin request that is not simple, a browser asks the "
+            "target for permission with an OPTIONS request naming the method "
+            "and headers it intends to use, and sends nothing if the answer "
+            "does not allow them. That question is the preflight, and it is "
+            "what decides whether an in-page query editor can talk to this "
+            "endpoint at all. The probe records the header VALUES and not just "
+            "their presence, because a header that is there and says no is not "
+            "permission."
+        ),
+    },
+    "geo-functions": {
+        "label": "GeoSPARQL relation functions",
+        "dimension": "capability",
+        "cost": "cheap",
+        "explains": (
+            "Whether the engine evaluates GeoSPARQL relation functions, asked "
+            "with a filter over constants so the answer is about the engine "
+            "rather than about the data. This is the metric where the "
+            "vocabulary earns its keep: an endpoint can evaluate these "
+            "functions without declaring them, which is undeclared but "
+            "verified, and an endpoint can answer a point-in-polygon test with "
+            "the wrong answer, which is declared but wrong. Both are true of "
+            "real endpoints in this registry."
+        ),
+    },
+    "geo-data": {
+        "label": "Holds WKT geometry",
+        "dimension": "content",
+        "cost": "cheap",
+        "explains": (
+            "Whether any geometry is actually stored, asked separately from the "
+            "functions above because holding geometry and being able to reason "
+            "over it are different facts. The probe guards against a literal "
+            "that is present and empty, because one endpoint in the survey this "
+            "project reproduces passed a naive check while every geometry it "
+            "held was nil."
+        ),
+    },
+    "service-description": {
+        "label": "Service description informativeness",
+        "dimension": "documentation",
+        "cost": "cheap",
+        "explains": (
+            "What the endpoint says about itself when asked with no query at "
+            "all. Graded rather than yes or no, because a description that "
+            "exists and names nothing useful is not the same as one that names "
+            "its dataset, its graphs and the languages it supports. Most of the "
+            "descriptions in this registry are at the lowest level, which is "
+            "the engine's default stub rather than anything a publisher wrote."
+        ),
+    },
+    # RETIRED 2026-08-28, and still here because the data is still published.
+    # A run graph records what one sweep observed and nothing rewrites one, so
+    # 543 has-classes measurements stand in the store, the index derives a
+    # column from them, and a column with no description would be a chip a
+    # reader cannot look up. `retired` is what keeps that honest: described,
+    # and marked as a thing no new sweep will produce.
+    "has-classes": {
+        "label": "Holds typed resources",
+        "dimension": "content",
+        "cost": "cheap",
+        "retired": "2026-08-28",
+        "explains": (
+            "Whether anything in the endpoint carried a type at all, asked with "
+            "one row as the whole answer. No longer measured, because the "
+            "question it answered was not the one it looked like: every RDF "
+            "dataset worth monitoring has types, so as a fact about CONTENT "
+            "this was close to worthless, and 54 verified against 489 "
+            "indeterminate on the 2026-08-24 sweep says what it was really "
+            "reporting was whether a query came back. Availability asks that, "
+            "with a smaller query. Measurements already taken are still shown "
+            "and still true of the sweep that took them."
+        ),
+    },
+    "classes": {
+        "label": "Distinct classes",
+        "dimension": "content",
+        "cost": "expensive",
+        "explains": (
+            "Which types the endpoint holds, sampled rather than counted. The "
+            "only expensive metric here, and every sweep so far has run at the "
+            "cheap ceiling, so this is declined for every endpoint and the grid "
+            "on the index shows that as a column of 543 declines. That is a gap "
+            "in what this service has looked at and not a finding about any "
+            "endpoint."
+        ),
+    },
+}
+
+
+def _docs_context() -> dict:
+    """What every page in this section needs: the way home, and its siblings.
+
+    One table, so a fourth page is added in one place and every page's nav
+    learns about it. Monitoring is a full entry with a `path` like the others,
+    which is what lets the index list three pages without knowing that one of
+    them lives outside /docs.
+    """
+    return {
+        "index_path": INDEX_PATH,
+        "docs_path": DOCS_PATH,
+        "docs_path": DOCS_PATH,
+        "about_path": ABOUT_PATH,
+        "pages": [
+            {
+                "path": DOCS_METRICS_PATH,
+                "title": "Metrics",
+                "blurb": (
+                    "The eight things this service asks an endpoint, what each "
+                    "question is, and what an answer to it does and does not "
+                    "establish."
+                ),
+            },
+            {
+                "path": DOCS_STATES_PATH,
+                "title": "States",
+                "blurb": (
+                    "The seven verdicts a measurement can carry, what each one "
+                    "means, and how each is drawn without relying on colour."
+                ),
+            },
+            {
+                "path": ABOUT_PATH,
+                "title": "Monitoring",
+                "blurb": (
+                    "Who queried your server, how often, how politely, why "
+                    "that endpoint, and how to ask to be left alone. This page "
+                    "keeps its own address because every request this service "
+                    "makes carries it."
+                ),
+            },
+        ],
+    }
+
+
+def _docs_metrics_context() -> dict:
+    """One entry per metric, in the order prober/metrics.toml declares them."""
+    return {
+        # Measured first, retired last, because a reader scanning this page is
+        # looking for what the service does now and a retired entry is a
+        # footnote to that rather than one of the eight things it asks.
+        "metrics": [
+            {"id": metric, **facts}
+            for metric, facts in sorted(
+                METRIC_DOCS.items(), key=lambda pair: bool(pair[1].get("retired"))
+            )
+        ],
+    }
+
+
+def _docs_states_context() -> dict:
+    """One entry per state, from the encoding table itself.
+
+    Nothing is written twice here: the label, the meaning and all three drawing
+    channels come from verdict_encoding, which docs/design/verdict-encoding.md
+    is canonical for and a test compares against.
+    """
+    return {
+        "states": [
+            {
+                "slug": state.slug,
+                "label": state.label,
+                "meaning": state.meaning,
+                "css_class": verdict_encoding.css_class(state.slug),
+                "border": state.border,
+                "fill": "filled" if state.fill else "empty",
+                "weight": state.weight,
+            }
+            for state in verdict_encoding.STATES
+        ],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -2099,7 +2314,7 @@ POLITENESS = {
     "request-budget-seconds": 30,
     "metric-budget-seconds": 60,
     "endpoint-budget-seconds": 600,
-    "requests-per-endpoint": 7,
+    "requests-per-endpoint": 6,
 }
 
 # What the admission policy costs an endpoint that has proved expensive and
@@ -2214,6 +2429,7 @@ SUMMARY = (
 _SERVICE = NamedNode("urn:sparqlwatch:service")
 _ABOUT = "urn:sparqlwatch:about:"
 _XSD_INTEGER = NamedNode("http://www.w3.org/2001/XMLSchema#integer")
+_XSD_BOOLEAN = NamedNode("http://www.w3.org/2001/XMLSchema#boolean")
 
 
 def _about_context() -> dict:
@@ -2234,6 +2450,7 @@ def _about_context() -> dict:
         "registry": REGISTRY,
         "full_sweep": FULL_SWEEP_DURATION,
         "index_path": INDEX_PATH,
+        "docs_path": DOCS_PATH,
         "endpoint_path": ENDPOINT_PATH,
     }
 
@@ -2296,6 +2513,152 @@ def _about_rdf(media_type: str) -> bytes:
         for name, value in (*POLITENESS.items(), *DORMANCY.items())
     )
     return serialize(iter(triples), format=RdfFormat.from_media_type(media_type))
+
+
+# ---------------------------------------------------------------------------
+# The docs routes
+# ---------------------------------------------------------------------------
+# Negotiated like every other resource here, because the spec's rule is
+# "content negotiation on every resource: HTML for people, RDF for machines"
+# and these two are not an exception in the way it might first look. A metric
+# and a state are VOCABULARY: what this service measures and what its verdicts
+# mean are exactly the things a client integrating with it needs without
+# parsing English, and the encoding table is already canonical in
+# docs/design/verdict-encoding.md. The prose is the part only a person reads.
+_DOCS = "urn:sparqlwatch:docs:"
+_METRIC = "urn:sparqlwatch:metric:"
+_STATE = "urn:sparqlwatch:state:"
+
+
+def _docs_rdf(media_type: str) -> bytes:
+    """The three documents this section holds, and nothing about their prose."""
+    section = NamedNode(_DOCS + "section")
+    triples = [
+        Triple(section, NamedNode(_DOCS + "page"), NamedNode(_DOCS + name))
+        for name in ("metrics", "states", "monitoring")
+    ]
+    return serialize(iter(triples), format=RdfFormat.from_media_type(media_type))
+
+
+def _docs_metrics_rdf(media_type: str) -> bytes:
+    """Each metric with the three facts prober/metrics.toml states about it.
+
+    The label, the dimension and the cost class, which are the prober's own
+    values and are pinned against its file by a test. Not the prose: an
+    explanation is for a reader and putting it here would invite a consumer to
+    treat a paragraph as data.
+    """
+    triples = []
+    for metric, facts in METRIC_DOCS.items():
+        subject = NamedNode(_METRIC + metric)
+        triples.append(
+            Triple(subject, NamedNode(_DOCS + "label"), Literal(facts["label"]))
+        )
+        triples.append(
+            Triple(
+                subject,
+                NamedNode(_DOCS + "dimension"),
+                Literal(facts["dimension"]),
+            )
+        )
+        triples.append(
+            Triple(subject, NamedNode(_DOCS + "cost"), Literal(facts["cost"]))
+        )
+    return serialize(iter(triples), format=RdfFormat.from_media_type(media_type))
+
+
+def _docs_states_rdf(media_type: str) -> bytes:
+    """Each state with its label, its meaning and all three drawing channels.
+
+    The channels are here because they are the encoding, not decoration: a
+    client rendering these verdicts itself needs to know that the difference
+    between "declared but wrong" and "verified" is a border weight and not a
+    colour, which is the property that keeps the drawing legible without colour.
+    """
+    triples = []
+    for state in verdict_encoding.STATES:
+        subject = NamedNode(_STATE + state.slug)
+        triples.append(
+            Triple(subject, NamedNode(_DOCS + "label"), Literal(state.label))
+        )
+        triples.append(
+            Triple(subject, NamedNode(_DOCS + "meaning"), Literal(state.meaning))
+        )
+        triples.append(
+            Triple(subject, NamedNode(_DOCS + "border"), Literal(state.border))
+        )
+        triples.append(
+            Triple(
+                subject,
+                NamedNode(_DOCS + "fill"),
+                Literal("true" if state.fill else "false", datatype=_XSD_BOOLEAN),
+            )
+        )
+        triples.append(
+            Triple(
+                subject,
+                NamedNode(_DOCS + "border-weight-px"),
+                Literal(str(state.weight), datatype=_XSD_INTEGER),
+            )
+        )
+    return serialize(iter(triples), format=RdfFormat.from_media_type(media_type))
+
+
+def _negotiated(request: Request, html, rdf) -> Response:
+    """One negotiation for the three docs resources.
+
+    The other three routes each spell this out, and each had a reason to: they
+    differ in what they do when the store cannot answer. These three read no
+    store and cannot 404, so one helper is the honest shape rather than three
+    copies of an identical branch.
+    """
+    media_type = choose_representation(request.headers.get("accept"))
+    if media_type is None:
+        return Response(
+            content=(
+                "none of the requested media types can be served; this "
+                "resource offers " + ", ".join(OFFERED_MEDIA_TYPES) + "\n"
+            ),
+            status_code=406,
+            media_type="text/plain; charset=utf-8",
+        )
+    if media_type == HTML_MEDIA_TYPE:
+        return Response(content=html(), media_type="text/html; charset=utf-8")
+    return Response(content=rdf(media_type), media_type=media_type)
+
+
+@app.get(DOCS_PATH)
+def docs_resource(request: Request) -> Response:
+    """What this service measures, what its verdicts mean, and why it queried."""
+    return _negotiated(
+        request,
+        lambda: _TEMPLATES.get_template("docs.html").render(**_docs_context()),
+        _docs_rdf,
+    )
+
+
+@app.get(DOCS_METRICS_PATH)
+def docs_metrics_resource(request: Request) -> Response:
+    """One section per metric: what it asks and what a verdict on it means."""
+    return _negotiated(
+        request,
+        lambda: _TEMPLATES.get_template("docs-metrics.html").render(
+            **_docs_context(), **_docs_metrics_context()
+        ),
+        _docs_metrics_rdf,
+    )
+
+
+@app.get(DOCS_STATES_PATH)
+def docs_states_resource(request: Request) -> Response:
+    """One section per state: what it means and how it is drawn."""
+    return _negotiated(
+        request,
+        lambda: _TEMPLATES.get_template("docs-states.html").render(
+            **_docs_context(), **_docs_states_context()
+        ),
+        _docs_states_rdf,
+    )
 
 
 @app.get(ABOUT_PATH)

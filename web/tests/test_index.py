@@ -38,6 +38,7 @@ web/tests/fixtures/; see each fixture's header comment for its provenance.
 """
 
 import re
+from pathlib import Path
 from html.parser import HTMLParser
 
 import pytest
@@ -47,6 +48,8 @@ from starlette.testclient import TestClient
 import verdict_encoding
 from app import (
     ABOUT_PATH,
+    DOCS_PATH,
+    METRIC_DESCRIPTIONS,
     DORMANCY,
     _index_html,
     _legend,
@@ -502,113 +505,6 @@ def test_a_declined_metric_is_not_drawn_as_a_verdict(
         assert classes[0]["data-declined"] == "cost-ceiling"
 
 
-# ---------------------------------------------------------------------------
-# The grouping
-# ---------------------------------------------------------------------------
-def test_groups_are_the_availability_values_present_in_encoding_order(
-    client_for, store_registry_sample
-):
-    """The order and the labels, not the membership.
-
-    Three things are being pinned. The groups are the availability verdict's
-    own values, so there are three of them here and not two. Their labels are
-    the labels verdict_encoding.py gives those states. And the order is that
-    table's order, which is neither alphabetical (absent, indeterminate,
-    verified) nor by size (indeterminate 4, verified 3, absent 2), so a page
-    that sorted by either would fail.
-    """
-    page = index(client_for(store_registry_sample))
-
-    assert [group["availability"] for group in groups(page)] == [
-        "verified",
-        "indeterminate",
-        "absent",
-    ]
-    assert [group["label"] for group in groups(page)] == [
-        verdict_encoding.presentation(slug).label
-        for slug in ("verified", "indeterminate", "absent")
-    ]
-
-
-def test_an_endpoint_with_no_availability_verdict_gets_its_own_group(
-    client_for, store_registry_and_failure
-):
-    """run-prober-failed.nq beside the nine, and its endpoint merged with
-    nothing.
-
-    That run declined every metric it applied, so it recorded no availability
-    verdict at all, and stage 1c-b3 makes this the normal outcome for a host
-    group whose probe task panicked. Its group comes last, is labelled "not
-    measured", and holds that endpoint alone: folding it into "absent" would
-    turn "nobody looked" into "we established nothing was there", and folding
-    it into "indeterminate" would claim a measurement that was never taken.
-    """
-    page = index(client_for(store_registry_and_failure))
-
-    assert [group["availability"] for group in groups(page)] == [
-        "verified",
-        "indeterminate",
-        "absent",
-        "",
-    ]
-    assert groups(page)[-1]["label"] == "not measured"
-    assert groups(page)[-1]["label"] == verdict_encoding.presentation(
-        verdict_encoding.NOT_MEASURED
-    ).label
-    assert [group["count"] for group in groups(page)] == ["3", "4", "2", "1"]
-
-    assert len(rows(page)) == REGISTRY_SAMPLE_ENDPOINTS + 1
-    assert KADASTER in listed(page)
-    assert chip_verdicts(page, row_for(page, KADASTER)) == {}
-
-
-def test_the_final_groups_sentence_is_true_of_both_ways_into_it(
-    client_for, store_no_availability_two_ways
-):
-    """The group is keyed on the ABSENCE of an availability verdict, and there
-    are two opposite ways to have one.
-
-    run-prober-failed.nq's endpoint was declined availability: a run recorded an
-    sw:NotMeasured fact naming the metric and a reason. run-no-availability.nq's
-    endpoint has no availability fact in either direction, while a metric of its
-    own was measured. The group used to say "every metric it applied to them was
-    declined rather than measured", which is false of the second on both counts,
-    and it contradicted EMPTY_CELL_TEXT fifty lines above it in app.py, which
-    says a metric a run recorded nothing about "is a gap in what this service
-    holds, not a verdict about the endpoint".
-
-    So the sentence must state the criterion the grouping actually uses and send
-    a reader to the row for which of the two it is, and it must not claim a
-    decline of either endpoint.
-    """
-    page = index(client_for(store_no_availability_two_ways))
-    final = groups(page)[-1]
-
-    assert final["availability"] == "", "the group keyed on no verdict"
-    assert final["count"] == "2", "one endpoint of each kind is in it"
-    assert set(listed(page)) == {KADASTER, NO_AVAILABILITY}
-
-    said = group_note(page, "")
-    assert "declined" in said, "the declining case must still be named"
-    assert re.search(r"recorded nothing|nothing about it|no availability fact", said), (
-        f"the other case must be named too, said {said!r}"
-    )
-    assert "every metric" not in said, (
-        f"one of these endpoints had a metric measured, said {said!r}"
-    )
-
-    # And the rows are where a reader tells the two apart, which is what the
-    # sentence sends them to: the declined endpoint carries a chip for
-    # availability, the other carries a gap.
-    kadaster = row_for(page, KADASTER)
-    assert any(
-        chip.get("data-declined") for chip in kadaster["chips"]
-    ), "the declined endpoint's row must carry its decline"
-    assert chip_verdicts(page, row_for(page, NO_AVAILABILITY)) == {
-        "classes": "absent"
-    }, "and the other endpoint's row must carry the metric that WAS measured"
-
-
 def test_each_group_states_its_count_with_the_denominator(
     client_for, store_registry_and_failure
 ):
@@ -629,66 +525,6 @@ def test_each_group_states_its_count_with_the_denominator(
         assert re.search(
             rf"\b{group['count']} of {total} endpoints\b", group["heading"] or ""
         ), f"{group['label']}'s heading reads {group['heading']!r}"
-
-
-def test_no_group_is_drawn_for_a_value_no_endpoint_carries(
-    client_for, store_registry_sample
-):
-    """One group per value PRESENT, so the states this fixture has no endpoint
-    for get no heading.
-
-    A page listing all seven headings would read as a claim that the fixture
-    holds an endpoint whose availability is declared-but-wrong. The legend is
-    the place that lists every state whatever the page holds, and it says so
-    about the encoding rather than about these endpoints.
-    """
-    page = index(client_for(store_registry_sample))
-    drawn = {group["availability"] for group in groups(page)}
-
-    assert drawn == {"verified", "indeterminate", "absent"}
-    for slug in ("undeclared-but-verified", "declared-only", "declared-but-wrong"):
-        assert slug not in drawn
-
-
-# ---------------------------------------------------------------------------
-# Rows whose facts are not current
-# ---------------------------------------------------------------------------
-def test_a_row_whose_run_did_not_finish_is_qualified(
-    client_for, store_crashed_partway
-):
-    """The two conditions the endpoint page states, on the index's rows.
-
-    kadaster's facts come from the run that died partway: it recorded
-    sw:emission and never recorded sw:finalised, so what is shown is a partial
-    sweep's. The other two endpoints' facts are complete and current, and what
-    is true of them is a different claim: a later sweep exists, stopped, and
-    never recorded reaching them, so their rows are not a report on that sweep.
-    Two claims, so two markers, and a row carrying neither would present a
-    crashed sweep's facts as a finished one's.
-
-    Both markers are also words a reader sees, not attributes alone: a marker
-    that only a test can read qualifies nothing.
-    """
-    page = index(client_for(store_crashed_partway))
-    assert set(listed(page)) == {KADASTER, QLEVER, ONTOP}
-
-    unfinished = {
-        attributes["data-endpoint"]
-        for attributes in with_attribute(page, "data-run-unfinished")
-    }
-    never_reached = {
-        attributes["data-endpoint"]
-        for attributes in with_attribute(page, "data-newer-run-unfinished")
-    }
-    assert unfinished == {KADASTER}
-    assert never_reached == {QLEVER, ONTOP}
-
-    assert row_for(page, KADASTER)["text"] != row_for(page, KADASTER)["endpoint"]
-    for endpoint in (KADASTER, QLEVER, ONTOP):
-        row = row_for(page, endpoint)
-        assert row["text"].strip() not in ("", endpoint), (
-            f"{endpoint}'s row carries the marker attribute and no words"
-        )
 
 
 def test_a_finished_sweep_qualifies_no_row(client_for, store_registry_sample):
@@ -830,7 +666,10 @@ def test_an_unrecognised_verdict_is_drawn_as_unrecognised_and_shown_verbatim(
         verdict_encoding.UNRECOGNISED.slug
     ) in drawn[0]["class"].split()
 
-    assert [group["availability"] for group in groups(page)] == [""]
+    # One listing since 2026-08-28, so there is no group whose availability
+    # value could be read. What matters is on the row: it is on the page and its
+    # chip carries the unrecognised encoding.
+    assert any(r["endpoint"] == row["endpoint"] for r in grouped_rows(page))
 
 
 def test_the_metric_columns_come_from_the_run_rather_than_a_fixed_list(
@@ -1202,8 +1041,10 @@ def test_a_dormant_row_keeps_the_verdict_its_last_probe_produced(
     """
     page = index(client_for(store_dormant_newest))
 
-    groups_by_value = {group["availability"]: group for group in groups(page)}
-    assert "dormant" not in groups_by_value, "dormancy was drawn as a group"
+    # Dormancy was never a group and is not one now: the row keeps the verdict
+    # its last real probe produced, and since 2026-08-28 there are no groups at
+    # all, so the only place the marker can appear is on the row.
+    assert not with_attribute(page, "data-group-heading")
     assert chip_verdicts(page, row_for(page, KADASTER))["availability"] == "verified"
     assert (
         chip_verdicts(page, row_for(page, KADASTER))
@@ -1216,8 +1057,10 @@ def test_a_dormant_row_keeps_the_verdict_its_last_probe_produced(
         }
     )
 
-    note = texts_with(page, "data-group-dormant")
-    assert len(note) == 1, f"{len(note)} groups carry a dormancy note"
+    # ONE note for the page, where it was one per group and a group holding no
+    # marked row correctly carried none.
+    note = texts_with(page, "data-page-dormant")
+    assert len(note) == 1, f"{len(note)} page-level dormancy notes"
     assert "1" in note[0], note[0]
     assert "did not ask" in note[0], note[0]
 
@@ -1394,47 +1237,38 @@ def test_dormancy_is_not_added_to_the_legend(client_for, store_dormant_newest):
     assert "dormant" not in states
 
 
-def test_the_row_markers_are_explained_on_about_and_not_on_the_index(
+def test_the_row_markers_are_explained_in_the_docs_and_not_on_the_index(
     client_for, store_dormant_newest
 ):
-    """The panel that explained the four row markers was commented out by the
-    plan owner on 2026-08-28, so this pins where the explanation now lives.
+    """The panel that explained the four row markers went on 2026-08-28, and
+    the header now leads to the docs section rather than straight to /about.
 
-    The markers themselves still render, so a reader still meets "the newest
-    sweep did not ask" on a row. What changed is that the index no longer says
-    what that means, what it does NOT mean, or who changes it. /about does say
-    all three, and the header links there from every page, which is why this is
-    a relocation rather than a loss: the sentence a reader needs is one click
-    away instead of one scroll away. The row's own wording still carries the
-    reason, which is what stops the marker being bare.
+    The markers still render, so a reader still meets "the newest sweep did not
+    ask" on a row. What the index no longer does is explain it, and the way to
+    the page that does is two clicks instead of one: docs, then Monitoring.
     """
     page = index(client_for(store_dormant_newest))
     assert not with_attribute(page, "data-row-marker")
-    # The marker is still on the row, and still says why.
     marked = texts_with(page, "data-newest-sweep-dormant")
     assert marked and any("did not ask" in text for text in marked)
-    # And the way to the page that explains it is in the header.
-    assert f'href="{ABOUT_PATH}"' in page
+    nav = with_attribute(page, "data-nav")
+    assert [a["href"] for a in nav] == [DOCS_PATH]
 
 
-def test_the_index_links_to_about_once_and_not_once_per_row(
+def test_the_index_carries_one_nav_link_and_never_one_per_row(
     client_for, store_dormant_newest
 ):
     """One occurrence, in the page header, and never one per row.
 
-    Was two until 2026-08-28: the header's and one inside the panel that
-    explained the dormancy marker, which the plan owner commented out. The
-    invariant this test exists for is unchanged and is the one that matters at
-    543 rows: a link repeated per row would spend 1,227 bytes as 24,000, and
+    It pointed at /about until 2026-08-28 and points at /docs now. The
+    invariant is the one that matters at 543 rows and is unchanged: a link
+    repeated per row would spend about 1,200 bytes as 24,000, and
     web/README.md's table is the record of how little headroom that leaves.
     """
-    href = f'href="{ABOUT_PATH}"'
     text = index(client_for(store_dormant_newest))
-    assert text.count(href) == 1, (
-        f"the header's link and no more: {text.count(href)}"
-    )
-    # The real invariant: not once per row, whatever the row count.
-    assert text.count(href) < len(listed(text))
+    nav = f'href="{DOCS_PATH}"'
+    assert text.count(nav) == 1, f"{text.count(nav)} nav links"
+    assert text.count(nav) < len(listed(text))
 
 
 def test_the_row_marker_reads_every_reason_a_run_graph_can_carry():
@@ -1653,67 +1487,39 @@ def facet_counts(text):
 
 
 class _GroupedRows(HTMLParser):
-    """Every row with the group element it is NESTED INSIDE, and its chips.
+    """Every rendered row and its chips.
 
-    The nesting is the point. The script reads a row's availability off the
-    group element the row is inside, so a reader that credited each row to the
-    nearest PRECEDING group heading would agree with the page even on markup
-    where a row had escaped its group, which is the arrangement that would make
-    the script read null and file every row on the page under "not available".
-    This tracks the open elements, so a row outside every group is not
-    attributed to one.
+    Tracked each row's enclosing availability group until 2026-08-28, when the
+    three sections became one listing and there was no group to track. What it
+    still refuses to fake is the row set: every assertion about a count on this
+    page is checked against the rows the page actually renders, which is the
+    only reading that catches a builder and a script disagreeing.
     """
 
     def __init__(self):
-        super().__init__()
+        super().__init__(convert_charrefs=True)
         self.rows = []
-        self._availability = None
-        self._depth = None
-        self._row_depth = None
-        self._chip = None
+        self._row = None
 
     def handle_starttag(self, tag, attrs):
         attributes = dict(attrs)
-        if "data-availability" in attributes:
-            assert self._depth is None, "a group is nested inside another group"
-            self._availability = attributes["data-availability"]
-            self._depth = 0
-            return
-        if self._depth is None:
-            return
-        self._depth += 1
         if "data-endpoint" in attributes:
-            assert self._row_depth is None, "a row is nested inside another row"
-            self._row_depth = self._depth
-            self.rows.append(
-                {
-                    "availability": self._availability,
-                    "endpoint": attributes["data-endpoint"],
-                    "chips": [],
-                }
-            )
-            return
-        if self._row_depth is not None and (
-            "data-verdict" in attributes or "data-declined" in attributes
-        ):
-            self._chip = dict(attributes, abbr="")
-            self.rows[-1]["chips"].append(self._chip)
-
-    def handle_endtag(self, tag):
-        if self._depth is None:
-            return
-        self._chip = None
-        if self._row_depth is not None and self._depth == self._row_depth:
-            self._row_depth = None
-        if self._depth == 0:
-            self._depth = None
-            self._availability = None
-        else:
-            self._depth -= 1
+            self._row = {"endpoint": attributes["data-endpoint"], "chips": []}
+            self.rows.append(self._row)
+        elif self._row is not None and "class" in attributes:
+            if attributes["class"].startswith("enc-"):
+                self._chip = dict(attributes)
+                self._row["chips"].append(self._chip)
 
     def handle_data(self, data):
-        if self._chip is not None:
-            self._chip["abbr"] += data
+        if self._row is not None and self._row["chips"]:
+            chip = self._row["chips"][-1]
+            if "abbr" not in chip and data.strip():
+                chip["abbr"] = data.strip()
+
+    def handle_endtag(self, tag):
+        if tag == "li":
+            self._row = None
 
 
 def grouped_rows(text):
@@ -1737,54 +1543,63 @@ def encoding_class(chip):
     return tokens[0][len("enc-") :]
 
 
-def group_of(group_value, *rows):
-    """One group of rows that need not be alike, in _index_groups' shape.
+def group_of(_ignored, *cell_maps):
+    """Rows that need not be alike, in the shape _index_rows returns.
 
-    Each row is a mapping from a metric name to either a verdict string or None
-    for a decline, which is the distinction all three facet builders turn on.
-    The slug is taken through verdict_encoding.presentation, exactly as
-    _index_row takes it, so a value this build has no encoding for arrives here
-    drawn the way the page draws it rather than under its own name.
+    One list of rows and no group since 2026-08-28. The first parameter was the
+    group's availability value and is ignored, kept so the call sites still read
+    as descriptions of endpoints whose availability reads that value.
     """
-    return {
-        "availability": group_value,
-        "rows": [
-            {
-                "cells": [
-                    {
-                        "present": True,
-                        "name": name,
-                        "abbr": name[:2].upper(),
-                        "verdict": value,
-                        "reason": None if value else "cost-ceiling",
-                        "slug": (
-                            verdict_encoding.presentation(value).slug
-                            if value
-                            else verdict_encoding.NOT_MEASURED
-                        ),
-                    }
-                    for name, value in cells.items()
-                ]
-            }
-            for cells in rows
-        ],
-    }
+    return [
+        {
+            "cells": [
+                {
+                    "present": True,
+                    "name": name,
+                    "abbr": name[:2].upper(),
+                    "verdict": value,
+                    "reason": None if value else "cost-ceiling",
+                    "slug": (
+                        value
+                        if value in {state.slug for state in verdict_encoding.STATES}
+                        else (
+                            verdict_encoding.NOT_MEASURED
+                            if value is None
+                            else verdict_encoding.UNRECOGNISED.slug
+                        )
+                    ),
+                }
+                for name, value in cells.items()
+            ]
+        }
+        for cells in cell_maps
+    ]
 
 
-def rows_of(group_value, count, /, **cells):
-    """One group of `count` rows, all alike, in the shape _index_groups returns.
+def rows_of(_ignored, count, /, **cells):
+    """`count` identical rows in the shape _index_rows returns.
 
-    Positional-only first parameter, because one of the metrics a caller names
-    is `availability` and a keyword of that name would collide with the group's
-    own value.
+    The first parameter was the group's availability value and is ignored since
+    2026-08-28: the builders take one flat list of rows and no longer see a
+    grouping. Kept in the signature so the call sites read the same, because
+    what each one is describing is still an endpoint whose availability reads
+    that value.
 
-    Each row gets its OWN dict, through group_of. The first version of this
-    built one row and aliased it `count` times, which was harmless because all
-    three builders are read-only over rows; harmless-until is not a property
-    worth keeping in a fixture, since a builder that ever annotated a row would
-    have annotated 543 of them.
+    `cells` maps a metric name to either a verdict string or None for a
+    decline, which is the distinction every builder turns on.
     """
-    return group_of(group_value, *([cells] * count))
+    built = [
+        {
+            "present": True,
+            "name": name,
+            "abbr": name[:2].upper(),
+            "verdict": value,
+            "reason": None if value else "cost-ceiling",
+            "slug": value if value else verdict_encoding.NOT_MEASURED,
+        }
+        for name, value in cells.items()
+    ]
+    return [{"cells": built} for _ in range(count)]
 
 
 def test_a_state_chip_counts_the_rows_carrying_at_least_one_of_that_state():
@@ -1802,12 +1617,10 @@ def test_a_state_chip_counts_the_rows_carrying_at_least_one_of_that_state():
     a declined chip counts too: that is what makes the "we did not look" chip
     mean the endpoints with a metric no sweep has run.
     """
-    groups = [
-        rows_of("indeterminate", 4, availability="indeterminate",
-                cors="indeterminate", classes=None),
-        rows_of("verified", 2, availability="verified", cors="absent", classes=None),
-    ]
-    by_slug = {f["slug"]: f["count"] for f in _state_facets(groups)}
+    built = rows_of("indeterminate", 4, availability="indeterminate",
+                    cors="indeterminate", classes=None) + rows_of(
+        "verified", 2, availability="verified", cors="absent", classes=None)
+    by_slug = {f["slug"]: f["count"] for f in _state_facets(built)}
     assert by_slug["indeterminate"] == 4
     assert by_slug["verified"] == 2, "the row has a verified chip, whatever else it has"
     assert by_slug["absent"] == 2, "and an absent one, so it counts towards both"
@@ -1834,34 +1647,34 @@ def test_the_state_chips_are_the_states_the_legend_lists_and_no_others():
     known = group_of("verified", {"availability": "verified"})
 
     # A row uniform in the unrecognised state: the count is 1 and it is stated.
-    assert [f["slug"] for f in _state_facets([uniform])] == eight
-    assert {f["slug"]: f["count"] for f in _state_facets([uniform])}[
+    assert [f["slug"] for f in _state_facets(uniform)] == eight
+    assert {f["slug"]: f["count"] for f in _state_facets(uniform)}[
         "unrecognised"
     ] == 1
     # And the case a condition on uniformity alone would miss: a row that DREW
     # an unrecognised verdict without being uniform in it. The legend lists the
     # eighth state because a chip on the page is in it, so the mapping carries
     # it too, at the count that is true, which is no rows.
-    assert [f["slug"] for f in _state_facets([mixed])] == eight
+    assert [f["slug"] for f in _state_facets(mixed)] == eight
     # 1 and not 0: the row carries an unrecognised chip beside a verified one,
     # and at-least-one counts it. Under the uniform reading this was 0, and the
     # point of the case is unchanged: the eighth entry is emitted because a cell
     # was DRAWN in that state, which is the same condition _legend lists it on,
     # so neither sequence can grow an entry the other lacks.
-    assert {f["slug"]: f["count"] for f in _state_facets([mixed])}[
+    assert {f["slug"]: f["count"] for f in _state_facets(mixed)}[
         "unrecognised"
     ] == 1
     # The other direction, which is what catches an eighth entry always drawn.
-    assert [f["slug"] for f in _state_facets([known])] == seven
+    assert [f["slug"] for f in _state_facets(known)] == seven
     # And the condition is the legend's own, over the same rows.
-    for group in (uniform, mixed, known):
+    for case in (uniform, mixed, known):
         drawn = [
             {"slug": cell["slug"]}
-            for row in group["rows"]
+            for row in case
             for cell in row["cells"]
             if cell["present"]
         ]
-        assert [f["slug"] for f in _state_facets([group])] == [
+        assert [f["slug"] for f in _state_facets(case)] == [
             entry["slug"] for entry in _legend(drawn)
         ]
 
@@ -1937,12 +1750,12 @@ def test_the_page_states_no_endpoint_or_metric_count_in_prose(
     # heading cannot. A group keyed ON a verdict has a heading that already
     # names that verdict and its denominator, so its note said nothing the
     # heading and the chips above the rows do not.
-    keyed = [
-        attributes["data-group-note"]
-        for attributes in with_attribute(page, "data-group-note")
-    ]
-    assert keyed == [""], keyed
-    assert "recorded no availability verdict at all" in group_note(page, "")
+    # No group carries a note because no group is drawn: the three sections
+    # became one listing on 2026-08-28. The two ways into the final group, a
+    # DECLINED availability metric and a run that recorded nothing for it, are
+    # both still on the row, where one draws a decline chip and the other a gap.
+    assert not with_attribute(page, "data-group-note")
+    assert not with_attribute(page, "data-group-heading")
 
 
 def test_every_facet_chip_is_an_unpressed_button(client_for, store_registry_sample):
@@ -2170,3 +1983,110 @@ def test_every_chip_count_is_the_rows_the_page_renders(
                     expected[key] += 1
 
         assert printed == expected
+
+# ---------------------------------------------------------------------------
+# One listing, and the tooltips that replaced the prose
+# ---------------------------------------------------------------------------
+
+
+def test_the_page_is_one_listing_with_no_headings(
+    client_for, store_registry_and_failure
+):
+    """Three sections became one on 2026-08-28.
+
+    What the headings said, "availability verified: 57 of 543 endpoints" and two
+    more, the grid's availability row now says per state: 57, 482 and 4, keeping
+    apart the two that an available-or-not reading merged.
+    """
+    page = index(client_for(store_registry_and_failure))
+    assert not with_attribute(page, "data-group-heading")
+    assert not with_attribute(page, "data-availability")
+    assert len(with_attribute(page, "data-listing")) == 1
+    assert grouped_rows(page), "one listing, and it holds the rows"
+
+
+def test_the_listing_is_alphabetical_and_ranks_nothing(
+    client_for, store_registry_and_failure
+):
+    """The order the removal forces as a decision.
+
+    Rows came out in the encoding table's order while the groups were labelled,
+    and app.py's own comment said that order was "not any notion of better or
+    worse" because "ranking the groups would be this service's opinion about the
+    endpoints". Unlabelled, that order is an unexplained ranking with the
+    sentence that excused it deleted, so the listing is the endpoint's own url.
+    """
+    page = index(client_for(store_registry_and_failure))
+    listed_urls = [row["endpoint"] for row in grouped_rows(page)]
+    assert listed_urls == sorted(listed_urls)
+
+
+def test_every_metric_name_carries_what_the_metric_asks(
+    client_for, store_registry_sample
+):
+    """A tooltip on the row label, from METRIC_DESCRIPTIONS."""
+    page = index(client_for(store_registry_sample))
+    labelled = with_attribute(page, "data-metric-column")
+    assert labelled
+    for attributes in labelled:
+        name = attributes["data-metric-column"]
+        if name in METRIC_DESCRIPTIONS:
+            assert attributes["title"] == METRIC_DESCRIPTIONS[name]
+
+
+def test_the_metric_descriptions_are_the_probers_own_labels():
+    """The pin that keeps the two from drifting.
+
+    prober/metrics.toml is the source and the run graphs do not carry it: a
+    measurement names its metric by IRI and nothing publishes a label for that
+    IRI, so the web tier cannot read these out of the store the way it reads
+    everything else it says. Same shape as test_about.py's politeness numbers,
+    and the same answer: keep the words in app.py and fail here when they drift.
+    """
+    metrics = (
+        Path(__file__).resolve().parents[2] / "prober" / "metrics.toml"
+    ).read_text()
+    labels = {}
+    for block in metrics.split("[[metric]]")[1:]:
+        found_id = re.search(r'^id = "([^"]+)"', block, re.M)
+        found_label = re.search(r'^label = "([^"]+)"', block, re.M)
+        if found_id and found_label:
+            labels[found_id.group(1)] = found_label.group(1)
+    assert labels, "no metric in prober/metrics.toml carries a label"
+    # Every metric the prober measures must be described, and a description may
+    # outlive the probe: see test_docs.py's retirement rule, which is where the
+    # marking is enforced. The store keeps publishing a retired metric's
+    # measurements and the index keeps deriving a column from them.
+    for metric, label in labels.items():
+        assert METRIC_DESCRIPTIONS.get(metric) == label, (
+            f"{metric}: the page says {METRIC_DESCRIPTIONS.get(metric)!r}, "
+            f"prober/metrics.toml says {label!r}"
+        )
+
+
+def test_every_state_column_carries_its_meaning(client_for, store_registry_sample):
+    """A tooltip on the column header, from verdict_encoding.
+
+    These were printed as prose under the panel until the plan owner removed it,
+    so the meanings did not go: they moved onto the thing they describe.
+    """
+    page = index(client_for(store_registry_sample))
+    headers = with_attribute(page, "data-state")
+    assert headers
+    for attributes in headers:
+        state = verdict_encoding.presentation(attributes["data-state"])
+        assert attributes["title"] == state.meaning
+
+
+def test_no_prose_stands_under_the_grid(client_for, store_registry_sample):
+    """Removed by the plan owner on 2026-08-28.
+
+    Both paragraphs went: the one explaining what a count is and the one
+    explaining what the borders mean. The second one's content is now on the
+    column headers, one state at a time. The first one's is not anywhere, which
+    is the cost: nothing on the page now says a count is conditioned on the
+    other filters, and the counts still are.
+    """
+    page = index(client_for(store_registry_sample))
+    assert "A cell is the endpoints whose newest sweep" not in page
+    assert "A filled chip means" not in page

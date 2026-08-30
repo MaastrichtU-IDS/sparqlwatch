@@ -126,7 +126,13 @@
     sparqlwatch
   </a>
   <span class="run">{% if run %}run {{ generated_at }}{% else %}no measurement sweep{% endif %}</span>
-  <a href="{{ about_path }}">why we queried your server</a>
+  {# The docs tab. It replaced a direct link to /about on 2026-08-28, which
+     costs a reader one click to reach the monitoring page and buys the other
+     two documentation pages a way in: nothing linked to either before, and
+     nothing linked to /about either until this stage. The sentence on a dormant
+     row still links straight to /about, because the reader it is written for
+     came for that page and not for a section. #}
+  <a href="{{ docs_path }}" data-nav="docs">docs</a>
 </header>
 <main>
   <h1>{{ endpoint }}</h1>

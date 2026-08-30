@@ -34,6 +34,7 @@ from starlette.testclient import TestClient
 import verdict_encoding
 from app import (
     ABOUT_PATH,
+    DOCS_PATH,
     COMPLETE_TEXT,
     INDEX_PATH,
     LINKABLE_SCHEMES,
@@ -1521,35 +1522,17 @@ def test_the_endpoint_page_says_the_newest_sweep_did_not_ask(
     )
 
 
-def test_the_endpoint_page_links_to_about(
-    client_for, store, store_dormant_newest
-):
-    """The instruction for overruling us has to be reachable from the page that
-    marks you.
+def test_the_endpoint_page_links_to_the_docs_section(client_for, store):
+    """The header's link became the docs tab on 2026-08-28.
 
-    Nothing on this site linked to `/about` until this stage. The contact address
-    that lifts a hold, the four numbers behind an automatic relegation and the
-    paragraph saying dormant is not a verdict all lived on a page reachable only
-    by pasting the prober's `User-Agent` URL into a browser, so this page said
-    what happened and stopped there.
-
-    Twice, and each is a different reader. The header is for anybody who lands on
-    an endpoint page at all. The second is inside the dormancy sentence, for the
-    one operator it is addressed to, so that "who changes this" is answered in
-    the same breath as the mark rather than two scrolls away.
+    A dormant endpoint's page still links straight to /about inside the sentence
+    that explains the marker, because the reader that sentence is written for
+    came for that page rather than for a section, and making them find it
+    through an index would be worse for exactly the reader who needs it most.
     """
-    href = f'href="{ABOUT_PATH}"'
-    plain = page(client_for(store), KADASTER)
-    assert href in plain, "no link to /about in the endpoint page header"
-    assert plain.count(href) == 1, (
-        "a page with no dormancy mark has nothing further to send a reader "
-        f"to /about for: {plain.count(href)} links"
-    )
-
-    marked = page(client_for(store_dormant_newest), KADASTER)
-    assert marked.count(href) == 2, "the header's link, and the sentence's"
-    said = texts_with(marked, SILENT)[0]
-    assert "about page" in said, said
+    text = page(client_for(store), KADASTER)
+    nav = with_attribute(text, "data-nav")
+    assert [a["href"] for a in nav] == [DOCS_PATH]
 
 
 def test_the_dormancy_sentence_is_not_drawn_as_a_verdict(

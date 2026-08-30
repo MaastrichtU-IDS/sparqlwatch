@@ -150,45 +150,167 @@ pub struct MetricDef {
     pub sample_limit: Option<usize>,
 }
 
-/// Drop everything from a `#` to the end of its line. `metrics.toml` uses
-/// triple-quoted multi-line query blocks, so a SPARQL comment inside one is
-/// entirely plausible, and a comment mentioning a limit must not be read as
-/// one: `LIMIT 50` plus a trailing `# raise back to limit 200` would otherwise
-/// satisfy a declared `sample_limit = 200` while the query returned 50, and 50
-/// of a cap of 200 is published as COMPLETE. That is the precise failure the
-/// cross-check exists to block.
+/// The query with everything that is not SPARQL *code* blanked out: comments
+/// removed, and the contents of IRI references and string literals replaced by
+/// spaces. Offsets and line structure are preserved so a position in the result
+/// is a position in the original.
 ///
-/// Crude in the same direction as `query_limit` itself: a `#` inside an IRI or
-/// a string literal truncates that line too, so such a query loses its `LIMIT`
-/// and fails to load. That is the acceptable failure. A matcher that fails
-/// loudly is fine; one that PASSES something it should reject is not.
-fn without_sparql_comments(query: &str) -> String {
-    query
-        .lines()
-        .map(|line| match line.find('#') {
-            Some(i) => &line[..i],
-            None => line,
-        })
-        .collect::<Vec<&str>>()
-        .join("\n")
+/// This exists for `query_limit` and for nothing else. The query actually sent
+/// to an endpoint is never rewritten.
+///
+/// Two failures, both real, motivate the shape:
+///
+/// Until 2026-08-29 this truncated every line at its first `#`. That is also the
+/// IRI fragment separator, so a query naming `<...owl#Class>` on the same line
+/// as its `LIMIT` lost the `LIMIT` and was refused for declaring a
+/// `sample_limit` its query did not carry, which is a false accusation: the
+/// query carries it. Two exploratory metric sets had to put every `LIMIT` on its
+/// own line to get around that.
+///
+/// Fixing only the comment handling then exposed the second failure, which the
+/// old crudeness had been hiding by accident: `query_limit` looks for the
+/// substring "limit", and `<http://example.org/vocab#limit200>` contains one. A
+/// query with no `LIMIT` clause at all would have loaded and been sent to a
+/// stranger's server unbounded. Blanking IRIs and literals is what closes that,
+/// and it is why this function blanks rather than merely uncomments.
+///
+/// Not a SPARQL parser, and it does not need to be. It needs one property, and
+/// keeps it: where the text is malformed it blanks to the end of the construct
+/// rather than guessing, so a `LIMIT` inside something it could not close is not
+/// found and the metric fails to load. Failing loudly is fine; passing something
+/// that should be rejected is not.
+fn sparql_code_only(query: &str) -> String {
+    let chars: Vec<char> = query.chars().collect();
+    let mut out = String::with_capacity(query.len());
+    let mut i = 0;
+
+    // Blank one char, keeping newlines so line structure survives.
+    let mut blank = |out: &mut String, c: char| out.push(if c == '\n' { '\n' } else { ' ' });
+
+    while i < chars.len() {
+        match chars[i] {
+            // A comment runs to the end of its line.
+            '#' => {
+                while i < chars.len() && chars[i] != '\n' {
+                    blank(&mut out, chars[i]);
+                    i += 1;
+                }
+            }
+
+            // An IRI reference. A SPARQL IRIREF may not contain whitespace, `<`
+            // or `>`, so an unclosed `<` runs into one of those and cannot
+            // swallow the rest of the query.
+            '<' => {
+                blank(&mut out, '<');
+                i += 1;
+                while i < chars.len()
+                    && chars[i] != '>'
+                    && chars[i] != '<'
+                    && !chars[i].is_whitespace()
+                {
+                    blank(&mut out, chars[i]);
+                    i += 1;
+                }
+                if i < chars.len() && chars[i] == '>' {
+                    blank(&mut out, '>');
+                    i += 1;
+                }
+            }
+
+            // A string literal. The long forms may span lines; the short ones
+            // may not, so a newline ends one and a stray quote cannot swallow
+            // the rest of the query.
+            q @ ('"' | '\'') => {
+                let long = i + 2 < chars.len() && chars[i + 1] == q && chars[i + 2] == q;
+                let open = if long { 3 } else { 1 };
+                for _ in 0..open {
+                    blank(&mut out, q);
+                }
+                i += open;
+                while i < chars.len() {
+                    if chars[i] == '\\' {
+                        blank(&mut out, '\\');
+                        i += 1;
+                        if i < chars.len() {
+                            blank(&mut out, chars[i]);
+                            i += 1;
+                        }
+                        continue;
+                    }
+                    if chars[i] == q {
+                        if !long {
+                            blank(&mut out, q);
+                            i += 1;
+                            break;
+                        }
+                        if i + 2 < chars.len() && chars[i + 1] == q && chars[i + 2] == q {
+                            for _ in 0..3 {
+                                blank(&mut out, q);
+                            }
+                            i += 3;
+                            break;
+                        }
+                    }
+                    if !long && chars[i] == '\n' {
+                        break;
+                    }
+                    blank(&mut out, chars[i]);
+                    i += 1;
+                }
+            }
+
+            c => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    out
 }
 
-/// Pull the integer following the last case-insensitive `LIMIT` in `query`,
-/// if any. Deliberately crude: this reads our own hand-written
-/// `metrics.toml`, not arbitrary SPARQL, and a wrong read here is a load
-/// error rather than a wrong measurement, so a full parser would be the
-/// wrong amount of machinery for the risk it removes.
+/// Pull the integer of the last `LIMIT` clause in `query`, if any.
+///
+/// Deliberately narrow rather than crude: this reads our own hand-written
+/// `metrics.toml`, not arbitrary SPARQL, and a wrong read here is a load error
+/// rather than a wrong measurement, so a full parser would be the wrong amount
+/// of machinery for the risk it removes. What it does insist on is that the
+/// match be a `LIMIT` CLAUSE and not the letters l-i-m-i-t appearing somewhere:
+/// the token must stand alone, and a count must follow it across whitespace.
+/// `?limit200` is a variable and `ex:limit200` is a name; neither bounds a
+/// query, and reading either as a bound would send an unbounded enumeration to
+/// somebody else's server.
 fn query_limit(query: &str) -> Option<u64> {
-    let query = without_sparql_comments(query);
-    let lower = query.to_ascii_lowercase();
-    let pos = lower.rfind("limit")?;
-    let rest = query[pos + "limit".len()..].trim_start();
-    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-    if digits.is_empty() {
-        None
-    } else {
-        digits.parse().ok()
+    let code = sparql_code_only(query);
+    let lower = code.to_ascii_lowercase();
+    let bytes = lower.as_bytes();
+
+    // Last match wins, so scan candidates from the end.
+    let mut found: Option<u64> = None;
+    for (pos, _) in lower.match_indices("limit") {
+        // The token must not continue a longer word on either side.
+        let before_ok = pos == 0 || {
+            let c = bytes[pos - 1] as char;
+            !(c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        };
+        if !before_ok {
+            continue;
+        }
+        let after = &code[pos + "limit".len()..];
+        let trimmed = after.trim_start();
+        // SPARQL puts whitespace between LIMIT and its count, and requiring it
+        // is what rejects `limit200` as a name rather than a clause.
+        if trimmed.len() == after.len() {
+            continue;
+        }
+        let digits: String = trimmed.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if digits.is_empty() {
+            continue;
+        }
+        if let Ok(n) = digits.parse() {
+            found = Some(n);
+        }
     }
+    found
 }
 
 /// Same reason as `MetricDef` above: a stray table at the top level (a second
@@ -905,16 +1027,54 @@ query = "SELECT ?s WHERE { ?s ?p ?o } LIMIT 1"
             "no LIMIT is no LIMIT, whatever an identifier happens to spell"
         );
 
-        // The same crudeness in the other direction, asserted so it stays a known
-        // failure rather than a surprise: a `#` inside a string literal truncates
-        // its line too, so an otherwise honest query loses its `LIMIT` and refuses
-        // to load. A matcher that fails loudly is fine; one that passes something
-        // it should reject is not.
+        // A `#` inside a string literal is data, not the start of a comment, so
+        // the line keeps its `LIMIT` and the metric loads. This asserted
+        // `is_err()` until 2026-08-29, when the scanner replaced a truncate-at-
+        // the-first-`#` pass that could not tell data from a comment.
         let hash_in_a_literal = "[[metric]]\nid=\"zebra-sample\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"SelectIris\"\nvar=\"c\"\n\
              sample_limit=200\nquery=\"SELECT DISTINCT ?c WHERE { ?s a ?c FILTER(?c != \\\"#\\\") } LIMIT 200\"\n";
         assert!(
-            load_metrics(hash_in_a_literal).is_err(),
-            "the crude matcher refuses rather than guessing, and a load error is the safe direction"
+            load_metrics(hash_in_a_literal).is_ok(),
+            "a `#` in a literal is data: {:?}",
+            load_metrics(hash_in_a_literal).err().map(|e| e.to_string())
+        );
+
+        // The case that actually cost this project time, twice. `owl#Class` is an
+        // IRI whose `#` is a fragment separator. Truncating there ate the `LIMIT`
+        // and the metric was refused for declaring a `sample_limit` its query did
+        // not carry, which is a false accusation: the query carries it. Two
+        // exploratory metric sets had to put every `LIMIT` on its own line to get
+        // around this, and that workaround is what this test retires.
+        let hash_in_an_iri = "[[metric]]\nid=\"zebra-sample\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"SelectIris\"\nvar=\"c\"\n\
+             sample_limit=200\nquery=\"SELECT DISTINCT ?c WHERE { ?c a <http://www.w3.org/2002/07/owl#Class> } LIMIT 200\"\n";
+        assert!(
+            load_metrics(hash_in_an_iri).is_ok(),
+            "an IRI fragment is not a comment: {:?}",
+            load_metrics(hash_in_an_iri).err().map(|e| e.to_string())
+        );
+
+        // The safety property the crude version was protecting, which must survive
+        // the fix: a TRAILING comment mentioning a limit is still stripped. Without
+        // this, `rfind("limit")` finds the one in the comment, reads 200 from it,
+        // and a query that returns 50 satisfies `sample_limit = 200`. Fifty of a cap
+        // of two hundred is then published as COMPLETE, which is a wrong fact about
+        // somebody's data and the whole reason the cross-check exists.
+        let trailing_comment_lies = "[[metric]]\nid=\"zebra-sample\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"SelectIris\"\nvar=\"c\"\n\
+             sample_limit=200\nquery=\"SELECT DISTINCT ?c WHERE { ?s a ?c } LIMIT 50 # raise back to limit 200\"\n";
+        assert!(
+            load_metrics(trailing_comment_lies).is_err(),
+            "a comment must never satisfy the cross-check"
+        );
+
+        // And both at once, which is the shape a real content metric takes: an IRI
+        // carrying a fragment, a real LIMIT, and a comment after it that must not be
+        // read as one.
+        let both = "[[metric]]\nid=\"zebra-sample\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"SelectIris\"\nvar=\"c\"\n\
+             sample_limit=200\nquery=\"SELECT DISTINCT ?c WHERE { ?c a <http://www.w3.org/2002/07/owl#Class> } LIMIT 200 # bounded on purpose\"\n";
+        assert!(
+            load_metrics(both).is_ok(),
+            "an IRI fragment, a real limit, and a trailing comment: {:?}",
+            load_metrics(both).err().map(|e| e.to_string())
         );
 
         // And an ordinary comment that says nothing about a limit still loads, so
