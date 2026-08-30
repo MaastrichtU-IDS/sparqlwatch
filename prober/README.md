@@ -5,6 +5,8 @@ produces one immutable named graph of DQV quality measurements with PROV
 provenance. That graph is the whole output: there is no database, no state
 carried between runs, and no score.
 
+For how this component sits beside the other one, see `docs/architecture.md`.
+
 ## The rule the whole thing serves
 
 **It must never report a confident wrong answer.** Each (endpoint, metric) pair

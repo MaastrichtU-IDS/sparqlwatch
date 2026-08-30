@@ -5,6 +5,8 @@ Oxigraph store and holds the read queries against it. The Rust prober is
 untouched by anything here; it keeps writing N-Quads files, and this side
 starts where that file leaves off.
 
+For how this component sits beside the other one, see `docs/architecture.md`.
+
 ## The interpreter must be 3.12
 
 Use `python3.12`, not the system `python3`.
