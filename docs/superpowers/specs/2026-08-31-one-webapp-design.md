@@ -484,9 +484,32 @@ are where a mistake reaches a stranger's endpoint.
 
 - **The store-lock win survives only while the sweep runs in the serving
   process.** If stage 4 later runs the sweep as a separate CronJob for isolation,
-  as the founding spec's stage 4 currently plans, the problem returns unchanged
-  and the merge will have bought nothing but one language. **Decide before step
-  11, not after.**
+  the problem returns unchanged and the merge will have bought nothing but one
+  language. **Decide before step 11, not after.** The founding spec's Scheduling
+  section argued FOR a CronJob, on the grounds that an in-process scheduler
+  couples the web tier's uptime to the sweep's and makes a stuck sweep a restart
+  of the whole app. That argument was correct and has been knowingly reversed;
+  the reversal and its cost are recorded there rather than deleted.
+
+- **[R3] The merge's justification is also void if Oxigraph becomes a service,
+  and the founding spec planned exactly that.** Its Deployment section listed
+  Oxigraph as its own `Deployment` plus PVC plus `Service`. That is Oxigraph's
+  SERVER mode, reached over the SPARQL protocol, not the embedded library this
+  project uses (`web/app.py:327` opens a RocksDB directory in process). In server
+  mode **the store lock never exists**: the server serialises writers, so any
+  number of web replicas and a separate prober can all talk to it.
+
+  So there are two independent roads to "the merge bought only one language", and
+  the second one is a deployment decision nobody has consciously taken yet. Both
+  founding-spec sites are now corrected to the merged architecture, and the
+  question is flagged there too, but it wants an explicit answer before stage 4
+  builds anything. Doing it by accident would retire this spec's stated benefit
+  without anybody noticing.
+
+  It also changes what the rewrite is worth. If Oxigraph ends up a service, the
+  honest ledger for this work is one language, at the cost of 477 tests and three
+  build-time guarantees. That may still be the right trade; it should be made
+  with the number in view.
 - **A long sweep inside the serving process competes with serving.** The
   543-endpoint sweep took 1h26m21s. "It is async so it is fine" is not an
   argument: CPU-bound parsing blocks the loop.

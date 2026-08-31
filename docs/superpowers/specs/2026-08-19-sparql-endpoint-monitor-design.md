@@ -347,13 +347,37 @@ endpoints scoring zero for the wrong reason. The validator must require a
 
 ### 4. Scheduling
 
-A Kubernetes `CronJob` per run, not an in-process scheduler. umakadata runs
-sidekiq-scheduler inside the app container, which couples the web tier's uptime to
-the crawler's and makes a stuck job a restart of the whole app. On ids3 a CronJob
-gives isolation, retries, and history for free.
+**Reversed 2026-08-31, knowingly. This section's original argument is kept below
+because it is still the argument against what was chosen.**
 
-Per-endpoint isolation argues for the prober being invoked with a shard of the
-registry, so one hung endpoint cannot delay a sweep.
+The owner decided to merge the prober into the web application
+([One webapp](2026-08-31-one-webapp-design.md)), so the sweep now runs IN
+PROCESS. `Dockerfile` implements that: one image, one worker, the sweep started
+by an explicit `docker exec` rather than by a scheduler inside the app.
+
+What that costs is exactly what this section warned about, and the warning was
+right: the web tier's uptime is now coupled to the sweep's, and a stuck sweep is
+a restart of the whole app. The 543-endpoint sweep takes 1h26m21s, so this is not
+a theoretical coupling. The accepted mitigations are that the container never
+sweeps on startup, and that sweeping is an explicit act with a person or a
+scheduler outside the container deciding when.
+
+The original argument, unedited:
+
+> A Kubernetes `CronJob` per run, not an in-process scheduler. umakadata runs
+> sidekiq-scheduler inside the app container, which couples the web tier's uptime to
+> the crawler's and makes a stuck job a restart of the whole app. On ids3 a CronJob
+> gives isolation, retries, and history for free.
+>
+> Per-endpoint isolation argues for the prober being invoked with a shard of the
+> registry, so one hung endpoint cannot delay a sweep.
+
+**If that argument wins again**, an external CronJob invoking the sweep is still
+available, since the CLI is retained deliberately. But note what it costs: the
+sweep would then run in a process that is not the serving process, the store lock
+returns, and the merge's only operational justification is void. See the
+Oxigraph-as-a-service note under Deployment below, which reaches the same place
+by a different road.
 
 ## Testing and CI
 
@@ -374,9 +398,43 @@ Standalone project-env per the `converting-compose-to-ids3` conventions: a
 `sparqlwatch-dev` namespace first, promoting the same pinned image to
 `sparqlwatch-prod` once proven.
 
-Components: prober `CronJob`, web `Deployment` plus `Service` plus `Ingress`, Oxigraph
-`Deployment` plus PVC plus `Service`, the mandatory egress `NetworkPolicy`, and Vault
-for the moderation credentials. Images pinned by tag or digest, never `latest`.
+**Updated 2026-08-31 for the merged architecture, and one contradiction here is
+worth more than the edit.**
+
+Components as now planned: web `Deployment` (ONE replica, see below) plus
+`Service` plus `Ingress`, a PVC for the store and a second PVC for the run files,
+the mandatory egress `NetworkPolicy`, and Vault for the moderation credentials.
+Images pinned by tag or digest, never `latest`. No prober `CronJob`: the sweep
+runs in the web process, per Scheduling above.
+
+**One replica is an invariant, not a default.** `pyoxigraph` opens the store
+EMBEDDED, as a RocksDB directory in the serving process (`web/app.py:327`), and
+RocksDB admits one writer. Measured 2026-08-31: a second read-write open is
+refused on the LOCK file, while a read-only open succeeds. So a second replica,
+or `uvicorn --workers 2`, breaks it. `Dockerfile` spells `--workers 1` out for
+this reason.
+
+**The contradiction this replaces, recorded because it matters more than the
+correction.** The original text planned Oxigraph as its own `Deployment` plus PVC
+plus `Service`. That is Oxigraph's SERVER mode, reached over the SPARQL protocol,
+and it is a different deployment model from the embedded library this project
+actually uses. It is also one in which **the store-lock problem does not exist**:
+the server serialises writers, so any number of web replicas and a separate
+prober could all talk to it.
+
+Since ending the store-lock problem is the merge's only operational
+justification, the two plans cannot both be right, and whichever is chosen makes
+the other's rationale void:
+
+| | store lock | web replicas | the merge buys |
+|---|---|---|---|
+| embedded store, merged prober (chosen) | solved by one process | exactly 1, forever | one language plus the lock fix |
+| Oxigraph as a service | never existed | many | one language only |
+
+This is not a reason to revisit the merge, which was decided on 2026-08-31 after
+the alternative was shown. It IS a reason to decide the Oxigraph question
+deliberately before stage 4 builds anything, because doing it by accident would
+retire the merge's justification without anybody noticing.
 
 No relational database, so no migration hook is needed. The equivalent concern is the
 metric-definition revision, which is versioned data loaded into a named graph.
@@ -465,7 +523,7 @@ that each end in something demonstrable, and each gets its own plan.
 | **2b. Content metadata + examples** | Tiered VoID extraction, SIB example ingestion, `/.well-known/sparql-examples` discovery. **PARTLY DELIVERED 2026-08-22** (stage 2b-1): distinct classes are sampled and published as a `ContentSample` fact, deliberately not as VoID; see the tier-2 status note under [1b](#1b-content-metadata-extraction-tiered). Properties per class and counts are specified as of 2026-08-29 in [Content profiles](2026-08-29-content-profiles-design.md) and not yet built; SIB ingestion and example discovery are neither specified nor built. | stage 1d |
 | **3. Web read tier** | Faceted search, browse, endpoint pages, metric pages, charts, content negotiation, read-only public SPARQL endpoint. **PARTLY DELIVERED 2026-08-23** (stage 3-1): One endpoint resource served at `GET /endpoint?url=...` with content negotiation returning HTML or any of four RDF serialisations (Turtle, N-Triples, RDF/XML, JSON-LD), the HTML and the RDF agreeing on every verdict the run recorded. **MORE DELIVERED 2026-08-25** (stage 3-2): an index at `GET /` listing all 543 endpoints in one page of 424.6 KiB, grouped by the availability verdict's own values with a denominator on every count; `GET /about`, the page the prober's `User-Agent` points at, saying who is querying, how often, how politely, why that endpoint, and how to ask to be left alone; and all three read paths moved onto the derived `urn:sparqlwatch:current` graph, which is what makes a whole-registry page a flat scan. All three resources negotiate. Leaderboard, per-metric pages, history, evidence per measurement, embedded query editor, and read-only public SPARQL endpoint are still not built. **Faceted search is blocked rather than unbuilt**: faceting by vocabulary or class needs content data, and stage 2b has produced no vocabulary or property data and one class sample per endpoint at best, since `sw:metric:classes` is declined at the default cost ceiling. | stage 2, 2b |
 | **3b. Embedded editor** | `@sib-swiss/sparql-editor` per endpoint, fed autocomplete metadata from our origin | stage 2b, 3 |
-| **4. ids3 deployment** | `sparqlwatch-dev` project-env: prober CronJob, web, Oxigraph, ingress, egress policy | stage 3 |
+| **4. ids3 deployment** | `sparqlwatch-dev` project-env: web (ONE replica, sweep in process), store and runs PVCs, ingress, egress policy. **Updated 2026-08-31**: no prober CronJob and no separate Oxigraph Deployment, per the merge. A `Dockerfile` exists as of 2026-08-31 and has been built and driven; nothing is deployed. | stage 3 |
 | **5. Submissions and moderation** | Public submission with endpoint validation, moderation queue, rate limiting; example contribution shares this path | stage 4 |
 | **6. Discussion threads** | Per-endpoint threads for consumer-to-provider issues | stage 5 |
 
