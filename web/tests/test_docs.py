@@ -12,6 +12,7 @@ import re
 from pathlib import Path
 
 import pytest
+from conftest import requires_repo_sources
 from starlette.testclient import TestClient
 
 import verdict_encoding
@@ -229,6 +230,7 @@ def test_the_index_lists_three_pages_and_monitoring_keeps_its_own_url(client):
     assert "Monitoring" in page
 
 
+@requires_repo_sources
 def test_the_user_agents_url_still_answers(client):
     """The promise itself, tested rather than assumed.
 

@@ -1,0 +1,19 @@
+# prober/target alone is 9 GB. Without this line the build context transfer is
+# the slowest part of the build by two orders of magnitude.
+prober/target/
+
+# The dev virtualenv. requirements.txt is what the image installs from, and
+# copying a macOS venv into a Linux image would put unusable binaries on the
+# path where the real ones should be.
+web/.venv/
+**/__pycache__/
+**/*.pyc
+.pytest_cache/
+
+.git/
+.github/
+
+# Scratch and design artefacts. The .pdf and the .dc.html canvases are inputs to
+# design work, not to the running service.
+design/
+.superpowers/

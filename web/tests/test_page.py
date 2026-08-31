@@ -29,6 +29,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 
 import pytest
+from conftest import requires_repo_sources
 from starlette.testclient import TestClient
 
 import verdict_encoding
@@ -448,6 +449,7 @@ def _states_in_the_canonical_document():
     return parsed
 
 
+@requires_repo_sources
 def test_the_implementation_equals_the_canonical_table():
     """No third copy of the encoding.
 

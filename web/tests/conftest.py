@@ -17,6 +17,30 @@ from pyoxigraph import NamedNode, Store
 
 from load_run import load_run
 
+REPO = Path(__file__).resolve().parents[2]
+
+# Some tests in this suite check that the SITE'S COPY of a fact still matches the
+# PROBER'S SOURCE: that the politeness numbers on /about are the prober's real
+# defaults, that the User-Agent the page shows is the one client.rs sends, that
+# the section terminators load_run recognises are the ones docs/design records.
+# They read .rs files, prober/README.md, docs/design/ and .github/workflows/.
+#
+# Those are repo-consistency checks, not runtime checks. A built container ships
+# what it needs to RUN and not the sources it was built from, so in an image
+# there is nothing for them to compare against and, more to the point, nothing
+# that could have drifted: both halves were frozen at build time, and CI checks
+# them against the repo before an image is built at all.
+#
+# So they skip where the sources are absent rather than fail. Skipping is the
+# honest outcome; failing would say the image is broken when what is missing is
+# a comparison that does not apply to it.
+REPO_SOURCES_PRESENT = (REPO / "prober" / "src").is_dir()
+
+requires_repo_sources = pytest.mark.skipif(
+    not REPO_SOURCES_PRESENT,
+    reason="reads the prober's own sources, which a runtime image does not ship",
+)
+
 FIXTURES = Path(__file__).parent / "fixtures"
 
 RUN_WITH_SAMPLES = FIXTURES / "run-with-samples.nq"

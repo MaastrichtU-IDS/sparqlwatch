@@ -39,6 +39,7 @@ import re
 from pathlib import Path
 
 import pytest
+from conftest import requires_repo_sources
 from pyoxigraph import NamedNode, RdfFormat, Store, parse
 from starlette.testclient import TestClient
 
@@ -421,6 +422,7 @@ def test_the_rdf_and_the_html_state_the_same_numbers_and_the_same_address(client
 # ---------------------------------------------------------------------------
 # The numbers are the prober's
 # ---------------------------------------------------------------------------
+@requires_repo_sources
 def test_the_politeness_numbers_on_the_page_are_the_prober_defaults(client):
     """Read from `prober/src/`, compared against the page.
 
@@ -457,6 +459,7 @@ def test_the_politeness_numbers_on_the_page_are_the_prober_defaults(client):
         )
 
 
+@requires_repo_sources
 def test_the_flag_defaults_still_come_from_those_constants():
     """The constants the test above reads are the values the flags default to.
 
@@ -542,6 +545,7 @@ def test_the_page_says_the_gap_and_the_count_are_per_host_and_port(client):
     assert _port_of(first) != _port_of(second), "and two ports"
 
 
+@requires_repo_sources
 def test_the_gate_really_keys_on_the_port_the_page_names(client):
     """The other side of the sentence above: the prober's own pins.
 
@@ -570,6 +574,7 @@ def test_the_gate_really_keys_on_the_port_the_page_names(client):
     ), "the end-to-end pin behind this page's paragraph is gone"
 
 
+@requires_repo_sources
 def test_the_user_agent_shown_is_the_one_the_prober_sends(client):
     """The string the reader searched their logs for, exactly.
 
@@ -601,6 +606,7 @@ def test_the_page_says_where_the_endpoint_list_came_from(client):
     assert shown["distinct"]["data-value"] == prov["distinct"]
 
 
+@requires_repo_sources
 def test_the_page_says_nothing_is_on_a_schedule_and_nothing_is(client):
     """What a reader can expect in their logs, today.
 
@@ -635,6 +641,7 @@ def test_the_page_says_nothing_is_on_a_schedule_and_nothing_is(client):
     assert duration.group(0) in (PROBER / "README.md").read_text()
 
 
+@requires_repo_sources
 def test_the_page_says_which_kind_of_block_changes_anything_and_which_does_not(
     client,
 ):
@@ -735,6 +742,7 @@ def test_the_page_describes_the_exclusion_mechanism_and_every_limit_of_it(client
         )
 
 
+@requires_repo_sources
 def test_the_page_names_the_file_an_exclusion_lands_in(client):
     """The path both binaries read at every run, as `registry.rs` spells it.
 
@@ -745,6 +753,7 @@ def test_the_page_names_the_file_an_exclusion_lands_in(client):
     assert exclusions_path() in page(client)
 
 
+@requires_repo_sources
 def test_the_ipv6_limit_the_page_states_is_the_one_the_parser_has(client):
     """The seventh limit, read off the parser rather than remembered.
 
@@ -770,6 +779,7 @@ def test_the_ipv6_limit_the_page_states_is_the_one_the_parser_has(client):
     assert "colon" in limits["no-ipv6-literal"], limits["no-ipv6-literal"]
 
 
+@requires_repo_sources
 def test_the_redirect_sentence_states_the_hop_limit_the_client_enforces(client):
     """"follows a redirect from it if there is one, and stops" understated it.
 
@@ -787,6 +797,7 @@ def test_the_redirect_sentence_states_the_hop_limit_the_client_enforces(client):
     )
 
 
+@requires_repo_sources
 def test_the_unroutable_rule_is_described_as_the_seeder_only_rule_it_is(client):
     """`without_unroutable_hosts` is not wired into `load_endpoints`.
 
@@ -959,6 +970,7 @@ def test_the_page_says_what_dormant_means_and_what_it_does_not(client):
             assert word in texts[slug], f"{slug}: {texts[slug]!r} does not say {word!r}"
 
 
+@requires_repo_sources
 def test_the_dormant_cadence_is_stated_as_a_bound_and_never_as_a_schedule(client):
     """"At most one sweep in every seven days, and only when a person starts
     one", and never "weekly".
@@ -984,6 +996,7 @@ def test_the_dormant_cadence_is_stated_as_a_bound_and_never_as_a_schedule(client
     assert "only when a person starts one" in said, said
 
 
+@requires_repo_sources
 def test_the_page_does_not_call_a_dormant_endpoint_unresponsive(client):
     """The word `prober/src/dormancy.rs` refuses, refused here too.
 
@@ -1004,6 +1017,7 @@ def test_the_page_does_not_call_a_dormant_endpoint_unresponsive(client):
         assert overclaim not in lowered, overclaim
 
 
+@requires_repo_sources
 def test_the_dormancy_numbers_come_from_the_flags_that_carry_them():
     """The four constants the reader above reads are the flag defaults.
 
@@ -1031,6 +1045,7 @@ def test_the_dormancy_numbers_come_from_the_flags_that_carry_them():
     assert "dormancy::DEFAULT_GRACE_DAYS" in wake
 
 
+@requires_repo_sources
 def test_the_dormancy_reasons_the_pages_read_are_the_probers_own():
     """Both reason maps in `web/app.py`, against `SkipReason::slug`.
 
@@ -1071,6 +1086,7 @@ def test_the_dormancy_reasons_the_pages_read_are_the_probers_own():
     )
 
 
+@requires_repo_sources
 def test_the_numbers_in_the_prose_are_the_constants_and_not_words(client):
     """Every place the prose states the cadence or the strike count.
 

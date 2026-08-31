@@ -9,6 +9,7 @@ destroying an existing run before the parse failure is noticed.
 from pathlib import Path
 
 import pytest
+from conftest import requires_repo_sources
 from pyoxigraph import (
     DefaultGraph,
     NamedNode,
@@ -668,6 +669,7 @@ def _wire_format_table() -> dict[str, str]:
     return table
 
 
+@requires_repo_sources
 def test_the_loader_recognises_exactly_the_documented_terminators():
     """The Python half of the wire format.
 
