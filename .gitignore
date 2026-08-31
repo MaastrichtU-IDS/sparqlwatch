@@ -7,3 +7,7 @@ __pycache__/
 data/
 design/sparqlwatch-ui.html
 design/sparqlwatch-ui-print.html
+
+# Test environment scratch: store, runs, dormancy state, generated registry.
+# Rebuildable by tools/testenv/build.py, so none of it is precious.
+tools/testenv/run/
