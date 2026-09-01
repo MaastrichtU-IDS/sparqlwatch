@@ -169,6 +169,15 @@
   .cells > span.gap { border: none; background: none; color: var(--text-dim); }
   .qual { font-size: 11.5px; color: var(--warn); border: 1px dashed var(--warn);
           border-radius: 3px; padding: 1px 7px; white-space: nowrap; }
+  /* The content link. Quiet and bracketed on purpose: the row's subject is the
+     endpoint, and this is a side door to a different page about it. It appears on
+     2 of 543 rows today, so it has to read as an exception rather than as a
+     column that happens to be empty everywhere else. */
+  a.content { margin-left: 8px; font-size: 11.5px; color: var(--text-dim);
+              text-decoration: none; white-space: nowrap; }
+  a.content::before { content: "["; }
+  a.content::after { content: "]"; }
+  a.content:hover { color: var(--accent); }
   /* Which sweep measured this row, drawn differently from the markers above on
      purpose. Those two are things that went wrong with a sweep; this is
      provenance, and it is true of every row in a store whose newest sweep asked
@@ -397,7 +406,7 @@
    data-measured-by-sweep, kept for now because a script filtering these rows
    needs the instant as a value and the RDF representation is a second request,
    and it is the cheapest thing to give up if something has to go. #}
-      <li data-endpoint="{{ row.endpoint }}"{% if row.run_unfinished %} data-run-unfinished="true"{% endif %}{% if row.never_reached %} data-newer-run-unfinished="true"{% endif %}{% if row.dormant %} data-newest-sweep-dormant="true"{% if row.dormancy_reason %} data-dormancy-reason="{{ row.dormancy_reason }}"{% endif %}{% endif %}{% if row.measured_by %} data-measured-by-sweep="{{ row.measured_by }}"{% endif %}><a href="{{ row.href }}">{{ row.endpoint }}</a>{% if row.run_unfinished %}<span class="qual">{{ row_unfinished_text }}</span>{% endif %}{% if row.never_reached %}<span class="qual">{{ row_never_reached_text }}</span>{% endif %}{% if row.dormant %}<span class="qual">{{ row.dormant_text }}</span>{% endif %}{% if row.measured_by %}<span class="when">{{ row_measured_by_text }} {{ row.measured_by }}</span>{% endif %}<span class="cells">{% for cell in row.cells %}{% if cell.present %}<span class="{{ cell.css_class }}"{% if cell.verdict is not none %} data-verdict="{{ cell.verdict }}"{% else %} data-declined="{{ cell.reason }}"{% endif %}>{{ cell.abbr }}</span>{% else %}<span class="gap" data-gap="true">&#183;</span>{% endif %}{% endfor %}</span></li>
+      <li data-endpoint="{{ row.endpoint }}"{% if row.run_unfinished %} data-run-unfinished="true"{% endif %}{% if row.never_reached %} data-newer-run-unfinished="true"{% endif %}{% if row.dormant %} data-newest-sweep-dormant="true"{% if row.dormancy_reason %} data-dormancy-reason="{{ row.dormancy_reason }}"{% endif %}{% endif %}{% if row.measured_by %} data-measured-by-sweep="{{ row.measured_by }}"{% endif %}><a href="{{ row.href }}">{{ row.endpoint }}</a>{% if row.content_href %}<a class="content" href="{{ row.content_href }}" title="Explore the classes and properties observed in this endpoint">content</a>{% endif %}{% if row.run_unfinished %}<span class="qual">{{ row_unfinished_text }}</span>{% endif %}{% if row.never_reached %}<span class="qual">{{ row_never_reached_text }}</span>{% endif %}{% if row.dormant %}<span class="qual">{{ row.dormant_text }}</span>{% endif %}{% if row.measured_by %}<span class="when">{{ row_measured_by_text }} {{ row.measured_by }}</span>{% endif %}<span class="cells">{% for cell in row.cells %}{% if cell.present %}<span class="{{ cell.css_class }}"{% if cell.verdict is not none %} data-verdict="{{ cell.verdict }}"{% else %} data-declined="{{ cell.reason }}"{% endif %}>{{ cell.abbr }}</span>{% else %}<span class="gap" data-gap="true">&#183;</span>{% endif %}{% endfor %}</span></li>
       {% endfor %}
   </ul>
 

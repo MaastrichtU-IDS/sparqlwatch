@@ -288,6 +288,30 @@ EXPLORE_PAYLOAD_FILE = Path(__file__).resolve().parent / "explore_payload.json"
 EXPLORE_PROBE_NOTE = "prototype: 2 endpoints, probed 2026-08-28"
 
 
+def _explore_endpoints() -> frozenset[str]:
+    """The endpoints the explorer has vocabulary for.
+
+    The index links a row to /explore only when this holds its endpoint. Two of
+    543 today, and linking the other 541 would be a promise the data does not
+    keep: a `content` link that opens an explorer with nothing in it tells a
+    reader the endpoint has no vocabulary, when what happened is that nobody
+    looked. On these pages an absent qualifier is a positive claim, and so is a
+    link that leads somewhere empty.
+
+    The set will grow to the whole registry when the content-profile work lands,
+    at which point this stops being a filter and becomes a formality. It is still
+    the right shape then: an endpoint whose content sweep failed still should not
+    get the link.
+    """
+    import json
+
+    payload = json.loads(EXPLORE_PAYLOAD_FILE.read_text())
+    return frozenset(e["url"] for e in payload["endpoints"])
+
+
+EXPLORE_ENDPOINTS = _explore_endpoints()
+
+
 STORE_PATH_VARIABLE = "SPARQLWATCH_STORE"
 
 
@@ -1742,6 +1766,14 @@ def _index_row(entry: EndpointMeasurements, metrics: list[dict]) -> dict:
     return {
         "endpoint": entry.endpoint,
         "href": ENDPOINT_PATH + "?url=" + quote(entry.endpoint, safe=""),
+        # Present only where the explorer has something to show. See
+        # _explore_endpoints on why a link to an empty explorer would be a claim
+        # rather than a convenience.
+        "content_href": (
+            EXPLORE_PATH + "?endpoint=" + quote(entry.endpoint, safe="")
+            if entry.endpoint in EXPLORE_ENDPOINTS
+            else None
+        ),
         "cells": _index_chips(entry, metrics),
         "run_unfinished": entry.run_did_not_finish,
         "never_reached": entry.newer_run_did_not_reach_this_endpoint,

@@ -567,6 +567,30 @@
     render();
   });
 
+  // Arriving from the index's [content] link, which passes the endpoint it was
+  // clicked on. Pre-selecting the chip rather than filtering the list directly
+  // means the page opens in a state the reader can SEE and undo: the chip is lit,
+  // its count is visible, and clicking it clears the filter. A hidden filter
+  // would make the same page look like it holds one endpoint's vocabulary.
+  //
+  // An endpoint that is not in the payload selects nothing and the page opens
+  // whole, which is the honest outcome: the index only offers the link where
+  // there is something to open, and a hand-typed URL should not produce an empty
+  // page with a chip nobody can explain.
+  (function selectFromQuery() {
+    var m = /[?&]endpoint=([^&]+)/.exec(window.location.search);
+    if (!m) return;
+    var wanted;
+    try {
+      wanted = decodeURIComponent(m[1]);
+    } catch (e) {
+      return;
+    }
+    if (EPS.some(function (e) { return e.url === wanted; })) {
+      picked.endpoint[wanted] = true;
+    }
+  })();
+
   renderLegend();
   render();
 })();
