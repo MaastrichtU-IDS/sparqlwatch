@@ -351,6 +351,94 @@ reload, not an in-place rewrite, and it is cheap for that reason. The pointer
 predicates are new names rather than a reinterpretation of the old one, so a
 store carrying both is unambiguous during the reload.
 
+## Ruling 4: `classes` stops being a verdict, and stays a step
+
+**Added 2026-09-01**, on the plan owner's observation that `classes` and
+`has-classes` are both better served by this work. They are, but not in the same
+way, and the difference decides what gets deleted.
+
+### `has-classes` is already gone, and its argument is the precedent
+
+Removed from `metrics.toml` on 2026-08-28. It survives on the page only because
+the store holds the 2026-08-24 run that measured it, and the web tier keeps
+describing it marked `retired`. The reason it went is the reason this ruling
+exists, quoted from the metric file:
+
+> As a CONTENT fact "something here is typed" is close to worthless: every RDF
+> dataset worth monitoring has types, and 54 verified against 489 indeterminate
+> on the 2026-08-24 sweep says the metric was mostly reporting whether a query
+> came back at all. That is what `availability` asks, with a smaller query, so
+> the pair measured responsiveness twice and content once badly.
+
+### `classes` has never produced a verdict. Not once.
+
+Counted across every preserved run in `~/code/sparqlwatch-runs`, all four,
+checksummed:
+
+| | `sw:metric:classes` mentions | of which declines | measurement rows |
+|---|---|---|---|
+| lod-cloud-543 | 543 | 543 | 0 |
+| calibration-54 | 54 | 54 | 0 |
+| content-probe-2 | 0 | 0 | 0 |
+| void-coverage-57 | 0 | 0 | 0 |
+| **total** | **597** | **597** | **0** |
+
+It is `expensive`, the default ceiling is `cheap`, so every sweep this project
+has ever run declined it. On the page it is a column of 543 `not-measured`,
+which tells a reader nothing about their endpoint.
+
+And if it did run, `verified` would mean "we enumerated some classes", which is
+`has-classes`'s worthless fact one step along. The value of this metric was
+always the `ContentSample` it attaches, never the verdict beside it.
+
+### But the query is this design's own first step
+
+`classes` is not replaced by the content pass. It is CONSUMED by it. The probe in
+this spec is one query per class:
+
+```sparql
+{ SELECT ?s WHERE { ?s a <CLASS> . FILTER(STRSTARTS(SHA256(STR(?s)), "PREFIX")) } }
+```
+
+and the cost model is `SUM over classes of min(instances, cap)`. Something has to
+produce that class list, and this is the thing that produces it. Deleting the
+query would delete the input to the work this document specifies.
+
+### The ruling
+
+**Retire `classes` as a verdict-bearing metric. Keep the class enumeration as the
+first step of the content pass.**
+
+- The class list stops being a `[[metric]]` carrying a `dqv:value`. It becomes
+  the profile pass's opening query, publishing a `ContentSample` and nothing
+  else. `ContentSample` is already a non-verdict fact kind, so this is Ruling 2
+  applied one level earlier rather than a new idea.
+- The 543 `NotMeasured` facts the column currently contributes stop being
+  written. A column that is nothing but declines is not coverage information, it
+  is an artefact of pricing a metric above the ceiling it runs under.
+- Measurements already published STAND, and the web tier keeps describing the
+  metric marked `retired`, exactly as `has-classes` is handled. A run graph is a
+  record of what one sweep observed and nothing rewrites one.
+
+### What this costs, said plainly
+
+The matrix drops to **five metrics, all cheap, and no content column at all**
+until the profile pass ships. The site will say less about content than it does
+today.
+
+That is honest rather than good. What it removes is a column of 543 declines and
+a verdict nobody has ever seen; what it does not do is add anything in their
+place. Anyone reading this later should know the gap was chosen with open eyes,
+and that it closes when the profile pass lands and not before.
+
+### Sequencing, which matters more than the ruling
+
+**Do not retire `classes` before the profile pass can produce its replacement.**
+Retiring it first buys a tidier matrix and loses the only content sampling the
+prober can do. The order is: build the profile pass, prove it produces class
+lists and profiles, then retire the metric in the same change that ships the
+replacement.
+
 ## What this requires of the existing code
 
 - **A new metric kind** in `prober/src/metrics.rs`. Existing kinds resolve to a

@@ -103,6 +103,20 @@ graded = true
 # what one sweep observed and nothing here rewrites one, so the web tier still
 # derives a column for this metric from the store and still describes it, marked
 # as no longer measured. See web/app.py's METRIC_DOCS.
+# DECIDED 2026-09-01, NOT YET DONE: this metric is to be retired as a VERDICT
+# while its query survives as the content pass's first step. It has never
+# produced a verdict, not once: 597 mentions across all four preserved runs and
+# 597 of them declines, because it is `expensive` and every sweep so far has run
+# at the `cheap` ceiling. And a `verified` here would mean "we enumerated some
+# classes", which is the worthless fact that retired `has-classes` above, one
+# step along. The value was always the ContentSample, never the verdict.
+#
+# The query is NOT going: the content pass asks one query per class and needs
+# something to produce the class list. See Ruling 4 in
+# docs/superpowers/specs/2026-08-29-content-profiles-design.md, including its
+# sequencing note: retiring this before the profile pass can replace it would
+# buy a tidier matrix and lose the only content sampling the prober can do.
+
 [[metric]]
 id = "classes"
 label = "Distinct classes"

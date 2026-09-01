@@ -420,6 +420,10 @@ Same family: Rust's overflow paranoia (`checked_add` on a stranger-controlled
   run, dormancy failing closed.
 - **The `AskData` literal guard** and its trap: `?c` in `?s a ?c` binds an IRI, so
   a class metric must be `SelectIris`. Rediscovered by measurement twice.
+  Survives Ruling 4 in the content-profiles spec, which retires `classes` as a
+  verdict but keeps the class enumeration as the profile pass's first query: the
+  trap is a property of the QUERY and of `ask_literal`, not of the metric that
+  currently carries it.
 - **No third-party endpoint contacted by CI.**
 
 ## Migration order
