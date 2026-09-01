@@ -34,6 +34,7 @@ from starlette.testclient import TestClient
 
 import verdict_encoding
 from app import (
+    EXPLORE_PATH,
     ABOUT_PATH,
     DOCS_PATH,
     COMPLETE_TEXT,
@@ -1534,7 +1535,11 @@ def test_the_endpoint_page_links_to_the_docs_section(client_for, store):
     """
     text = page(client_for(store), KADASTER)
     nav = with_attribute(text, "data-nav")
-    assert [a["href"] for a in nav] == [DOCS_PATH]
+    # The vocabulary explorer joined the nav on 2026-09-01, when it stopped being
+    # a second server on a second port. Asserted as an exact list, still: the
+    # header is small on purpose, and a link arriving in it without a test
+    # changing is how a nav becomes a menu.
+    assert [a["href"] for a in nav] == [EXPLORE_PATH, DOCS_PATH]
 
 
 def test_the_dormancy_sentence_is_not_drawn_as_a_verdict(

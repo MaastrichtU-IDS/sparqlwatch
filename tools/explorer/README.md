@@ -56,10 +56,27 @@ a REFUSED query is not evidence of absence either. Both collapse to
 The result is the page's whole point: of dbpedia's 572 terms, 13 are claimable
 and 559 read "not determined", with both negative-evidence chips at zero.
 
-## Why it is not a route on the site yet
+## It IS a route, as of 2026-09-01
 
-The payload is embedded, and that does not scale: 196 bytes per term, and these
-two endpoints share only 25 of 990 terms because each publisher brings its own
-ontology. Extrapolated to 543 endpoints that is 20 to 37 MB against a 750 KB page
-budget. A real `/explore` computes facets and autocomplete server-side, which
-needs content data in the store, which needs the content-profile work.
+`GET /explore`, on the same port as everything else. Port 8731 is retired and the
+standalone copies are deleted: `template.html` plus `build.py` are the source now,
+and `web/explore_payload.json` is what the route serves.
+
+Run `build.py` and copy its payload into `web/explore_payload.json` to refresh it:
+
+```bash
+web/.venv/bin/python tools/explorer/build.py --payload-only > web/explore_payload.json
+```
+
+## What still has to change before it is more than a prototype
+
+The payload is embedded and holds two endpoints. That is fine at 214 KB and does
+not scale: 196 bytes per term, and these two endpoints share only 25 of 990 terms
+because each publisher brings its own ontology, so 543 endpoints projects to 20 to
+37 MB against a 750 KB page budget.
+
+So the route serves a committed file today and must compute its facets and
+autocomplete server-side later. That needs content data in the store, which needs
+the content-profile work. The page says "prototype: 2 endpoints" in its header for
+as long as that is true, and `test_the_page_says_it_is_a_prototype` keeps it
+saying so.

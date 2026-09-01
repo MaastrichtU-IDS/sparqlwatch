@@ -47,6 +47,7 @@ from starlette.testclient import TestClient
 
 import verdict_encoding
 from app import (
+    EXPLORE_PATH,
     ABOUT_PATH,
     DOCS_PATH,
     METRIC_DESCRIPTIONS,
@@ -1252,7 +1253,10 @@ def test_the_row_markers_are_explained_in_the_docs_and_not_on_the_index(
     marked = texts_with(page, "data-newest-sweep-dormant")
     assert marked and any("did not ask" in text for text in marked)
     nav = with_attribute(page, "data-nav")
-    assert [a["href"] for a in nav] == [DOCS_PATH]
+    # The vocabulary explorer joined the nav on 2026-09-01. Still an exact list:
+    # this header is deliberately small, and a link appearing in it without a
+    # test changing is how a nav turns into a menu.
+    assert [a["href"] for a in nav] == [EXPLORE_PATH, DOCS_PATH]
 
 
 def test_the_index_carries_one_nav_link_and_never_one_per_row(
@@ -1266,9 +1270,16 @@ def test_the_index_carries_one_nav_link_and_never_one_per_row(
     web/README.md's table is the record of how little headroom that leaves.
     """
     text = index(client_for(store_dormant_newest))
-    nav = f'href="{DOCS_PATH}"'
-    assert text.count(nav) == 1, f"{text.count(nav)} nav links"
-    assert text.count(nav) < len(listed(text))
+    # Both nav links, because the invariant is about repetition and not about
+    # which link: the explorer joined the header on 2026-09-01 and would cost the
+    # same 24,000 bytes if it were ever emitted per row.
+    rows = len(listed(text))
+    for path in (DOCS_PATH, EXPLORE_PATH):
+        occurrences = text.count(f'href="{path}"')
+        assert occurrences == 1, f"{occurrences} links to {path}"
+        # The second assertion is the one that survives a redesign: whatever the
+        # header holds, it must not scale with the listing.
+        assert occurrences < rows, f"{path} appears per row"
 
 
 def test_the_row_marker_reads_every_reason_a_run_graph_can_carry():

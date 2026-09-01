@@ -121,6 +121,8 @@ DOCS_STATES_PATH = "/docs/states"
 # (prober/src/client.rs), so the URL is already published, in somebody else's
 # server log, before this route exists. Renaming it would break the one
 # promise this project has made to every host it has contacted.
+EXPLORE_PATH = "/explore"
+
 ABOUT_PATH = "/about"
 
 # ---------------------------------------------------------------------------
@@ -270,6 +272,22 @@ def choose_representation(accept: str | None) -> str | None:
 # ---------------------------------------------------------------------------
 # The store, injected
 # ---------------------------------------------------------------------------
+# The vocabulary explorer's data: one preserved probe of two endpoints, taken
+# 2026-08-28 and irreproducible, since re-running it would get different answers.
+# Built by tools/explorer/build.py from the run file and committed, so the route
+# does not depend on a directory outside the repository.
+#
+# Read once at import and passed through as text. It is 190 KB, so parsing it per
+# request would be the most expensive thing on the page, and nothing here needs
+# it as Python: the template hands it straight to the browser.
+EXPLORE_PAYLOAD_FILE = Path(__file__).resolve().parent / "explore_payload.json"
+
+# A prototype, and the page says so. Two endpoints is not the registry, and a
+# reader who assumed otherwise would draw conclusions about coverage that the
+# data does not support.
+EXPLORE_PROBE_NOTE = "prototype: 2 endpoints, probed 2026-08-28"
+
+
 STORE_PATH_VARIABLE = "SPARQLWATCH_STORE"
 
 
@@ -998,6 +1016,7 @@ def _page_context(
         # other than the back button.
         "index_path": INDEX_PATH,
         "docs_path": DOCS_PATH,
+        "explore_path": EXPLORE_PATH,
         # The endpoint itself, in a new tab, when its scheme is one a browser
         # should follow. See _outward_link: this is the only href on this site
         # holding a string a third party chose.
@@ -1895,6 +1914,7 @@ def _index_context(entries: list[EndpointMeasurements]) -> dict:
         # other than the back button.
         "index_path": INDEX_PATH,
         "docs_path": DOCS_PATH,
+        "explore_path": EXPLORE_PATH,
         "row_unfinished_text": ROW_UNFINISHED_TEXT,
         "row_never_reached_text": ROW_NEVER_REACHED_TEXT,
         # The two new markers' words, for the panel that explains them. The
@@ -2146,7 +2166,7 @@ def _docs_context() -> dict:
     return {
         "index_path": INDEX_PATH,
         "docs_path": DOCS_PATH,
-        "docs_path": DOCS_PATH,
+        "explore_path": EXPLORE_PATH,
         "about_path": ABOUT_PATH,
         "pages": [
             {
@@ -2451,6 +2471,7 @@ def _about_context() -> dict:
         "full_sweep": FULL_SWEEP_DURATION,
         "index_path": INDEX_PATH,
         "docs_path": DOCS_PATH,
+        "explore_path": EXPLORE_PATH,
         "endpoint_path": ENDPOINT_PATH,
     }
 
@@ -2658,6 +2679,32 @@ def docs_states_resource(request: Request) -> Response:
             **_docs_context(), **_docs_states_context()
         ),
         _docs_states_rdf,
+    )
+
+
+@app.get(EXPLORE_PATH)
+def explore(request: Request) -> Response:
+    """The vocabulary explorer.
+
+    Serves a static payload rather than querying the store, because the store
+    holds no content samples: `sw:metric:classes` is declined at the default cost
+    ceiling, so the registry sweep produced none. When the content-profile work
+    lands this route computes its facets server-side and the payload file goes.
+
+    HTML only. The other resources negotiate, and this one does not, because
+    there is no RDF here that the store could be asked for: the payload is a
+    derived view of one run's samples, and publishing it as RDF would assert it
+    as a fact about the endpoints rather than as a reading of one probe.
+    """
+    return Response(
+        content=_TEMPLATES.get_template("explore.html").render(
+            payload=EXPLORE_PAYLOAD_FILE.read_text(),
+            probe_note=EXPLORE_PROBE_NOTE,
+            index_path=INDEX_PATH,
+            docs_path=DOCS_PATH,
+            explore_path=EXPLORE_PATH,
+        ),
+        media_type="text/html; charset=utf-8",
     )
 
 
