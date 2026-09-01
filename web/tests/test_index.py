@@ -1458,7 +1458,7 @@ class _FacetChips(HTMLParser):
         if self._depth is None:
             return
         self._depth += 1
-        if attributes.get("class") == "f-count":
+        if "f-count" in (attributes.get("class") or "").split():
             assert self.chips[-1]["count"] is None, "a chip holds two counts"
             self._count = self._depth
             self._buffer = []
@@ -2191,18 +2191,41 @@ def test_each_states_count_sits_below_its_label(client_for, store_registry_sampl
     assert rule and "flex-direction: column" in rule.group(1), rule and rule.group(1)
 
 
-def test_the_states_count_is_not_dressed_as_a_cell(client_for, store_registry_sample):
-    """Neutral, because it is a column total and not a measurement.
+def test_the_states_count_is_dressed_exactly_like_a_cell(client_for, store_registry_sample):
+    """The header's count wears the state's own encoding, like the cells under it.
 
-    Every cell below it wears the state's own encoding. If the header's count did
-    too it would read as one more cell in the column rather than as the sum of
-    them.
+    It was neutral for one commit, on the argument that a column total is not a
+    measurement and should not look like one. The plan owner asked for it to match
+    the column, and consistency wins: a reader scanning a column sees one shape
+    from the header to the last row.
+
+    The class must be the state's OWN, or the header would head its column in
+    another state's colours.
     """
     page = index(client_for(store_registry_sample))
-    for inner in re.findall(r'<button[^>]*class="facet facet-head".*?</button>', page, re.S):
+    heads = re.findall(r'<button[^>]*class="facet facet-head".*?</button>', page, re.S)
+    assert heads, "no state header buttons"
+    for inner in heads:
+        slug = re.search(r'data-state="([a-z-]+)"', inner).group(1)
         count = re.search(r'<span class="([^"]*f-count[^"]*)"', inner)
         assert count, inner[:120]
-        assert "enc-" not in count.group(1), count.group(1)
+        classes = count.group(1).split()
+        assert verdict_encoding.css_class(slug) in classes, (slug, classes)
+
+
+def test_the_state_columns_are_centred(client_for, store_registry_sample):
+    """Label, count and cells on one axis.
+
+    The column's width is set by the label, which is wider than a count, so
+    without centring the counts sat left of the cells they head.
+    """
+    page = index(client_for(store_registry_sample))
+    head = re.search(r"\.facet-head\s*\{([^}]*)\}", page)
+    assert head and "align-items: center" in head.group(1), head and head.group(1)
+    assert re.search(
+        r"table\.matrix thead th:not\(:first-child\)\s*\{[^}]*text-align: center",
+        page,
+    ), "the state headers must centre over their columns"
 
 
 def test_no_metric_total_chip_remains(client_for, store_registry_sample):

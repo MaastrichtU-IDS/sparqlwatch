@@ -111,6 +111,9 @@
   table.matrix { border-collapse: collapse; margin: 0; font-size: 12.5px; }
   table.matrix th { font-weight: 500; text-align: left; padding: 2px 6px 6px 0;
     color: var(--text-muted); font-size: 11px; vertical-align: bottom; }
+  /* Every state column centres. The first header is the word "metric" over the
+     row labels, which stay left with them. */
+  table.matrix thead th:not(:first-child) { text-align: center; padding: 2px 4px 6px; }
   table.matrix td { padding: 2px 4px 2px 0; text-align: center;
     font-variant-numeric: tabular-nums; }
   table.matrix tbody th { text-align: left; padding-right: 14px; }
@@ -123,31 +126,35 @@
      The BUTTON draws no box, so the only box is the label's. Two nested borders
      would put a neutral rectangle around every state's own line style, which is
      exactly the marker this is trying to show. */
-  /* A column, so the count sits UNDER the label rather than beside it. It was
-     beside it until 2026-09-01. Stacking gives the wrapped labels their full
-     width back and puts each column's total directly over the cells it totals. */
-  .facet-head { display: flex; flex-direction: column; align-items: flex-start;
+  /* A column, so the count sits UNDER the label rather than beside it, and
+     CENTRED so the label, the count and every cell below share one axis. The
+     column's width is set by the label, which is wider than a count, so without
+     this the counts sat off to the left of the cells they head. */
+  .facet-head { display: flex; flex-direction: column; align-items: center;
     gap: 3px; height: auto; padding: 0; border: none; background: none;
-    border-radius: 0; font-size: 11px; }
+    border-radius: 0; font-size: 11px; margin: 0 auto; }
   .facet-head:hover { background: none; }
   .f-head-label { display: inline-block; max-width: 92px; white-space: normal;
-    text-align: left; line-height: 1.25; padding: 2px 5px;
+    text-align: center; line-height: 1.25; padding: 2px 5px;
     border-radius: var(--radius-sm); }
   /* Selection is a ring OUTSIDE the label's own border rather than a fill, so a
      selected state still shows its line style. The accent fill that every other
      chip uses when pressed would paint over the marker. */
   .facet-head[aria-pressed="true"] .f-head-label {
     outline: 2px solid var(--accent); outline-offset: 2px; }
-  /* Neutral border and ink on purpose. The cells below wear the state's own
-     encoding because each is a measurement; this is the column's total, and in
-     an enc- class it would read as one more cell rather than as the sum of
-     them. */
-  .facet-head .f-count { padding: 1px 7px; border: 1px solid var(--border);
-    border-radius: var(--radius-sm); font-family: var(--mono); font-size: 10.5px;
-    color: var(--text-dim); line-height: 1.4; }
-  .facet-head:hover .f-count { border-color: var(--text-dim); color: var(--text-muted); }
-  .facet-head[aria-pressed="true"] .f-count { color: var(--accent);
-    border-color: var(--accent); font-weight: 600; }
+  /* The same geometry as .facet-cell, so the header's count and the cells under
+     it are one shape. Written out rather than sharing the class because
+     .facet-cell is a flex button and this is a span inside one; the values are
+     the ones that have to match, and the two rules sit together so a change to
+     either is visible beside the other. */
+  .facet-head .facet-cell-look { display: inline-flex; align-items: center;
+    justify-content: center; min-width: 42px; height: 22px; padding: 0 6px;
+    border-radius: var(--radius-sm); font-family: var(--mono); font-size: 11px;
+    color: var(--text); }
+  /* Selection colours the LABEL's outline, already, so the count needs nothing
+     here: taking an accent border too would hide the state's own line style,
+     which is the thing the encoding is for. */
+  .facet-head[aria-pressed="true"] .facet-cell-look { color: var(--text-bright); }
   /* The cell IS the chip: it carries the state's own border and fill through
      the enc- class, so the grid draws the encoding rather than describing it,
      and a reader sees the shape of the registry in the borders. */
@@ -337,7 +344,15 @@
                  which put the marker next to the thing it marks instead of on
                  it. #}
               <span class="f-head-label {{ state.css_class }} {{ state.text_class }}">{{ state.label }}</span>
-              <span class="f-count">{{ state_counts[state.slug] }}</span>
+              {# The count is drawn as a CELL, not as a neutral total. It was
+                 neutral for one commit, on the argument that a column total is
+                 not a measurement and should not look like one. The plan owner
+                 asked for it to match the column instead, and consistency wins:
+                 a reader scanning a column now sees one shape from the header to
+                 the last row, and `absent` is unboxed here exactly as it is in
+                 the cells below. #}
+              <span class="f-count facet-cell-look {{ state.css_class }}"
+                    >{{ state_counts[state.slug] }}</span>
             </button>
           </th>
           {% endfor %}
