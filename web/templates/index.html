@@ -114,17 +114,6 @@
   table.matrix td { padding: 2px 4px 2px 0; text-align: center;
     font-variant-numeric: tabular-nums; }
   table.matrix tbody th { text-align: left; padding-right: 14px; }
-  /* The metric's total, under its name. Neutral ink and a neutral border: it is
-     a denominator and not a verdict, so it must not read as an eighth state. The
-     count columns are centred, and this is deliberately not, because it belongs
-     to the label above it rather than to any column. */
-  /* block plus fit-content, not inline-block: inline-block flowed it after the
-     metric name on the same line, and the ask was a row below. fit-content keeps
-     it as wide as the number rather than as wide as the column. */
-  .mtotal { display: block; width: fit-content; margin-top: 3px; padding: 1px 7px;
-    border: 1px solid var(--border); border-radius: var(--radius-sm);
-    font-family: var(--mono); font-size: 10.5px; color: var(--text-dim);
-    line-height: 1.4; }
   /* The state headers read left to right and wrap, as of 2026-09-01. They were
      rotated with `writing-mode: vertical-rl` so that seven long labels could sit
      over narrow count columns without widening the table. Horizontal and
@@ -134,9 +123,12 @@
      The BUTTON draws no box, so the only box is the label's. Two nested borders
      would put a neutral rectangle around every state's own line style, which is
      exactly the marker this is trying to show. */
-  .facet-head { display: flex; align-items: baseline; gap: 5px; height: auto;
-    padding: 0; border: none; background: none; border-radius: 0;
-    font-size: 11px; }
+  /* A column, so the count sits UNDER the label rather than beside it. It was
+     beside it until 2026-09-01. Stacking gives the wrapped labels their full
+     width back and puts each column's total directly over the cells it totals. */
+  .facet-head { display: flex; flex-direction: column; align-items: flex-start;
+    gap: 3px; height: auto; padding: 0; border: none; background: none;
+    border-radius: 0; font-size: 11px; }
   .facet-head:hover { background: none; }
   .f-head-label { display: inline-block; max-width: 92px; white-space: normal;
     text-align: left; line-height: 1.25; padding: 2px 5px;
@@ -146,7 +138,16 @@
      chip uses when pressed would paint over the marker. */
   .facet-head[aria-pressed="true"] .f-head-label {
     outline: 2px solid var(--accent); outline-offset: 2px; }
-  .facet-head[aria-pressed="true"] .f-count { color: var(--accent); font-weight: 600; }
+  /* Neutral border and ink on purpose. The cells below wear the state's own
+     encoding because each is a measurement; this is the column's total, and in
+     an enc- class it would read as one more cell rather than as the sum of
+     them. */
+  .facet-head .f-count { padding: 1px 7px; border: 1px solid var(--border);
+    border-radius: var(--radius-sm); font-family: var(--mono); font-size: 10.5px;
+    color: var(--text-dim); line-height: 1.4; }
+  .facet-head:hover .f-count { border-color: var(--text-dim); color: var(--text-muted); }
+  .facet-head[aria-pressed="true"] .f-count { color: var(--accent);
+    border-color: var(--accent); font-weight: 600; }
   /* The cell IS the chip: it carries the state's own border and fill through
      the enc- class, so the grid draws the encoding rather than describing it,
      and a reader sees the shape of the registry in the borders. */
@@ -355,18 +356,6 @@
               data-abbr="{{ row.abbr }}"
               {%- if row.description %} title="{{ row.description }}"{% endif %}>
             <span class="mabbr">{{ row.abbr }}</span> {{ row.name }}
-            {# The row's own total, on its own line, as of 2026-09-01. It is the
-               denominator for every count beside it: 57 verified means little
-               until a reader can see it is 57 of 543.
-
-               A chip in shape but NOT a facet: no data-facet, no aria-pressed,
-               not a button. Every cell in this row already filters on this
-               metric, so a control here could only widen what they narrow,
-               which is the reason the metric label itself stopped being
-               selectable on 2026-08-28. It carries no enc- class either,
-               because it is not a state and wearing one would put it in the
-               encoding's vocabulary. #}
-            <span class="mtotal" data-metric-total="{{ row.name }}">{{ row.total }}</span>
           </th>
           {% for cell in row.cells %}
           <td>

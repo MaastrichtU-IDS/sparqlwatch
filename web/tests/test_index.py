@@ -2169,48 +2169,48 @@ def test_absent_sits_before_indeterminate(client_for, store_registry_sample):
     assert shown.index("absent") < shown.index("indeterminate")
 
 
-def test_each_metric_carries_its_own_total(client_for, store_registry_sample):
-    """The denominator, under the metric's name.
+def test_each_states_count_sits_below_its_label(client_for, store_registry_sample):
+    """The count is under the label, not beside it, as of 2026-09-01.
 
-    57 verified means little until a reader can see it is 57 of 543. Asserted as
-    the SUM of the row's own cells rather than as the endpoint count, because
-    that is what makes it a denominator for the numbers beside it: if a metric
-    ever has no fact for some endpoint, the total must follow the cells and not
-    the registry.
-    """
-    client = client_for(store_registry_sample)
-    page = index(client)
-    entries = [
-        endpoint_measurements(store_registry_sample, e)
-        for e in sorted(_endpoints_of(store_registry_sample))
-    ]
-    matrix = _metric_state_matrix(_index_rows(entries, _index_metrics(entries)),
-                                  _index_metrics(entries))
-    assert matrix, "no matrix to check"
-    for row in matrix:
-        assert row["total"] == sum(cell["count"] for cell in row["cells"]), row["name"]
-        assert f'data-metric-total="{row["name"]}">{row["total"]}<' in page, row["name"]
+    A metric total under the metric name was added and removed the same day: it
+    was the wrong axis. The counts that belong under something are the states',
+    because each heads the column of cells it totals.
 
-
-def test_the_total_is_not_a_control(client_for, store_registry_sample):
-    """A chip in shape, not a facet.
-
-    Every cell in a row already filters on that metric, so a control here could
-    only widen what they narrow, which is why the metric label itself stopped
-    being selectable on 2026-08-28. And it wears no enc- class: it is not a
-    state, and one would put it in the encoding's vocabulary as an eighth.
+    Asserted on the ORDER inside the button and on the rule that stacks them,
+    since either alone would pass on a layout that looks nothing like this: the
+    markup order is the same whether the button is a row or a column.
     """
     page = index(client_for(store_registry_sample))
-    for tag in re.findall(r'<span class="mtotal"[^>]*>', page):
-        assert "data-facet" not in tag, tag
-        assert "aria-pressed" not in tag, tag
-    # A first cut asserted no "<button" within 80 characters of the total, which
-    # matched the NEXT cell's button and could only ever fail. The claim is about
-    # the total element, so it is checked on the element.
-    assert re.search(r'<span class="mtotal"[^>]*>\d+</span>', page), "not a plain span"
-    assert 'class="mtotal"' in page
-    for cls in re.findall(r'<span class="([^"]*mtotal[^"]*)"', page):
-        assert "enc-" not in cls, cls
+    button = re.search(r'<button[^>]*class="facet facet-head".*?</button>', page, re.S)
+    assert button, "no state header button"
+    inner = button.group(0)
+    assert inner.index("f-head-label") < inner.index("f-count"), (
+        "the label must come before the count"
+    )
+    rule = re.search(r"\.facet-head\s*\{([^}]*)\}", page)
+    assert rule and "flex-direction: column" in rule.group(1), rule and rule.group(1)
+
+
+def test_the_states_count_is_not_dressed_as_a_cell(client_for, store_registry_sample):
+    """Neutral, because it is a column total and not a measurement.
+
+    Every cell below it wears the state's own encoding. If the header's count did
+    too it would read as one more cell in the column rather than as the sum of
+    them.
+    """
+    page = index(client_for(store_registry_sample))
+    for inner in re.findall(r'<button[^>]*class="facet facet-head".*?</button>', page, re.S):
+        count = re.search(r'<span class="([^"]*f-count[^"]*)"', inner)
+        assert count, inner[:120]
+        assert "enc-" not in count.group(1), count.group(1)
+
+
+def test_no_metric_total_chip_remains(client_for, store_registry_sample):
+    """Added and removed on 2026-09-01. Asserted so it does not come back by
+    someone reading the commit that added it and not the one that took it out."""
+    page = index(client_for(store_registry_sample))
+    assert "mtotal" not in page
+    assert "data-metric-total" not in page
 
 
 def _endpoints_of(store):
