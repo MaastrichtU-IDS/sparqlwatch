@@ -212,15 +212,42 @@ def _declarations(state: Presentation) -> str:
     )
 
 
+def text_class(slug: str) -> str:
+    """The class that puts a state's own colour on TEXT rather than on a border.
+
+    The matrix header needs it. Its state labels were rotated swatch-plus-text
+    pairs until 2026-09-01, where the swatch carried the encoding and the words
+    carried none of it. Written out horizontally the words are the marker, so
+    they take the state's colour, and `enc-<slug>` beside this one gives them its
+    line style.
+
+    A second class rather than a `color` added to `_declarations`, because the
+    chips in the listing and the cells in the grid must NOT take it: a cell shows
+    a count, and a count in the warn token reads as a warning about the number.
+    """
+    return "enc-text-" + (slug if slug in _BY_SLUG else UNRECOGNISED.slug)
+
+
 def css_rules() -> str:
     """The stylesheet fragment for every state, generated from the table.
 
     Emitted rather than hand-written so that adding a state, or changing one
     channel of one state, cannot leave the legend explaining the old drawing.
+
+    Two families. `enc-<slug>` is the border and fill that draw a chip, and
+    `enc-text-<slug>` is the same state's colour for text. Both are generated
+    from the one table for the same reason: a state added with no text colour
+    would render its label in the default ink and silently stop being marked.
     """
     lines = []
     for state in (*STATES, UNRECOGNISED):
         lines.append(
             f"  .{css_class(state.slug)} {{ {_declarations(state)} }}"
+        )
+    for state in (*STATES, UNRECOGNISED):
+        # The token, never the border colour: `absent` draws no border, and a
+        # label in `transparent` would be an invisible label.
+        lines.append(
+            f"  .{text_class(state.slug)} {{ color: var(--{state.token}); }}"
         )
     return "\n".join(lines)

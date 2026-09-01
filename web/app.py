@@ -1726,6 +1726,10 @@ def _matrix_states(matrix: list[dict]) -> list[dict]:
             "slug": cell["slug"],
             "label": cell["label"],
             "css_class": cell["css_class"],
+            # The state's own colour, for the label text. See
+            # verdict_encoding.text_class on why it is a second class and not a
+            # `color` folded into the chip rule.
+            "text_class": verdict_encoding.text_class(cell["slug"]),
             # The meaning verdict_encoding already carries. It was printed as
             # prose under the legend until the grid replaced it, and the prose
             # under the grid went on 2026-08-28, so this is where it lives now:

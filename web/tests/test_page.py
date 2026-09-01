@@ -472,10 +472,15 @@ def test_every_state_has_exactly_one_generated_rule():
     or a state with no rule, is how a chip ends up drawn by whatever it
     inherits."""
     rules = verdict_encoding.css_rules()
-    for state in (*verdict_encoding.STATES, verdict_encoding.UNRECOGNISED):
-        selector = "." + verdict_encoding.css_class(state.slug) + " "
-        assert rules.count(selector) == 1
-    assert rules.count("{") == len(verdict_encoding.STATES) + 1
+    every = (*verdict_encoding.STATES, verdict_encoding.UNRECOGNISED)
+    for state in every:
+        assert rules.count("." + verdict_encoding.css_class(state.slug) + " ") == 1
+        # The second family, added 2026-09-01 for the matrix header's labels.
+        # Generated from the same table for the same reason: a state added with
+        # no text colour would render its label in the default ink and silently
+        # stop being marked.
+        assert rules.count("." + verdict_encoding.text_class(state.slug) + " ") == 1
+    assert rules.count("{") == 2 * len(every)
 
 
 def _generated_declarations():
@@ -490,7 +495,16 @@ def _generated_declarations():
     for line in verdict_encoding.css_rules().splitlines():
         selector, brace, rest = line.strip().partition("{")
         assert brace, f"not a rule: {line!r}"
-        bodies[selector.strip().lstrip(".")] = " ".join(rest.rstrip("}").split())
+        name = selector.strip().lstrip(".")
+        # The text family is EXCLUDED, and that is the point rather than a
+        # convenience. Text colours are deliberately not injective: verified and
+        # undeclared-but-verified are both `good`, absent and not-measured are
+        # both `text-dim`. Injectivity is carried by border, fill and weight, so
+        # the colour is what those pairs are allowed to share. Folding them in
+        # here would report the design as a collision.
+        if name.startswith("enc-text-"):
+            continue
+        bodies[name] = " ".join(rest.rstrip("}").split())
     return bodies
 
 

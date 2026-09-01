@@ -624,6 +624,14 @@ def test_the_chips_come_from_the_one_encoding_table(
     """
     page = index(client_for(store_registry_sample))
     generated = set(re.findall(r"\.(enc-[a-z-]+)\s*\{", page))
+    # Both families since 2026-09-01: the chip rule and the text colour the
+    # matrix header's labels wear. Still asserted as an exact set, so a private
+    # table in the template still fails here.
+    assert {g for g in generated if g.startswith("enc-text-")} == {
+        verdict_encoding.text_class(state.slug)
+        for state in (*verdict_encoding.STATES, verdict_encoding.UNRECOGNISED)
+    }
+    generated = {g for g in generated if not g.startswith("enc-text-")}
     assert generated == {
         verdict_encoding.css_class(state.slug)
         for state in (*verdict_encoding.STATES, verdict_encoding.UNRECOGNISED)
@@ -2101,3 +2109,43 @@ def test_no_prose_stands_under_the_grid(client_for, store_registry_sample):
     page = index(client_for(store_registry_sample))
     assert "A cell is the endpoints whose newest sweep" not in page
     assert "A filled chip means" not in page
+
+
+def test_the_state_labels_wear_their_own_encoding(client_for, store_registry_sample):
+    """Each state label carries its own colour and line style.
+
+    The header held a swatch beside words in the default ink until 2026-09-01,
+    which put the marker next to the thing it marked instead of on it. Both
+    classes are generated from verdict_encoding's one table, so a state added
+    without a text colour fails here rather than rendering unmarked.
+    """
+    page = index(client_for(store_registry_sample))
+    labels = re.findall(r'class="f-head-label ([^"]+)"', page)
+    assert labels, "no state labels in the matrix header"
+    for classes in labels:
+        names = classes.split()
+        chip = [n for n in names if n.startswith("enc-") and not n.startswith("enc-text-")]
+        text = [n for n in names if n.startswith("enc-text-")]
+        assert len(chip) == 1 and len(text) == 1, classes
+        # Same state on both, or the label would wear one state's colour and
+        # another's border.
+        assert text[0] == "enc-text-" + chip[0][len("enc-"):], classes
+
+
+def test_the_state_labels_are_not_rotated(client_for, store_registry_sample):
+    """Horizontal since 2026-09-01, and allowed to wrap.
+
+    They were rotated with writing-mode so seven long labels could sit over
+    narrow count columns. Asserted because the rule is easy to reintroduce while
+    tidying CSS, and rotated text is what this change exists to remove.
+    """
+    page = index(client_for(store_registry_sample))
+    # The RULE, not the string. A first cut searched the page for
+    # "writing-mode" and matched the comment that explains its removal, which is
+    # a test that fails on its own documentation.
+    rule = re.search(r"\.f-head-label\s*\{([^}]*)\}", page)
+    assert rule, "no .f-head-label rule"
+    body = rule.group(1)
+    assert "writing-mode" not in body, body
+    assert "transform" not in body, body
+    assert "white-space: normal" in body, body

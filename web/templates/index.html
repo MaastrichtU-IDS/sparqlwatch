@@ -109,15 +109,33 @@
   /* The grid. Tabular numbers so the columns read as columns, and the state
      columns narrow because a count is at most three digits. */
   table.matrix { border-collapse: collapse; margin: 0; font-size: 12.5px; }
-  table.matrix th { font-weight: 500; text-align: left; padding: 2px 4px 2px 0;
+  table.matrix th { font-weight: 500; text-align: left; padding: 2px 6px 6px 0;
     color: var(--text-muted); font-size: 11px; vertical-align: bottom; }
   table.matrix td { padding: 2px 4px 2px 0; text-align: center;
     font-variant-numeric: tabular-nums; }
   table.matrix tbody th { text-align: left; padding-right: 14px; }
-  .facet-head { height: auto; min-height: 22px; padding: 2px 6px;
-    border-radius: var(--radius-sm); font-size: 11px; gap: 6px; }
-  .f-head-label { writing-mode: vertical-rl; transform: rotate(180deg);
-    text-align: left; }
+  /* The state headers read left to right and wrap, as of 2026-09-01. They were
+     rotated with `writing-mode: vertical-rl` so that seven long labels could sit
+     over narrow count columns without widening the table. Horizontal and
+     wrapping costs width and buys legibility, which is the better trade for a
+     row of seven things a reader has to tell apart.
+
+     The BUTTON draws no box, so the only box is the label's. Two nested borders
+     would put a neutral rectangle around every state's own line style, which is
+     exactly the marker this is trying to show. */
+  .facet-head { display: flex; align-items: baseline; gap: 5px; height: auto;
+    padding: 0; border: none; background: none; border-radius: 0;
+    font-size: 11px; }
+  .facet-head:hover { background: none; }
+  .f-head-label { display: inline-block; max-width: 92px; white-space: normal;
+    text-align: left; line-height: 1.25; padding: 2px 5px;
+    border-radius: var(--radius-sm); }
+  /* Selection is a ring OUTSIDE the label's own border rather than a fill, so a
+     selected state still shows its line style. The accent fill that every other
+     chip uses when pressed would paint over the marker. */
+  .facet-head[aria-pressed="true"] .f-head-label {
+    outline: 2px solid var(--accent); outline-offset: 2px; }
+  .facet-head[aria-pressed="true"] .f-count { color: var(--accent); font-weight: 600; }
   /* The cell IS the chip: it carries the state's own border and fill through
      the enc- class, so the grid draws the encoding rather than describing it,
      and a reader sees the shape of the registry in the borders. */
@@ -300,8 +318,13 @@
                     data-facet="state" data-facet-value="{{ state.slug }}"
                     data-state="{{ state.slug }}"
                     {%- if state.description %} title="{{ state.description }}"{% endif %}>
-              <span class="f-swatch {{ state.css_class }}" aria-hidden="true"></span>
-              <span class="f-head-label">{{ state.label }}</span>
+              {# The label carries the encoding: its line style from
+                 `enc-<slug>` and its colour from `enc-text-<slug>`, both
+                 generated from verdict_encoding's one table. A separate swatch
+                 sat here until 2026-09-01, beside words in the default ink,
+                 which put the marker next to the thing it marks instead of on
+                 it. #}
+              <span class="f-head-label {{ state.css_class }} {{ state.text_class }}">{{ state.label }}</span>
               <span class="f-count">{{ state_counts[state.slug] }}</span>
             </button>
           </th>
