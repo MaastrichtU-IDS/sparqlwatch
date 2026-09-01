@@ -1,0 +1,566 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vocabulary explorer (prototype) - sparqlwatch</title>
+<style>
+  /* The same tokens as web/templates/index.html. The .enc- rules below are
+     copied from verdict_encoding.css_rules() rather than invented, because a
+     term's evidence state IS a verdict in this project's vocabulary: used and
+     declared is `verified`, used but not declared is `undeclared-but-verified`,
+     declared but not used is `declared-only`. A prototype that drew its own
+     encoding would teach the reader a second language for the same fact. */
+  :root {
+    --bg: #0a1929; --bg-secondary: #112a3f; --bg-hover: #1a3952; --bg-deep: #061320;
+    --border: #2a5580; --text: #d0e4f5; --text-bright: #ffffff; --text-muted: #7fa5c8;
+    --text-dim: #5c7c9c; --accent: #4fc3f7; --on-accent: #0a1929; --accent-blue: #81d4fa;
+    --good: #66bb6a; --warn: #ffb74d; --crit: #ef5350; --overlay: rgba(255,255,255,0.05);
+    --radius: 6px; --radius-sm: 4px;
+    --mono: ui-monospace, 'Cascadia Code', 'Source Code Pro', monospace;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.5 system-ui, -apple-system, 'Segoe UI', sans-serif; }
+  a { color: var(--accent-blue); text-decoration: none; }
+  a:hover { color: var(--accent); text-decoration: underline; }
+  header { display: flex; align-items: center; gap: 12px; padding: 14px 24px;
+           background: var(--bg-secondary); border-bottom: 1px solid var(--border); }
+  .logo { display: flex; align-items: center; gap: 9px; font-weight: 600;
+          color: var(--text-bright); text-decoration: none; }
+  .logo:hover { color: var(--accent); }
+  nav { margin-left: auto; display: flex; gap: 16px; font-size: 13px; }
+  main { padding: 22px 24px; max-width: 1120px; }
+  h1 { margin: 0 0 6px; font-size: 18px; font-weight: 600; color: var(--text-bright);
+       letter-spacing: -0.01em; }
+  h2 { font-size: 12px; font-weight: 600; color: var(--text-dim); text-transform: uppercase;
+       letter-spacing: 0.05em; margin: 0; }
+  p { margin: 0 0 11px; }
+  .lead { color: var(--text-muted); margin-bottom: 18px; max-width: 780px; }
+  .proto { border: 1px dashed var(--warn); border-radius: var(--radius);
+           padding: 10px 13px; margin: 0 0 20px; max-width: 780px;
+           background: var(--bg-secondary); color: var(--text-muted); font-size: 13px; }
+  .proto b { color: var(--warn); font-weight: 600; }
+
+  /* SEARCH. The input is wide because the thing being typed is an IRI, and
+     the suggestion list is what makes a 990-term vocabulary navigable at all:
+     nobody remembers whether the local name is `birthPlace` or `placeOfBirth`. */
+  .search { position: relative; max-width: 620px; margin: 0 0 20px; }
+  .search input { width: 100%; padding: 10px 12px; font: 14px var(--mono);
+                  color: var(--text-bright); background: var(--bg-deep);
+                  border: 1px solid var(--border); border-radius: var(--radius); }
+  .search input:focus { outline: none; border-color: var(--accent); }
+  .search input::placeholder { color: var(--text-dim); font-family: system-ui, sans-serif; }
+  .ac { position: absolute; z-index: 20; left: 0; right: 0; top: calc(100% + 4px);
+        background: var(--bg-secondary); border: 1px solid var(--accent);
+        border-radius: var(--radius); overflow: hidden; display: none;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.5); }
+  .ac[data-open="true"] { display: block; }
+  .ac li { list-style: none; padding: 7px 12px; display: flex; align-items: baseline;
+           gap: 9px; cursor: pointer; }
+  .ac ul { margin: 0; padding: 0; max-height: 320px; overflow-y: auto; }
+  .ac li[aria-selected="true"], .ac li:hover { background: var(--bg-hover); }
+  .ac .ac-local { font: 13px var(--mono); color: var(--text-bright); }
+  .ac .ac-ns { font-size: 12px; color: var(--text-dim); margin-left: auto;
+               font-family: var(--mono); }
+  .ac .ac-n { font-size: 11.5px; color: var(--text-muted); font-family: var(--mono);
+              min-width: 76px; text-align: right; }
+  .ac .ac-kind { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
+                 color: var(--text-muted); border: 1px solid var(--border);
+                 border-radius: var(--radius-sm); padding: 0 4px; }
+  .ac .ac-empty { padding: 9px 12px; color: var(--text-dim); font-size: 13px; }
+
+  /* CHIPS. One row per group, the group's name in the gutter, exactly the
+     shape the index's matrix settled on. */
+  .facets { border: 1px solid var(--border); border-radius: var(--radius);
+            background: var(--bg-secondary); padding: 4px 0; margin: 0 0 18px; }
+  .fgroup { display: flex; align-items: flex-start; gap: 14px; padding: 9px 16px; }
+  .fgroup + .fgroup { border-top: 1px solid var(--border); }
+  .fgroup > h2 { flex: 0 0 92px; padding-top: 4px; }
+  .fchips { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; }
+  .facet { display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+           font: inherit; font-size: 12.5px; color: var(--text);
+           background: transparent; border: 1px solid var(--border);
+           border-radius: var(--radius-sm); padding: 3px 8px; }
+  .facet:hover { background: var(--bg-hover); }
+  .facet[aria-pressed="true"] { background: var(--accent); color: var(--on-accent);
+                                border-color: var(--accent); font-weight: 600; }
+  .facet[data-empty="true"] { opacity: 0.4; }
+  .f-count { font-family: var(--mono); font-size: 11.5px; opacity: 0.75; }
+  .facet[aria-pressed="true"] .f-count { opacity: 0.9; }
+  .f-swatch { width: 11px; height: 11px; border-radius: 2px; flex: none; }
+  .fmore { background: none; border: none; color: var(--accent-blue); cursor: pointer;
+           font: inherit; font-size: 12.5px; padding: 3px 4px; }
+  .fmore:hover { text-decoration: underline; }
+  .clear { margin-left: auto; }
+
+  /* RESULTS. A term is the row, its endpoints are its cells: the transpose of
+     the index, where the endpoint is the row and the metric is the cell. */
+  .summary { display: flex; align-items: baseline; gap: 10px; margin: 0 0 10px; }
+  .summary .count { font-weight: 600; color: var(--text-bright); }
+  .summary .hidden-note { font-size: 12.5px; color: var(--text-dim); }
+  ul.terms { list-style: none; margin: 0; padding: 0;
+             border: 1px solid var(--border); border-radius: var(--radius);
+             background: var(--bg-secondary); }
+  ul.terms li { display: flex; align-items: center; gap: 12px;
+                padding: 7px 14px; border-bottom: 1px solid var(--border); }
+  ul.terms li:last-child { border-bottom: none; }
+  ul.terms li:hover { background: var(--bg-hover); }
+  .t-local { font: 13.5px var(--mono); color: var(--text-bright); flex: none; }
+  .t-kind { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
+            color: var(--text-muted); border: 1px solid var(--border);
+            border-radius: var(--radius-sm); padding: 0 4px; flex: none; }
+  .t-iri { font: 11.5px var(--mono); color: var(--text-dim); overflow: hidden;
+           text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; }
+  .t-eps { display: flex; gap: 5px; flex: none; }
+  .t-ep { font: 11px var(--mono); padding: 1px 6px; border-radius: var(--radius-sm);
+          color: var(--text); }
+  .empty { padding: 26px 14px; text-align: center; color: var(--text-dim); }
+  .truncated { padding: 9px 14px; color: var(--text-dim); font-size: 12.5px;
+               border-top: 1px solid var(--border); }
+  .legend { margin: 16px 0 0; font-size: 12.5px; color: var(--text-muted);
+            max-width: 780px; }
+
+  /* Copied verbatim from verdict_encoding.css_rules(). */
+  .enc-verified { border: 1px solid var(--good); background: rgba(255, 255, 255, 0.16); }
+  .enc-undeclared-but-verified { border: 1px dashed var(--good); background: rgba(255, 255, 255, 0.16); }
+  .enc-declared-only { border: 1px solid var(--text-muted); background: transparent; }
+  .enc-declared-but-wrong { border: 2px solid var(--crit); background: rgba(255, 255, 255, 0.16); }
+  .enc-indeterminate { border: 1px dashed var(--warn); background: transparent; }
+  .enc-absent { border: 1px solid transparent; background: transparent; }
+  .enc-not-measured { border: 1px dotted var(--text-dim); background: transparent; }
+  .enc-unrecognised { border: 3px double var(--accent); background: transparent; }
+</style>
+</head>
+<body>
+<header>
+  <a class="logo" href="#">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)"
+         stroke-width="2" stroke-linecap="round" aria-hidden="true">
+      <circle cx="11" cy="11" r="7"></circle><path d="M16.5 16.5 L21 21"></path>
+    </svg>
+    sparqlwatch
+  </a>
+  <nav><span style="color:var(--text-dim)">prototype</span></nav>
+</header>
+<main>
+  <h1>Vocabulary</h1>
+  <p class="lead">Every class and property observed in the endpoints monitored here,
+     with what each endpoint's own answers support saying about it.</p>
+
+  <p class="proto"><b>Prototype.</b> Two endpoints, probed once on 2026-08-28, with a
+     200-term sample limit per question. It is here to be argued with, not to be
+     believed: the numbers below are what those two sweeps actually returned, and
+     the limits they expose are the point.</p>
+
+  <div class="search">
+    <input id="q" type="text" autocomplete="off" spellcheck="false"
+           role="combobox" aria-expanded="false" aria-controls="ac-list"
+           aria-autocomplete="list"
+           placeholder="Search a class or property by name or IRI">
+    <div class="ac" id="ac"><ul id="ac-list" role="listbox"></ul></div>
+  </div>
+
+  <div class="facets" id="facets"></div>
+
+  <div class="summary">
+    <span class="count" id="count"></span>
+    <span class="hidden-note" id="hidden-note"></span>
+    <button class="fmore clear" id="clear" type="button" hidden>clear all filters</button>
+  </div>
+
+  <ul class="terms" id="terms"></ul>
+
+  <p class="legend" id="legend"></p>
+</main>
+
+<script type="application/json" id="data">__PAYLOAD__</script>
+<script>
+(function () {
+  "use strict";
+  var DATA = JSON.parse(document.getElementById("data").textContent);
+  var TERMS = DATA.terms;
+  var EPS = DATA.endpoints;
+  var RENDER_CAP = 300;
+
+  // The four states this data can produce, in the order the docs list them.
+  // `declared-but-wrong`, `absent` and `not-measured` cannot arise from a term
+  // that is in the sample at all, so they are not offered as filters: a chip
+  // that can only ever read 0 is a claim that something was looked for.
+  var STATES = [
+    { slug: "verified", label: "confirmed and declared" },
+    { slug: "undeclared-but-verified", label: "confirmed, not declared" },
+    { slug: "declared-only", label: "declared, not confirmed" },
+    { slug: "indeterminate", label: "not determined" }
+  ];
+
+  // Read once. 990 terms times four chip groups times a keystroke is the whole
+  // reason these are fields and not DOM reads.
+  TERMS.forEach(function (t) {
+    t._hay = (t.l + " " + t.i).toLowerCase();
+    t._low = t.l.toLowerCase();
+    t._n = 0;
+    for (var url in t.at) { t._n++; }
+  });
+
+  var GROUPS = ["kind", "state", "endpoint", "vocab"];
+  var picked = { kind: {}, state: {}, endpoint: {}, vocab: {} };
+  var query = "";
+  // Accepting a suggestion pins ONE term, and that is not the same thing as
+  // searching for its IRI: <.../foaf/0.1/Person> is a substring of
+  // <.../foaf/0.1/PersonalProfileDocument>, so a substring pin quietly returns
+  // two rows when the reader asked for one. Typing again drops the pin.
+  var exact = null;
+  var showEngine = false;
+  var vocabExpanded = false;
+  var VOCAB_SHOWN = 10;
+
+  function any(obj) { for (var k in obj) { if (obj[k]) return true; } return false; }
+
+  function matchesChip(t, group, value) {
+    if (group === "kind") return t.k === value;
+    if (group === "vocab") return t.n === value;
+    return false;
+  }
+
+  // `kind` and `vocab` are properties of the term itself, so they test
+  // independently and AND with everything else.
+  function groupOk(t, group) {
+    var chosen = picked[group];
+    if (!any(chosen)) return true;
+    for (var v in chosen) {
+      if (chosen[v] && matchesChip(t, group, v)) return true;
+    }
+    return false;
+  }
+
+  // `endpoint` and `state` are NOT independent, and treating them as two
+  // groups that merely AND is wrong here. A row on this page is a TERM, and a
+  // term carries one state PER endpoint. Testing the two separately lets
+  // `dbpedia` + `declared, not confirmed` return a term that is declared-only
+  // at camera and merely present at dbpedia, which is a confident wrong
+  // answer of exactly the kind this project refuses. So the pair is one joint
+  // facet: the term qualifies when ONE of its own (endpoint, state)
+  // observations satisfies both filters at once. This is the same lesson the
+  // index learned when metric and state became a matrix instead of two rows,
+  // and a matrix is not available here because the endpoint axis is 543 long.
+  function qualifies(t, epFilter, stFilter, needEp, needState) {
+    for (var url in t.at) {
+      if (needEp && url !== needEp) continue;
+      if (epFilter && any(epFilter) && !epFilter[url]) continue;
+      var st = t.at[url];
+      if (needState && st !== needState) continue;
+      if (stFilter && any(stFilter) && !stFilter[st]) continue;
+      return true;
+    }
+    return false;
+  }
+
+  // Everything that is true of the term regardless of which endpoint saw it.
+  function base(t, skip) {
+    if (t.e && !showEngine) return false;
+    if (exact) { if (t.i !== exact) return false; }
+    else if (query && t._hay.indexOf(query) === -1) return false;
+    if (skip !== "kind" && !groupOk(t, "kind")) return false;
+    if (skip !== "vocab" && !groupOk(t, "vocab")) return false;
+    return true;
+  }
+
+  function survives(t) {
+    return base(t, null) && qualifies(t, picked.endpoint, picked.state, null, null);
+  }
+
+  // A chip's count is conditioned on the OTHER groups and never on its own,
+  // so it reads as "what selecting this would give me".
+  function countFor(group, value) {
+    var n = 0;
+    for (var i = 0; i < TERMS.length; i++) {
+      var t = TERMS[i];
+      if (group === "endpoint") {
+        if (base(t, null) && qualifies(t, null, picked.state, value, null)) n++;
+      } else if (group === "state") {
+        if (base(t, null) && qualifies(t, picked.endpoint, null, null, value)) n++;
+      } else {
+        if (base(t, group) && matchesChip(t, group, value) &&
+            qualifies(t, picked.endpoint, picked.state, null, null)) n++;
+      }
+    }
+    return n;
+  }
+
+  function visible() {
+    var out = [];
+    for (var i = 0; i < TERMS.length; i++) {
+      if (survives(TERMS[i])) out.push(TERMS[i]);
+    }
+    return out;
+  }
+
+  function esc(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
+  function chip(group, value, label, swatchClass) {
+    var on = !!picked[group][value];
+    var n = countFor(group, value);
+    return '<button type="button" class="facet" data-group="' + group + '"' +
+           ' data-value="' + esc(value) + '" aria-pressed="' + on + '"' +
+           (n === 0 && !on ? ' data-empty="true"' : '') + '>' +
+           (swatchClass ? '<span class="f-swatch ' + swatchClass + '" aria-hidden="true"></span>' : '') +
+           esc(label) + '<span class="f-count">' + n + '</span></button>';
+  }
+
+  function renderFacets() {
+    var h = "";
+
+    h += '<div class="fgroup"><h2>Kind</h2><div class="fchips">' +
+         chip("kind", "class", "class") + chip("kind", "property", "property") +
+         '</div></div>';
+
+    var states = "";
+    STATES.forEach(function (s) {
+      states += chip("state", s.slug, s.label, "enc-" + s.slug);
+    });
+    h += '<div class="fgroup"><h2>Evidence</h2><div class="fchips">' + states + '</div></div>';
+
+    var eps = "";
+    EPS.forEach(function (e) { eps += chip("endpoint", e.url, e.short); });
+    h += '<div class="fgroup"><h2>Endpoint</h2><div class="fchips">' + eps + '</div></div>';
+
+    // Ordered by how much of the vocabulary each namespace accounts for, and
+    // truncated, because 35 namespaces is a wall and the long tail is 1 term each.
+    var vs = DATA.vocabularies;
+    var shown = vocabExpanded ? vs.length : Math.min(VOCAB_SHOWN, vs.length);
+    var voc = "";
+    for (var i = 0; i < shown; i++) {
+      voc += chip("vocab", vs[i].ns, vs[i].prefix);
+    }
+    if (vs.length > shown) {
+      voc += '<button class="fmore" type="button" id="vocab-more">show ' +
+             (vs.length - shown) + ' more</button>';
+    } else if (vocabExpanded && vs.length > VOCAB_SHOWN) {
+      voc += '<button class="fmore" type="button" id="vocab-more">show fewer</button>';
+    }
+    h += '<div class="fgroup"><h2>Vocabulary</h2><div class="fchips">' + voc + '</div></div>';
+
+    // Not a chip group. The engine's own schema is not the publisher's data, so
+    // it is out by default and its exclusion is stated rather than silent.
+    var engineTotal = 0;
+    TERMS.forEach(function (t) { if (t.e) engineTotal++; });
+    h += '<div class="fgroup"><h2>Server</h2><div class="fchips">' +
+         '<button type="button" class="facet" id="engine" aria-pressed="' + showEngine + '">' +
+         "include the server\'s own schema" + '<span class="f-count">' + engineTotal +
+         '</span></button></div></div>';
+
+    document.getElementById("facets").innerHTML = h;
+  }
+
+  function renderTerms() {
+    var rows = visible();
+    var host = document.getElementById("terms");
+
+    if (rows.length === 0) {
+      host.innerHTML = '<li class="empty">No class or property matches these filters.</li>';
+    } else {
+      var h = "";
+      var shown = Math.min(rows.length, RENDER_CAP);
+      for (var i = 0; i < shown; i++) {
+        var t = rows[i];
+        var cells = "";
+        EPS.forEach(function (e) {
+          var state = t.at[e.url];
+          if (!state) return;
+          // Dim, rather than drop, an observation the current selection did
+          // not ask for: the term is on the page because of some other
+          // endpoint, and hiding this one would misreport what was measured.
+          var asked = (!any(picked.endpoint) || picked.endpoint[e.url]) &&
+                      (!any(picked.state) || picked.state[state]);
+          cells += '<span class="t-ep enc-' + state + '"' +
+                   (asked ? '' : ' style="opacity:0.4"') + ' title="' +
+                   esc(e.short + ": " + stateLabel(state)) + '">' + esc(e.short) + '</span>';
+        });
+        h += '<li><span class="t-local">' + esc(t.l) + '</span>' +
+             '<span class="t-kind">' + esc(t.k) + '</span>' +
+             '<span class="t-iri">' + esc(t.i) + '</span>' +
+             '<span class="t-eps">' + cells + '</span></li>';
+      }
+      if (rows.length > shown) {
+        h += '<li class="truncated">Showing the first ' + shown + ' of ' + rows.length +
+             '. Narrow the filters or search to see the rest.</li>';
+      }
+      host.innerHTML = h;
+    }
+
+    document.getElementById("count").textContent =
+      rows.length + (rows.length === 1 ? " term" : " terms");
+
+    var hiddenEngine = 0;
+    if (!showEngine) {
+      TERMS.forEach(function (t) {
+        if (!t.e) return;
+        if (exact) { if (t.i === exact) hiddenEngine++; }
+        else if (!query || t._hay.indexOf(query) !== -1) hiddenEngine++;
+      });
+    }
+    document.getElementById("hidden-note").textContent = hiddenEngine
+      ? hiddenEngine + " hidden as the server's own schema" : "";
+
+    var filtering = query !== "" || exact !== null || showEngine || GROUPS.some(function (g) { return any(picked[g]); });
+    document.getElementById("clear").hidden = !filtering;
+  }
+
+  function stateLabel(slug) {
+    for (var i = 0; i < STATES.length; i++) {
+      if (STATES[i].slug === slug) return STATES[i].label;
+    }
+    return slug;
+  }
+
+  function renderLegend() {
+    var caps = [];
+    EPS.forEach(function (e) {
+      var q = e.questions, bad = [];
+      for (var name in q) {
+        if (q[name].capped) bad.push(name + " hit its 200 limit");
+        else if (q[name].verdict) bad.push(name + " was not answered (" + q[name].verdict + ")");
+      }
+      if (bad.length) caps.push(e.short + ": " + bad.join("; "));
+    });
+    document.getElementById("legend").innerHTML =
+      "A term reads <em>not determined</em> at an endpoint whenever the answer " +
+      "that would have settled it was truncated or refused, because neither a " +
+      "capped list nor a refused query is evidence that something is absent. " +
+      (caps.length ? "<br>" + caps.map(esc).join("<br>") : "");
+  }
+
+  function render() { renderFacets(); renderTerms(); }
+
+  // AUTOCOMPLETE. Prefix matches on the local name first, then substring, then
+  // the IRI: typing `Per` should reach foaf:Person before it reaches anything
+  // that merely contains those letters.
+  var acBox = document.getElementById("ac");
+  var acList = document.getElementById("ac-list");
+  var input = document.getElementById("q");
+  var suggestions = [];
+  var acIndex = -1;
+
+  function suggest(raw) {
+    var s = raw.toLowerCase().trim();
+    if (s.length < 2) return [];
+    var pre = [], sub = [], iri = [];
+    for (var i = 0; i < TERMS.length; i++) {
+      var t = TERMS[i];
+      if (t.e && !showEngine) continue;
+      if (t._low.indexOf(s) === 0) pre.push(t);
+      else if (t._low.indexOf(s) !== -1) sub.push(t);
+      else if (t.i.toLowerCase().indexOf(s) !== -1) iri.push(t);
+    }
+    // Within a bucket, rank by how many endpoints carry the term. Alphabetical
+    // order put a five-term vocabulary's `Person` above foaf's, which is the
+    // wrong answer to every query that produced it: the reason to search a
+    // vocabulary is to find the term other people use. Then prefer the shorter
+    // local name, so `Person` precedes `PersonalProfileDocument`.
+    function rank(a, b) {
+      var d = b._n - a._n;
+      if (d) return d;
+      d = a.l.length - b.l.length;
+      if (d) return d;
+      return a.i < b.i ? -1 : (a.i > b.i ? 1 : 0);
+    }
+    pre.sort(rank); sub.sort(rank); iri.sort(rank);
+    return pre.concat(sub, iri).slice(0, 8);
+  }
+
+  function renderAc() {
+    if (suggestions.length === 0) {
+      acBox.dataset.open = "false";
+      input.setAttribute("aria-expanded", "false");
+      acList.innerHTML = "";
+      return;
+    }
+    var h = "";
+    suggestions.forEach(function (t, i) {
+      h += '<li role="option" data-i="' + i + '" aria-selected="' + (i === acIndex) + '">' +
+           '<span class="ac-local">' + esc(t.l) + '</span>' +
+           '<span class="ac-kind">' + esc(t.k) + '</span>' +
+           '<span class="ac-ns">' + esc(t.p) + '</span>' +
+           '<span class="ac-n">' + t._n + (t._n === 1 ? ' endpoint' : ' endpoints') +
+           '</span></li>';
+    });
+    acList.innerHTML = h;
+    acBox.dataset.open = "true";
+    input.setAttribute("aria-expanded", "true");
+  }
+
+  function closeAc() { suggestions = []; acIndex = -1; renderAc(); }
+
+  function accept(i) {
+    var t = suggestions[i];
+    if (!t) return;
+    input.value = t.i;
+    query = t.i.toLowerCase();
+    exact = t.i;
+    closeAc();
+    render();
+  }
+
+  input.addEventListener("input", function () {
+    exact = null;
+    query = input.value.toLowerCase().trim();
+    suggestions = suggest(input.value);
+    acIndex = -1;
+    renderAc();
+    render();
+  });
+
+  input.addEventListener("keydown", function (ev) {
+    if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+      if (suggestions.length === 0) return;
+      ev.preventDefault();
+      acIndex += (ev.key === "ArrowDown" ? 1 : -1);
+      if (acIndex < 0) acIndex = suggestions.length - 1;
+      if (acIndex >= suggestions.length) acIndex = 0;
+      renderAc();
+    } else if (ev.key === "Enter") {
+      if (acIndex >= 0) { ev.preventDefault(); accept(acIndex); }
+      else closeAc();
+    } else if (ev.key === "Escape") {
+      closeAc();
+    }
+  });
+
+  acList.addEventListener("mousedown", function (ev) {
+    var li = ev.target.closest("li[data-i]");
+    if (li) { ev.preventDefault(); accept(Number(li.dataset.i)); }
+  });
+
+  document.addEventListener("click", function (ev) {
+    if (!ev.target.closest(".search")) closeAc();
+  });
+
+  document.getElementById("facets").addEventListener("click", function (ev) {
+    var more = ev.target.closest("#vocab-more");
+    if (more) { vocabExpanded = !vocabExpanded; render(); return; }
+    if (ev.target.closest("#engine")) { showEngine = !showEngine; render(); return; }
+    var b = ev.target.closest(".facet[data-group]");
+    if (!b) return;
+    var g = b.dataset.group, v = b.dataset.value;
+    picked[g][v] = !picked[g][v];
+    render();
+  });
+
+  document.getElementById("clear").addEventListener("click", function () {
+    GROUPS.forEach(function (g) { picked[g] = {}; });
+    query = ""; exact = null; input.value = ""; showEngine = false;
+    closeAc();
+    render();
+  });
+
+  renderLegend();
+  render();
+})();
+</script>
+</body>
+</html>
