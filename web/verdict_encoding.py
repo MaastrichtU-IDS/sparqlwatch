@@ -82,6 +82,14 @@ class Presentation:
 # prober/src/verdict.rs's slugs exactly, plus one fact that is deliberately not
 # a verdict: a declined metric was never measured, so it has no verdict at all,
 # and "we chose not to look" is not a finding about the endpoint.
+#
+# `absent` and `indeterminate` swapped places on 2026-09-01, at the plan owner's
+# request. The order is presentation and carries no ranking, but it does group:
+# absent now sits beside declared-but-wrong at the end of the states that are
+# ANSWERS about the endpoint, and indeterminate sits beside not-measured, which
+# are the two that say we do not know. docs/design/verdict-encoding.md is
+# canonical and moved with this; test_the_implementation_equals_the_canonical_table
+# compares them as dicts, so only a reader would have noticed them disagree.
 STATES: tuple[Presentation, ...] = (
     Presentation(
         slug="verified",
@@ -120,15 +128,6 @@ STATES: tuple[Presentation, ...] = (
         token="crit",
     ),
     Presentation(
-        slug="indeterminate",
-        label="indeterminate",
-        meaning="not determined",
-        border="dashed",
-        fill=False,
-        weight=1,
-        token="warn",
-    ),
-    Presentation(
         slug="absent",
         label="absent",
         meaning="neither declared nor confirmed",
@@ -136,6 +135,15 @@ STATES: tuple[Presentation, ...] = (
         fill=False,
         weight=1,
         token="text-dim",
+    ),
+    Presentation(
+        slug="indeterminate",
+        label="indeterminate",
+        meaning="not determined",
+        border="dashed",
+        fill=False,
+        weight=1,
+        token="warn",
     ),
     Presentation(
         slug="not-measured",

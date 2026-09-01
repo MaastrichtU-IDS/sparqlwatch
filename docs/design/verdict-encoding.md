@@ -14,8 +14,8 @@ Six verdicts, plus one fact that is deliberately not a verdict.
 | `undeclared-but-verified` | dashed | filled | 1px | confirmed, not declared |
 | `declared-only` | solid | empty | 1px | declared, not confirmed |
 | `declared-but-wrong` | solid | filled | **2px** | declared, but incorrect |
-| `indeterminate` | dashed | empty | 1px | not determined |
 | `absent` | none | empty | 1px | neither declared nor confirmed |
+| `indeterminate` | dashed | empty | 1px | not determined |
 | `not-measured` | dotted | empty | 1px | not measured |
 
 The wordings above were rewritten by the plan owner on 2026-08-28 to one

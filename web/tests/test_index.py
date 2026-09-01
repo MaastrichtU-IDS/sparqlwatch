@@ -46,7 +46,11 @@ from pyoxigraph import NamedNode, RdfFormat, Store, parse
 from starlette.testclient import TestClient
 
 import verdict_encoding
+from endpoint_measurements import endpoint_measurements
 from app import (
+    _index_metrics,
+    _index_rows,
+    _metric_state_matrix,
     EXPLORE_PATH,
     ABOUT_PATH,
     DOCS_PATH,
@@ -2149,3 +2153,69 @@ def test_the_state_labels_are_not_rotated(client_for, store_registry_sample):
     assert "writing-mode" not in body, body
     assert "transform" not in body, body
     assert "white-space: normal" in body, body
+
+
+def test_absent_sits_before_indeterminate(client_for, store_registry_sample):
+    """The order the plan owner asked for on 2026-09-01.
+
+    It carries no ranking, but it does group: absent ends the run of states that
+    are ANSWERS about the endpoint, and indeterminate begins the two that say we
+    do not know. Asserted against verdict_encoding rather than as a literal list,
+    so the canonical table stays the only place the order is decided.
+    """
+    page = index(client_for(store_registry_sample))
+    shown = re.findall(r'data-state="([a-z-]+)"', page)
+    assert shown == [state.slug for state in verdict_encoding.STATES]
+    assert shown.index("absent") < shown.index("indeterminate")
+
+
+def test_each_metric_carries_its_own_total(client_for, store_registry_sample):
+    """The denominator, under the metric's name.
+
+    57 verified means little until a reader can see it is 57 of 543. Asserted as
+    the SUM of the row's own cells rather than as the endpoint count, because
+    that is what makes it a denominator for the numbers beside it: if a metric
+    ever has no fact for some endpoint, the total must follow the cells and not
+    the registry.
+    """
+    client = client_for(store_registry_sample)
+    page = index(client)
+    entries = [
+        endpoint_measurements(store_registry_sample, e)
+        for e in sorted(_endpoints_of(store_registry_sample))
+    ]
+    matrix = _metric_state_matrix(_index_rows(entries, _index_metrics(entries)),
+                                  _index_metrics(entries))
+    assert matrix, "no matrix to check"
+    for row in matrix:
+        assert row["total"] == sum(cell["count"] for cell in row["cells"]), row["name"]
+        assert f'data-metric-total="{row["name"]}">{row["total"]}<' in page, row["name"]
+
+
+def test_the_total_is_not_a_control(client_for, store_registry_sample):
+    """A chip in shape, not a facet.
+
+    Every cell in a row already filters on that metric, so a control here could
+    only widen what they narrow, which is why the metric label itself stopped
+    being selectable on 2026-08-28. And it wears no enc- class: it is not a
+    state, and one would put it in the encoding's vocabulary as an eighth.
+    """
+    page = index(client_for(store_registry_sample))
+    for tag in re.findall(r'<span class="mtotal"[^>]*>', page):
+        assert "data-facet" not in tag, tag
+        assert "aria-pressed" not in tag, tag
+    # A first cut asserted no "<button" within 80 characters of the total, which
+    # matched the NEXT cell's button and could only ever fail. The claim is about
+    # the total element, so it is checked on the element.
+    assert re.search(r'<span class="mtotal"[^>]*>\d+</span>', page), "not a plain span"
+    assert 'class="mtotal"' in page
+    for cls in re.findall(r'<span class="([^"]*mtotal[^"]*)"', page):
+        assert "enc-" not in cls, cls
+
+
+def _endpoints_of(store):
+    rows = store.query(
+        "PREFIX dqv: <http://www.w3.org/ns/dqv#> "
+        "SELECT DISTINCT ?e WHERE { GRAPH ?g { ?m dqv:computedOn ?e } }"
+    )
+    return {r["e"].value for r in rows}
