@@ -10,6 +10,30 @@ pub enum BodyKind {
     None,
 }
 
+/// One property's row from a class profile.
+///
+/// Counts rather than a verdict, because a profile is not a measurement: see
+/// Ruling 2 in docs/superpowers/specs/2026-08-29-content-profiles-design.md. The
+/// caller turns these into a `ContentProfile` fact and applies no threshold, so
+/// the frequency a reader wants is `subjects` over the rdf:type row's
+/// `subjects`, computed by whoever wants it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProfileRow {
+    /// The predicate, as an IRI.
+    pub property: String,
+    /// How many DISTINCT subjects in the sample carry it. Distinct, so a
+    /// multi-valued property cannot exceed the denominator and produce a
+    /// frequency above 1.0.
+    pub subjects: u64,
+    /// How many distinct datatypes its objects had. Carried beside
+    /// `any_datatype` so a property with mixed datatypes is VISIBLE as mixed
+    /// rather than silently reduced to whichever one the store returned first.
+    pub datatypes: u64,
+    /// One of the datatypes seen, or the string "IRI" when the object was one.
+    /// `None` when the endpoint bound nothing for it.
+    pub any_datatype: Option<String>,
+}
+
 /// Raw evidence from one request. Deliberately carries no judgement: the
 /// resolver decides what it means.
 ///
@@ -67,6 +91,15 @@ pub struct Observation {
     /// came back.
     #[serde(default)]
     pub allow_headers: Option<String>,
+    /// The grouped rows of a class profile, when this observation came from one.
+    ///
+    /// `None` for every probe that is not a profile, and for a profile the
+    /// endpoint refused. That second case is the load-bearing one: a REFUSAL
+    /// must not arrive as an empty profile, because an empty profile says the
+    /// class carries no properties and nothing observed that. Same distinction
+    /// the six-verdict vocabulary draws between `absent` and `indeterminate`.
+    #[serde(default)]
+    pub profile: Option<Vec<ProfileRow>>,
     pub elapsed_ms: u64,
     #[serde(default)]
     pub error: Option<String>,
@@ -86,6 +119,7 @@ impl Observation {
             allow_origin: None,
             allow_methods: None,
             allow_headers: None,
+            profile: None,
             elapsed_ms,
             error: Some(error),
         }

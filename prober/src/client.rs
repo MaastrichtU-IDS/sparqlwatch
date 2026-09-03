@@ -1,6 +1,6 @@
 use crate::budget::Budget;
 use crate::media;
-use crate::observe::{BodyKind, Observation};
+use crate::observe::{BodyKind, Observation, ProfileRow};
 use crate::politeness::{honour, parse_retry_after, Honour, Politeness, RetryAfter};
 use oxrdfio::{RdfFormat, RdfParser};
 use std::collections::HashSet;
@@ -461,6 +461,9 @@ impl Client {
             allow_origin: None,
             allow_methods: None,
             allow_headers: None,
+            // Not a profile probe. profile_class is the only operation that sets
+            // this, and it sets it from the response body.
+            profile: None,
             elapsed_ms: elapsed,
             error: None,
         };
@@ -551,6 +554,9 @@ impl Client {
             allow_origin: None,
             allow_methods: None,
             allow_headers: None,
+            // Not a profile probe. profile_class is the only operation that sets
+            // this, and it sets it from the response body.
+            profile: None,
             elapsed_ms: elapsed,
             error: None,
         };
@@ -709,6 +715,9 @@ impl Client {
             allow_origin: value("access-control-allow-origin"),
             allow_methods: value("access-control-allow-methods"),
             allow_headers: value("access-control-allow-headers"),
+            // Not a profile probe. profile_class is the only operation that sets
+            // this, and it sets it from the response body.
+            profile: None,
             elapsed_ms: elapsed,
             error: None,
         };
@@ -783,6 +792,78 @@ impl Client {
             let lits = Self::extract(&a.extra, var, true);
             o.boolean = Some(!lits.is_empty());
             o.bindings = lits;
+        }
+        o
+    }
+
+    /// Pull the grouped rows of a class profile out of a SPARQL JSON body.
+    ///
+    /// Returns `None` when the body is not a results set this can read, and
+    /// `Some` otherwise, even if the row list ends up empty: the distinction
+    /// between "we could not read an answer" and "the answer had no rows" is the
+    /// same one the six-verdict vocabulary draws between `indeterminate` and
+    /// `absent`, and collapsing it here would put a confident wrong answer in a
+    /// published fact.
+    ///
+    /// A row whose count will not parse is DROPPED rather than defaulted. Zero
+    /// would say "no subjects carry this property", which is a claim about the
+    /// endpoint that nothing observed.
+    fn extract_profile(body: &str) -> Option<Vec<ProfileRow>> {
+        let v = serde_json::from_str::<serde_json::Value>(body).ok()?;
+        let rows = v.get("results")?.get("bindings")?.as_array()?;
+        let cell = |row: &serde_json::Value, name: &str| -> Option<String> {
+            row.get(name)?
+                .get("value")?
+                .as_str()
+                .map(str::to_string)
+        };
+        let count = |row: &serde_json::Value, name: &str| -> Option<u64> {
+            cell(row, name)?.parse().ok()
+        };
+        Some(
+            rows.iter()
+                .filter_map(|row| {
+                    Some(ProfileRow {
+                        // The predicate must be an IRI. A literal here is not a
+                        // predicate, so the row is not a profile row.
+                        property: {
+                            let p = row.get("p")?;
+                            if p.get("type").and_then(|t| t.as_str()) != Some("uri") {
+                                return None;
+                            }
+                            p.get("value")?.as_str()?.to_string()
+                        },
+                        subjects: count(row, "subjects")?,
+                        // Absent rather than unparseable: an endpoint that
+                        // projects no datatype count still gives a usable row,
+                        // so this defaults to zero meaning "not reported"
+                        // instead of dropping the property.
+                        datatypes: count(row, "datatypes").unwrap_or(0),
+                        any_datatype: cell(row, "anyDatatype"),
+                    })
+                })
+                .collect(),
+        )
+    }
+
+    /// Profile one class: which properties its instances carry, and how many
+    /// carry each.
+    ///
+    /// Resolves to NO VERDICT. The caller publishes these rows as a
+    /// `ContentProfile` fact and applies no threshold, because thresholding is
+    /// how a 95% property became a silent absence in the shexer benchmark of
+    /// 2026-08-29. See Ruling 2 in
+    /// docs/superpowers/specs/2026-08-29-content-profiles-design.md.
+    ///
+    /// `query` is built by the caller because it names the class and carries the
+    /// sampling prefix, both of which are runtime values: the fan-out that calls
+    /// this asks one query per class discovered during the same sweep, so there
+    /// is no static query for a metric to declare.
+    pub async fn profile_class(&self, url: &str, query: &str) -> Observation {
+        let a = self.honouring_retry_after(url, || self.query_chain(url, query, false)).await;
+        let mut o = a.observation;
+        if o.body_kind == BodyKind::SparqlJson {
+            o.profile = Self::extract_profile(&a.extra);
         }
         o
     }
