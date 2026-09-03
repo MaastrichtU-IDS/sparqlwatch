@@ -72,7 +72,7 @@
 #
 # Each branch's "most recent" IS NOT COMPUTED HERE. The first two branches read
 # this endpoint's sw:currentRun out of the derived urn:sparqlwatch:current
-# graph, the sample branch reads its sw:currentSampleRun, and web/load_run.py
+# graph, the sample branch reads its sample pointers, and web/load_run.py
 # writes both as each run is loaded. The two pointers exist because the newest
 # run that measured an endpoint and the newest that sampled it are routinely
 # different runs; endpoint_content.rq's header argues that at length.
@@ -252,7 +252,11 @@ WHERE {
   {
     # The sample's OWN run, read from the second pointer. See
     # endpoint_content.rq's header on why one pointer cannot serve both.
-    GRAPH sw:current { ?endpoint sw:currentSampleRun ?sampleRun }
+    GRAPH sw:current {
+      ?sampleptr sw:sampleRunFor ?endpoint ;
+                 sw:sampleRunMetric ?sampleMetric ;
+                 sw:sampleRunIs ?sampleRun .
+    }
     # OPTIONAL plus a FILTER that requires what it binds, the same shape and the
     # same measured reason as the two branches above and as endpoint_content.rq,
     # which this branch has to match exactly.
@@ -264,7 +268,7 @@ WHERE {
                 sw:sampleSize ?size ;
                 sw:sampleTruncated ?truncated ;
                 sw:sampledBy ?sampledBy .
-        FILTER (?sampledBy = sw:metric:classes)
+        
         ?sampleActivity a prov:Activity ;
                         prov:generatedAtTime ?sampleGeneratedAt .
         # OPTIONAL for the same reason as in endpoint_content.rq: a sample

@@ -398,7 +398,7 @@ def _opened_store(path: str) -> Store:
             f"{endpoints[0]} is one of them. index.rq and "
             f"endpoint_measurements.rq reach an endpoint's verdicts through "
             f"sw:currentRun and endpoint_content.rq reaches its class sample "
-            f"through sw:currentSampleRun, and each drops a solution whose run "
+            f"through its sample pointer, and each drops a solution whose run "
             f"graph is gone, so those endpoints would be answered as though no "
             f"run had ever measured them, while an older run graph in this same "
             f"store may still hold every verdict for them. A run graph has been "

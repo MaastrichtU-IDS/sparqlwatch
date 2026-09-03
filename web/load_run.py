@@ -125,8 +125,9 @@ whose facts current holds, in graph urn:sparqlwatch:current:
 
   E sw:currentRun <run>          the newest run that recorded a measurement,
                                  a decline or a sw:declarationsRead for E
-  E sw:currentSampleRun <run>    the newest run that published a
-                                 sw:metric:classes sample of E
+  <ptr> sw:sampleRunFor E        one pointer resource per (E, metric) pair,
+        sw:sampleRunMetric M     naming the newest run that published an
+        sw:sampleRunIs <run>     M sample of E. See _sample_pointer_iri.
   E sw:declarationsRead <bool>   copied verbatim from sw:currentRun's graph
   <measurement> ?p ?o            every quad of every dqv:QualityMeasurement
                                  whose dqv:computedOn is E, copied verbatim
@@ -152,7 +153,7 @@ and NOTHING ELSE. In particular:
     endpoint_description.rq to publish <endpoint> sw:finalised true, a wrong
     fact because finishing is something a run does.
   - NO sample quads. The class sample stays in its run graph and is read through
-    sw:currentSampleRun, because the index reads current for verdicts and never
+    a sample pointer, because the index reads current for verdicts and never
     for sample values, so copying several hundred sw:sampledValue triples per
     endpoint would grow the graph the index scans and buy nothing.
 
@@ -175,11 +176,17 @@ the run that stated it. Dormancy itself is a run-graph fact and reaches current
 never; see "DORMANCY, AND WHY current HOLDS NONE OF IT" at the end of this
 docstring, and the two _refuse_ functions for the case each one prevents.
 
-TWO POINTERS, which is the subtle half. The newest run that MEASURED an
+TWO KINDS OF POINTER, which is the subtle half. The newest run that MEASURED an
 endpoint and the newest run that SAMPLED it are different runs the moment a
-cheap sweep declines sw:metric:classes, and that is the steady state: the
-543-endpoint registry sweep declined classes for every one of them. One pointer
-with one notion of recency loses the class sample outright.
+cheap sweep declines a sampling metric, and that is the steady state: the
+543-endpoint registry sweep declined sw:metric:classes for every one of them.
+One pointer with one notion of recency loses the sample outright.
+
+The same argument applies once more, one level down, which is why the sample
+pointer is keyed on (endpoint, METRIC) rather than on the endpoint alone. A run
+may sample classes and decline properties, so a single per-endpoint sample
+pointer loses whichever metric came from the older run. Ruling 3 in
+docs/superpowers/specs/2026-08-29-content-profiles-design.md.
 
 THE UPDATE RULE. For every endpoint the incoming run mentions, what current
 holds for that endpoint is replaced, in one store.update() so the endpoint is
@@ -207,6 +214,7 @@ import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 
 from pyoxigraph import DefaultGraph, NamedNode, RdfFormat, Store, parse
 
@@ -256,7 +264,38 @@ CURRENT_GRAPH = NamedNode(CURRENT_GRAPH_IRI)
 # pointer nothing writes and every page answering "we know nothing about this
 # endpoint".
 CURRENT_RUN = "urn:sparqlwatch:currentRun"
-CURRENT_SAMPLE_RUN = "urn:sparqlwatch:currentSampleRun"
+# The sample pointer, keyed on (endpoint, metric) since 2026-09-03. One triple
+# per endpoint could not say "classes came from January and properties from
+# February", and picking either run lost the other metric's sample outright:
+# the same loss sw:currentSampleRun exists to prevent, one level down. See
+# Ruling 3 in docs/superpowers/specs/2026-08-29-content-profiles-design.md.
+SAMPLE_RUN_FOR = "urn:sparqlwatch:sampleRunFor"
+SAMPLE_RUN_METRIC = "urn:sparqlwatch:sampleRunMetric"
+SAMPLE_RUN_IS = "urn:sparqlwatch:sampleRunIs"
+
+_SAMPLE_POINTER_PREFIX = "urn:sparqlwatch:sampleptr:"
+
+
+def _sample_pointer_iri(endpoint: str, metric: str) -> str:
+    """The pointer resource for one (endpoint, metric) pair.
+
+    A derived IRI rather than a blank node because the replace path addresses the
+    pointer by its own subject in a DELETE WHERE, which a blank node cannot serve
+    without matching on its properties: slower, and fragile against a partial
+    write.
+
+    Both components are percent-encoded with an empty safe set, so the ':'
+    separators are the only unencoded ones and the IRI is unambiguous. This
+    encoding does not have to match the prober's `encode_unreserved`: this
+    resource lives only in the derived current graph, which the prober never
+    writes, and rebuild_current reconstructs it from the run graphs.
+    """
+    return (
+        _SAMPLE_POINTER_PREFIX
+        + quote(endpoint, safe="")
+        + ":"
+        + quote(metric, safe="")
+    )
 
 # Every update and query below is parameterised through pyoxigraph's
 # ``prefixes`` argument rather than by formatting an IRI into the text.
@@ -271,6 +310,11 @@ CURRENT_SAMPLE_RUN = "urn:sparqlwatch:currentSampleRun"
 # interpolated string could.
 _ENDPOINT_PREFIX = "endpoint"
 _RUN_PREFIX = "run"
+# Two more for the sample pointer, which needs the metric and the pointer's own
+# derived IRI. Store.update takes no substitutions, so a value can only reach an
+# update as a prefix.
+_METRIC_PREFIX = "metric"
+_POINTER_PREFIX = "ptr"
 
 _PREAMBLE = """
 PREFIX dqv: <http://www.w3.org/ns/dqv#>
@@ -308,10 +352,14 @@ SELECT DISTINCT ?endpoint WHERE {
 # sw:metric:classes because endpoint_content.rq is: a sample from another
 # metric is not this endpoint's classes, and web/tests/fixtures/
 # run-properties-sample.nq exists to prove that pin holds.
-_SAMPLED_ENDPOINTS = _PREAMBLE + """
-SELECT DISTINCT ?endpoint WHERE {
+# Which (endpoint, metric) pairs a run published a sample for. No metric is
+# named: a sample from ANY sampling metric gets a pointer, which is the point of
+# this shape. web/tests/fixtures/run-properties-sample.nq used to exist to prove
+# the sw:metric:classes pin held and now proves it is gone.
+_SAMPLED_PAIRS = _PREAMBLE + """
+SELECT DISTINCT ?endpoint ?metric WHERE {
   GRAPH run: {
-    ?sample sw:sampledFrom ?endpoint ; sw:sampledBy sw:metric:classes .
+    ?sample sw:sampledFrom ?endpoint ; sw:sampledBy ?metric .
   }
 }
 """
@@ -322,10 +370,26 @@ SELECT DISTINCT ?endpoint WHERE {
 # ?instant is OPTIONAL so a pointer naming a graph that has been dropped comes
 # back with the pointer and no instant, which is how the caller tells "older"
 # from "gone".
+# Both kinds of pointer, in one query, keyed the same way the callers key them.
+#
+# ?which is sw:currentRun for a run pointer and THE METRIC IRI for a sample
+# pointer, so the dict this builds is keyed (endpoint, CURRENT_RUN) for one and
+# (endpoint, metric) for the other with no further work. The two key spaces
+# cannot collide: a metric IRI always starts urn:sparqlwatch:metric: and
+# metrics.rs limits an id to [a-z0-9][a-z0-9-]*, so none can be spelled
+# urn:sparqlwatch:currentRun.
 _POINTERS = _PREAMBLE + """
 SELECT ?endpoint ?which ?run ?instant WHERE {
-  GRAPH sw:current { ?endpoint ?which ?run }
-  FILTER (?which = sw:currentRun || ?which = sw:currentSampleRun)
+  {
+    GRAPH sw:current { ?endpoint sw:currentRun ?run }
+    BIND (sw:currentRun AS ?which)
+  } UNION {
+    GRAPH sw:current {
+      ?ptr sw:sampleRunFor ?endpoint ;
+           sw:sampleRunMetric ?which ;
+           sw:sampleRunIs ?run .
+    }
+  }
   OPTIONAL {
     GRAPH ?run { ?activity a prov:Activity ; prov:generatedAtTime ?instant }
   }
@@ -352,12 +416,21 @@ SELECT ?endpoint WHERE {
 }
 """
 
+# ?metric is projected because the FILTER NOT EXISTS has to JOIN on it. That is
+# the substantive change: the question is no longer "did this run sample
+# classes" but "did this run sample the metric this pointer claims it did".
+# _drifted reads ?endpoint from both queries and needs no edit; repair is per
+# endpoint anyway, since it rebuilds the graph.
 _DRIFTED_SAMPLE_POINTERS = _PREAMBLE + """
-SELECT ?endpoint WHERE {
-  GRAPH sw:current { ?endpoint sw:currentSampleRun ?run }
+SELECT ?endpoint ?metric WHERE {
+  GRAPH sw:current {
+    ?ptr sw:sampleRunFor ?endpoint ;
+         sw:sampleRunMetric ?metric ;
+         sw:sampleRunIs ?run .
+  }
   FILTER NOT EXISTS {
     GRAPH ?run {
-      ?sample sw:sampledFrom ?endpoint ; sw:sampledBy sw:metric:classes .
+      ?sample sw:sampledFrom ?endpoint ; sw:sampledBy ?metric .
     }
   }
 }
@@ -417,9 +490,16 @@ INSERT DATA { GRAPH sw:current { endpoint: sw:currentRun run: } }
 # stage builds scans current for verdicts and never for sample values, so
 # copying several hundred sw:sampledValue triples per endpoint into current
 # would buy nothing and would grow the graph the index scans.
+# DELETE WHERE on ptr: and not on the endpoint, so replacing one metric's
+# pointer cannot disturb another's. That is the whole difference from the
+# predicate this replaced.
 _REPLACE_SAMPLED = """
-DELETE WHERE { GRAPH sw:current { endpoint: sw:currentSampleRun ?run } } ;
-INSERT DATA { GRAPH sw:current { endpoint: sw:currentSampleRun run: } }
+DELETE WHERE { GRAPH sw:current { ptr: ?p ?o } } ;
+INSERT DATA { GRAPH sw:current {
+  ptr: sw:sampleRunFor endpoint: ;
+       sw:sampleRunMetric metric: ;
+       sw:sampleRunIs run: .
+} }
 """
 
 # What one graph says about one endpoint, in the exact shape the loader copies:
@@ -448,8 +528,31 @@ SELECT ?thing ?p ?o WHERE {
 """
 
 
+def _run_sampled_pairs(store: Store, run: str) -> set[tuple[str, str]]:
+    """The (endpoint, metric) pairs ``run`` published a content sample for."""
+    return {
+        (str(row["endpoint"].value), str(row["metric"].value))
+        for row in store.query(_SAMPLED_PAIRS, prefixes={_RUN_PREFIX: run})
+    }
+
+
 def _endpoint_run(endpoint: str, run: str) -> dict[str, str]:
     return {_ENDPOINT_PREFIX: endpoint, _RUN_PREFIX: run}
+
+
+def _pair_run(endpoint: str, metric: str, run: str) -> dict[str, str]:
+    """Prefix bindings for one (endpoint, metric) pair's pointer update.
+
+    Store.update takes no substitutions in pyoxigraph 0.5.9, so every value
+    reaches an update as a prefix. A pair needs two more than an endpoint does:
+    the metric, and the pointer IRI derived from both.
+    """
+    return {
+        _ENDPOINT_PREFIX: endpoint,
+        _RUN_PREFIX: run,
+        _METRIC_PREFIX: metric,
+        _POINTER_PREFIX: _sample_pointer_iri(endpoint, metric),
+    }
 
 
 def _update_text(*bodies: str) -> str:
@@ -544,9 +647,17 @@ def _tied(existing: tuple[str, str | None] | None, run: str, instant: str) -> bo
     return _as_datetime(existing_instant) == _as_datetime(instant)
 
 
-def _tie_message(endpoint: str, first: str, second: str, instant: str) -> str:
+def _tie_message(
+    endpoint: str, first: str, second: str, instant: str, metric: str | None = None
+) -> str:
+    """``metric`` names which sample pointer tied, and is None for a run pointer.
+
+    Without it, two different metrics tying on one endpoint print the same
+    message twice and a reader cannot tell which pointer to look at.
+    """
+    about = f"{endpoint}'s {metric} sample" if metric else endpoint
     return (
-        f"{endpoint} has 2 runs tied as most recent ({sorted([first, second])}) "
+        f"{about} has 2 runs tied as most recent ({sorted([first, second])}) "
         f"at {instant}: two run graphs share a prov:generatedAtTime, so which "
         f"of them urn:sparqlwatch:current should point at has no answer. Both "
         f"read paths refuse such a store rather than blending two sweeps under "
@@ -596,7 +707,7 @@ def pointers_to_missing_runs(store: Store) -> list[tuple[str, str, str]]:
 
     Both pointers are checked. endpoint_measurements.rq and index.rq read the
     run sw:currentRun names and endpoint_content.rq reads the run
-    sw:currentSampleRun names, and each of them drops a solution whose run graph
+    a sample pointer names, and each of them drops a solution whose run graph
     is gone, so either pointer left dangling makes a page state a negative about
     an endpoint the store still holds facts about.
     """
@@ -636,22 +747,23 @@ def _maintain_current(
             runs.append((graph.value, instant))
     runs.sort(key=lambda pair: _as_datetime(pair[1]))
 
-    work: list[tuple[str, str, set[str], set[str]]] = []
+    # The sample half carries (endpoint, metric) PAIRS now, not endpoints.
+    work: list[tuple[str, str, set[str], set[tuple[str, str]]]] = []
     pointers = _pointers(store)
     for run, instant in runs:
         measured = _run_endpoints(store, run, _MEASURED_ENDPOINTS)
-        sampled = _run_endpoints(store, run, _SAMPLED_ENDPOINTS)
+        sampled = _run_sampled_pairs(store, run)
         for endpoint in sorted(measured):
             existing = pointers.get((endpoint, CURRENT_RUN))
             if _tied(existing, run, instant):
                 raise ValueError(
                     _tie_message(endpoint, existing[0], run, instant)
                 )
-        for endpoint in sorted(sampled):
-            existing = pointers.get((endpoint, CURRENT_SAMPLE_RUN))
+        for endpoint, metric in sorted(sampled):
+            existing = pointers.get((endpoint, metric))
             if _tied(existing, run, instant):
                 raise ValueError(
-                    _tie_message(endpoint, existing[0], run, instant)
+                    _tie_message(endpoint, existing[0], run, instant, metric)
                 )
         work.append((run, instant, measured, sampled))
         # The pointers this run will move, so a second graph in the same file
@@ -659,9 +771,9 @@ def _maintain_current(
         for endpoint in measured:
             if _advance(pointers.get((endpoint, CURRENT_RUN)), run, instant):
                 pointers[(endpoint, CURRENT_RUN)] = (run, instant)
-        for endpoint in sampled:
-            if _advance(pointers.get((endpoint, CURRENT_SAMPLE_RUN)), run, instant):
-                pointers[(endpoint, CURRENT_SAMPLE_RUN)] = (run, instant)
+        for pair in sampled:
+            if _advance(pointers.get(pair), run, instant):
+                pointers[pair] = (run, instant)
 
     advanced: set[str] = set()
     advanced_samples: set[str] = set()
@@ -672,30 +784,46 @@ def _maintain_current(
     # store is actually in.
     live = _pointers(store)
     for run, instant, measured, sampled in work:
-        for endpoint in sorted(measured | sampled):
+        for endpoint in sorted(measured):
             bodies = []
-            if endpoint in measured:
-                if _advance(live.get((endpoint, CURRENT_RUN)), run, instant):
-                    bodies.append(_REPLACE_MEASURED)
-                    advanced.add(endpoint)
-                    live[(endpoint, CURRENT_RUN)] = (run, instant)
-                else:
-                    kept_newer.add(endpoint)
-            if endpoint in sampled:
-                if _advance(live.get((endpoint, CURRENT_SAMPLE_RUN)), run, instant):
-                    bodies.append(_REPLACE_SAMPLED)
-                    advanced_samples.add(endpoint)
-                    live[(endpoint, CURRENT_SAMPLE_RUN)] = (run, instant)
-                else:
-                    kept_newer.add(endpoint)
+            if _advance(live.get((endpoint, CURRENT_RUN)), run, instant):
+                bodies.append(_REPLACE_MEASURED)
+                advanced.add(endpoint)
+                live[(endpoint, CURRENT_RUN)] = (run, instant)
+            else:
+                kept_newer.add(endpoint)
             if bodies:
-                # One call, so this endpoint's measurements, declines,
-                # declarations fact and both pointers move together or not at
-                # all. See _REPLACE_MEASURED on why that is available.
+                # One call, so this endpoint's measurements, declines and
+                # declarations fact move together or not at all. See
+                # _REPLACE_MEASURED on why that is available.
                 store.update(
                     _update_text(*bodies),
                     prefixes=_endpoint_run(endpoint, run),
                 )
+
+        # The sample pointers, one call per (endpoint, metric) pair.
+        #
+        # THIS COSTS SOMETHING AND IT IS NOT HIDDEN. Until 2026-09-03 a sample
+        # pointer moved inside the SAME store.update() as its endpoint's
+        # measurements, so the two could not disagree. They cannot share one call
+        # any more: each pair needs its own prefix bindings, and Store.update
+        # takes no substitutions.
+        #
+        # What is still guaranteed: _REPLACE_MEASURED is one call, so an
+        # endpoint's measurements are never half-updated. What is no longer
+        # guaranteed: measurements and sample pointers moving as one unit. That
+        # is the tradeoff rebuild_current already accepts for its own two units,
+        # and _drifted is what finds a load that stopped in between.
+        for endpoint, metric in sorted(sampled):
+            if _advance(live.get((endpoint, metric)), run, instant):
+                store.update(
+                    _update_text(_REPLACE_SAMPLED),
+                    prefixes=_pair_run(endpoint, metric, run),
+                )
+                advanced_samples.add(endpoint)
+                live[(endpoint, metric)] = (run, instant)
+            else:
+                kept_newer.add(endpoint)
 
     return sorted(advanced), sorted(advanced_samples), sorted(kept_newer)
 
@@ -765,14 +893,16 @@ def _newest_per_endpoint(
     "the newest run" a question with no answer.
     """
     measured: dict[str, str] = {}
-    sampled: dict[str, str] = {}
+    # Keyed on the PAIR, because a run may sample classes and decline properties
+    # and each half then has its own newest run.
+    sampled: dict[tuple[str, str], str] = {}
     instants: dict[str, str] = {}
     for run, instant in runs:
         for endpoint in _run_endpoints(store, run, _MEASURED_ENDPOINTS):
             _keep_newest(measured, instants, endpoint, run, instant, CURRENT_RUN)
-        for endpoint in _run_endpoints(store, run, _SAMPLED_ENDPOINTS):
+        for endpoint, metric in _run_sampled_pairs(store, run):
             _keep_newest(
-                sampled, instants, endpoint, run, instant, CURRENT_SAMPLE_RUN
+                sampled, instants, (endpoint, metric), run, instant, metric
             )
     return measured, sampled
 
@@ -825,24 +955,28 @@ def rebuild_current(store: Store) -> RebuildResult:
     if store.contains_named_graph(CURRENT_GRAPH):
         store.remove_graph(CURRENT_GRAPH)
 
-    for endpoint in sorted(set(measured) | set(sampled)):
-        # The two units can name different runs, which is the whole point of
-        # two pointers, so they cannot share one prefix binding and so they are
-        # two calls here rather than one. Each is transactional on its own, and
-        # a rebuild interrupted between them is repaired by running it again.
-        if endpoint in measured:
-            store.update(
-                _update_text(_REPLACE_MEASURED),
-                prefixes=_endpoint_run(endpoint, measured[endpoint]),
-            )
-        if endpoint in sampled:
-            store.update(
-                _update_text(_REPLACE_SAMPLED),
-                prefixes=_endpoint_run(endpoint, sampled[endpoint]),
-            )
+    # TWO LOOPS, because the dicts are keyed differently: measured by endpoint,
+    # sampled by (endpoint, metric). They were one loop with a branch inside
+    # until 2026-09-03, and that union no longer type-checks.
+    #
+    # Still one update call each, for the reason the old comment gave: the units
+    # can name different runs, so they cannot share a prefix binding. Each is
+    # transactional on its own, and a rebuild interrupted between them is
+    # repaired by running it again.
+    for endpoint in sorted(measured):
+        store.update(
+            _update_text(_REPLACE_MEASURED),
+            prefixes=_endpoint_run(endpoint, measured[endpoint]),
+        )
+    for (endpoint, metric), run in sorted(sampled.items()):
+        store.update(
+            _update_text(_REPLACE_SAMPLED),
+            prefixes=_pair_run(endpoint, metric, run),
+        )
 
+    touched = set(measured) | {endpoint for endpoint, _ in sampled}
     return RebuildResult(
-        endpoints=len(set(measured) | set(sampled)), runs=len(runs)
+        endpoints=len(touched), runs=len(runs)
     )
 
 
@@ -876,7 +1010,10 @@ def check_current(store: Store) -> CheckResult:
         reasons.setdefault(endpoint, []).append(reason)
 
     pointers = _pointers(store)
-    expected = set(measured) | set(sampled)
+    # `sampled` is keyed on (endpoint, metric) since 2026-09-03, so its keys
+    # cannot be unioned with `measured`'s bare endpoints and sorted: a tuple and
+    # a string do not compare. Project the endpoints out.
+    expected = set(measured) | {endpoint for endpoint, _ in sampled}
     for endpoint in sorted(expected):
         if endpoint in measured:
             held = pointers.get((endpoint, CURRENT_RUN))
@@ -906,18 +1043,23 @@ def check_current(store: Store) -> CheckResult:
                     note(endpoint, f"{len(extra)} fact(s) in current no run states")
         elif (endpoint, CURRENT_RUN) in pointers:
             note(endpoint, "sw:currentRun names a run that measured nothing here")
-        if endpoint in sampled:
-            held = pointers.get((endpoint, CURRENT_SAMPLE_RUN))
+        # `wanted`, not `expected`: `expected` is the set of endpoints this
+        # function compares, bound above and read again below, and shadowing it
+        # here left it a string by the time the count was taken.
+        for (sampled_endpoint, metric), wanted in sampled.items():
+            if sampled_endpoint != endpoint:
+                continue
+            held = pointers.get((endpoint, metric))
             if held is None:
                 note(
                     endpoint,
-                    f"no sw:currentSampleRun; expected {sampled[endpoint]}",
+                    f"no sample pointer for {metric}; expected {wanted}",
                 )
-            elif held[0] != sampled[endpoint]:
+            elif held[0] != wanted:
                 note(
                     endpoint,
-                    f"sw:currentSampleRun is {held[0]}, expected "
-                    f"{sampled[endpoint]}",
+                    f"the {metric} sample pointer is {held[0]}, expected "
+                    f"{wanted}",
                 )
 
     for (endpoint, pointer), (run, _) in sorted(pointers.items()):
@@ -1223,20 +1365,26 @@ def _governed_by_graph(quads: list) -> dict[NamedNode, set[str]]:
     sample.
 
     "Governed" is the docstring's word for it above: sw:currentRun governs the
-    first three shapes and sw:currentSampleRun the fourth. This is deliberately
+    first three shapes and the sample pointer the fourth. This is deliberately
     the union, because a graph replaced by a dormancy declaration loses whichever
     of the two it happened to hold.
 
     Four shapes, three positions, which is why this cannot be one set of
     predicates matched in one place: the endpoint is the OBJECT of
     dqv:computedOn, sw:notMeasuredOn and sw:sampledFrom, and the SUBJECT of
-    sw:declarationsRead. The class sample also needs two quads rather than one,
-    because sw:sampledFrom alone does not say which metric was sampled, so it is
-    resolved in a second pass over the sample nodes the first pass found to
-    carry sw:sampledBy sw:metric:classes.
+    sw:declarationsRead. A sample also needs two quads rather than one, because
+    sw:sampledFrom alone does not say that a node IS a sample, so it is resolved
+    in a second pass over the nodes the first pass found to carry sw:sampledBy.
+
+    THE METRIC IS NO LONGER PINNED, as of 2026-09-03. This matched only
+    sw:sampledBy sw:metric:classes, matching what was then _SAMPLED_ENDPOINTS,
+    and the two moved together: a sample of any other metric was governed by
+    neither reader. Any sampling metric counts now, and the two readers still
+    have to agree, which test_the_python_shapes_and_the_sparql_shapes_agree is
+    what enforces.
     """
     found: dict[NamedNode, set[str]] = {}
-    class_samples: set[tuple] = set()
+    sample_nodes: set[tuple] = set()
     sampled_from: list = []
     for quad in quads:
         predicate = quad.predicate.value
@@ -1245,8 +1393,7 @@ def _governed_by_graph(quads: list) -> dict[NamedNode, set[str]]:
         elif predicate == _DECLARATIONS_READ:
             endpoint = quad.subject
         elif predicate == _SAMPLED_BY:
-            if quad.object.value == _CLASSES_METRIC:
-                class_samples.add((quad.graph_name, quad.subject))
+            sample_nodes.add((quad.graph_name, quad.subject))
             continue
         elif predicate == _SAMPLED_FROM:
             sampled_from.append(quad)
@@ -1256,7 +1403,7 @@ def _governed_by_graph(quads: list) -> dict[NamedNode, set[str]]:
         if isinstance(endpoint, NamedNode):
             found.setdefault(quad.graph_name, set()).add(endpoint.value)
     for quad in sampled_from:
-        if (quad.graph_name, quad.subject) in class_samples and isinstance(
+        if (quad.graph_name, quad.subject) in sample_nodes and isinstance(
             quad.object, NamedNode
         ):
             found.setdefault(quad.graph_name, set()).add(quad.object.value)
@@ -1335,9 +1482,9 @@ def _refuse_rewriting_history(store: Store, quads: list) -> None:
         # and no measured-shaped quad at all (run-later-sample-only.nq is one),
         # so that version accepted a file that dropped the sample and drifted
         # the pointer naming it.
-        held = _run_endpoints(store, graph.value, _MEASURED_ENDPOINTS) | (
-            _run_endpoints(store, graph.value, _SAMPLED_ENDPOINTS)
-        )
+        held = _run_endpoints(store, graph.value, _MEASURED_ENDPOINTS) | {
+            endpoint for endpoint, _ in _run_sampled_pairs(store, graph.value)
+        }
         lost = sorted(endpoints & held)
         if lost:
             raise ValueError(

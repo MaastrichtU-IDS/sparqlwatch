@@ -824,7 +824,13 @@ def test_a_run_that_never_looked_at_classes_borrows_no_reason():
     )
     sample = _sample(
         measured_something_else,
-        EndpointContent(endpoint="https://example.org/sparql", sampled=False),
+        EndpointContent(
+            endpoint="https://example.org/sparql",
+            # Required since 2026-09-03: the field has no default, so a
+            # caller cannot build a sample without saying what it is of.
+            metric="urn:sparqlwatch:metric:classes",
+            sampled=False,
+        ),
     )
     assert sample["present"] is False
     assert sample["classes"] == []

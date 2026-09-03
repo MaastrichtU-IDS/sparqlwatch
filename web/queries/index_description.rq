@@ -21,7 +21,7 @@
 # endpoint descriptions:
 #
 #   * No class sample. endpoint_description.rq's third branch reads
-#     sw:currentSampleRun and emits the sample's values, its size, its
+#     the sample pointers and emits each sample's values, its size, its
 #     truncation flag and its own activity. The index draws no sample and says
 #     nothing about one, so emitting several hundred sw:sampledValue triples per
 #     endpoint would publish, in the index's name, facts no row of the index
