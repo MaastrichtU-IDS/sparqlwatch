@@ -234,12 +234,20 @@ def test_a_current_graph_naming_two_sample_runs_is_refused_not_blended(tmp_path)
     """
     store = Store(str(tmp_path / "s"))
     store.load(_tied_runs(), format=RdfFormat.N_QUADS)
+    # ONE pointer resource carrying TWO runs, which is the new shape's version of
+    # the doubled pointer this guards against: since 2026-09-03 a sample pointer
+    # is a resource keyed on (endpoint, metric) rather than a triple on the
+    # endpoint, so the corruption to hand-build is two sw:sampleRunIs values on
+    # one of them.
     store.update(
         f"""
         INSERT DATA {{ GRAPH <urn:sparqlwatch:current> {{
-          <{TIED_ENDPOINT}> <urn:sparqlwatch:currentSampleRun>
-            <urn:sparqlwatch:test:run:a> ,
-            <urn:sparqlwatch:test:run:b> .
+          <urn:sparqlwatch:test:ptr> <urn:sparqlwatch:sampleRunFor>
+            <{TIED_ENDPOINT}> ;
+            <urn:sparqlwatch:sampleRunMetric> <urn:sparqlwatch:metric:classes> ;
+            <urn:sparqlwatch:sampleRunIs>
+              <urn:sparqlwatch:test:run:a> ,
+              <urn:sparqlwatch:test:run:b> .
         }} }}"""
     )
 

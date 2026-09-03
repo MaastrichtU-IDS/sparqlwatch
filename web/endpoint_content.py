@@ -27,6 +27,10 @@ _QUERY = read_query("endpoint_content")
 _ENDPOINT = Variable("endpoint")
 
 
+CLASSES_METRIC = "urn:sparqlwatch:metric:classes"
+_METRIC = Variable("metric")
+
+
 @dataclass
 class EndpointContent:
     """What the most recent run that sampled ``endpoint`` saw in it.
@@ -63,6 +67,15 @@ class EndpointContent:
     """
 
     endpoint: str
+    # Which metric this is a sample OF. Added 2026-09-03, when the pointer became
+    # per metric: without it a caller holding an EndpointContent cannot say what
+    # it is a sample of, and two of them would be indistinguishable.
+    #
+    # NO DEFAULT, deliberately. A default would let a caller publish a sample
+    # without saying what the sample is of, which is the whole thing this field
+    # exists to prevent. It sits here rather than at the end because a field with
+    # no default cannot follow one that has it.
+    metric: str
     sampled: bool
     run: str | None = None
     generated_at: str | None = None
@@ -71,8 +84,14 @@ class EndpointContent:
     classes: list[str] = field(default_factory=list)
 
 
-def endpoint_content(store: Store, endpoint: str) -> EndpointContent:
-    """Return what the most recent run that sampled ``endpoint`` found in it.
+def endpoint_content(
+    store: Store, endpoint: str, metric: str = CLASSES_METRIC
+) -> EndpointContent:
+    """Return what the most recent run that sampled ``metric`` here found.
+
+    ``metric`` defaults to sw:metric:classes, which is the only sampling metric
+    the shipped metrics.toml declares, so it is the answer to "the sample" until
+    a second one ships. Every existing caller relies on that default.
 
     Raises ValueError if two distinct runs tie for most recent on this
     endpoint, which means two run graphs carry the same
@@ -80,21 +99,28 @@ def endpoint_content(store: Store, endpoint: str) -> EndpointContent:
     two answers, and picking one of them silently would hide it.
     """
     rows = list(
-        store.query(_QUERY, substitutions={_ENDPOINT: NamedNode(endpoint)})
+        store.query(
+            _QUERY,
+            substitutions={
+                _ENDPOINT: NamedNode(endpoint),
+                _METRIC: NamedNode(metric),
+            },
+        )
     )
     if not rows:
-        return EndpointContent(endpoint=endpoint, sampled=False)
+        return EndpointContent(endpoint=endpoint, metric=metric, sampled=False)
 
     runs = {row["run"].value for row in rows}
     if len(runs) > 1:
         raise ValueError(
-            f"{endpoint} has {len(runs)} runs tied as most recent "
+            f"{endpoint}'s {metric} sample has {len(runs)} runs tied as most recent "
             f"({sorted(runs)}); two run graphs share a prov:generatedAtTime"
         )
 
     first = rows[0]
     return EndpointContent(
         endpoint=endpoint,
+        metric=metric,
         sampled=True,
         run=first["run"].value,
         generated_at=first["generatedAt"].value,

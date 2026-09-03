@@ -24,7 +24,9 @@ from endpoint_content import endpoint_content
 from endpoint_measurements import endpoint_measurements
 from load_run import (
     _MEASURED_ENDPOINTS,
-    _SAMPLED_ENDPOINTS,
+    _SAMPLED_PAIRS,
+    _run_sampled_pairs,
+    _sample_pointer_iri,
     _TERMINATOR_PREDICATES,
     CURRENT_GRAPH_IRI,
     LoadResult,
@@ -735,7 +737,18 @@ def _current(store: Store) -> set[tuple[str, str, str]]:
 
 
 def _pointer(store: Store, endpoint: str, predicate: str) -> str | None:
-    """What ``endpoint``'s ``predicate`` pointer in current names, or None."""
+    """What ``endpoint``'s ``predicate`` pointer in current names, or None.
+
+    "currentSampleRun" is accepted as a name for the CLASSES sample pointer, and
+    it is a compatibility spelling rather than a predicate: since 2026-09-03 a
+    sample pointer is a resource carrying sw:sampleRunFor, sw:sampleRunMetric and
+    sw:sampleRunIs, keyed on (endpoint, metric). The tests that ask this question
+    were written when the classes sample was the only one, so this keeps their
+    intent without rewriting each of them to name a metric they never had to.
+    Use _sample_pointer for a metric other than classes.
+    """
+    if predicate == "currentSampleRun":
+        return _sample_pointer(store, endpoint, SW + "metric:classes")
     found = [
         quad.object.value
         for quad in store.quads_for_pattern(
@@ -747,6 +760,26 @@ def _pointer(store: Store, endpoint: str, predicate: str) -> str | None:
     ]
     assert len(found) <= 1, f"{endpoint} has {len(found)} {predicate} pointers"
     return found[0] if found else None
+
+
+def _sample_pointer(store: Store, endpoint: str, metric: str) -> str | None:
+    """The run one (endpoint, metric) sample pointer names, or None."""
+    rows = list(
+        store.query(
+            """
+            SELECT ?run WHERE {
+              GRAPH <urn:sparqlwatch:current> {
+                ?ptr <urn:sparqlwatch:sampleRunFor> <%s> ;
+                     <urn:sparqlwatch:sampleRunMetric> <%s> ;
+                     <urn:sparqlwatch:sampleRunIs> ?run .
+              }
+            }
+            """
+            % (endpoint, metric)
+        )
+    )
+    assert len(rows) <= 1, f"{endpoint} has {len(rows)} {metric} pointers"
+    return rows[0]["run"].value if rows else None
 
 
 def _verdict_in_current(store: Store, endpoint: str, metric: str) -> list[str]:
@@ -1098,8 +1131,10 @@ def test_a_rebuild_from_the_run_graphs_alone_reproduces_current(tmp_path):
     assert expected, "there must be something to rebuild"
 
     store.update(f"""
-        DELETE {{ GRAPH <{SW}current> {{ <{KADASTER}> <{SW}currentSampleRun> ?r }} }}
-        WHERE  {{ GRAPH <{SW}current> {{ <{KADASTER}> <{SW}currentSampleRun> ?r }} }} ;
+        DELETE {{ GRAPH <{SW}current> {{ ?ptr ?pp ?oo }} }}
+        WHERE  {{ GRAPH <{SW}current> {{
+          ?ptr <{SW}sampleRunFor> <{KADASTER}> ; ?pp ?oo
+        }} }} ;
         INSERT DATA {{ GRAPH <{SW}current> {{
           <{QLEVER}> <{DQV}value> "invented"
         }} }}""")
@@ -1138,8 +1173,10 @@ def test_the_check_names_every_endpoint_that_drifted_and_no_others(tmp_path):
         WHERE  {{ GRAPH <{SW}current> {{
           ?m <{DQV}computedOn> <{QLEVER}> ; <{DQV}value> ?v
         }} }} ;
-        DELETE {{ GRAPH <{SW}current> {{ <{ONTOP}> <{SW}currentSampleRun> ?r }} }}
-        WHERE  {{ GRAPH <{SW}current> {{ <{ONTOP}> <{SW}currentSampleRun> ?r }} }}""")
+        DELETE {{ GRAPH <{SW}current> {{ ?ptr ?pp ?oo }} }}
+        WHERE  {{ GRAPH <{SW}current> {{
+          ?ptr <{SW}sampleRunFor> <{ONTOP}> ; ?pp ?oo
+        }} }}""")
 
     drifted = check_current(store)
     assert sorted(drifted.drifted) == sorted([ONTOP, QLEVER]), (
@@ -1778,22 +1815,31 @@ def test_a_graph_that_sampled_an_endpoint_and_declares_it_dormant_is_refused(
     assert "sample" in str(raised.value)
 
 
-def test_a_graph_that_sampled_another_metric_and_declares_dormant_is_accepted(
+def test_a_graph_that_sampled_another_metric_and_declares_dormant_is_refused(
     tmp_path,
 ):
-    """The deliberate edge of both refusals, and the reason the Python side
-    carries the class pin rather than matching sw:sampledFrom bare. A sample of
-    some other metric has no pointer in current naming it, so replacing the
-    graph loses nothing current holds and there is no reader to tell two
-    things. Stated as a test so the pin is a decision and not an accident."""
-    store = Store(str(tmp_path / "s"))
-    result = load_run(store, _one_graph(
-        _declares_dormant(KADASTER),
-        f"<{SW}sample:x> <{SW}sampledFrom> <{KADASTER}>",
-        f"<{SW}sample:x> <{SW}sampledBy> <{SW}metric:properties>",
-    ))
+    """INVERTED 2026-09-03, and the inversion is the point.
 
-    assert result.dormant == [KADASTER]
+    This asserted ACCEPTED while the class pin stood. A sample of any other
+    metric had no pointer in current naming it, so replacing the graph lost
+    nothing and no reader could tell two things: the pin made the case harmless
+    and the test recorded that as a decision rather than an accident.
+
+    The pin is gone. A properties sample now has a pointer, so a graph that both
+    declares an endpoint dormant and samples it is self-contradicting in exactly
+    the way a classes sample always was: a sweep either asked an endpoint or
+    declined to, and this graph says both.
+    """
+    store = Store(str(tmp_path / "s"))
+    with pytest.raises(ValueError) as caught:
+        load_run(store, _one_graph(
+            _declares_dormant(KADASTER),
+            f"<{SW}sample:x> <{SW}sampledFrom> <{KADASTER}>",
+            f"<{SW}sample:x> <{SW}sampledBy> <{SW}metric:properties>",
+        ))
+    said = str(caught.value)
+    assert KADASTER in said, said
+    assert "dormant" in said, said
 
 
 def test_a_file_that_would_replace_a_class_sample_with_dormancy_is_refused(store):
@@ -1838,9 +1884,11 @@ def test_the_python_shapes_and_the_sparql_shapes_agree(tmp_path):
     how the first review's two findings both happened, so this compares them
     over one graph carrying every shape at once.
 
-    E5 is the pin's other side: a sample of a metric that is not
-    sw:metric:classes is governed by NEITHER reader, so it must be absent from
-    both sets rather than absent from one of them.
+    E5 was the pin's other side: until 2026-09-03 a sample of a metric other
+    than sw:metric:classes was governed by NEITHER reader. The pin is gone, so
+    E5 is now governed by BOTH, and it is still the case that matters most: a
+    properties sample seen by one reader and not the other is exactly how the
+    two refusals come to disagree.
     """
     e1 = "https://e1.example/sparql"
     e2 = "https://e2.example/sparql"
@@ -1864,13 +1912,100 @@ def test_the_python_shapes_and_the_sparql_shapes_agree(tmp_path):
     store.load(data, format=RdfFormat.N_QUADS)
 
     from_quads = _governed_by_graph(list(parse(data, format=RdfFormat.N_QUADS)))
-    from_sparql = _run_endpoints(store, run, _MEASURED_ENDPOINTS) | _run_endpoints(
-        store, run, _SAMPLED_ENDPOINTS
-    )
+    from_sparql = _run_endpoints(store, run, _MEASURED_ENDPOINTS) | {
+        endpoint for endpoint, _ in _run_sampled_pairs(store, run)
+    }
 
     assert from_quads[NamedNode(run)] == from_sparql
-    assert from_sparql == {e1, e2, e3, e4}, (
-        "all four governed shapes, and only those: if this set shrinks, one "
-        "reader stopped seeing a shape and the refusals disagree"
+    assert from_sparql == {e1, e2, e3, e4, e5}, (
+        "every governed shape, and only those: if this set shrinks, one reader "
+        "stopped seeing a shape and the refusals disagree"
     )
-    assert e5 not in from_sparql, "the class pin, on both sides at once"
+    assert e5 in from_sparql, "a properties sample is governed now, on both sides"
+
+
+# ---------------------------------------------------------------------------
+# The sample pointer, keyed on (endpoint, metric).
+#
+# It was one triple per endpoint until 2026-09-03. These tests are the reason it
+# changed: one pointer cannot say "classes came from January and properties from
+# February", and picking either run loses the other metric's sample outright.
+# ---------------------------------------------------------------------------
+ENDPOINT = "http://example.org/sparql"
+JANUARY = "urn:sparqlwatch:run:2026-01-01T00:00:00Z"
+FEBRUARY = "urn:sparqlwatch:run:2026-02-01T00:00:00Z"
+CLASSES = "urn:sparqlwatch:metric:classes"
+PROPERTIES = "urn:sparqlwatch:metric:properties"
+
+_POINTERS_HELD = """
+SELECT ?metric ?run WHERE {
+  GRAPH <urn:sparqlwatch:current> {
+    ?ptr <urn:sparqlwatch:sampleRunFor> <%s> ;
+         <urn:sparqlwatch:sampleRunMetric> ?metric ;
+         <urn:sparqlwatch:sampleRunIs> ?run .
+  }
+}
+""" % ENDPOINT
+
+
+def _pointers(store):
+    return {(r["metric"].value, r["run"].value) for r in store.query(_POINTERS_HELD)}
+
+
+def test_two_metrics_sampled_in_different_runs_both_keep_a_pointer(store_metrics_diverged):
+    """The reason this shape exists.
+
+    One pointer per endpoint would have to choose, and either choice loses a
+    sample the store holds: the stage 3-1 defect one level down.
+    """
+    assert _pointers(store_metrics_diverged) == {
+        (CLASSES, JANUARY),
+        (PROPERTIES, FEBRUARY),
+    }, f"each metric keeps its own newest run: {sorted(_pointers(store_metrics_diverged))}"
+
+
+def test_the_sample_pointer_is_addressable_by_subject(store_two_metrics):
+    """load_run replaces a pointer with DELETE WHERE keyed on the pointer's own
+    subject, so the subject must be derivable in Python from (endpoint, metric)
+    without reading the store first. A blank node could not serve that."""
+    held = [
+        r["ptr"].value
+        for r in store_two_metrics.query(
+            """
+            SELECT ?ptr WHERE {
+              GRAPH <urn:sparqlwatch:current> {
+                ?ptr <urn:sparqlwatch:sampleRunMetric>
+                     <urn:sparqlwatch:metric:classes> .
+              }
+            }
+            """
+        )
+    ]
+    assert held == [_sample_pointer_iri(ENDPOINT, CLASSES)], held
+
+
+def test_reloading_the_same_run_does_not_duplicate_a_pointer(store_two_metrics_reloaded):
+    """Re-loading a run under the same IRI is the documented recovery, so this
+    path is exercised in earnest rather than only by mistake."""
+    assert len(_pointers(store_two_metrics_reloaded)) == 2
+
+
+def test_no_currentsamplerun_triple_survives(store_two_metrics):
+    """The old predicate is replaced, not kept alongside. Two spellings of one
+    fact is how a reader ends up preferring the stale one."""
+    n = int(
+        next(
+            iter(
+                store_two_metrics.query(
+                    """
+                    SELECT (COUNT(*) AS ?n) WHERE {
+                      GRAPH <urn:sparqlwatch:current> {
+                        ?e <urn:sparqlwatch:currentSampleRun> ?run
+                      }
+                    }
+                    """
+                )
+            )
+        )["n"].value
+    )
+    assert n == 0, f"sw:currentSampleRun is retired: {n} left"

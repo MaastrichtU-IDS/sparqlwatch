@@ -49,6 +49,18 @@ STORES: dict[str, tuple[Path, ...]] = {
     "store_two_sweeps": (conftest.RUN_TWO_SWEEPS,),
     "store_zero_classes": (conftest.RUN_ZERO_CLASSES,),
     "store_properties_sample": (conftest.RUN_PROPERTIES_SAMPLE,),
+    # Added 2026-09-03 with the per-metric sample pointer. The first two are the
+    # cases the old shape could not express, so the golden should hold what the
+    # readers say about them.
+    "store_two_metrics": (conftest.RUN_TWO_METRICS_SAMPLED,),
+    "store_metrics_diverged": (
+        conftest.RUN_TWO_METRICS_SAMPLED,
+        conftest.RUN_PROPERTIES_LATER,
+    ),
+    "store_two_metrics_reloaded": (
+        conftest.RUN_TWO_METRICS_SAMPLED,
+        conftest.RUN_TWO_METRICS_SAMPLED,
+    ),
     "store_declined": (conftest.RUN_DECLINED,),
     "store_classes_absent": (conftest.RUN_CLASSES_ABSENT,),
     "store_stale_sample": (conftest.RUN_WITH_SAMPLES, conftest.RUN_DECLINED),

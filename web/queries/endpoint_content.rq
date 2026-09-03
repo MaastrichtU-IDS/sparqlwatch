@@ -22,7 +22,8 @@
 # (web/tests/fixtures/run-truncated.nq has none) whereas every quad the
 # prober writes lands in its run's graph by construction.
 #
-# "Most recent" IS NOT COMPUTED HERE. This endpoint's sw:currentSampleRun in
+# "Most recent" IS NOT COMPUTED HERE. This endpoint's sample pointer for this
+# metric, in
 # the derived urn:sparqlwatch:current graph names the newest run that published
 # a class sample for it, written by web/load_run.py as each run is loaded.
 #
@@ -53,11 +54,15 @@
 PREFIX prov: <http://www.w3.org/ns/prov#>
 PREFIX sw: <urn:sparqlwatch:>
 
-SELECT ?endpoint ?run ?generatedAt ?size ?truncated ?class
+SELECT ?endpoint ?metric ?run ?generatedAt ?size ?truncated ?class
 WHERE {
   # The run that took this endpoint's class sample. One quad, and the reason
   # this query does no recency work at all.
-  GRAPH sw:current { ?endpoint sw:currentSampleRun ?run }
+  GRAPH sw:current {
+    ?ptr sw:sampleRunFor ?endpoint ;
+         sw:sampleRunMetric ?metric ;
+         sw:sampleRunIs ?run .
+  }
   # ONE HOP into that run's graph for the sample itself, wrapped in OPTIONAL
   # with a FILTER that requires what it binds. That pair means exactly what a
   # plain GRAPH block means, and only the plain form grows with the history this
@@ -80,8 +85,7 @@ WHERE {
       ?sample sw:sampledFrom ?endpoint ;
               sw:sampleSize ?size ;
               sw:sampleTruncated ?truncated ;
-              sw:sampledBy ?sampledBy .
-      FILTER (?sampledBy = sw:metric:classes)
+              sw:sampledBy ?metric .
       ?activity a prov:Activity ;
                 prov:generatedAtTime ?generatedAt .
       # OPTIONAL so a sample that genuinely found no classes still reports its

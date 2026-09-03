@@ -1,0 +1,9 @@
+<urn:sparqlwatch:activity:2026-02-01T00:00:00Z> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/prov#Activity> <urn:sparqlwatch:run:2026-02-01T00:00:00Z> .
+<urn:sparqlwatch:activity:2026-02-01T00:00:00Z> <http://www.w3.org/ns/prov#generatedAtTime> "2026-02-01T00:00:00Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> <urn:sparqlwatch:run:2026-02-01T00:00:00Z> .
+<http://example.org/sparql> <urn:sparqlwatch:declarationsRead> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> <urn:sparqlwatch:run:2026-02-01T00:00:00Z> .
+<urn:sparqlwatch:sample:2026-02-01T00:00:00Z:http%3A%2F%2Fexample.org%2Fsparql:properties> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <urn:sparqlwatch:ContentSample> <urn:sparqlwatch:run:2026-02-01T00:00:00Z> .
+<urn:sparqlwatch:sample:2026-02-01T00:00:00Z:http%3A%2F%2Fexample.org%2Fsparql:properties> <urn:sparqlwatch:sampledFrom> <http://example.org/sparql> <urn:sparqlwatch:run:2026-02-01T00:00:00Z> .
+<urn:sparqlwatch:sample:2026-02-01T00:00:00Z:http%3A%2F%2Fexample.org%2Fsparql:properties> <urn:sparqlwatch:sampledBy> <urn:sparqlwatch:metric:properties> <urn:sparqlwatch:run:2026-02-01T00:00:00Z> .
+<urn:sparqlwatch:sample:2026-02-01T00:00:00Z:http%3A%2F%2Fexample.org%2Fsparql:properties> <urn:sparqlwatch:sampledValue> <http://xmlns.com/foaf/0.1/mbox> <urn:sparqlwatch:run:2026-02-01T00:00:00Z> .
+<urn:sparqlwatch:sample:2026-02-01T00:00:00Z:http%3A%2F%2Fexample.org%2Fsparql:properties> <urn:sparqlwatch:sampleTruncated> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> <urn:sparqlwatch:run:2026-02-01T00:00:00Z> .
+<urn:sparqlwatch:sample:2026-02-01T00:00:00Z:http%3A%2F%2Fexample.org%2Fsparql:properties> <urn:sparqlwatch:sampleSize> "1"^^<http://www.w3.org/2001/XMLSchema#integer> <urn:sparqlwatch:run:2026-02-01T00:00:00Z> .

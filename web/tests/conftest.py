@@ -48,6 +48,8 @@ RUN_TRUNCATED = FIXTURES / "run-truncated.nq"
 RUN_TWO_SWEEPS = FIXTURES / "run-two-sweeps.nq"
 RUN_ZERO_CLASSES = FIXTURES / "run-zero-classes.nq"
 RUN_PROPERTIES_SAMPLE = FIXTURES / "run-properties-sample.nq"
+RUN_TWO_METRICS_SAMPLED = FIXTURES / "run-two-metrics-sampled.nq"
+RUN_PROPERTIES_LATER = FIXTURES / "run-properties-later.nq"
 RUN_DECLINED = FIXTURES / "run-declined.nq"
 RUN_CLASSES_ABSENT = FIXTURES / "run-classes-absent.nq"
 RUN_LATER_SAMPLE_ONLY = FIXTURES / "run-later-sample-only.nq"
@@ -160,6 +162,34 @@ def store_properties_sample(tmp_path):
     content query's metric pin can be tested. See the comment in
     web/tests/fixtures/run-properties-sample.nq."""
     return _loaded_store(tmp_path, "store-properties-sample", RUN_PROPERTIES_SAMPLE)
+
+
+@pytest.fixture
+def store_two_metrics(tmp_path):
+    """One run sampling two metrics for one endpoint, so a pointer keyed on
+    (endpoint, metric) has something to be right about."""
+    return _loaded_store(tmp_path, "store-two-metrics", RUN_TWO_METRICS_SAMPLED)
+
+
+@pytest.fixture
+def store_metrics_diverged(tmp_path):
+    """Two runs whose newest samples are for DIFFERENT metrics: classes from the
+    first, properties from the second. The case a single per-endpoint sample
+    pointer cannot express at all, and the reason that shape is changing."""
+    return _loaded_store(
+        tmp_path, "store-metrics-diverged", RUN_TWO_METRICS_SAMPLED, RUN_PROPERTIES_LATER
+    )
+
+
+@pytest.fixture
+def store_two_metrics_reloaded(tmp_path):
+    """The same run loaded twice under the same run IRI, which is the documented
+    recovery, so the idempotence of the pointer replace is exercised in earnest
+    rather than only by mistake."""
+    return _loaded_store(
+        tmp_path, "store-two-metrics-reloaded",
+        RUN_TWO_METRICS_SAMPLED, RUN_TWO_METRICS_SAMPLED,
+    )
 
 
 @pytest.fixture
