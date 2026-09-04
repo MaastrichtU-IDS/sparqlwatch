@@ -19,6 +19,16 @@ pub enum ProbeKind {
     AskData,
     SelectIris,
     FetchWellKnown,
+    /// Enumerate an endpoint's classes, then profile each one: which properties
+    /// its instances carry and how many carry each.
+    ///
+    /// UNLIKE EVERY OTHER KIND, this produces no verdict and no measurement row.
+    /// Its work fans out over classes discovered during the same sweep, so it is
+    /// handled by `profile::profile_classes` after the per-metric dispatch rather
+    /// than through it, and it publishes `ContentSample` plus `ContentProfile`
+    /// facts instead. See Ruling 2 and Ruling 4 in
+    /// docs/superpowers/specs/2026-08-29-content-profiles-design.md.
+    ClassProfile,
 }
 
 impl ProbeKind {
@@ -27,7 +37,7 @@ impl ProbeKind {
     /// Kept honest by `sequence` below rather than by discipline: a
     /// hand-maintained list in a test looks like it enforces coverage and does
     /// not, which is the defect shape this crate keeps finding in itself.
-    pub const ALL: [ProbeKind; 7] = [
+    pub const ALL: [ProbeKind; 8] = [
         ProbeKind::Liveness,
         ProbeKind::Cors,
         ProbeKind::CorsPreflight,
@@ -35,7 +45,33 @@ impl ProbeKind {
         ProbeKind::AskData,
         ProbeKind::SelectIris,
         ProbeKind::FetchWellKnown,
+        ProbeKind::ClassProfile,
     ];
+
+    /// Whether a metric of this kind produces a measurement row, and so a
+    /// verdict and a column in the matrix.
+    ///
+    /// `ClassProfile` is the one kind that does not: its pass publishes
+    /// `ContentSample` and `ContentProfile` facts instead, per Ruling 2 in
+    /// `docs/superpowers/specs/2026-08-29-content-profiles-design.md`. A row
+    /// would give it a column of verdicts it does not have.
+    ///
+    /// Exhaustive with no catch-all, so a new kind cannot be added without
+    /// deciding which side of this line it falls on. Tests count expected rows
+    /// through this method rather than against `defs.len()`, so the two can
+    /// never drift apart.
+    pub fn yields_measurement(self) -> bool {
+        match self {
+            ProbeKind::Liveness
+            | ProbeKind::Cors
+            | ProbeKind::CorsPreflight
+            | ProbeKind::AskFilter
+            | ProbeKind::AskData
+            | ProbeKind::SelectIris
+            | ProbeKind::FetchWellKnown => true,
+            ProbeKind::ClassProfile => false,
+        }
+    }
 
     /// This kind's position in `ALL`. The match is exhaustive with no catch-all,
     /// so adding a variant fails to compile here; the new variant then gets the
@@ -55,6 +91,7 @@ impl ProbeKind {
             ProbeKind::AskData => 4,
             ProbeKind::SelectIris => 5,
             ProbeKind::FetchWellKnown => 6,
+            ProbeKind::ClassProfile => 7,
         }
     }
 
@@ -76,7 +113,8 @@ impl ProbeKind {
             | ProbeKind::AskFilter
             | ProbeKind::AskData
             | ProbeKind::SelectIris
-            | ProbeKind::FetchWellKnown => true,
+            | ProbeKind::FetchWellKnown
+            | ProbeKind::ClassProfile => true,
         }
     }
 }
@@ -148,6 +186,22 @@ pub struct MetricDef {
     /// the two places that must agree cannot drift in silence.
     #[serde(default)]
     pub sample_limit: Option<usize>,
+    /// How a `ClassProfile` pass samples each class's instances: a SHA256 prefix
+    /// on the subject IRI, or absent/empty for every instance.
+    ///
+    /// One hex character keeps about a sixteenth of the instances, two about a
+    /// two-hundred-and-fifty-sixth. Measured 2026-08-29: at one character every
+    /// property frequency landed within 0.002 of the true value over 200,000
+    /// instances, while `LIMIT` without `ORDER BY` was wrong by 0.950 because it
+    /// returned a contiguous block of the id space. There is deliberately no
+    /// `LIMIT` option here: the prefix length is the only knob, because adding a
+    /// limit reintroduces exactly that bias.
+    ///
+    /// Ignored by every other kind. NOT VALIDATED as hex here yet, which is a
+    /// known gap: a prefix of "zz" would match nothing and the pass would report
+    /// every class unreached, honestly but uselessly.
+    #[serde(default)]
+    pub sample_prefix: Option<String>,
 }
 
 /// The query with everything that is not SPARQL *code* blanked out: comments
@@ -408,9 +462,19 @@ pub fn load_metrics(toml_src: &str) -> anyhow::Result<Vec<MetricDef>> {
             // IRI or a literal (with its datatype), and the emitter must emit
             // accordingly. Until both exist, widening this check publishes
             // wrong term types.
-            if m.kind != ProbeKind::SelectIris {
+            // WIDENED 2026-09-04 to admit `ClassProfile`, and the reason it is
+            // safe is the reason the check exists. The rule being protected is
+            // that every sampled value is published as an IRI, so a kind may
+            // sample only if what it binds IS one. `ClassProfile` enumerates
+            // classes through `select_iris` itself, with the same literal guard,
+            // so its sample is the same shape `SelectIris` produces. `AskData`
+            // is still refused, because `ask_literal` reads lexical forms of
+            // literals and publishing those as IRIs is the wrong-term-type
+            // defect this guard was built for.
+            if !matches!(m.kind, ProbeKind::SelectIris | ProbeKind::ClassProfile) {
                 anyhow::bail!(
-                    "metric '{}' of kind {:?} declares a `sample_limit`, but only `SelectIris` may sample: \
+                    "metric '{}' of kind {:?} declares a `sample_limit`, but only `SelectIris` and \
+                     `ClassProfile` may sample: \
                      every sampled value is published as an IRI, so any other kind would publish the wrong term type",
                     m.id,
                     m.kind
@@ -493,9 +557,15 @@ pub fn definitions_revision(defs: &[MetricDef]) -> String {
             graded,
             cost,
             sample_limit,
+            // IN THE REVISION, deliberately. The prefix decides whether a
+            // profile is exact or drawn from a sixteenth of the instances, so
+            // two definition sets differing only in it measure different things.
+            // Sharing one revision forever would be exactly the failure the
+            // comment above describes.
+            sample_prefix,
         } = d;
         canonical.push_str(&format!(
-            "{}\x1f{}\x1f{}\x1f{:?}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{:?}\x1f{}\x1e",
+            "{}\x1f{}\x1f{}\x1f{:?}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{:?}\x1f{}\x1f{}\x1e",
             id,
             label,
             dimension,
@@ -507,6 +577,7 @@ pub fn definitions_revision(defs: &[MetricDef]) -> String {
             graded,
             cost,
             sample_limit.map(|n| n.to_string()).unwrap_or_default(),
+            sample_prefix.as_deref().unwrap_or(""),
         ));
     }
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
@@ -662,6 +733,7 @@ query = "SELECT ?thing WHERE {{ ?s ?p ?thing }} LIMIT 1"
             graded,
             cost,
             sample_limit,
+            sample_prefix,
         } = d.clone();
 
         let variants: Vec<(&str, MetricDef)> = vec![
@@ -719,6 +791,21 @@ query = "SELECT ?thing WHERE {{ ?s ?p ?thing }} LIMIT 1"
             // `load_metrics`'s cross-check on purpose: this constructs a
             // `MetricDef` directly, and the check belongs to the loader, not
             // to the struct.
+            // A profile drawn from a sixteenth of the instances is not the same
+            // measurement as an exact one, so the prefix has to move the
+            // revision. Without this variant the field could join the
+            // definitions and two sets that sample differently would share one
+            // revision forever.
+            (
+                "sample_prefix",
+                MetricDef {
+                    sample_prefix: Some(match sample_prefix.as_deref() {
+                        Some("0") => "00".to_string(),
+                        _ => "0".to_string(),
+                    }),
+                    ..d.clone()
+                },
+            ),
             (
                 "sample_limit",
                 MetricDef {

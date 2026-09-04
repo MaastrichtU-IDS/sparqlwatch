@@ -263,7 +263,8 @@ impl<W: Write> RunWriter<W> {
 mod tests {
     use super::*;
     use crate::emit::{
-        ContentSample, DeclarationsRead, MeasurementRow, NotMeasured, NotMeasuredReason,
+        ContentProfile, ContentSample, DeclarationsRead, MeasurementRow, NotMeasured,
+        NotMeasuredReason, ProfileProperty,
     };
     use crate::metrics::Cost;
     use crate::verdict::Verdict;
@@ -300,6 +301,7 @@ mod tests {
             declarations_read: &all.declarations_read,
             not_measured: &all.not_measured,
             content_samples: &all.content_samples,
+            content_profiles: &all.content_profiles,
         }
     }
 
@@ -308,6 +310,7 @@ mod tests {
         declarations_read: Vec<DeclarationsRead>,
         not_measured: Vec<NotMeasured>,
         content_samples: Vec<ContentSample>,
+        content_profiles: Vec<ContentProfile>,
     }
 
     /// The metric ids are the shipped ones on purpose: `web/queries/`
@@ -333,6 +336,19 @@ mod tests {
                 metric_id: "classes".into(),
                 values: vec!["https://a.example/vocab#Zebra".into()],
                 truncated: false,
+            }],
+            content_profiles: vec![ContentProfile {
+                endpoint: endpoint.into(),
+                metric_id: "class-profiles".into(),
+                class: "https://a.example/vocab#Zebra".into(),
+                sampling: "exact".into(),
+                sampling_prefix: None,
+                properties: vec![ProfileProperty {
+                    property: "https://a.example/vocab#stripes".into(),
+                    subjects: 3,
+                    datatypes: 1,
+                    any_datatype: Some("http://www.w3.org/2001/XMLSchema#integer".into()),
+                }],
             }],
         }
     }

@@ -139,6 +139,18 @@ pub fn resolve(def: &MetricDef, declared: Declared, obs: Result<&Observation, Ex
     }
 
     match def.kind {
+        // A profile is not a measurement, so it has no verdict to resolve. This
+        // arm exists to be unreachable rather than to compute anything: nothing
+        // routes a ClassProfile metric through here, because `probe_endpoint`
+        // handles it after the per-metric dispatch and pushes no MeasurementRow.
+        // Ruling 2 in
+        // docs/superpowers/specs/2026-08-29-content-profiles-design.md.
+        //
+        // `Indeterminate` and not a panic, because a wrong answer here would be
+        // a published verdict on somebody's endpoint and this is the one value
+        // that claims nothing. If it ever appears in a run graph, the routing is
+        // broken and the graph says so honestly.
+        ProbeKind::ClassProfile => Verdict::Indeterminate,
         ProbeKind::AskFilter | ProbeKind::AskData => match (o.boolean, def.expect) {
             // This arm serves both probe kinds, and the two readings differ:
             // for `AskFilter` a wrong boolean means broken semantics; for
@@ -425,6 +437,7 @@ mod tests {
             graded: false,
             cost: Cost::Cheap,
             sample_limit: None,
+            sample_prefix: None,
         }
     }
 

@@ -37,6 +37,7 @@ fn preflight_def() -> MetricDef {
         graded: false,
         cost: Cost::Cheap,
         sample_limit: None,
+        sample_prefix: None,
     }
 }
 

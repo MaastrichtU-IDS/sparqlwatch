@@ -19,10 +19,12 @@ use crate::budget::{Budget, Expired};
 use crate::client::Client;
 use crate::declare::{parse_declarations_for, Declarations};
 use crate::emit::{
-    ContentSample, DeclarationsRead, EndpointFacts, MeasurementRow, NotMeasured, NotMeasuredReason,
+    ContentProfile, ContentSample, DeclarationsRead, EndpointFacts, MeasurementRow,
+    NotMeasured, NotMeasuredReason, ProfileProperty,
     RunId,
 };
 use crate::metrics::{MetricDef, ProbeKind};
+use crate::profile::{profile_classes, ProfileOutcome, Sampling};
 use crate::politeness::host_key;
 use crate::resolve::{resolve, resolve_fetch, Declared};
 use crate::verdict::Verdict;
@@ -385,6 +387,7 @@ struct EndpointFactLists {
     declarations_read: Vec<DeclarationsRead>,
     not_measured: Vec<NotMeasured>,
     content_samples: Vec<ContentSample>,
+    content_profiles: Vec<ContentProfile>,
     /// Whether the sweep failed on this endpoint, so `Sweep::failed_endpoints`
     /// counts the same endpoints whose facts say `prober-failed`.
     failed: bool,
@@ -401,6 +404,7 @@ impl EndpointFactLists {
             declarations_read: &self.declarations_read,
             not_measured: &self.not_measured,
             content_samples: &self.content_samples,
+            content_profiles: &self.content_profiles,
         }
     }
 }
@@ -427,6 +431,7 @@ fn assemble_endpoint(
         declarations_read: Vec::new(),
         not_measured: Vec::new(),
         content_samples: Vec::new(),
+            content_profiles: Vec::new(),
         failed: slot.is_none(),
     };
     match slot {
@@ -436,6 +441,33 @@ fn assemble_endpoint(
                 .push(DeclarationsRead { endpoint: ep.to_string(), read: swept.declarations_read });
             facts.rows = swept.rows;
             facts.content_samples = swept.content_samples;
+            facts.content_profiles = swept.content_profiles;
+            // THE UNREACHED CLASSES ARE NOT PUBLISHED AS NotMeasured, and the
+            // spec said they would be. Doing it properly is not possible with
+            // this vocabulary and the half-right version would be worse:
+            //
+            //   * `NotMeasured` is keyed on (endpoint, METRIC), so it cannot
+            //     name a class. One fact per class is not a shape it has.
+            //   * A single fact for the metric would be WRONG whenever some
+            //     classes were profiled and some were not, which is the normal
+            //     partial case: it would say nothing was measured while the
+            //     graph holds profiles beside it.
+            //   * Neither existing reason fits. `CostCeiling` is about a
+            //     declined metric and `ProberFailed` means the prober panicked.
+            //
+            // A reader derives the set instead, exactly: the metric's own
+            // ContentSample lists every class the enumeration saw, and the
+            // ContentProfile facts name the ones profiled. The difference is the
+            // unreached set, and it needs no new fact to be honest.
+            //
+            // ONE GAP REMAINS AND IS NOT CLOSED HERE. If the enumeration itself
+            // never answered, there is no ContentSample either, so nothing in
+            // the graph says the pass was attempted at all and a reader cannot
+            // tell that from a metric nobody declared. Closing it needs a
+            // NotMeasuredReason variant, which is a vocabulary change reaching
+            // web/app.py's reason list and the docs pages. Recorded rather than
+            // guessed at.
+            let _ = swept.profile_unreached;
         }
         // Nothing was observed, so there is nothing to grade: no rows, and
         // no `declarationsRead` either, since whether the description was
@@ -533,6 +565,16 @@ struct EndpointSweep {
     declarations_read: bool,
     /// This endpoint's share of `Sweep::content_samples`, under the same rules.
     content_samples: Vec<ContentSample>,
+    /// This endpoint's class profiles, under the same rules: whatever the pass
+    /// finished before the endpoint budget expired.
+    content_profiles: Vec<ContentProfile>,
+    /// Per profile metric, the classes the pass did not profile.
+    ///
+    /// Published as `NotMeasured` rather than omitted, because a reader who sees
+    /// no profile for a class cannot otherwise tell "this class carries no
+    /// properties" from "we never asked". An empty class list means the
+    /// enumeration itself never answered, so nothing is known about any class.
+    profile_unreached: Vec<(String, Vec<String>)>,
 }
 
 /// Probe one endpoint, under the endpoint budget: the unit of work a sweep
@@ -657,6 +699,18 @@ async fn probe_endpoint(
             });
             continue;
         }
+        // A profile metric produces NO MEASUREMENT ROW, which is why it is
+        // skipped here rather than dispatched. Its pass runs after this loop,
+        // over classes it discovers itself, and publishes ContentSample and
+        // ContentProfile facts instead of a verdict. Ruling 2 and Ruling 4 in
+        // docs/superpowers/specs/2026-08-29-content-profiles-design.md.
+        //
+        // `continue` and not a row: a row would put this metric in the matrix as
+        // a column of verdicts it does not have, which is the column Ruling 4
+        // exists to remove.
+        if !def.kind.yields_measurement() {
+            continue;
+        }
         // A kind with no implemented probe is skipped before any request is
         // built: the generic query path would send `?query=` to a real
         // operator and learn nothing. No current kind takes this path (even
@@ -694,6 +748,7 @@ async fn probe_endpoint(
                 ProbeKind::Liveness => client.ask(ep, &q).await,
                 ProbeKind::AskFilter => client.ask(ep, &q).await,
                 ProbeKind::FetchWellKnown => unreachable!("FetchWellKnown is handled once per endpoint before the per-metric dispatch"),
+                ProbeKind::ClassProfile => unreachable!("ClassProfile is handled after the per-metric dispatch, and pushes no measurement row"),
             }
         };
         let observed = budget.with_metric_budget(fut).await;
@@ -753,7 +808,92 @@ async fn probe_endpoint(
             elapsed_ms: elapsed,
         });
     }
+
+    // ---------------------------------------------------------------------
+    // The class profile pass, after every metric row and never through one.
+    //
+    // Last on purpose. It is the most expensive thing this function does, and
+    // the endpoint budget cancels whatever is running when it expires, so
+    // putting it here means an expiry costs the profiles rather than the
+    // verdicts. A reader loses the answer to "what is in this endpoint" and
+    // keeps the answer to "does it work", which is the right way round.
+    // ---------------------------------------------------------------------
+    for def in defs.iter().filter(|d| d.kind == ProbeKind::ClassProfile) {
+        let enumeration = def.query.clone().unwrap_or_default();
+        let var = def.var.clone().unwrap_or_else(|| "c".to_string());
+        let observed = budget
+            .with_metric_budget(client.select_iris(ep, &enumeration, &var))
+            .await;
+        let classes = match &observed {
+            Ok(o) => o.bindings.clone(),
+            // The enumeration itself timed out. Nothing is known about this
+            // endpoint's classes, so nothing is published about them: the pass
+            // records the metric as not measured and stops. An empty class list
+            // would read as "this endpoint has no classes".
+            Err(_) => {
+                acc.profile_unreached.push((def.id.clone(), Vec::new()));
+                continue;
+            }
+        };
+        if classes.is_empty() {
+            // Either the endpoint genuinely has no typed subjects, or it refused
+            // and the body told us nothing. `select_iris` cannot tell those
+            // apart, so neither can this: publishing no profile is the honest
+            // outcome either way, and the enumeration's own sample below is
+            // where a reader looks for what was seen.
+            continue;
+        }
+
+        // The classes themselves are published as a ContentSample, exactly as
+        // the `classes` metric published them before Ruling 4 retired its
+        // verdict. Same fact, same shape, now produced by the pass that uses it.
+        if let Some(limit) = def.sample_limit {
+            acc.content_samples.push(ContentSample {
+                endpoint: ep.to_string(),
+                metric_id: def.id.clone(),
+                values: classes.clone(),
+                truncated: classes.len() >= limit,
+            });
+        }
+
+        let sampling = def
+            .sample_prefix
+            .clone()
+            .filter(|p| !p.is_empty())
+            .map_or(Sampling::Exact, Sampling::HashPrefix);
+        let mut outcome = ProfileOutcome::default();
+        profile_classes(ep, &classes, sampling, client, budget, &mut outcome).await;
+        // On BOTH paths, because a cancelled pass cannot name its own tail and a
+        // completed one still has refusals to name. `name_unreached` is
+        // idempotent so calling it here cannot double-name anything.
+        outcome.name_unreached(&classes);
+
+        for profile in outcome.profiles {
+            acc.content_profiles.push(ContentProfile {
+                endpoint: ep.to_string(),
+                metric_id: def.id.clone(),
+                class: profile.class,
+                sampling: profile.sampling.slug().to_string(),
+                sampling_prefix: profile.sampling.prefix().map(str::to_string),
+                properties: profile
+                    .rows
+                    .into_iter()
+                    .map(|r| ProfileProperty {
+                        property: r.property,
+                        subjects: r.subjects,
+                        datatypes: r.datatypes,
+                        any_datatype: r.any_datatype,
+                    })
+                    .collect(),
+            });
+        }
+        if !outcome.unreached.is_empty() {
+            acc.profile_unreached
+                .push((def.id.clone(), outcome.unreached));
+        }
+    }
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -817,6 +957,7 @@ mod tests {
             graded: false,
             cost: Cost::Cheap,
             sample_limit: None,
+            sample_prefix: None,
         }
     }
 
@@ -841,6 +982,13 @@ mod tests {
                 values: vec!["http://example.org/C".to_string()],
                 truncated: false,
             }],
+            // Empty on purpose: this helper stands for one endpoint's FINISHED
+            // work under the shapes that existed before the profile pass, and
+            // the tests using it are about the four lists a consumer reads. A
+            // profile here would change what they assert without changing what
+            // they are for.
+            content_profiles: Vec::new(),
+            profile_unreached: Vec::new(),
         }
     }
 

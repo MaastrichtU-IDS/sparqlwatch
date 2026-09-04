@@ -401,6 +401,9 @@ pub struct RunEmission<'a> {
     /// What the enumerating probes saw, published verbatim and in the
     /// endpoint's own order.
     pub content_samples: &'a [ContentSample],
+    /// Every endpoint's class profiles, filtered per endpoint by the assembler
+    /// the same way the other lists are.
+    pub content_profiles: &'a [ContentProfile],
     /// How many hosts the sweep talked to at once, recorded on the activity
     /// beside `max_cost` and for the same reason: it is a parameter of the run,
     /// not of any one measurement.
@@ -913,6 +916,10 @@ pub struct EndpointFacts<'a> {
     pub declarations_read: &'a [DeclarationsRead],
     pub not_measured: &'a [NotMeasured],
     pub content_samples: &'a [ContentSample],
+    /// This endpoint's class profiles. Emitted after the samples and before the
+    /// chunk terminator, so a cut loses profiles before it loses the terminator
+    /// that says the chunk is whole.
+    pub content_profiles: &'a [ContentProfile],
 }
 
 /// The one thing that survives between two chunks: which endpoints this writer
@@ -948,6 +955,7 @@ pub fn emit_endpoint(state: &mut EmitState, facts: EndpointFacts) -> anyhow::Res
         declarations_read,
         not_measured,
         content_samples,
+        content_profiles,
     } = facts;
     // A second chunk for one endpoint would put its facts either side of the
     // pre-scan below, so a pair measured twice with differing results would be
@@ -1511,6 +1519,26 @@ pub fn emit_endpoint(state: &mut EmitState, facts: EndpointFacts) -> anyhow::Res
     // What "completed" includes: an endpoint the prober FAILED on. `run_sweep`
     // writes a chunk for every endpoint it was given, including the ones a
     // panicked group lost, so a chunk of `prober-failed` declines carries this
+    // The class profiles, after the samples and BEFORE the terminator. Rule 1 of
+    // the section protocol: the terminator says the chunk is whole, so anything
+    // written after it would be a fact a reader holding the terminator does not
+    // have. A cut here loses profiles and no terminator, which every consumer
+    // already handles as an unfinished chunk.
+    for profile in content_profiles {
+        match profile_quads(profile, run, &graph) {
+            Ok(qs) => quads.extend(qs),
+            // Non-fatal, for the same reason every other fact here is: one junk
+            // class out of two hundred must not cost the chunk its output after
+            // the probing is already paid for.
+            Err(e) => tracing::warn!(
+                endpoint = %profile.endpoint,
+                class = %profile.class,
+                error = %e,
+                "skipping a class profile: it cannot be written"
+            ),
+        }
+    }
+
     // marker too. The fact is about the chunk being whole, not about the probe
     // succeeding. Withholding it there would leave that endpoint looking, on a
     // run that later crashed, exactly like one the run never reached, and the
@@ -1622,6 +1650,7 @@ fn endpoint_order(
     rows: &[MeasurementRow],
     not_measured: &[NotMeasured],
     content_samples: &[ContentSample],
+    content_profiles: &[ContentProfile],
     declarations_read: &[DeclarationsRead],
 ) -> Vec<String> {
     let mut seen: BTreeSet<&str> = BTreeSet::new();
@@ -1631,6 +1660,7 @@ fn endpoint_order(
         .map(|r| r.endpoint.as_str())
         .chain(not_measured.iter().map(|f| f.endpoint.as_str()))
         .chain(content_samples.iter().map(|s| s.endpoint.as_str()))
+        .chain(content_profiles.iter().map(|p| p.endpoint.as_str()))
         .chain(declarations_read.iter().map(|d| d.endpoint.as_str()));
     for endpoint in all {
         if seen.insert(endpoint) {
@@ -1659,6 +1689,7 @@ pub fn emit_nquads(input: RunEmission) -> anyhow::Result<String> {
         declarations_read,
         not_measured,
         max_cost,
+        content_profiles,
         content_samples,
         concurrency,
         failed_endpoints,
@@ -1681,17 +1712,21 @@ pub fn emit_nquads(input: RunEmission) -> anyhow::Result<String> {
         dormant: &[],
     })?;
     let mut state = EmitState::new();
-    for endpoint in endpoint_order(rows, not_measured, content_samples, declarations_read) {
-        // The four flat lists carry no endpoint grouping this function can rely
+    for endpoint in
+        endpoint_order(rows, not_measured, content_samples, content_profiles, declarations_read)
+    {
+        // The five flat lists carry no endpoint grouping this function can rely
         // on, so each is sliced by endpoint here. Cloned rather than borrowed
         // because an endpoint's entries need not be contiguous, and a run's
-        // four lists are a few thousand small structs at registry scale.
+        // five lists are a few thousand small structs at registry scale.
         let rows: Vec<MeasurementRow> =
             rows.iter().filter(|r| r.endpoint == endpoint).cloned().collect();
         let not_measured: Vec<NotMeasured> =
             not_measured.iter().filter(|f| f.endpoint == endpoint).cloned().collect();
         let content_samples: Vec<ContentSample> =
             content_samples.iter().filter(|s| s.endpoint == endpoint).cloned().collect();
+        let content_profiles: Vec<ContentProfile> =
+            content_profiles.iter().filter(|p| p.endpoint == endpoint).cloned().collect();
         let declarations_read: Vec<DeclarationsRead> =
             declarations_read.iter().filter(|d| d.endpoint == endpoint).cloned().collect();
         out.push_str(&emit_endpoint(
@@ -1703,6 +1738,7 @@ pub fn emit_nquads(input: RunEmission) -> anyhow::Result<String> {
                 declarations_read: &declarations_read,
                 not_measured: &not_measured,
                 content_samples: &content_samples,
+                content_profiles: &content_profiles,
             },
         )?);
     }
@@ -1771,6 +1807,7 @@ mod tests {
             concurrency: NonZeroUsize::new(1).unwrap(),
             failed_endpoints: 0,
             content_samples: &[],
+            content_profiles: &[],
         }).unwrap();
         quads_of(&out)
     }
@@ -1837,6 +1874,7 @@ mod tests {
             concurrency: NonZeroUsize::new(1).unwrap(),
             failed_endpoints: 0,
             content_samples: &content_samples,
+            content_profiles: &[],
         })
         .unwrap()
     }
@@ -2033,6 +2071,7 @@ mod tests {
             concurrency: NonZeroUsize::new(4).unwrap(),
             failed_endpoints: 1,
             content_samples: &content_samples,
+            content_profiles: &[],
         })
         .unwrap()
     }
@@ -2231,6 +2270,7 @@ mod tests {
                 }],
                 not_measured: &[],
                 content_samples: &[],
+                content_profiles: &[],
             },
         )
         .unwrap();
@@ -2335,6 +2375,7 @@ mod tests {
                 declarations_read: &[],
                 not_measured: &[],
                 content_samples: &[],
+                content_profiles: &[],
             })
             .unwrap();
         writer.finish(RunFooter { run: &run, failed_endpoints: 0 }).unwrap();
@@ -2537,6 +2578,7 @@ mod tests {
                 declarations_read: &[],
                 not_measured: &[],
                 content_samples: &[],
+                content_profiles: &[],
             },
         )
         .unwrap();
@@ -2593,6 +2635,7 @@ mod tests {
                 declarations_read: &[],
                 not_measured: &[],
                 content_samples: &[],
+                content_profiles: &[],
             },
         )
         .unwrap();
@@ -2607,6 +2650,7 @@ mod tests {
                 declarations_read: &[],
                 not_measured: &[],
                 content_samples: &[],
+                content_profiles: &[],
             },
         )
         .unwrap();
@@ -2642,6 +2686,7 @@ mod tests {
                 declarations_read: &[],
                 not_measured: &[],
                 content_samples: &[],
+                content_profiles: &[],
             },
         )
         .unwrap();
@@ -2682,6 +2727,7 @@ mod tests {
                     declarations_read: &[],
                     not_measured: &[],
                     content_samples: &[],
+                    content_profiles: &[],
                 },
             )
             .unwrap()
@@ -2719,6 +2765,7 @@ mod tests {
                     ],
                     truncated: false,
                 }],
+                content_profiles: &[],
             },
         )
         .unwrap();
@@ -3029,6 +3076,7 @@ mod tests {
             concurrency: NonZeroUsize::new(1).unwrap(),
             failed_endpoints: 0,
             content_samples: &[],
+            content_profiles: &[],
         });
         assert!(out.is_ok(), "a bad metric id must not cost the sweep its output");
         let qs = quads_of(&out.unwrap());
@@ -3052,6 +3100,7 @@ mod tests {
             concurrency: NonZeroUsize::new(1).unwrap(),
             failed_endpoints: 0,
             content_samples: &[],
+            content_profiles: &[],
         }).unwrap();
         let expected = GraphName::NamedNode(
             NamedNode::new("urn:sparqlwatch:run:2026-08-20T08:00:00Z").unwrap(),
@@ -3159,6 +3208,7 @@ mod tests {
             concurrency: NonZeroUsize::new(1).unwrap(),
             failed_endpoints: 0,
             content_samples: &[],
+            content_profiles: &[],
         })
             .expect("one junk endpoint must not discard the sweep");
         assert!(!out.contains("not an iri at all"));
@@ -3238,6 +3288,7 @@ mod tests {
             concurrency: NonZeroUsize::new(1).unwrap(),
             failed_endpoints: 0,
             content_samples: &[],
+            content_profiles: &[],
         }).unwrap();
         let qs = quads_of(&out);
         let q = qs
@@ -3278,6 +3329,7 @@ mod tests {
             concurrency: NonZeroUsize::new(1).unwrap(),
             failed_endpoints: 0,
             content_samples: &[],
+            content_profiles: &[],
         }).unwrap();
         let qs = quads_of(&out);
         let read_quads: Vec<&Quad> =
@@ -3302,6 +3354,7 @@ mod tests {
             concurrency: NonZeroUsize::new(1).unwrap(),
             failed_endpoints: 0,
             content_samples: &[],
+            content_profiles: &[],
         })
         .unwrap();
 
@@ -3334,6 +3387,7 @@ mod tests {
             concurrency: NonZeroUsize::new(1).unwrap(),
             failed_endpoints: 0,
             content_samples: &[],
+            content_profiles: &[],
         }).unwrap();
 
         // Collect the two subject sets separately, each by the rdf:type that
@@ -3383,6 +3437,7 @@ mod tests {
             concurrency: NonZeroUsize::new(1).unwrap(),
             failed_endpoints: 0,
             content_samples: &[],
+            content_profiles: &[],
         }).unwrap();
         let qs = quads_of(&out);
         let subj = NamedOrBlankNode::NamedNode(
@@ -3450,6 +3505,7 @@ mod tests {
             concurrency: NonZeroUsize::new(1).unwrap(),
             failed_endpoints: 0,
             content_samples: &[],
+            content_profiles: &[],
         }).unwrap();
         let qs = quads_of(&out);
         let subj = NamedOrBlankNode::NamedNode(
@@ -3521,6 +3577,7 @@ mod tests {
             concurrency: NonZeroUsize::new(1).unwrap(),
             failed_endpoints: 0,
             content_samples: &[],
+            content_profiles: &[],
         }).unwrap();
         let qs = quads_of(&out);
 
@@ -3574,6 +3631,7 @@ mod tests {
             concurrency: NonZeroUsize::new(1).unwrap(),
             failed_endpoints: 0,
             content_samples: &[],
+            content_profiles: &[],
         }).unwrap();
         let qs = quads_of(&out);
         let subjects: BTreeSet<String> = qs
@@ -3603,6 +3661,7 @@ mod tests {
             concurrency: NonZeroUsize::new(1).unwrap(),
             failed_endpoints: 0,
             content_samples: &[],
+            content_profiles: &[],
         })
             .expect("one junk endpoint must not discard the sweep");
         assert!(!out.contains("not an iri at all"));
@@ -3628,6 +3687,7 @@ mod tests {
                 concurrency: NonZeroUsize::new(1).unwrap(),
                 failed_endpoints: 0,
                 content_samples: &[],
+                content_profiles: &[],
             }).unwrap();
             let qs = quads_of(&out);
             assert_eq!(
@@ -3663,6 +3723,7 @@ mod tests {
             not_measured: &[],
             max_cost: Cost::Cheap,
             content_samples: &[],
+            content_profiles: &[],
             concurrency: NonZeroUsize::new(4).unwrap(),
             failed_endpoints: 2,
         })
@@ -3720,6 +3781,7 @@ mod tests {
             not_measured: &nm,
             max_cost: Cost::Cheap,
             content_samples: &[],
+            content_profiles: &[],
             concurrency: NonZeroUsize::new(1).unwrap(),
             failed_endpoints: 1,
         })
@@ -3766,6 +3828,7 @@ mod tests {
                 concurrency: NonZeroUsize::new(1).unwrap(),
                 failed_endpoints: 0,
                 content_samples: &[s],
+                content_profiles: &[],
             }).unwrap();
         assert!(nq.contains("urn:sparqlwatch:ContentSample"));
         assert_eq!(nq.matches("urn:sparqlwatch:sampledValue").count(), 2);
@@ -3792,6 +3855,7 @@ mod tests {
                 concurrency: NonZeroUsize::new(1).unwrap(),
                 failed_endpoints: 0,
                 content_samples: &[sample(&["http://example.org/A"], true)],
+                content_profiles: &[],
             }).unwrap();
         let qs = quads_of(&out);
         assert_eq!(
@@ -3830,6 +3894,7 @@ mod tests {
             concurrency: NonZeroUsize::new(1).unwrap(),
             failed_endpoints: 0,
             content_samples: &[sample(&["http://example.org/A", "http://example.org/B"], false)],
+            content_profiles: &[],
         })
         .unwrap();
         let subjects: std::collections::HashSet<&str> = nq
@@ -3885,6 +3950,7 @@ mod tests {
             concurrency: NonZeroUsize::new(1).unwrap(),
             failed_endpoints: 0,
             content_samples: &[sample(&["http://example.org/A"], false)],
+            content_profiles: &[],
         })
         .unwrap();
         let qs = quads_of(&out);
@@ -3927,6 +3993,7 @@ mod tests {
                 &["http://example.org/Zebra", "http://example.org/Apple", "http://example.org/Mango"],
                 false,
             )],
+            content_profiles: &[],
         })
         .unwrap();
         let qs = quads_of(&out);
@@ -3995,6 +4062,7 @@ mod tests {
                     truncated: true,
                 },
             ],
+            content_profiles: &[],
         })
         .unwrap();
         let qs = quads_of(&out);
@@ -4028,6 +4096,7 @@ mod tests {
                 sample(&["https://a.example/A"], false),
                 sample(&["https://a.example/B"], false),
             ],
+            content_profiles: &[],
         })
         .expect("a contradicted sample must not cost the sweep its output");
         let qs = quads_of(&out);
@@ -4071,6 +4140,7 @@ mod tests {
                 },
                 sample(&["http://example.org/A", "not an iri either"], false),
             ],
+            content_profiles: &[],
         })
         .expect("one junk string must not discard the sweep");
         assert!(!out.contains("not an iri"));
@@ -4109,6 +4179,7 @@ mod tests {
             concurrency: NonZeroUsize::new(1).unwrap(),
             failed_endpoints: 0,
             content_samples: &[sample(&["not an iri", "nor this one"], false)],
+            content_profiles: &[],
         })
         .unwrap();
         assert!(
@@ -4136,6 +4207,7 @@ mod tests {
                 &["http://example.org/A", "not an iri", "http://example.org/B", "no space allowed"],
                 false,
             )],
+            content_profiles: &[],
         })
         .unwrap();
         let qs = quads_of(&out);

@@ -136,3 +136,42 @@ sample_limit = 200
 query = """
 SELECT DISTINCT ?c WHERE { { ?s a ?c } UNION { GRAPH ?anyg { ?s a ?c } } } LIMIT 200
 """
+
+# The content pass. Enumerates this endpoint's classes, then profiles each one:
+# which properties its instances carry and how many carry each.
+#
+# NO VERDICT, and that is the point rather than an omission. A profile is an
+# inference from a sample and the six-verdict vocabulary is for what was
+# observed, so this metric publishes `ContentSample` and `ContentProfile` facts
+# and no measurement row at all. It therefore has no column in the index's
+# matrix, which is what Ruling 2 and Ruling 4 in
+# docs/superpowers/specs/2026-08-29-content-profiles-design.md decide.
+#
+# The query below is the CLASS ENUMERATION, and it is the same question the
+# `classes` metric asks above. Once this ships, Ruling 4's sequencing note
+# applies: `classes` loses its verdict in the same change, not before, because
+# retiring it first would buy a tidier matrix and lose the only content sampling
+# the prober can do.
+#
+# `expensive`, so the default `--max-cost cheap` declines it and a sweep has to
+# ask for it. That is deliberate: at one query per class this is the most costly
+# thing the prober does to a stranger's server.
+#
+# `sample_prefix` empty means an exact profile: every instance of every class.
+# Measured 2026-08-29 over 200,000 instances, a prefix of one hex character keeps
+# about a sixteenth and every property frequency landed within 0.002 of the true
+# value, so "0" is the setting to reach for on an endpoint too large to profile
+# exactly. There is no LIMIT option, because a LIMIT cuts by the store's own
+# iteration order and was wrong by 0.950 in that same measurement.
+[[metric]]
+id = "class-profiles"
+label = "Properties per class"
+dimension = "content"
+kind = "ClassProfile"
+var = "c"
+cost = "expensive"
+sample_limit = 200
+sample_prefix = ""
+query = """
+SELECT DISTINCT ?c WHERE { { ?s a ?c } UNION { GRAPH ?anyg { ?s a ?c } } } LIMIT 200
+"""

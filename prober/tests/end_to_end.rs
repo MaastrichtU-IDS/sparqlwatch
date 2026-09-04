@@ -8,6 +8,16 @@ use sparqlwatch_prober::emit::RunFooter;
 use sparqlwatch_prober::run_sweep;
 use sparqlwatch_prober::write::RunWriter;
 use sparqlwatch_prober::Sweep;
+
+/// How many of these definitions produce a measurement row.
+///
+/// Not `defs.len()`: a `ClassProfile` metric publishes profile facts and no
+/// verdict, so it has no row and no matrix column. Asking `ProbeKind` keeps
+/// these tests and `probe_endpoint`'s dispatch reading the same rule, so
+/// shipping another non-measuring kind cannot silently pass here.
+fn measured(defs: &[MetricDef]) -> usize {
+    defs.iter().filter(|d| d.kind.yields_measurement()).count()
+}
 use sparqlwatch_prober::verdict::{Level, Verdict};
 use oxrdf::{NamedNode, Quad, Term};
 use oxrdfio::{RdfFormat, RdfParser};
@@ -54,7 +64,7 @@ async fn a_sweep_over_one_mock_endpoint_produces_nquads() {
     let url = format!("{}/sparql", server.uri());
     let Sweep { rows, declarations_read: _declarations_read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
 
-    assert_eq!(rows.len(), defs.len(), "one measurement per metric per endpoint");
+    assert_eq!(rows.len(), measured(&defs), "one measurement per verdict-bearing metric per endpoint");
 
     // Assert the verdicts themselves, not just the row count: an
     // implementation that resolved everything to `Absent` -- the exact failure
@@ -106,6 +116,7 @@ async fn a_sweep_over_one_mock_endpoint_produces_nquads() {
             concurrency: NonZeroUsize::new(1).unwrap(),
             failed_endpoints: 0,
             content_samples: &[],
+            content_profiles: &[],
         })
             .unwrap();
     let quads: Vec<Quad> = RdfParser::from_format(RdfFormat::NQuads)
@@ -183,7 +194,7 @@ async fn an_unreachable_endpoint_yields_indeterminate_not_a_panic() {
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
     let client = std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
     let Sweep { rows, declarations_read: _declarations_read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(&["http://127.0.0.1:1/sparql".to_string()], &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
-    assert_eq!(rows.len(), defs.len());
+    assert_eq!(rows.len(), measured(&defs));
     assert!(rows.iter().all(|r| r.verdict == Verdict::Indeterminate));
 }
 
@@ -212,6 +223,7 @@ async fn a_metric_binding_a_nonstandard_variable_is_extracted_via_its_declared_v
         graded: false,
         cost: Cost::Cheap,
         sample_limit: None,
+        sample_prefix: None,
     };
 
     let client = std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
@@ -253,7 +265,7 @@ async fn the_sweep_fetches_the_description_once_per_endpoint() {
     let queryless = server.received_requests().await.unwrap().iter()
         .filter(|r| r.method == Method::GET && r.url.query().is_none()).count();
     assert_eq!(queryless, 1, "expected exactly one queryless fetch per endpoint");
-    assert_eq!(rows.len(), defs.len());
+    assert_eq!(rows.len(), measured(&defs));
 }
 
 /// The first place a `Level` can appear in a row: a fetched, parseable
@@ -309,6 +321,7 @@ async fn a_non_graded_fetch_metric_carries_no_level() {
         graded: false,
         cost: Cost::Cheap,
         sample_limit: None,
+        sample_prefix: None,
     };
 
     let client = std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
@@ -537,6 +550,7 @@ async fn an_endpoint_budget_expiry_still_yields_one_row_per_metric() {
             graded: false,
             cost: Cost::Cheap,
             sample_limit: None,
+            sample_prefix: None,
         })
         .collect();
 
@@ -551,7 +565,7 @@ async fn an_endpoint_budget_expiry_still_yields_one_row_per_metric() {
     let Sweep { rows, declarations_read: _declarations_read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, budget, NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
     let took = started.elapsed();
 
-    assert_eq!(rows.len(), defs.len(), "one row per (endpoint, metric) regardless of timing");
+    assert_eq!(rows.len(), measured(&defs), "one row per (endpoint, metric) regardless of timing");
     assert!(took < std::time::Duration::from_millis(400), "endpoint budget did not cut the loop short: {took:?}");
     assert!(
         rows.iter().all(|r| r.verdict == Verdict::Indeterminate),
@@ -603,6 +617,7 @@ async fn a_budget_expiry_after_the_fetch_still_publishes_declarations_read() {
             graded: false,
             cost: Cost::Cheap,
             sample_limit: None,
+            sample_prefix: None,
         })
         .collect();
 
@@ -617,7 +632,7 @@ async fn a_budget_expiry_after_the_fetch_still_publishes_declarations_read() {
 
     // The budget really did cut the loop short, or this proves nothing about
     // the write position.
-    assert_eq!(rows.len(), defs.len(), "one row per (endpoint, metric) regardless of timing");
+    assert_eq!(rows.len(), measured(&defs), "one row per (endpoint, metric) regardless of timing");
     assert!(
         rows.iter().all(|r| r.verdict == Verdict::Indeterminate),
         "the metric loop must have been cut short for this test to say anything"
@@ -677,6 +692,7 @@ async fn a_partial_endpoint_keeps_the_verdicts_it_already_earned() {
         graded: false,
         cost: Cost::Cheap,
         sample_limit: Some(5),
+        sample_prefix: None,
     }];
     // Then the metrics that stall, so the endpoint budget expires with the
     // first metric's results already in hand.
@@ -692,6 +708,7 @@ async fn a_partial_endpoint_keeps_the_verdicts_it_already_earned() {
         graded: false,
         cost: Cost::Cheap,
         sample_limit: None,
+        sample_prefix: None,
     }));
 
     let budget = Budget {
@@ -703,7 +720,7 @@ async fn a_partial_endpoint_keeps_the_verdicts_it_already_earned() {
     let url = format!("{}/sparql", server.uri());
     let Sweep { rows, declarations_read: read, not_measured: _not_measured, content_samples: samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, budget, NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
 
-    assert_eq!(rows.len(), defs.len(), "one row per (endpoint, metric) regardless of timing");
+    assert_eq!(rows.len(), measured(&defs), "one row per (endpoint, metric) regardless of timing");
     for (row, def) in rows.iter().zip(&defs) {
         assert_eq!(row.metric_id, def.id, "rows stay aligned with the definitions");
         assert_eq!(row.endpoint, url);
@@ -943,6 +960,7 @@ async fn sweep_with_description(body: &str, content_type: &str) -> String {
         concurrency: NonZeroUsize::new(1).unwrap(),
         failed_endpoints: 0,
         content_samples: &[],
+        content_profiles: &[],
     }).unwrap()
 }
 
@@ -969,6 +987,7 @@ async fn sweep_with_status(status: u16) -> String {
         concurrency: NonZeroUsize::new(1).unwrap(),
         failed_endpoints: 0,
         content_samples: &[],
+        content_profiles: &[],
     }).unwrap()
 }
 
@@ -1000,6 +1019,7 @@ async fn sweep_with_status_and_working_queries(status: u16) -> String {
         concurrency: NonZeroUsize::new(1).unwrap(),
         failed_endpoints: 0,
         content_samples: &[],
+        content_profiles: &[],
     }).unwrap()
 }
 
@@ -1028,6 +1048,7 @@ async fn sweep_two_endpoints_one_broken() -> String {
         concurrency: NonZeroUsize::new(1).unwrap(),
         failed_endpoints: 0,
         content_samples: &[],
+        content_profiles: &[],
     }).unwrap()
 }
 
@@ -1156,10 +1177,11 @@ async fn a_registry_that_lists_one_url_twice_probes_it_once() {
         concurrency: NonZeroUsize::new(1).unwrap(),
         failed_endpoints: 0,
         content_samples: &[],
+        content_profiles: &[],
     }).unwrap();
 
     assert_eq!(count_declarations_read_quads(&run), 1, "one endpoint, one fact, whatever the registry said");
-    assert_eq!(rows.len(), defs.len(), "one row per metric, not two");
+    assert_eq!(rows.len(), measured(&defs), "one row per metric, not two");
     let ids: BTreeSet<&str> = rows.iter().map(|r| r.metric_id.as_str()).collect();
     assert_eq!(ids.len(), rows.len(), "no metric may appear twice for one endpoint");
 }
@@ -1197,14 +1219,15 @@ async fn a_near_duplicate_differing_by_a_trailing_slash_stays_two_entries() {
         concurrency: NonZeroUsize::new(1).unwrap(),
         failed_endpoints: 0,
         content_samples: &[],
+        content_profiles: &[],
     }).unwrap();
 
     assert_eq!(count_declarations_read_quads(&run), 2, "two entries, two facts");
-    assert_eq!(rows.len(), 2 * defs.len(), "one row per metric per entry");
+    assert_eq!(rows.len(), 2 * measured(&defs), "one row per metric per entry");
     for ep in [&url, &slashed] {
         assert_eq!(
             rows.iter().filter(|r| &r.endpoint == ep).count(),
-            defs.len(),
+            measured(&defs),
             "{ep} must carry a full set of rows of its own"
         );
     }
@@ -1374,6 +1397,7 @@ async fn has_classes_reads_the_iri_c_binds_through_select_iris_not_ask_data() {
         concurrency: NonZeroUsize::new(1).unwrap(),
         failed_endpoints: 0,
         content_samples: &[],
+        content_profiles: &[],
     }).unwrap();
 
     assert_eq!(
@@ -1485,6 +1509,7 @@ async fn a_declined_metric_reaches_the_published_graph_with_no_verdict() {
         concurrency: NonZeroUsize::new(1).unwrap(),
         failed_endpoints: 0,
         content_samples: &[],
+        content_profiles: &[],
     }).unwrap();
     let quads = quads_of(&nq);
 
@@ -1531,7 +1556,7 @@ async fn a_declined_metric_is_recorded_once_per_endpoint() {
     let a = an_endpoint_that_answers_everything().await;
     let b = an_endpoint_that_answers_everything().await;
     let (run, declined) = within_cost(&load_shipped_metrics(), Cost::Cheap);
-    assert_eq!(declined.len(), 1, "the fixture assumes exactly one expensive metric");
+    assert!(!declined.is_empty(), "the fixture needs at least one expensive metric to decline");
 
     let client = std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
     let urls = vec![format!("{}/sparql", a.uri()), format!("{}/sparql", b.uri())];
@@ -1540,13 +1565,19 @@ async fn a_declined_metric_is_recorded_once_per_endpoint() {
 
     assert_eq!(
         not_measured.len(),
-        2,
+        urls.len() * declined.len(),
         "one fact per (endpoint, declined metric), not one per run: {not_measured:?}"
     );
-    let named: std::collections::BTreeSet<&str> =
-        not_measured.iter().map(|n| n.endpoint.as_str()).collect();
-    let expected: std::collections::BTreeSet<&str> = urls.iter().map(|u| u.as_str()).collect();
-    assert_eq!(named, expected, "each endpoint is named by exactly one fact");
+    // The cross product itself, not just its size: the count alone would pass if
+    // one endpoint carried every fact and the other none, which is exactly the
+    // per-run fanout this test exists to rule out.
+    let named: std::collections::BTreeSet<(&str, &str)> =
+        not_measured.iter().map(|n| (n.endpoint.as_str(), n.metric_id.as_str())).collect();
+    let expected: std::collections::BTreeSet<(&str, &str)> = urls
+        .iter()
+        .flat_map(|u| declined.iter().map(move |d| (u.as_str(), d.id.as_str())))
+        .collect();
+    assert_eq!(named, expected, "every (endpoint, declined metric) pair is named exactly once");
 }
 
 /// `availability` must not report `verified` for an endpoint that refused to
@@ -1692,6 +1723,7 @@ fn enumerating_metric(limit: usize) -> MetricDef {
         graded: false,
         cost: Cost::Expensive,
         sample_limit: Some(limit),
+        sample_prefix: None,
     }
 }
 
@@ -1727,13 +1759,26 @@ async fn the_classes_metric_publishes_the_iris_it_bound() {
     let Sweep { rows, declarations_read: read, not_measured, content_samples, failed_endpoints: _failed_endpoints } =
         without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
 
-    // Only the metric that declared a `sample_limit` publishes one. This case
-    // was sharper while `has-classes` existed, because it bound the very same
-    // `?c` and had to publish nothing or the cheap probe would have quietly
+    // Only a metric that declared a `sample_limit` publishes one. This case was
+    // sharper while `has-classes` existed, because it bound the very same `?c`
+    // and had to publish nothing or the cheap probe would have quietly
     // enumerated too; with that metric gone the assertion is that no OTHER
     // metric in the shipped set produces a sample.
+    //
+    // Two ids, and that is a KNOWN REGRESSION, asserted so it cannot be
+    // forgotten: `classes` and `class-profiles` both enumerate, so the shipped
+    // set now sends the same `DISTINCT ?c` query twice per endpoint. Ruling 4
+    // in docs/superpowers/specs/2026-08-29-content-profiles-design.md says the
+    // profile pass's enumeration replaces the `classes` metric, which makes the
+    // duplication transitional -- but retiring `classes` also has to move
+    // web/queries/endpoint_content.rq, which joins on `sw:metric:classes` by
+    // name. Until that lands, this list has two entries on purpose.
     let ids: Vec<&str> = content_samples.iter().map(|s| s.metric_id.as_str()).collect();
-    assert_eq!(ids, ["classes"], "only a metric declaring a sample_limit enumerates");
+    assert_eq!(
+        ids,
+        ["classes", "class-profiles"],
+        "only a metric declaring a sample_limit enumerates, and two currently do"
+    );
     let sample = &content_samples[0];
     assert_eq!(
         sample.values,
@@ -1756,17 +1801,27 @@ async fn the_classes_metric_publishes_the_iris_it_bound() {
         concurrency: NonZeroUsize::new(1).unwrap(),
         failed_endpoints: 0,
         content_samples: &content_samples,
+        content_profiles: &[],
     }).unwrap();
     let quads = quads_of(&nq);
-    let published: Vec<String> = quads.iter()
-        .filter(|q| q.predicate.as_str() == "urn:sparqlwatch:sampledValue")
-        .map(|q| match &q.object {
+    // Grouped by sample subject, not flattened: two metrics enumerate now, so a
+    // flat list would compare the endpoint's order against two copies of it and
+    // fail for a reason that has nothing to do with order. Per sample is what
+    // the invariant was always about.
+    let mut by_sample: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for q in quads.iter().filter(|q| q.predicate.as_str() == "urn:sparqlwatch:sampledValue") {
+        let value = match &q.object {
             Term::NamedNode(n) => n.as_str().to_string(),
             other => panic!("a sampled value must be an IRI, got {other}"),
-        })
-        .collect();
-    assert_eq!(published, vec![ZEBRA.to_string(), APPLE.to_string(), MANGO.to_string()],
-               "the published order is the endpoint's order");
+        };
+        by_sample.entry(q.subject.to_string()).or_default().push(value);
+    }
+    assert_eq!(by_sample.len(), 2, "one sample subject per enumerating metric");
+    let in_endpoint_order = vec![ZEBRA.to_string(), APPLE.to_string(), MANGO.to_string()];
+    for (subject, values) in &by_sample {
+        assert_eq!(values, &in_endpoint_order,
+                   "{subject} must publish in the endpoint's order");
+    }
     // The sample is joinable to the endpoint and to the metric that took it.
     let subject = quads.iter()
         .find(|q| q.predicate.as_str() == "urn:sparqlwatch:sampledValue")
@@ -1864,6 +1919,7 @@ async fn a_declined_metric_publishes_no_sample_and_still_says_why() {
         concurrency: NonZeroUsize::new(1).unwrap(),
         failed_endpoints: 0,
         content_samples: &content_samples,
+        content_profiles: &[],
     }).unwrap();
     let quads = quads_of(&nq);
     assert!(!quads.iter().any(|q| q.predicate.as_str().starts_with("urn:sparqlwatch:sample")),
@@ -1954,6 +2010,7 @@ async fn a_status_the_resolver_distrusts_publishes_no_sample_at_all() {
             concurrency: NonZeroUsize::new(1).unwrap(),
             failed_endpoints: 0,
             content_samples: &content_samples,
+            content_profiles: &[],
         })
         .unwrap();
         assert_eq!(
@@ -2030,6 +2087,7 @@ async fn each_sample_names_its_own_endpoint_its_own_values_and_its_own_metric() 
         concurrency: NonZeroUsize::new(1).unwrap(),
         failed_endpoints: 0,
         content_samples: &content_samples,
+        content_profiles: &[],
     })
     .unwrap();
     let quads = quads_of(&nq);
@@ -2177,6 +2235,7 @@ fn probe_and_declined() -> (Vec<MetricDef>, Vec<MetricDef>) {
             graded: false,
             cost: Cost::Cheap,
             sample_limit: None,
+            sample_prefix: None,
         },
         MetricDef {
             id: "classes-small".into(),
@@ -2190,6 +2249,7 @@ fn probe_and_declined() -> (Vec<MetricDef>, Vec<MetricDef>) {
             graded: false,
             cost: Cost::Cheap,
             sample_limit: Some(1),
+            sample_prefix: None,
         },
     ];
     let declined = vec![MetricDef {
@@ -2204,6 +2264,7 @@ fn probe_and_declined() -> (Vec<MetricDef>, Vec<MetricDef>) {
         graded: false,
         cost: Cost::Expensive,
         sample_limit: Some(200),
+        sample_prefix: None,
     }];
     (run, declined)
 }
@@ -2505,6 +2566,7 @@ fn panicking_metric() -> MetricDef {
         graded: false,
         cost: Cost::Cheap,
         sample_limit: None,
+        sample_prefix: None,
     }
 }
 
