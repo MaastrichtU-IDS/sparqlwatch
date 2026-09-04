@@ -42,6 +42,22 @@ fn answered_ok(o: &Observation) -> bool {
     matches!(o.status, Some(s) if (200..=299).contains(&s))
 }
 
+/// Whether an observation is a SPARQL result set this prober may read, empty
+/// or not.
+///
+/// The gate the `SelectIris` arm below applies before it will treat bindings
+/// as evidence, named and made public so the class profile pass applies the
+/// same one. Two probes reading the same evidence shape must decide the same
+/// way about it, and the pass has to make this call outside `resolve()`
+/// because a `ClassProfile` metric publishes no verdict for `resolve()` to
+/// produce.
+///
+/// A 500 carrying a populated `results.bindings` fails this: the engine
+/// errored, so its body is not an answer, however well-formed.
+pub fn is_a_readable_result(o: &Observation) -> bool {
+    o.body_kind == BodyKind::SparqlJson && answered_ok(o)
+}
+
 /// The verdict for a probe that CONFIRMED the capability, and the only place
 /// that decision is made. Every arm below routes its positive outcome through
 /// here, so the declared/observed axis reads the same way on every published
@@ -292,7 +308,7 @@ pub fn resolve(def: &MetricDef, declared: Declared, obs: Result<&Observation, Ex
                 // Two metrics reading the same evidence shape must apply the
                 // same rule to it.
                 if answered_ok(o) { confirmed(def, declared) } else { Verdict::Indeterminate }
-            } else if o.body_kind == BodyKind::SparqlJson && answered_ok(o) {
+            } else if is_a_readable_result(o) {
                 // Empty bindings are only evidence of absence when we
                 // actually parsed a result.
                 Verdict::Absent

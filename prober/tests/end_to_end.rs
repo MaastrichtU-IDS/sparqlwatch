@@ -3161,3 +3161,71 @@ async fn a_chunk_write_failure_stops_the_sweep_with_what_was_written_intact() {
         "a sweep that stopped must not have written a footer"
     );
 }
+
+
+/// The profile pass's enumeration fails, and the graph says so.
+///
+/// This is the case that had NOTHING in it. A ClassProfile metric publishes no
+/// measurement row (ProbeKind::yields_measurement), so before
+/// NotMeasuredReason::EnumerationFailed a pass whose enumeration did not
+/// answer left no row, no sample and no profile: identical, from a reader's
+/// side, to a metric nobody had declared. The endpoint here answers every
+/// query with a 500, so the enumeration cannot bind a single class.
+#[tokio::test]
+async fn a_profile_pass_whose_enumeration_fails_says_so_rather_than_nothing() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+    let defs = load_shipped_metrics();
+    let client = std::sync::Arc::new(
+        Client::new(Budget::default(), Politeness::unlimited()).unwrap(),
+    );
+    let url = format!("{}/sparql", server.uri());
+    let Sweep { rows: _rows, declarations_read: _read, not_measured, content_samples, failed_endpoints: _failed } =
+        without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
+
+    let profile_metric = defs
+        .iter()
+        .find(|d| d.kind == ProbeKind::ClassProfile)
+        .expect("the shipped set declares a profile metric");
+    let said: Vec<&NotMeasured> = not_measured
+        .iter()
+        .filter(|n| n.metric_id == profile_metric.id)
+        .collect();
+    assert_eq!(said.len(), 1, "one fact for the one pass that failed: {not_measured:?}");
+    assert_eq!(said[0].reason, NotMeasuredReason::EnumerationFailed);
+    assert_eq!(said[0].endpoint, url, "the fact names the endpoint it is about");
+
+    // And nothing was invented to fill the hole. An empty class list published
+    // as a sample would read as "this endpoint has no classes", which is the
+    // specific wrong answer this path exists to avoid.
+    assert!(
+        content_samples.iter().all(|s| s.metric_id != profile_metric.id),
+        "a failed enumeration publishes no sample: {content_samples:?}"
+    );
+}
+
+/// The reason is only for a pass that actually failed.
+///
+/// A working endpoint must not carry it, or the fact means nothing. Same
+/// shipped set and the same expensive ceiling as the test above, so the only
+/// difference is that the enumeration answers.
+#[tokio::test]
+async fn a_profile_pass_that_enumerates_publishes_no_enumeration_failure() {
+    let server = an_endpoint_binding_classes(&[ZEBRA]).await;
+    let defs = load_shipped_metrics();
+    let client = std::sync::Arc::new(
+        Client::new(Budget::default(), Politeness::unlimited()).unwrap(),
+    );
+    let url = format!("{}/sparql", server.uri());
+    let Sweep { rows: _rows, declarations_read: _read, not_measured, content_samples: _samples, failed_endpoints: _failed } =
+        without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
+
+    assert!(
+        not_measured.iter().all(|n| n.reason != NotMeasuredReason::EnumerationFailed),
+        "the enumeration answered, so nothing may say it failed: {not_measured:?}"
+    );
+}

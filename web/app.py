@@ -578,6 +578,15 @@ _DECLINE_DETAILS = {
         "the prober failed on this endpoint, so this run observed nothing "
         "about it"
     ),
+    # The third party in the same argument about responsibility: not our budget
+    # and not our crash, but a question the endpoint did not answer. The pass
+    # asked which classes are in there and got no readable result, so it
+    # profiled none of them, and that is a fact about this exchange rather than
+    # a finding about the endpoint's content.
+    "enumeration-failed": (
+        "we asked which classes the endpoint holds and got no readable "
+        "answer, so nothing was profiled"
+    ),
 }
 
 # The detail for a reason this build has no sentence for, from a prober newer

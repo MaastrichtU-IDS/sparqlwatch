@@ -43,6 +43,7 @@ from app import (
     _outward_link,
     ENDPOINT_PATH,
     TRUNCATED_TEXT,
+    _DECLINE_DETAILS,
     _DORMANCY_REASONS,
     _newest_sweep_silence_text,
     _rows,
@@ -1826,3 +1827,30 @@ def test_an_endpoint_with_an_unlinkable_scheme_keeps_its_page(store_hostile_lite
     url, and the page prints it in full as text where a reader can see it.
     """
     assert LINKABLE_SCHEMES == ("http://", "https://")
+
+
+@requires_repo_sources
+def test_every_decline_reason_the_prober_can_write_has_a_sentence():
+    """The pin this table did not have, and the drift it just failed to catch.
+
+    _DECLINE_DETAILS is keyed on NotMeasuredReason::slug, and nothing tied the
+    two together: the enumeration-failed variant was added to the prober and
+    the page said "unrecognised reason" for it, which is the fallback doing its
+    job while the reader learns nothing. The fallback is still right for a
+    store written by a NEWER prober than this page, which is why it stays; it
+    is wrong as a description of a reason shipping in this same commit.
+
+    Read out of slug()'s own match arms rather than the enum's variants,
+    because the slug is the string the graph carries and the variant name is
+    not.
+    """
+    source = (Path(__file__).resolve().parents[2] / "prober" / "src" / "emit.rs").read_text()
+    body = source.split("pub fn slug(&self) -> &'static str {", 1)
+    assert len(body) == 2, "NotMeasuredReason::slug moved; this pin needs its new shape"
+    slugs = set(re.findall(r'NotMeasuredReason::\w+ => "([^"]+)"', body[1]))
+    assert slugs, "no slug arms found, so this test would pass vacuously"
+    missing = slugs - set(_DECLINE_DETAILS)
+    assert not missing, (
+        f"the prober can write {sorted(missing)} and this page has no sentence "
+        f"for it, so a declined row would read 'unrecognised reason'"
+    )

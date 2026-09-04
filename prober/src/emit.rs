@@ -108,6 +108,20 @@ pub enum NotMeasuredReason {
     /// apart. This says the weaker, true thing: nothing was measured, and the
     /// reason is on our side rather than the endpoint's.
     ProberFailed,
+    /// A class profile pass ran and could not list the classes it would have
+    /// profiled, so it profiled none of them.
+    ///
+    /// Distinct from `ProberFailed`, which is about this prober breaking, and
+    /// from an `Indeterminate` verdict, which this metric has no way to
+    /// publish: a `ClassProfile` metric produces no measurement row at all
+    /// (`ProbeKind::yields_measurement`), so without this reason a pass whose
+    /// enumeration timed out left NOTHING in the graph and a reader could not
+    /// tell it apart from a metric nobody ever declared.
+    ///
+    /// It says only that the enumeration did not answer. Whether the endpoint
+    /// has no classes, refused, or was too slow is not knowable from the
+    /// enumeration's own failure, and this reason deliberately does not guess.
+    EnumerationFailed,
 }
 
 impl NotMeasuredReason {
@@ -116,6 +130,7 @@ impl NotMeasuredReason {
         match self {
             NotMeasuredReason::CostCeiling => "cost-ceiling",
             NotMeasuredReason::ProberFailed => "prober-failed",
+            NotMeasuredReason::EnumerationFailed => "enumeration-failed",
         }
     }
 }

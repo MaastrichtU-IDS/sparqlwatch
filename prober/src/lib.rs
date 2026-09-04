@@ -26,7 +26,7 @@ use crate::emit::{
 use crate::metrics::{MetricDef, ProbeKind};
 use crate::profile::{profile_classes, ProfileOutcome, Sampling};
 use crate::politeness::host_key;
-use crate::resolve::{resolve, resolve_fetch, Declared};
+use crate::resolve::{is_a_readable_result, resolve, resolve_fetch, Declared};
 use crate::verdict::Verdict;
 use crate::write::RunWriter;
 use std::collections::HashMap;
@@ -442,6 +442,10 @@ fn assemble_endpoint(
             facts.rows = swept.rows;
             facts.content_samples = swept.content_samples;
             facts.content_profiles = swept.content_profiles;
+            // Extended and not assigned: the cost-ceiling loop below appends to
+            // this same list, and either order of the two is fine as long as
+            // neither overwrites the other.
+            facts.not_measured.extend(swept.not_measured);
             // THE UNREACHED CLASSES ARE NOT PUBLISHED AS NotMeasured, and the
             // spec said they would be. Doing it properly is not possible with
             // this vocabulary and the half-right version would be worse:
@@ -460,13 +464,15 @@ fn assemble_endpoint(
             // ContentProfile facts name the ones profiled. The difference is the
             // unreached set, and it needs no new fact to be honest.
             //
-            // ONE GAP REMAINS AND IS NOT CLOSED HERE. If the enumeration itself
-            // never answered, there is no ContentSample either, so nothing in
-            // the graph says the pass was attempted at all and a reader cannot
-            // tell that from a metric nobody declared. Closing it needs a
-            // NotMeasuredReason variant, which is a vocabulary change reaching
-            // web/app.py's reason list and the docs pages. Recorded rather than
-            // guessed at.
+            // The enumeration's own failure is no longer part of that
+            // subtraction: it publishes a NotMeasured fact carrying
+            // `EnumerationFailed`, because a pass that produced no
+            // ContentSample would otherwise leave nothing in the graph to
+            // distinguish it from a metric nobody declared.
+            //
+            // So this list is read for nothing, and is kept because it names
+            // per-class refusals the subtraction already covers. Dropping the
+            // field is a separate change to `EndpointSweep`.
             let _ = swept.profile_unreached;
         }
         // Nothing was observed, so there is nothing to grade: no rows, and
@@ -568,6 +574,16 @@ struct EndpointSweep {
     /// This endpoint's class profiles, under the same rules: whatever the pass
     /// finished before the endpoint budget expired.
     content_profiles: Vec<ContentProfile>,
+    /// Facts about metrics this endpoint's own probing decided not to measure,
+    /// as opposed to the ones the cost ceiling declined before probing began.
+    /// Only the class profile pass writes here, when its enumeration did not
+    /// answer.
+    ///
+    /// It lives on the accumulator and not on the fact lists for the reason
+    /// every field here does: the pass runs inside the endpoint budget, so a
+    /// fact it recorded before an expiry has to survive the cancellation that
+    /// drops the future.
+    not_measured: Vec<NotMeasured>,
     /// Per profile metric, the classes the pass did not profile.
     ///
     /// Published as `NotMeasured` rather than omitted, because a reader who sees
@@ -824,23 +840,46 @@ async fn probe_endpoint(
         let observed = budget
             .with_metric_budget(client.select_iris(ep, &enumeration, &var))
             .await;
+        // The gate is `is_a_readable_result` and not `Ok`, because `Ok` here
+        // means only that the metric budget did not expire: an endpoint that
+        // answered 500 arrives as `Ok` carrying an error body. The same
+        // predicate gates the `SelectIris` arm of `resolve()`, which reads this
+        // identical evidence shape, so the two decide alike by construction.
         let classes = match &observed {
-            Ok(o) => o.bindings.clone(),
-            // The enumeration itself timed out. Nothing is known about this
-            // endpoint's classes, so nothing is published about them: the pass
-            // records the metric as not measured and stops. An empty class list
-            // would read as "this endpoint has no classes".
-            Err(_) => {
+            Ok(o) if is_a_readable_result(o) => o.bindings.clone(),
+            // The enumeration did not answer: the budget expired, or the
+            // endpoint refused, or the body was not a result set. Nothing is
+            // known about this endpoint's classes, so nothing is published
+            // about them; an empty class list would read as "this endpoint has
+            // no classes".
+            //
+            // This fact is the ONLY thing the pass leaves behind here. The
+            // metric publishes no measurement row, so without it a reader
+            // cannot tell a pass that tried and failed from a metric nobody
+            // declared, and every profile fact below is absent either way.
+            _ => {
+                acc.not_measured.push(NotMeasured {
+                    endpoint: ep.to_string(),
+                    metric_id: def.id.clone(),
+                    reason: NotMeasuredReason::EnumerationFailed,
+                });
                 acc.profile_unreached.push((def.id.clone(), Vec::new()));
                 continue;
             }
         };
         if classes.is_empty() {
-            // Either the endpoint genuinely has no typed subjects, or it refused
-            // and the body told us nothing. `select_iris` cannot tell those
-            // apart, so neither can this: publishing no profile is the honest
-            // outcome either way, and the enumeration's own sample below is
-            // where a reader looks for what was seen.
+            // A readable result that bound nothing, so the endpoint really has
+            // no typed subjects and there is nothing to profile. NOT an
+            // enumeration failure: it answered, and the answer was "none".
+            //
+            // Publishing nothing leaves a reader unable to tell this from a
+            // pass that never ran, and the honest fact would be a sample with
+            // zero values. The prober skips those on purpose so that a size of
+            // 0 cannot be misread as a finding, while web/endpoint_content.py
+            // documents `sampled` with an empty list as exactly this case and
+            // has a fixture for it. The two tiers disagree, and settling that
+            // changes the meaning of a published fact, so it is not settled
+            // here.
             continue;
         }
 
@@ -989,6 +1028,7 @@ mod tests {
             // they are for.
             content_profiles: Vec::new(),
             profile_unreached: Vec::new(),
+            not_measured: Vec::new(),
         }
     }
 
