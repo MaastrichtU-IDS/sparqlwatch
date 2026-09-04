@@ -189,6 +189,13 @@ enum FactKind {
     Measurement,
     NotMeasured,
     ContentSample,
+    ContentProfile,
+    /// One property inside a profile. Its own kind rather than a blank node,
+    /// because this project diffs runs and a blank node cannot be matched across
+    /// two of them. Ruling 3 in
+    /// docs/superpowers/specs/2026-08-29-content-profiles-design.md settles it
+    /// for the web tier's pointers and the same argument applies here.
+    ProfileProperty,
 }
 
 impl FactKind {
@@ -198,8 +205,48 @@ impl FactKind {
             FactKind::Measurement => "measurement",
             FactKind::NotMeasured => "not-measured",
             FactKind::ContentSample => "content-sample",
+            FactKind::ContentProfile => "content-profile",
+            FactKind::ProfileProperty => "profile-property",
         }
     }
+}
+
+/// One class's profile, as published.
+///
+/// Deliberately NOT a measurement and deliberately not VoID. Two separate
+/// reasons, and both have already cost this project a defect.
+///
+/// No verdict, per Ruling 2: a profile is an inference from a sample, and the
+/// six-verdict vocabulary is for what was observed. Nothing that resolves to a
+/// verdict produces one of these, so the node cannot carry both.
+///
+/// Sparqlwatch-owned predicates, for the reason `ContentSample` gives: both
+/// `void:class` and `void:classPartition` declare `rdfs:domain void:Dataset`, so
+/// borrowing either would entail under plain RDFS that this observation IS a
+/// dataset, which cannot be honestly asserted about an arbitrary endpoint.
+#[derive(Debug, Clone)]
+pub struct ContentProfile {
+    pub endpoint: String,
+    pub metric_id: String,
+    /// The class profiled. Part of the subject IRI, so two profiles of one
+    /// endpoint cannot collide.
+    pub class: String,
+    /// "exact" or "sha256-prefix".
+    pub sampling: String,
+    /// The prefix, when sampled. `None` for an exact profile.
+    pub sampling_prefix: Option<String>,
+    /// One entry per property. Order is the endpoint's, not sorted, for the
+    /// reason `ContentSample::values` gives about its own order.
+    pub properties: Vec<ProfileProperty>,
+}
+
+/// One property within a profile.
+#[derive(Debug, Clone)]
+pub struct ProfileProperty {
+    pub property: String,
+    pub subjects: u64,
+    pub datatypes: u64,
+    pub any_datatype: Option<String>,
 }
 
 /// Percent-encode keeping RFC 3986's unreserved set (`ALPHA / DIGIT / "-" /
@@ -272,6 +319,32 @@ fn subject_iri(
         encode_unreserved(endpoint),
         metric_id
     ))
+}
+
+/// `subject_iri` with further components appended, each percent-encoded.
+///
+/// A profile needs the CLASS to be part of its subject, and a profile's property
+/// node needs the class and the property, or two of them collide. Injectivity
+/// survives for the same reason it does above: every appended component is
+/// encoded to the unreserved set, so none can contain the `:` the subject is
+/// split on.
+///
+/// Separate from `subject_iri` rather than an extra argument on it, because 23
+/// call sites pass no extras and would all have to say so.
+fn subject_iri_scoped(
+    kind: FactKind,
+    run: &RunId,
+    endpoint: &str,
+    metric_id: &str,
+    extra: &[&str],
+) -> anyhow::Result<NamedNode> {
+    let base = subject_iri(kind, run, endpoint, metric_id)?;
+    let mut iri = base.into_string();
+    for part in extra {
+        iri.push(':');
+        iri.push_str(&encode_unreserved(part));
+    }
+    nn(&iri)
 }
 
 /// Whether `subject` carries more than one distinguishable fact in this
@@ -571,6 +644,174 @@ pub fn emit_dormancy(run: &RunId, dormant: &[DormancyFact]) -> anyhow::Result<St
 /// comment). `emit_dormancy` writes them, and `write::RunWriter::start` is what
 /// calls both in order. `RunWriter` is the only production writer of a run file,
 /// so there is exactly one place that pairing can go wrong.
+/// One class profile's quads.
+///
+/// SECTION ORDER IS THE POINT, and it is rule 2 at the top of this module. The
+/// per-property nodes come first, then the profile's own summary. A cut inside
+/// the property list must lose the profile rather than leave
+/// `sw:profileDenominator` and `sw:profileSampling` standing beside three of two
+/// hundred properties, which a consumer would render as a complete profile of a
+/// class with three properties.
+///
+/// A profile with no properties publishes NOTHING, for the reason a sample that
+/// bound nothing publishes nothing: a node saying "zero properties" reads as
+/// "this class has no properties", and what happened is that we could not
+/// enumerate them. The caller records such a class as unreached instead.
+pub fn profile_quads(
+    profile: &ContentProfile,
+    run: &RunId,
+    graph: &GraphName,
+) -> anyhow::Result<Vec<Quad>> {
+    if profile.properties.is_empty() {
+        return Ok(Vec::new());
+    }
+    let node = subject_iri_scoped(
+        FactKind::ContentProfile,
+        run,
+        &profile.endpoint,
+        &profile.metric_id,
+        &[&profile.class],
+    )?;
+    let subj = NamedOrBlankNode::NamedNode(node.clone());
+    let mut quads = Vec::new();
+
+    quads.push(Quad::new(
+        subj.clone(),
+        rdf::TYPE.into_owned(),
+        Term::NamedNode(nn("urn:sparqlwatch:ContentProfile")?),
+        graph.clone(),
+    ));
+    quads.push(Quad::new(
+        subj.clone(),
+        nn("urn:sparqlwatch:profiledFrom")?,
+        Term::NamedNode(nn(&profile.endpoint)?),
+        graph.clone(),
+    ));
+    quads.push(Quad::new(
+        subj.clone(),
+        nn("urn:sparqlwatch:profiledBy")?,
+        Term::NamedNode(nn(&format!("urn:sparqlwatch:metric:{}", profile.metric_id))?),
+        graph.clone(),
+    ));
+    quads.push(Quad::new(
+        subj.clone(),
+        nn("urn:sparqlwatch:profiledClass")?,
+        Term::NamedNode(nn(&profile.class)?),
+        graph.clone(),
+    ));
+
+    // The properties, each its own addressable node. A derived IRI rather than a
+    // blank node because this project diffs runs, and a blank node cannot be
+    // matched across two of them.
+    for property in &profile.properties {
+        let pnode = subject_iri_scoped(
+            FactKind::ProfileProperty,
+            run,
+            &profile.endpoint,
+            &profile.metric_id,
+            &[&profile.class, &property.property],
+        )?;
+        let psubj = NamedOrBlankNode::NamedNode(pnode.clone());
+        quads.push(Quad::new(
+            subj.clone(),
+            nn("urn:sparqlwatch:profileProperty")?,
+            Term::NamedNode(pnode),
+            graph.clone(),
+        ));
+        quads.push(Quad::new(
+            psubj.clone(),
+            nn("urn:sparqlwatch:property")?,
+            Term::NamedNode(nn(&property.property)?),
+            graph.clone(),
+        ));
+        quads.push(Quad::new(
+            psubj.clone(),
+            nn("urn:sparqlwatch:subjectCount")?,
+            Term::Literal(Literal::new_typed_literal(
+                property.subjects.to_string(),
+                xsd::INTEGER,
+            )),
+            graph.clone(),
+        ));
+        quads.push(Quad::new(
+            psubj.clone(),
+            nn("urn:sparqlwatch:datatypeCount")?,
+            Term::Literal(Literal::new_typed_literal(
+                property.datatypes.to_string(),
+                xsd::INTEGER,
+            )),
+            graph.clone(),
+        ));
+        // A datatype IRI when the endpoint gave one, and the plain string "IRI"
+        // when the object was a resource. Written as a literal in that case
+        // rather than invented as an IRI: "IRI" is not one.
+        if let Some(dt) = &property.any_datatype {
+            let term = if dt == "IRI" {
+                Term::Literal(Literal::new_simple_literal("IRI"))
+            } else {
+                match nn(dt) {
+                    Ok(iri) => Term::NamedNode(iri),
+                    // A datatype we cannot write as an IRI is dropped rather
+                    // than published as a string that looks like one.
+                    Err(_) => {
+                        tracing::warn!(
+                            endpoint = %profile.endpoint,
+                            class = %profile.class,
+                            property = %property.property,
+                            datatype = %dt,
+                            "dropping a profile property's datatype: not a valid IRI"
+                        );
+                        continue;
+                    }
+                }
+            };
+            quads.push(Quad::new(
+                psubj,
+                nn("urn:sparqlwatch:anyDatatype")?,
+                term,
+                graph.clone(),
+            ));
+        }
+    }
+
+    // THE SUMMARY, LAST. See the doc comment: a cut above this point loses the
+    // profile, which every consumer already handles, rather than misstating it.
+    quads.push(Quad::new(
+        subj.clone(),
+        nn("urn:sparqlwatch:profileSampling")?,
+        Term::Literal(Literal::new_simple_literal(profile.sampling.clone())),
+        graph.clone(),
+    ));
+    if let Some(prefix) = &profile.sampling_prefix {
+        quads.push(Quad::new(
+            subj.clone(),
+            nn("urn:sparqlwatch:profileSamplingPrefix")?,
+            Term::Literal(Literal::new_simple_literal(prefix.clone())),
+            graph.clone(),
+        ));
+    }
+    // The denominator: how many subjects the sample held, taken from the
+    // rdf:type row. NO FREQUENCY IS PUBLISHED, per Ruling 2: a frequency is an
+    // inference, and publishing one would put a threshold decision in the graph.
+    // A reader divides by this.
+    quads.push(Quad::new(
+        subj,
+        nn("urn:sparqlwatch:profileDenominator")?,
+        Term::Literal(Literal::new_typed_literal(
+            profile
+                .properties
+                .iter()
+                .find(|p| p.property == "http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
+                .map(|p| p.subjects)
+                .unwrap_or(0)
+                .to_string(),
+            xsd::INTEGER,
+        )),
+        graph.clone(),
+    ));
+    Ok(quads)
+}
+
 pub fn emit_header(header: RunHeader) -> anyhow::Result<String> {
     let RunHeader { run, generated_at, metric_revision, max_cost, concurrency, dormant: _ } =
         header;
@@ -3909,4 +4150,124 @@ mod tests {
             "the size a consumer reads must be the number of values it can count"
         );
     }
+
+    fn a_profile() -> ContentProfile {
+        ContentProfile {
+            endpoint: "https://a.example/sparql".into(),
+            metric_id: "class-profiles".into(),
+            class: "http://xmlns.com/foaf/0.1/Person".into(),
+            sampling: "sha256-prefix".into(),
+            sampling_prefix: Some("0".into()),
+            properties: vec![
+                ProfileProperty {
+                    property: "http://www.w3.org/1999/02/22-rdf-syntax-ns#type".into(),
+                    subjects: 40,
+                    datatypes: 1,
+                    any_datatype: Some("IRI".into()),
+                },
+                ProfileProperty {
+                    property: "http://xmlns.com/foaf/0.1/name".into(),
+                    subjects: 38,
+                    datatypes: 1,
+                    any_datatype: Some("http://www.w3.org/2001/XMLSchema#string".into()),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn a_profiles_summary_comes_after_the_properties_it_summarises() {
+        // Rule 2 at the top of this module, for this fact family. A cut inside
+        // the property list must lose the profile, never leave a denominator and
+        // a sampling method standing beside three of two hundred properties,
+        // which a consumer would render as a complete profile.
+        let run = RunId("2026-09-04T00:00:00Z".into());
+        let qs = profile_quads(&a_profile(), &run, &GraphName::DefaultGraph).unwrap();
+        let order: Vec<&str> = qs.iter().map(|q| q.predicate.as_str()).collect();
+        let last_property = order
+            .iter()
+            .rposition(|p| *p == "urn:sparqlwatch:profileProperty")
+            .expect("the fixture publishes properties");
+        for summary in [
+            "urn:sparqlwatch:profileSampling",
+            "urn:sparqlwatch:profileSamplingPrefix",
+            "urn:sparqlwatch:profileDenominator",
+        ] {
+            let at = order.iter().position(|p| *p == summary)
+                .unwrap_or_else(|| panic!("no {summary} in {order:?}"));
+            assert!(at > last_property, "{summary} must come after the properties");
+        }
+    }
+
+    #[test]
+    fn a_profile_publishes_the_denominator_and_never_a_frequency() {
+        // Ruling 2. Publishing a frequency would put a threshold decision in the
+        // graph, and thresholding is how a 95% property became a silent absence
+        // in the shexer benchmark. A reader divides by this themselves.
+        let run = RunId("2026-09-04T00:00:00Z".into());
+        let qs = profile_quads(&a_profile(), &run, &GraphName::DefaultGraph).unwrap();
+        assert_eq!(
+            objects(&qs, "urn:sparqlwatch:profileDenominator"),
+            vec![&Term::Literal(Literal::new_typed_literal("40", xsd::INTEGER))],
+            "the denominator is the rdf:type row's subject count"
+        );
+        for q in &qs {
+            let p = q.predicate.as_str();
+            assert!(!p.contains("requency"), "no frequency may be published: {p}");
+            assert!(!p.contains("dqv#value"), "a profile carries no verdict: {p}");
+        }
+    }
+
+    #[test]
+    fn a_profile_with_no_properties_publishes_nothing() {
+        // Same rule as a sample that bound nothing. A node saying "zero
+        // properties" reads as "this class has none", and what happened is that
+        // we could not enumerate them.
+        let mut empty = a_profile();
+        empty.properties.clear();
+        let run = RunId("2026-09-04T00:00:00Z".into());
+        let qs = profile_quads(&empty, &run, &GraphName::DefaultGraph).unwrap();
+        assert!(qs.is_empty(), "an empty profile is not a profile: {qs:?}");
+    }
+
+    #[test]
+    fn two_classes_of_one_endpoint_do_not_share_a_subject() {
+        // The class is part of the subject, or one endpoint's profiles collide
+        // and the second silently overwrites the first.
+        let run = RunId("2026-09-04T00:00:00Z".into());
+        let mut other = a_profile();
+        other.class = "http://xmlns.com/foaf/0.1/Document".into();
+        let a = profile_quads(&a_profile(), &run, &GraphName::DefaultGraph).unwrap();
+        let b = profile_quads(&other, &run, &GraphName::DefaultGraph).unwrap();
+        let subj = |qs: &[Quad]| qs[0].subject.to_string();
+        assert_ne!(subj(&a), subj(&b), "the class must reach the subject");
+        // And a property node is scoped by its class too, for the same reason.
+        let pnode = |qs: &[Quad]| {
+            qs.iter()
+                .find(|q| q.predicate.as_str() == "urn:sparqlwatch:profileProperty")
+                .map(|q| q.object.to_string())
+                .unwrap()
+        };
+        assert_ne!(pnode(&a), pnode(&b), "a property node must be scoped by class");
+    }
+
+    #[test]
+    fn a_resource_valued_property_says_iri_as_a_literal() {
+        // "IRI" is not an IRI. Writing it as one would publish
+        // <IRI> as a datatype nobody can dereference.
+        let run = RunId("2026-09-04T00:00:00Z".into());
+        let qs = profile_quads(&a_profile(), &run, &GraphName::DefaultGraph).unwrap();
+        let datatypes = objects(&qs, "urn:sparqlwatch:anyDatatype");
+        assert!(
+            datatypes.contains(&&Term::Literal(Literal::new_simple_literal("IRI"))),
+            "the rdf:type row's IRI marker is a plain literal: {datatypes:?}"
+        );
+        assert!(
+            datatypes.contains(&&Term::NamedNode(
+                NamedNode::new("http://www.w3.org/2001/XMLSchema#string").unwrap()
+            )),
+            "and a real datatype stays an IRI: {datatypes:?}"
+        );
+    }
+
 }
