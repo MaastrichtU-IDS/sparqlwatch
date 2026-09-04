@@ -97,10 +97,10 @@ async fn a_sweep_over_one_mock_endpoint_produces_nquads() {
         // so the queryless fetch's body_kind is `Other`, not `Rdf`. A 200 with
         // an unparsed body is `Indeterminate`, never `Absent`.
         ("service-description", Verdict::Indeterminate),
-        // Likewise ?c is unbound, so zero classes, honestly measured. This had
-        // a cheap counterpart, `has-classes`, asserting the same absence until
-        // that metric was removed on 2026-08-28.
-        ("classes", Verdict::Absent),
+        // `classes` was here, reading `absent` because ?c is unbound. It was
+        // retired as a verdict on 2026-09-04 and its cheap counterpart
+        // `has-classes` on 2026-08-28, so the content dimension contributes no
+        // row at all now: `class-profiles` publishes samples and profiles.
     ]);
     assert_eq!(got, expected);
 
@@ -1298,7 +1298,7 @@ fn binds(block: &str, var: &str) -> bool {
 #[test]
 fn the_content_metrics_reach_named_graphs_without_colliding_variables() {
     let defs = load_shipped_metrics();
-    for id in ["geo-data", "classes"] {
+    for id in ["geo-data", "class-profiles"] {
         let d = defs.iter().find(|d| d.id == id).expect("metric must exist");
         let q = d.query.as_deref().unwrap_or("");
         let var = d.var.as_deref().expect("both metrics read a bound variable");
@@ -1361,20 +1361,23 @@ fn the_content_metrics_reach_named_graphs_without_colliding_variables() {
     }
 }
 
-/// Pins the `SelectIris` choice on `classes` against the exact mistake its own
-/// comment in `metrics.toml` warns about. The warning and this test were about
-/// `has-classes` until that metric went on 2026-08-28; the trap is unchanged,
-/// because this metric binds the same `?c` through the same probe kind. Every
-/// other fixture in this file leaves `?c` unbound, so `classes` reads `absent`
-/// under either probe
-/// kind and no existing test can tell `SelectIris` from `AskData`. Only a mock
-/// that actually binds `?c` to a URI can separate them: `SelectIris` collects
-/// it and confirms the metric, while `AskData` would route it through
-/// `Client::ask_literal`'s literal guard, find no literal because the value is
-/// an IRI, and quietly publish `absent` for an endpoint that plainly holds
-/// typed resources.
+/// Pins the class enumeration against the exact mistake `metrics.toml` warns
+/// about, now that the enumeration lives in the profile pass.
+///
+/// The warning and this test were about `has-classes` until 2026-08-28 and
+/// about `classes` until 2026-09-04, and the trap is unchanged across all
+/// three because the query is: `?c` in `?s a ?c` binds an IRI, and a
+/// literal-extracting path (`Client::ask_literal`, whose literal guard sits at
+/// `client.rs:472`) finds no literal in one.
+///
+/// What changed is where the damage shows. `classes` published a verdict, so
+/// the mistake read as `absent` for an endpoint plainly full of typed
+/// resources. The pass publishes no verdict, so it now reads as an EMPTY
+/// SAMPLE, and the assertion moved with it. Every other fixture in this file
+/// leaves `?c` unbound, so only a mock that binds it to a URI can tell the two
+/// paths apart at all.
 #[tokio::test]
-async fn has_classes_reads_the_iri_c_binds_through_select_iris_not_ask_data() {
+async fn the_class_enumeration_collects_the_iri_c_binds_rather_than_seeking_a_literal() {
     let server = MockServer::start().await;
     Mock::given(method("GET")).and(path("/sparql"))
         .respond_with(ResponseTemplate::new(200).set_body_string(
@@ -1385,26 +1388,17 @@ async fn has_classes_reads_the_iri_c_binds_through_select_iris_not_ask_data() {
     let defs = load_shipped_metrics();
     let client = std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
     let url = format!("{}/sparql", server.uri());
-    let Sweep { rows, declarations_read: read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
-    let run = emit_nquads(RunEmission {
-        run: &RunId("test".into()),
-        generated_at: "2026-08-20T08:00:00Z",
-        metric_revision: "test-revision",
-        rows: &rows,
-        declarations_read: &read,
-        not_measured: &[],
-        max_cost: Cost::Cheap,
-        concurrency: NonZeroUsize::new(1).unwrap(),
-        failed_endpoints: 0,
-        content_samples: &[],
-        content_profiles: &[],
-    }).unwrap();
+    let Sweep { rows: _rows, declarations_read: _read, not_measured: _not_measured, content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
 
+    let sampled: Vec<&str> = content_samples
+        .iter()
+        .flat_map(|s| s.values.iter().map(|v| v.as_str()))
+        .collect();
     assert_eq!(
-        verdict_of(&run, "classes"),
-        Verdict::Verified,
-        "classes must be confirmed from an IRI bound to ?c; a metric routed through \
-         AskData's literal guard would see no literal here and report absent instead"
+        sampled,
+        ["http://example.org/Thing"],
+        "the enumeration must collect the IRI bound to ?c; a path through \
+         AskData's literal guard would find no literal here and sample nothing"
     );
 }
 
@@ -1451,10 +1445,16 @@ async fn a_declined_metric_is_recorded_as_not_measured_not_as_indeterminate() {
     let (run, declined) = within_cost(&load_shipped_metrics(), Cost::Cheap);
     let out = sweep_against(&server, &run, &declined).await;
 
-    assert!(out.rows.iter().all(|r| r.metric_id != "classes"),
-            "a declined metric produces no measurement row");
-    assert!(out.not_measured.iter().any(|n| n.metric_id == "classes"),
-            "and is recorded as not measured instead");
+    // Named as the rule over the whole declined set, not as one example. The
+    // comment below already learned this when `has-classes` went; `classes`
+    // went the same way on 2026-09-04 and this assertion no longer has to move.
+    assert!(!declined.is_empty(), "the cheap ceiling must decline something");
+    for d in &declined {
+        assert!(out.rows.iter().all(|r| r.metric_id != d.id),
+                "{}: a declined metric produces no measurement row", d.id);
+        assert!(out.not_measured.iter().any(|n| n.metric_id == d.id),
+                "{}: and is recorded as not measured instead", d.id);
+    }
     // Every cheap definition ran, asserted as a property rather than by naming
     // one: this said `has-classes` until that metric was removed on 2026-08-28,
     // and a test that names an example breaks when the example goes while a
@@ -1513,26 +1513,35 @@ async fn a_declined_metric_reaches_the_published_graph_with_no_verdict() {
     }).unwrap();
     let quads = quads_of(&nq);
 
-    let classes = NamedNode::new("urn:sparqlwatch:metric:classes").unwrap();
-    let subjects: Vec<&oxrdf::NamedOrBlankNode> = quads.iter()
-        .filter(|q| q.predicate.as_str() == "urn:sparqlwatch:notMeasuredMetric"
-                    && q.object == Term::NamedNode(classes.clone()))
-        .map(|q| &q.subject)
-        .collect();
-    assert_eq!(subjects.len(), 1, "the declined metric appears exactly once, as a fact about not measuring it");
-    // And no measurement claims it: the two halves are disjoint on the metric
-    // as well as on the subject, so a consumer joining on the metric IRI cannot
-    // see a pair that both was and was not measured.
-    assert!(!quads.iter().any(|q| q.predicate.as_str() == "http://www.w3.org/ns/dqv#isMeasurementOf"
-                && q.object == Term::NamedNode(classes.clone())),
-            "a declined metric must never also be the subject of a measurement");
-    let subject = subjects[0];
-    assert!(quads.iter().any(|q| &q.subject == subject
-                && q.object == Term::NamedNode(NamedNode::new("urn:sparqlwatch:NotMeasured").unwrap())),
-            "and it is typed as a not-measured fact");
-    assert!(!quads.iter().any(|q| &q.subject == subject
-                && q.predicate.as_str() == "http://www.w3.org/ns/dqv#value"),
-            "a consumer asking for its verdict must get nothing, not a misleading zero");
+    // Over every declined metric rather than one named example, for the reason
+    // a_declined_metric_is_recorded_as_not_measured_not_as_indeterminate gives.
+    assert!(!declined.is_empty(), "the cheap ceiling must decline something");
+    for d in &declined {
+        let iri = NamedNode::new(format!("urn:sparqlwatch:metric:{}", d.id)).unwrap();
+        let subjects: Vec<&oxrdf::NamedOrBlankNode> = quads.iter()
+            .filter(|q| q.predicate.as_str() == "urn:sparqlwatch:notMeasuredMetric"
+                        && q.object == Term::NamedNode(iri.clone()))
+            .map(|q| &q.subject)
+            .collect();
+        assert_eq!(subjects.len(), 1,
+                   "{}: appears exactly once, as a fact about not measuring it", d.id);
+        // And no measurement claims it: the two halves are disjoint on the
+        // metric as well as on the subject, so a consumer joining on the metric
+        // IRI cannot see a pair that both was and was not measured.
+        assert!(!quads.iter().any(|q| q.predicate.as_str() == "http://www.w3.org/ns/dqv#isMeasurementOf"
+                    && q.object == Term::NamedNode(iri.clone())),
+                "{}: a declined metric must never also be the subject of a measurement", d.id);
+
+        // Inside the loop with the rest, so these hold for every declined
+        // metric rather than for whichever one happened to be first.
+        let subject = subjects[0];
+        assert!(quads.iter().any(|q| &q.subject == subject
+                    && q.object == Term::NamedNode(NamedNode::new("urn:sparqlwatch:NotMeasured").unwrap())),
+                "{}: and it is typed as a not-measured fact", d.id);
+        assert!(!quads.iter().any(|q| &q.subject == subject
+                    && q.predicate.as_str() == "http://www.w3.org/ns/dqv#value"),
+                "{}: a consumer asking for its verdict must get nothing, not a misleading zero", d.id);
+    }
     // The run itself says which ceiling declined it.
     assert!(quads.iter().any(|q| q.predicate.as_str() == "urn:sparqlwatch:maxCost"
                 && q.object == Term::Literal(oxrdf::Literal::new_simple_literal("cheap"))));
@@ -1751,7 +1760,7 @@ const APPLE: &str = "http://example.org/Apple";
 const MANGO: &str = "http://example.org/Mango";
 
 #[tokio::test]
-async fn the_classes_metric_publishes_the_iris_it_bound() {
+async fn the_class_enumeration_publishes_the_iris_it_bound() {
     let server = an_endpoint_binding_classes(&[ZEBRA, APPLE, MANGO]).await;
     let defs = load_shipped_metrics();
     let client = std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
@@ -1765,19 +1774,16 @@ async fn the_classes_metric_publishes_the_iris_it_bound() {
     // enumerated too; with that metric gone the assertion is that no OTHER
     // metric in the shipped set produces a sample.
     //
-    // Two ids, and that is a KNOWN REGRESSION, asserted so it cannot be
-    // forgotten: `classes` and `class-profiles` both enumerate, so the shipped
-    // set now sends the same `DISTINCT ?c` query twice per endpoint. Ruling 4
-    // in docs/superpowers/specs/2026-08-29-content-profiles-design.md says the
-    // profile pass's enumeration replaces the `classes` metric, which makes the
-    // duplication transitional -- but retiring `classes` also has to move
-    // web/queries/endpoint_content.rq, which joins on `sw:metric:classes` by
-    // name. Until that lands, this list has two entries on purpose.
+    // ONE id. It was two while `classes` and `class-profiles` both enumerated,
+    // which meant sending the same `DISTINCT ?c` query to every endpoint twice;
+    // retiring `classes` as a verdict on 2026-09-04 ended that, which is
+    // Ruling 4 in docs/superpowers/specs/2026-08-29-content-profiles-design.md
+    // carried out. A second entry here means the duplication is back.
     let ids: Vec<&str> = content_samples.iter().map(|s| s.metric_id.as_str()).collect();
     assert_eq!(
         ids,
-        ["classes", "class-profiles"],
-        "only a metric declaring a sample_limit enumerates, and two currently do"
+        ["class-profiles"],
+        "exactly one metric enumerates, so an endpoint is asked for its classes once"
     );
     let sample = &content_samples[0];
     assert_eq!(
@@ -1804,10 +1810,12 @@ async fn the_classes_metric_publishes_the_iris_it_bound() {
         content_profiles: &[],
     }).unwrap();
     let quads = quads_of(&nq);
-    // Grouped by sample subject, not flattened: two metrics enumerate now, so a
-    // flat list would compare the endpoint's order against two copies of it and
-    // fail for a reason that has nothing to do with order. Per sample is what
-    // the invariant was always about.
+    // Grouped by sample subject rather than flattened, which is what the
+    // invariant was always about: one sample's values in the endpoint's order.
+    // The grouping was forced when `classes` and `class-profiles` both
+    // enumerated and a flat list compared the order against two copies of
+    // itself. One metric enumerates again, and the grouping stays because it
+    // states the per-sample rule rather than relying on there being one.
     let mut by_sample: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for q in quads.iter().filter(|q| q.predicate.as_str() == "urn:sparqlwatch:sampledValue") {
         let value = match &q.object {
@@ -1816,7 +1824,7 @@ async fn the_classes_metric_publishes_the_iris_it_bound() {
         };
         by_sample.entry(q.subject.to_string()).or_default().push(value);
     }
-    assert_eq!(by_sample.len(), 2, "one sample subject per enumerating metric");
+    assert_eq!(by_sample.len(), 1, "one sample subject per enumerating metric");
     let in_endpoint_order = vec![ZEBRA.to_string(), APPLE.to_string(), MANGO.to_string()];
     for (subject, values) in &by_sample {
         assert_eq!(values, &in_endpoint_order,
@@ -1832,11 +1840,13 @@ async fn the_classes_metric_publishes_the_iris_it_bound() {
         && q.object == Term::NamedNode(NamedNode::new(&url).unwrap())));
     assert!(quads.iter().any(|q| q.subject == subject
         && q.predicate.as_str() == "urn:sparqlwatch:sampledBy"
-        && q.object == Term::NamedNode(NamedNode::new("urn:sparqlwatch:metric:classes").unwrap())));
+        && q.object == Term::NamedNode(NamedNode::new("urn:sparqlwatch:metric:class-profiles").unwrap())));
 
-    // And the verdict has not moved: this slice adds a fact, it does not
-    // regrade anything.
-    assert_eq!(verdict_of(&nq, "classes"), Verdict::Verified);
+    // And no verdict moved: this slice adds facts, it does not regrade
+    // anything. It read `classes` until that metric was retired on 2026-09-04,
+    // and `availability` is the one every sweep runs, so naming it does not pin
+    // this test to a definition that may change again.
+    assert_eq!(verdict_of(&nq, "availability"), Verdict::Verified);
 }
 
 #[tokio::test]
@@ -1893,14 +1903,16 @@ async fn a_metric_that_binds_nothing_publishes_no_sample() {
 
 #[tokio::test]
 async fn a_declined_metric_publishes_no_sample_and_still_says_why() {
-    // At the default cost ceiling `classes` is declined, so there is no sample
-    // to publish, and the existing NotMeasured fact is what tells a reader the
-    // absence is a choice rather than an empty endpoint. No new machinery: the
-    // distinction is already published.
+    // At the default cost ceiling every sampling metric is declined, so there
+    // is no sample to publish, and the existing NotMeasured fact is what tells
+    // a reader the absence is a choice rather than an empty endpoint. No new
+    // machinery: the distinction is already published.
     let server = an_endpoint_binding_classes(&[ZEBRA, APPLE, MANGO]).await;
     let (run, declined) = within_cost(&load_shipped_metrics(), Cost::Cheap);
-    assert!(declined.iter().any(|d| d.id == "classes"),
-            "the fixture assumes the cheap ceiling declines classes");
+    assert!(declined.iter().any(|d| d.sample_limit.is_some()),
+            "the fixture assumes the cheap ceiling declines every sampling metric");
+    assert!(run.iter().all(|d| d.sample_limit.is_none()),
+            "and that none of the cheap half samples, or a sample would be legitimate");
     let client = std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
     let url = format!("{}/sparql", server.uri());
     let Sweep { rows, declarations_read: read, not_measured, content_samples, failed_endpoints: _failed_endpoints } =
@@ -1926,7 +1938,7 @@ async fn a_declined_metric_publishes_no_sample_and_still_says_why() {
             "no sample quad of any kind reaches the graph");
     // ...and the reader is still told why there is nothing here.
     assert!(quads.iter().any(|q| q.predicate.as_str() == "urn:sparqlwatch:notMeasuredMetric"
-        && q.object == Term::NamedNode(NamedNode::new("urn:sparqlwatch:metric:classes").unwrap())),
+        && q.object == Term::NamedNode(NamedNode::new("urn:sparqlwatch:metric:class-profiles").unwrap())),
         "the absence is published as a choice, not left as a silence");
     assert!(quads.iter().any(|q| q.predicate.as_str() == "urn:sparqlwatch:notMeasuredReason"
         && q.object == Term::Literal(oxrdf::Literal::new_simple_literal("cost-ceiling"))));

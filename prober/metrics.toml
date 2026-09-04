@@ -86,56 +86,34 @@ kind = "FetchWellKnown"
 cost = "cheap"
 graded = true
 
-# `classes` was two metrics until 2026-08-28. `has-classes` asked whether
-# anything typed existed at all, with the same query minus the DISTINCT and with
-# LIMIT 1, and it was cheap for the reason the split recorded: measured on
-# qlever.dev/api/osm-planet the DISTINCT enumeration timed out past 45s while the
-# existence probe answered in 0.166s, 270 times faster.
+# `classes` and `has-classes` were both retired here, and the questions they
+# were reaching for are answered by the content pass below.
 #
-# It was removed because the question it answered is not the one it looked like.
-# As a CONTENT fact "something here is typed" is close to worthless: every RDF
-# dataset worth monitoring has types, and 54 verified against 489 indeterminate
-# on the 2026-08-24 sweep says the metric was mostly reporting whether a query
-# came back at all. That is what `availability` asks, with a smaller query, so
-# the pair measured responsiveness twice and content once badly.
+# `has-classes` went on 2026-08-28. It asked whether anything typed existed at
+# all, and as a CONTENT fact "something here is typed" is close to worthless:
+# every RDF dataset worth monitoring has types, and 54 verified against 489
+# indeterminate on the 2026-08-24 sweep says it was mostly reporting whether a
+# query came back. `availability` asks that with a smaller query.
 #
-# THE 543 MEASUREMENTS IT ALREADY PUBLISHED STAND. A run graph is a record of
-# what one sweep observed and nothing here rewrites one, so the web tier still
-# derives a column for this metric from the store and still describes it, marked
-# as no longer measured. See web/app.py's METRIC_DOCS.
-# DECIDED 2026-09-01, NOT YET DONE: this metric is to be retired as a VERDICT
-# while its query survives as the content pass's first step. It has never
-# produced a verdict, not once: 597 mentions across all four preserved runs and
-# 597 of them declines, because it is `expensive` and every sweep so far has run
-# at the `cheap` ceiling. And a `verified` here would mean "we enumerated some
-# classes", which is the worthless fact that retired `has-classes` above, one
-# step along. The value was always the ContentSample, never the verdict.
+# `classes` went on 2026-09-04, as a VERDICT. Its query survives as the content
+# pass's first step, which is Ruling 4 in
+# docs/superpowers/specs/2026-08-29-content-profiles-design.md and its
+# sequencing note: retiring it before the pass could replace it would have
+# bought a tidier matrix and lost the only content sampling the prober can do.
+# It never produced a verdict, not once, across 597 mentions in all four
+# preserved runs: it is `expensive` and every sweep so far ran at the `cheap`
+# ceiling, so all 597 are declines. A `verified` would have meant "we
+# enumerated some classes", one step along from the worthless fact that retired
+# `has-classes`. The value was always the ContentSample, never the verdict.
 #
-# The query is NOT going: the content pass asks one query per class and needs
-# something to produce the class list. See Ruling 4 in
-# docs/superpowers/specs/2026-08-29-content-profiles-design.md, including its
-# sequencing note: retiring this before the profile pass can replace it would
-# buy a tidier matrix and lose the only content sampling the prober can do.
-
-[[metric]]
-id = "classes"
-label = "Distinct classes"
-dimension = "content"
-# `SelectIris`, NOT `AskData`. This warning lived on `has-classes` until that
-# metric was removed on 2026-08-28, and it belongs here now because this metric
-# is the same shape: `AskData` routes through `Client::ask_literal`, which
-# extracts with the literal guard on (`client.rs:472`), and `?c` in `?s a ?c`
-# binds an IRI. Under `AskData` the guard would find no literal, report
-# `boolean = false`, and publish `absent` for an endpoint full of typed
-# resources: a silent false negative of exactly the kind this project exists to
-# prevent. `prober/tests/end_to_end.rs` pins it.
-kind = "SelectIris"
-var = "c"
-cost = "expensive"
-sample_limit = 200
-query = """
-SELECT DISTINCT ?c WHERE { { ?s a ?c } UNION { GRAPH ?anyg { ?s a ?c } } } LIMIT 200
-"""
+# Retiring it also ended a real cost: while both shipped, a sweep sent the same
+# DISTINCT ?c enumeration to every endpoint TWICE, once for each metric.
+#
+# THE MEASUREMENTS BOTH PUBLISHED STAND. A run graph records what one sweep
+# observed and nothing here rewrites one, so the web tier still derives their
+# columns from the store and still describes them, marked as no longer
+# measured. See web/app.py's METRIC_DOCS, and CLASS_SAMPLING_METRICS in
+# web/endpoint_content.py for how a `classes` sample is still read.
 
 # The content pass. Enumerates this endpoint's classes, then profiles each one:
 # which properties its instances carry and how many carry each.
@@ -156,6 +134,14 @@ SELECT DISTINCT ?c WHERE { { ?s a ?c } UNION { GRAPH ?anyg { ?s a ?c } } } LIMIT
 # `expensive`, so the default `--max-cost cheap` declines it and a sweep has to
 # ask for it. That is deliberate: at one query per class this is the most costly
 # thing the prober does to a stranger's server.
+#
+# The enumeration binds `?c` in `?s a ?c`, which is an IRI, and the pass reads
+# it with `select_iris`. That pairing is load-bearing and the warning is
+# inherited from `classes`, which carried it after `has-classes` carried it
+# first: a literal-extracting path (`Client::ask_literal`, with the literal
+# guard at `client.rs:472`) finds no literal here, reports `boolean = false`,
+# and would report an endpoint full of typed resources as having nothing. A
+# silent false negative of exactly the kind this project exists to prevent.
 #
 # `sample_prefix` empty means an exact profile: every instance of every class.
 # Measured 2026-08-29 over 200,000 instances, a prefix of one hex character keeps

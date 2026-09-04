@@ -1,5 +1,5 @@
 use sparqlwatch_prober::emit::{RunHeader, RunId};
-use sparqlwatch_prober::metrics::Cost;
+use sparqlwatch_prober::metrics::{Cost, ProbeKind};
 use sparqlwatch_prober::write::RunWriter;
 use sparqlwatch_prober::{budget::Budget, client::Client, metrics::load_metrics, politeness::Politeness, run_sweep, Sweep};
 use std::num::NonZeroUsize;
@@ -87,11 +87,18 @@ async fn the_widened_content_queries_return_real_bindings() {
     assert_eq!(o.boolean, Some(true), "kadaster is known to hold at least one WKT literal");
     assert!(!o.bindings.is_empty(), "geo-data must return a non-empty binding set against a real engine");
 
-    let classes = defs.iter().find(|d| d.id == "classes").expect("classes must be shipped");
+    // The class enumeration, which lived on the `classes` metric until it was
+    // retired as a verdict on 2026-09-04 and is now the profile pass's first
+    // step. Same query, same probe call, so what this smoke test proves against
+    // a real engine has not changed.
+    let profiles = defs
+        .iter()
+        .find(|d| d.kind == ProbeKind::ClassProfile)
+        .expect("a class profile metric must be shipped");
     let started = Instant::now();
     let o = client
-        .select_iris(url, classes.query.as_deref().unwrap(), classes.var.as_deref().unwrap())
+        .select_iris(url, profiles.query.as_deref().unwrap(), profiles.var.as_deref().unwrap())
         .await;
-    println!("classes: bindings={} elapsed={:?}", o.bindings.len(), started.elapsed());
-    assert!(!o.bindings.is_empty(), "classes must return a non-empty binding set against a real engine");
+    println!("class enumeration: bindings={} elapsed={:?}", o.bindings.len(), started.elapsed());
+    assert!(!o.bindings.is_empty(), "the class enumeration must return a non-empty binding set against a real engine");
 }

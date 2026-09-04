@@ -65,7 +65,7 @@ from pyoxigraph import (
 )
 
 import verdict_encoding
-from endpoint_content import EndpointContent, endpoint_content
+from endpoint_content import CLASS_SAMPLING_METRICS, EndpointContent, endpoint_content
 from endpoint_index import endpoint_index
 from endpoint_measurements import EndpointMeasurements, endpoint_measurements
 from load_run import CURRENT_GRAPH, pointers_to_missing_runs
@@ -482,12 +482,6 @@ _TEMPLATES = Environment(
 
 _METRIC_PREFIX = "urn:sparqlwatch:metric:"
 
-# The metric whose query produces the class sample. This mirrors the pin
-# inside web/queries/endpoint_content.rq: that query asks only about
-# sw:metric:classes, so this is the metric whose measurement row explains an
-# absent sample. If the query's pin ever moves, this moves with it.
-_CLASSES_METRIC = _METRIC_PREFIX + "classes"
-
 # The verdict that asserts the negative. It is one of the two assertive
 # values in the closed vocabulary (docs/design/verdict-encoding.md), and the
 # only one a missing class sample can carry, so it is the one verdict whose
@@ -873,9 +867,9 @@ def _sample(
         # whatever older sweeps published, and the reader is entitled to know
         # that this run did not look.
         sample["this_run_text"] = (
-            f"This run did not measure the classes metric at all, recording "
-            f"the reason '{declined.reason}'. Nobody looked in this run, so "
-            f"it reports nothing about what classes the endpoint holds."
+            f"This run did not look at this endpoint's classes at all, "
+            f"recording the reason '{declined.reason}'. Nobody looked in this "
+            f"run, so it reports nothing about what classes the endpoint holds."
         )
         return sample
 
@@ -889,6 +883,10 @@ def _sample(
         return sample
 
     measured = _measured_classes(measurements)
+    # These two sentences DO name the classes metric, unlike the decline and
+    # fall-through above, and that is deliberate: only the retired metric can
+    # reach here (see _measured_classes), so a run taking this branch really did
+    # measure it and naming it is the precise thing to say.
     if measured is not None:
         elapsed = (
             f" after {measured.elapsed_ms} ms"
@@ -920,26 +918,45 @@ def _sample(
         return sample
 
     sample["this_run_text"] = (
-        "No class sample from this run, and this run recorded no measurement "
-        "of the classes metric either. This page therefore says nothing about "
-        "what classes the endpoint holds."
+        "No class sample from this run, and this run recorded no account of "
+        "looking for one either. This page therefore says nothing about what "
+        "classes the endpoint holds."
     )
     return sample
 
 
 def _declined_classes(measurements: EndpointMeasurements):
-    """This run's decline of the classes metric, if it declined it."""
-    for declined in measurements.declined:
-        if declined.metric == _CLASSES_METRIC:
-            return declined
+    """This run's decline of a class-sampling metric, if it declined one.
+
+    Across CLASS_SAMPLING_METRICS and not the one retired id, because which
+    metric a cheap sweep declines changed on 2026-09-04: it is class-profiles
+    now, and every committed fixture predates that and declines classes. Keyed
+    on one id, a run that HAD declined the sampling metric and recorded why
+    fell through to the sentence reserved for a run that never looked.
+
+    In definition order, so the current scheme's decline is the one reported
+    when a transitional run declined both.
+    """
+    by_metric = {d.metric: d for d in measurements.declined}
+    for metric in CLASS_SAMPLING_METRICS:
+        if metric in by_metric:
+            return by_metric[metric]
     return None
 
 
 def _measured_classes(measurements: EndpointMeasurements):
-    """This run's measurement of the classes metric, if it measured it."""
-    for verdict in measurements.verdicts:
-        if verdict.metric == _CLASSES_METRIC:
-            return verdict
+    """This run's measurement of a class-sampling metric, if it measured one.
+
+    Only the retired classes metric can ever match: class-profiles publishes no
+    measurement row at all (prober's ProbeKind::yields_measurement), so a run
+    that ran the pass has no verdict here for any caller to read. That is not a
+    gap to work around, it is Ruling 2, and the list is walked anyway so this
+    function needs no separate notion of which metrics are in play.
+    """
+    by_metric = {v.metric: v for v in measurements.verdicts}
+    for metric in CLASS_SAMPLING_METRICS:
+        if metric in by_metric:
+            return by_metric[metric]
     return None
 
 
@@ -1234,7 +1251,7 @@ def endpoint_resource(
 
 # The metric the page groups by. Named rather than spelled at the call site so
 # that the one place the index turns a verdict into a heading is traceable, the
-# same way _CLASSES_METRIC is for the sample.
+# same way CLASS_SAMPLING_METRICS is for the sample.
 _AVAILABILITY_METRIC = _METRIC_PREFIX + "availability"
 
 # The two words a qualified row carries, and they are words rather than a
@@ -2184,16 +2201,31 @@ METRIC_DOCS = {
             "and still true of the sweep that took them."
         ),
     },
+    # RETIRED 2026-09-04, as a VERDICT, and still here for the reason
+    # has-classes is: 597 declines stand in the store across four preserved
+    # runs, the index derives a column from them, and a column with no
+    # description is a chip a reader cannot look up.
+    #
+    # Its QUERY was not retired. It is the class enumeration, and it is now the
+    # first step of class-profiles below, which is why this entry says the
+    # question moved rather than that it was dropped.
     "classes": {
         "label": "Distinct classes",
         "dimension": "content",
         "cost": "expensive",
+        "retired": "2026-09-04",
         "explains": (
-            "Which types the endpoint holds, sampled rather than counted. Every "
-            "sweep so far has run at the cheap ceiling, so this is declined for "
-            "every endpoint and the grid on the index shows that as a column of "
-            "543 declines. That is a gap in what this service has looked at and "
-            "not a finding about any endpoint."
+            "Which types the endpoint holds, sampled rather than counted. No "
+            "longer measured as a verdict, and it never produced one: it is "
+            "expensive, every sweep so far ran at the cheap ceiling, and all "
+            "597 of its mentions across the preserved runs are declines. A "
+            "'verified' here would have meant only 'we enumerated some "
+            "classes', which is the same near-worthless fact that retired "
+            "'holds typed resources'. The question itself was worth asking, so "
+            "its query survives as the first step of 'properties per class' "
+            "below, which publishes the class list as a sample instead of a "
+            "judgement. Declines already recorded are still shown and still "
+            "true of the sweep that recorded them."
         ),
     },
     # NO VERDICT AND NO COLUMN, which is what makes this entry different from

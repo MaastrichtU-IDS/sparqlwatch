@@ -835,7 +835,10 @@ def test_a_run_that_never_looked_at_classes_borrows_no_reason():
     )
     assert sample["present"] is False
     assert sample["classes"] == []
-    assert "no measurement of the classes metric" in sample["this_run_text"]
+    # The wording stopped naming the classes metric on 2026-09-04, when that
+    # metric was retired and the sampling one became class-profiles: this
+    # branch is reachable for either, so it names neither.
+    assert "no account of looking for one" in sample["this_run_text"]
     assert "cost-ceiling" not in sample["this_run_text"]
     assert "indeterminate" not in sample["this_run_text"]
 
@@ -1853,4 +1856,42 @@ def test_every_decline_reason_the_prober_can_write_has_a_sentence():
     assert not missing, (
         f"the prober can write {sorted(missing)} and this page has no sentence "
         f"for it, so a declined row would read 'unrecognised reason'"
+    )
+
+
+def test_a_run_declining_the_profile_pass_reports_that_decline():
+    """The retirement's live case, and the one that was quietly wrong.
+
+    Since 2026-09-04 the metric a cheap sweep declines is class-profiles, not
+    the retired classes. _declined_classes keyed on the retired id, so a run
+    that HAD declined the sampling metric and recorded why fell through to "this
+    run recorded no measurement either" -- the sentence reserved for a run that
+    never looked at all. Every committed fixture predates the retirement and
+    declines the old id, so no existing test could see this.
+    """
+    declined_the_pass = EndpointMeasurements(
+        endpoint="https://example.org/sparql",
+        assessed=True,
+        run="urn:sparqlwatch:run:x",
+        generated_at="2026-09-04T16:00:00Z",
+        verdicts=[MetricVerdict(metric=M + "availability", verdict="verified")],
+        declined=[
+            DeclinedMetric(metric=M + "class-profiles", reason="cost-ceiling")
+        ],
+    )
+    sample = _sample(
+        declined_the_pass,
+        EndpointContent(
+            endpoint="https://example.org/sparql",
+            metric=M + "class-profiles",
+            sampled=False,
+        ),
+    )
+    assert sample["present"] is False
+    assert "cost-ceiling" in sample["this_run_text"], (
+        "the run said why it did not look, so the page must say so: "
+        f"{sample['this_run_text']!r}"
+    )
+    assert "no measurement of the classes metric" not in sample["this_run_text"], (
+        "that sentence is for a run that never looked at all"
     )
