@@ -256,3 +256,116 @@ def test_a_current_graph_naming_two_sample_runs_is_refused_not_blended(tmp_path)
     message = str(raised.value)
     assert "urn:sparqlwatch:test:run:a" in message
     assert "urn:sparqlwatch:test:run:b" in message
+
+
+# ---------------------------------------------------------------------------
+# Two metrics sample classes now, so "the class sample" is a choice
+# ---------------------------------------------------------------------------
+
+TWO_SCHEME_ENDPOINT = "https://two-schemes.example/sparql"
+CLASSES = "urn:sparqlwatch:metric:classes"
+PROFILES = "urn:sparqlwatch:metric:class-profiles"
+OLD_SCHEME_CLASS = "https://two-schemes.example/vocab#FromClassesMetric"
+NEW_SCHEME_CLASS = "https://two-schemes.example/vocab#FromProfilePass"
+
+
+def _class_sample(run: str, at: str, metric: str, klass: str) -> list[str]:
+    """One class sample of TWO_SCHEME_ENDPOINT, by ``metric``, in run ``run``.
+
+    Built inline rather than as a fixture file for the reason ``_tied_runs``
+    gives: the metric id and the timestamp are the only things that matter here
+    and they are two literals.
+    """
+    graph = f"<urn:sparqlwatch:test:run:{run}>"
+    activity = f"<urn:sparqlwatch:test:activity:{run}>"
+    sample = f"<urn:sparqlwatch:test:content-sample:{run}-{metric.rsplit(':', 1)[-1]}>"
+    xsd = "http://www.w3.org/2001/XMLSchema"
+    return [
+        f"{activity} <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> "
+        f"<http://www.w3.org/ns/prov#Activity> {graph} .",
+        f"{activity} <http://www.w3.org/ns/prov#generatedAtTime> "
+        f'"{at}"^^<{xsd}#dateTime> {graph} .',
+        f"{sample} <urn:sparqlwatch:sampledFrom> <{TWO_SCHEME_ENDPOINT}> {graph} .",
+        f"{sample} <urn:sparqlwatch:sampledBy> <{metric}> {graph} .",
+        f'{sample} <urn:sparqlwatch:sampleSize> "1"^^<{xsd}#integer> {graph} .',
+        f'{sample} <urn:sparqlwatch:sampleTruncated> "false"^^<{xsd}#boolean> {graph} .',
+        f"{sample} <urn:sparqlwatch:sampledValue> <{klass}> {graph} .",
+    ]
+
+
+def _store_of(lines: list[str], tmp_path) -> Store:
+    store = Store(str(tmp_path / "s"))
+    load_run(store, ("\n".join(lines) + "\n").encode())
+    return store
+
+
+def test_the_newer_scheme_wins_when_a_later_run_switched_metrics(tmp_path):
+    """The whole reason this choice exists.
+
+    Retiring the ``classes`` metric does not retire the samples it already
+    took: a store holding history has ``classes`` samples in its older run
+    graphs and ``class-profiles`` samples in its newer ones. A caller asking
+    "what classes are in this endpoint" must get the newer answer, and a
+    default pinned to either metric id gets it wrong for half the store.
+    """
+    store = _store_of(
+        _class_sample("old", "2026-08-22T14:00:00Z", CLASSES, OLD_SCHEME_CLASS)
+        + _class_sample("new", "2026-08-22T16:00:00Z", PROFILES, NEW_SCHEME_CLASS),
+        tmp_path,
+    )
+    r = endpoint_content(store, TWO_SCHEME_ENDPOINT)
+    assert r.sampled is True
+    assert r.classes == [NEW_SCHEME_CLASS], "the newer run's sample is the answer"
+    assert r.metric == PROFILES
+
+
+def test_an_older_profile_sample_does_not_beat_a_newer_classes_sample(tmp_path):
+    """The choice is on the sample's own timestamp, not on a preference list.
+
+    A store can hold a new-scheme run that is OLDER than an old-scheme one,
+    which is what a rollout looks like while it is still partial. Preferring
+    the new metric id unconditionally would report a stale answer as current.
+    """
+    store = _store_of(
+        _class_sample("old", "2026-08-22T14:00:00Z", PROFILES, NEW_SCHEME_CLASS)
+        + _class_sample("new", "2026-08-22T16:00:00Z", CLASSES, OLD_SCHEME_CLASS),
+        tmp_path,
+    )
+    r = endpoint_content(store, TWO_SCHEME_ENDPOINT)
+    assert r.classes == [OLD_SCHEME_CLASS], "newer wins even under the retired id"
+    assert r.metric == CLASSES
+
+
+def test_one_run_publishing_both_samples_prefers_the_profile_pass(tmp_path):
+    """The transitional run, and the reason the tie needs a stated rule.
+
+    While both metrics ship, ONE run publishes both samples, so their
+    timestamps are identical by construction and the timestamp cannot choose.
+    That is the common case during the transition rather than an edge case, so
+    picking either silently would be picking by dict order.
+    """
+    store = _store_of(
+        _class_sample("both", "2026-08-22T16:00:00Z", CLASSES, OLD_SCHEME_CLASS)
+        + _class_sample("both", "2026-08-22T16:00:00Z", PROFILES, NEW_SCHEME_CLASS),
+        tmp_path,
+    )
+    r = endpoint_content(store, TWO_SCHEME_ENDPOINT)
+    assert r.classes == [NEW_SCHEME_CLASS], "the profile pass is the current scheme"
+    assert r.metric == PROFILES
+
+
+def test_an_explicit_metric_still_answers_only_for_that_metric(tmp_path):
+    """The generalisation must not cost the narrow question.
+
+    endpoint_content(store, ep, metric=X) is how a caller asks about ONE
+    sampling metric, and the faceted explorer needs it exact: asking for the
+    retired id in a store that holds both must return the retired id's sample.
+    """
+    store = _store_of(
+        _class_sample("old", "2026-08-22T14:00:00Z", CLASSES, OLD_SCHEME_CLASS)
+        + _class_sample("new", "2026-08-22T16:00:00Z", PROFILES, NEW_SCHEME_CLASS),
+        tmp_path,
+    )
+    r = endpoint_content(store, TWO_SCHEME_ENDPOINT, metric=CLASSES)
+    assert r.classes == [OLD_SCHEME_CLASS]
+    assert r.metric == CLASSES

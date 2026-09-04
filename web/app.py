@@ -2180,12 +2180,36 @@ METRIC_DOCS = {
         "dimension": "content",
         "cost": "expensive",
         "explains": (
-            "Which types the endpoint holds, sampled rather than counted. The "
-            "only expensive metric here, and every sweep so far has run at the "
-            "cheap ceiling, so this is declined for every endpoint and the grid "
-            "on the index shows that as a column of 543 declines. That is a gap "
-            "in what this service has looked at and not a finding about any "
-            "endpoint."
+            "Which types the endpoint holds, sampled rather than counted. Every "
+            "sweep so far has run at the cheap ceiling, so this is declined for "
+            "every endpoint and the grid on the index shows that as a column of "
+            "543 declines. That is a gap in what this service has looked at and "
+            "not a finding about any endpoint."
+        ),
+    },
+    # NO VERDICT AND NO COLUMN, which is what makes this entry different from
+    # every other one on this page. The pass publishes a sample of the classes
+    # it found and a profile of each, so what it produces is a description of
+    # the endpoint's content rather than a judgement about it, and there is no
+    # threshold it could be measured against. The index derives its columns
+    # from verdicts, so this metric contributes none.
+    "class-profiles": {
+        "label": "Properties per class",
+        "dimension": "content",
+        "cost": "expensive",
+        "explains": (
+            "For each class the endpoint holds, which properties its instances "
+            "carry, how many instances carry each one, and whether the values "
+            "are IRIs or one datatype or several. This is the question the "
+            "content metrics were reaching for and could not answer: 'holds "
+            "typed resources' and 'distinct classes' both reported that a "
+            "query came back, while this reports what is in there. The most "
+            "expensive thing this service does to a stranger's server, at two "
+            "queries per class, so it is declined at the default cheap ceiling "
+            "and a sweep has to ask for it. It publishes no verdict, because a "
+            "profile is a description and not a judgement: there is no "
+            "threshold at which 'this class has four properties' is a pass or "
+            "a failure."
         ),
     },
 }

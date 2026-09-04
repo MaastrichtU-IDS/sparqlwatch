@@ -28,6 +28,28 @@ _ENDPOINT = Variable("endpoint")
 
 
 CLASSES_METRIC = "urn:sparqlwatch:metric:classes"
+CLASS_PROFILES_METRIC = "urn:sparqlwatch:metric:class-profiles"
+
+# The metric ids whose sample is a list of CLASSES, current scheme first.
+#
+# It is a list and not a single id because retiring a metric does not retire
+# the samples it already took. A store holding history has `classes` samples in
+# its older run graphs and `class-profiles` samples in its newer ones, so a
+# default pinned to either id answers wrongly for half the store.
+#
+# The ORDER decides ties only. Which sample is "the" sample is decided on the
+# sample's own prov:generatedAtTime, because a store can hold a new-scheme run
+# older than an old-scheme one and preferring the new id unconditionally would
+# publish a stale list as the current one. The order matters because one
+# transitional run publishes BOTH samples, giving them identical timestamps by
+# construction; there the current scheme wins.
+#
+# A metric that samples something OTHER than classes must never be added here.
+# web/tests/fixtures/run-properties-sample.nq is an endpoint whose only sample
+# is of properties, and reporting those as its classes is the specific wrong
+# answer test_another_metrics_sample_is_not_reported_as_classes pins.
+CLASS_SAMPLING_METRICS = (CLASS_PROFILES_METRIC, CLASSES_METRIC)
+
 _METRIC = Variable("metric")
 
 
@@ -85,19 +107,58 @@ class EndpointContent:
 
 
 def endpoint_content(
-    store: Store, endpoint: str, metric: str = CLASSES_METRIC
+    store: Store, endpoint: str, metric: str | None = None
 ) -> EndpointContent:
-    """Return what the most recent run that sampled ``metric`` here found.
+    """Return what the most recent run that sampled classes here found.
 
-    ``metric`` defaults to sw:metric:classes, which is the only sampling metric
-    the shipped metrics.toml declares, so it is the answer to "the sample" until
-    a second one ships. Every existing caller relies on that default.
+    ``metric`` names ONE sampling metric to ask about. Left unset, the newest
+    sample across ``CLASS_SAMPLING_METRICS`` is the answer, which is what a
+    caller asking "what classes are in this endpoint" means once more than one
+    metric has sampled them over the store's history. See that constant for how
+    the choice is made and why it is not a fixed preference.
+
+    An endpoint no run sampled reports ``sampled is False`` under the current
+    scheme's id, since that is the question that was asked and came back empty.
 
     Raises ValueError if two distinct runs tie for most recent on this
     endpoint, which means two run graphs carry the same
     prov:generatedAtTime. That is a corrupt store rather than a question with
     two answers, and picking one of them silently would hide it.
     """
+    if metric is None:
+        return _newest_across_metrics(store, endpoint)
+    return _for_one_metric(store, endpoint, metric)
+
+
+def _newest_across_metrics(store: Store, endpoint: str) -> EndpointContent:
+    """The newest class sample for ``endpoint``, whichever metric took it.
+
+    One query per candidate metric rather than one query binding ?metric free,
+    because the free form would also return a sample from a metric that
+    samples something other than classes, and there is no predicate in the
+    graph that says "this metric samples classes" for it to filter on.
+    """
+    found = [
+        content
+        for content in (_for_one_metric(store, endpoint, m) for m in CLASS_SAMPLING_METRICS)
+        if content.sampled
+    ]
+    if not found:
+        return EndpointContent(
+            endpoint=endpoint, metric=CLASS_SAMPLING_METRICS[0], sampled=False
+        )
+    # Lexicographic on the timestamp is chronological: every generatedAtTime the
+    # prober writes is xsd:dateTime in UTC with a Z suffix, one fixed width. The
+    # index is the documented tie-break, negated so a lower index (the current
+    # scheme) sorts higher.
+    return max(
+        found,
+        key=lambda c: (c.generated_at, -CLASS_SAMPLING_METRICS.index(c.metric)),
+    )
+
+
+def _for_one_metric(store: Store, endpoint: str, metric: str) -> EndpointContent:
+    """``endpoint_content`` for exactly one sampling metric."""
     rows = list(
         store.query(
             _QUERY,

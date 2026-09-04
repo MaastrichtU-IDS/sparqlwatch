@@ -2057,6 +2057,12 @@ def test_every_metric_name_carries_what_the_metric_asks(
             assert attributes["title"] == METRIC_DESCRIPTIONS[name]
 
 
+# Kinds in prober/metrics.toml that publish no measurement row. Kept as a set
+# rather than a single string so that adding another non-measuring kind is one
+# edit here, and mirrors ProbeKind::yields_measurement returning false.
+_KINDS_WITHOUT_A_COLUMN = {"ClassProfile"}
+
+
 def test_the_metric_descriptions_are_the_probers_own_labels():
     """The pin that keeps the two from drifting.
 
@@ -2073,6 +2079,15 @@ def test_the_metric_descriptions_are_the_probers_own_labels():
     for block in metrics.split("[[metric]]")[1:]:
         found_id = re.search(r'^id = "([^"]+)"', block, re.M)
         found_label = re.search(r'^label = "([^"]+)"', block, re.M)
+        found_kind = re.search(r'^kind = "([^"]+)"', block, re.M)
+        # A kind that produces no measurement produces no column, so it has
+        # nothing for this table to describe. `class-profiles` is the case:
+        # its pass publishes content samples and profiles instead of a verdict,
+        # so the index never derives a row label for it and a description here
+        # would be a tooltip on nothing. The prober says the same thing in
+        # ProbeKind::yields_measurement, which is the other half of this rule.
+        if found_kind and found_kind.group(1) in _KINDS_WITHOUT_A_COLUMN:
+            continue
         if found_id and found_label:
             labels[found_id.group(1)] = found_label.group(1)
     assert labels, "no metric in prober/metrics.toml carries a label"
