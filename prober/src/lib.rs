@@ -7,6 +7,7 @@ pub mod dormancy;
 pub mod media;
 pub mod observe;
 pub mod politeness;
+pub mod profile;
 pub mod metrics;
 pub mod registry;
 pub mod resolve;
