@@ -8,10 +8,16 @@
 # a crash and after the Docker daemon restarts, which on this machine means
 # after a reboot IF Docker Desktop is set to start at login. That setting is
 # outside this file and outside the repository: check it under Docker Desktop's
-# General preferences, or the containers come back only when somebody opens
-# Docker. `unless-stopped` and not `always` so that a deliberate
-# `docker compose stop` stays stopped rather than being undone by the next
-# daemon start.
+# Settings > General, "Start Docker Desktop when you sign in", or the containers
+# come back only when somebody opens Docker. Verified here as far as the policy
+# string; the reboot itself is not something a test can take.
+#
+# `unless-stopped` and not `always`, so a deliberate `docker compose stop` stays
+# stopped. That also means `docker kill` does NOT bring a container back: an
+# explicit kill is exactly the case this policy excludes, which is worth knowing
+# before reading a dead container as a broken policy. `always` is the setting
+# that would restart even after an explicit stop, and it is not what is wanted
+# here.
 #
 # WHERE IT LISTENS, and this is the security-relevant line in the file.
 # SPARQLWATCH_BIND is the host address the site is published on, and it defaults
@@ -40,12 +46,16 @@ services:
       # keeps this off the LAN.
       - "${SPARQLWATCH_BIND:-127.0.0.1}:${SPARQLWATCH_PORT:-8420}:8000"
     volumes:
-      # The store is DERIVED and rebuildable from the runs beside it; the runs
-      # are not. Separate volumes so that dropping a corrupt store is one
-      # command that cannot take the record with it.
-      - store:/data/store
-      - runs:/data/runs
-      - state:/data/state
+      # BIND MOUNTS, not named volumes, and the difference is the run files.
+      # A named volume starts empty, so the site opened a store that was not
+      # there and refused to serve, which is the app declining to create a
+      # blank store rather than answer "we know nothing" about every endpoint.
+      # The runs are the permanent record and already live on the host; the
+      # store is derived from them. Point SPARQLWATCH_DATA elsewhere for a
+      # deployment that starts empty, and load a run before expecting a page.
+      - ${SPARQLWATCH_DATA:-./data}/store:/data/store
+      - ${SPARQLWATCH_DATA:-./data}/runs:/data/runs
+      - ${SPARQLWATCH_DATA:-./data}/state:/data/state
     environment:
       SPARQLWATCH_STORE: /data/store/sparqlwatch.db
     # The image's HEALTHCHECK asks a real route, so healthy means the store
@@ -55,8 +65,12 @@ services:
     build: .
     image: sparqlwatch:latest
     restart: unless-stopped
+    # 0.0.0.0 INSIDE the container, which is not a loosening: the `ports` line
+    # below is what decides exposure, and it publishes on host loopback only.
+    # Binding the container's own 127.0.0.1 would mean the published port
+    # reaches nothing at all, which is how this was found.
     command:
-      ["python", "/app/tools/synthetic/serve.py", "--port", "9200"]
+      ["python", "/app/tools/synthetic/serve.py", "--host", "0.0.0.0", "--port", "9200"]
     ports:
       # LOOPBACK ONLY, and not configurable. This is a generated dataset for
       # probing against, not a service anybody should reach: publishing it on
@@ -77,8 +91,8 @@ services:
     profiles: ["sweep"]
     depends_on: [synthetic]
     volumes:
-      - runs:/data/runs
-      - state:/data/state
+      - ${SPARQLWATCH_DATA:-./data}/runs:/data/runs
+      - ${SPARQLWATCH_DATA:-./data}/state:/data/state
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -91,8 +105,3 @@ services:
           --state /data/state/dormancy.toml \
           --max-cost "$${SPARQLWATCH_MAX_COST:-cheap}" \
           --out "/data/runs/run-$${AT}.nq"
-
-volumes:
-  store:
-  runs:
-  state:

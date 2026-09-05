@@ -171,6 +171,17 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=9200)
     ap.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help=(
+            "address to bind. Defaults to loopback so that running this on a "
+            "laptop cannot put a fake SPARQL endpoint on the network by "
+            "accident. INSIDE A CONTAINER pass 0.0.0.0: loopback there is the "
+            "container's own, so a published port reaches nothing, which is "
+            "how this was found."
+        ),
+    )
+    ap.add_argument(
         "--declare",
         choices=("correct", "stale", "wrong", "none"),
         default="correct",
@@ -182,9 +193,9 @@ def main() -> None:
     store, truth = build()
     Handler.store, Handler.truth, Handler.declare = store, truth, args.declare
 
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+    server = ThreadingHTTPServer((args.host, args.port), Handler)
     server.verbose = args.verbose  # type: ignore[attr-defined]
-    print(f"synthetic endpoint on http://127.0.0.1:{args.port}/sparql")
+    print(f"synthetic endpoint on http://{args.host}:{args.port}/sparql")
     print(f"  declaring: {args.declare}")
     print(f"  truth: {truth.as_json()}")
     sys.stdout.flush()
