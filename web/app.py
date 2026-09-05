@@ -45,6 +45,7 @@ cosmetic:
 from __future__ import annotations
 
 import html
+import json
 import os
 import re
 from collections import Counter
@@ -66,7 +67,7 @@ from pyoxigraph import (
 
 import verdict_encoding
 from endpoint_content import CLASS_SAMPLING_METRICS, EndpointContent, endpoint_content
-from explore_payload import build_payload, build_payload_json
+from explore_payload import build_payload, build_payload_json, endpoint_vocabulary
 from endpoint_index import endpoint_index
 from endpoint_history import EndpointHistory, endpoint_history
 from fleet import FleetHistory, fleet_history, fleet_stats
@@ -494,6 +495,13 @@ _TEMPLATES = Environment(
     lstrip_blocks=True,
 )
 
+# One filter, so a template never decides how a state is drawn. The mapping from
+# a verdict slug to its class is verdict_encoding's alone, and a template that
+# built the class name itself would be a second place that has to be right.
+_TEMPLATES.filters["enc_class"] = lambda slug: verdict_encoding.css_class(
+    verdict_encoding.presentation(slug).slug
+)
+
 _METRIC_PREFIX = "urn:sparqlwatch:metric:"
 
 # The verdict that asserts the negative. It is one of the two assertive
@@ -628,6 +636,29 @@ _UNRECOGNISED_DECLINE_DETAIL = "unrecognised reason, shown as the store recorded
 def _declined_detail(reason: str) -> str:
     """The extra clause a declined row carries, read out of its reason."""
     return _DECLINE_DETAILS.get(reason, _UNRECOGNISED_DECLINE_DETAIL)
+
+
+def _history_view(history: EndpointHistory, rows: list[dict]) -> dict:
+    """The interactive timeline: metrics down, sweeps across.
+
+    Ordered by `rows`, so the chart and the list above it name the metrics in
+    the same order. A chart that sorted itself would make a reader match ten
+    labels twice.
+    """
+    names = {r["metric"]: r["name"] for r in rows}
+    return {
+        "has_history": history.has_history,
+        "runs": history.runs,
+        "metrics": [
+            {
+                "metric": r["metric"],
+                "name": r["name"],
+                "cells": _history_cells(history, r["metric"]),
+            }
+            for r in rows
+            if any(c["present"] for c in _history_cells(history, r["metric"]))
+        ],
+    }
 
 
 def _history_cells(history: EndpointHistory, metric: str) -> list[dict]:
@@ -1112,6 +1143,7 @@ def _page_context(
     measurements: EndpointMeasurements,
     content: EndpointContent,
     history: EndpointHistory,
+    vocabulary: list[dict],
 ) -> dict:
     """Everything the template renders, decided here rather than in the page.
 
@@ -1120,12 +1152,17 @@ def _page_context(
     right answer, and they belong where they can be tested.
     """
     rows = _rows(measurements)
-    # Each row gains its own timeline, aligned to the shared run list. Attached
-    # to the row rather than rendered as a separate block, because a reading is
-    # the same fact as the verdict beside it and the two belong on one line.
-    for row in rows:
-        row["history"] = _history_cells(history, row["metric"])
     return {
+        # The timeline is its OWN section rather than a span on each row. The
+        # rows answer "what is true now" and the history answers "what has
+        # changed", which is the same split the index makes, and a sparkline
+        # squeezed onto a row cannot carry an axis, a hover readout, or dates.
+        "history": _history_view(history, rows),
+        # The vocabulary this endpoint holds, searchable in the page. Passed as
+        # data rather than pre-filtered markup because the search is the point:
+        # a reader types a name and the list narrows without a round trip.
+        "vocabulary": vocabulary,
+        "vocabulary_json": json.dumps(vocabulary, separators=(",", ":")),
         # Oldest first, and only where there is more than one: a single-cell
         # timeline implies a trend from one observation.
         "history_runs": history.runs if history.has_history else [],
@@ -1194,10 +1231,11 @@ def _endpoint_html(
     measurements: EndpointMeasurements,
     content: EndpointContent,
     history: EndpointHistory,
+    vocabulary: list[dict],
 ) -> str:
     """The page, rendered."""
     return _TEMPLATES.get_template("endpoint.html").render(
-        **_page_context(endpoint, measurements, content, history)
+        **_page_context(endpoint, measurements, content, history, vocabulary)
     )
 
 
@@ -1316,7 +1354,13 @@ def endpoint_resource(
 
     if media_type == HTML_MEDIA_TYPE:
         return Response(
-            content=_endpoint_html(url, measurements, content, endpoint_history(store, url)),
+            content=_endpoint_html(
+                url,
+                measurements,
+                content,
+                endpoint_history(store, url),
+                endpoint_vocabulary(store, url),
+            ),
             media_type="text/html; charset=utf-8",
         )
     return Response(
@@ -2134,6 +2178,12 @@ def _fleet_view(history: FleetHistory) -> dict:
     return {
         "runs": history.runs,
         "has_history": history.has_history,
+        # ONLY THE ENDPOINTS THAT MOVED, with the rest counted beside them.
+        # This grid is 543 rows at registry scale, and the great majority of
+        # them are one state repeated: a reader looking for what changed would
+        # be looking for it among rows that did not. Every endpoint is still in
+        # the listing below, with its own page and its own full timeline.
+        "steady": len(history.steady),
         "rows": [
             {
                 "endpoint": row.endpoint,
@@ -2142,7 +2192,7 @@ def _fleet_view(history: FleetHistory) -> dict:
                 "changed": row.changed,
                 "cells": [cell(at, v) for at, v in zip(history.runs, row.cells)],
             }
-            for row in history.rows
+            for row in history.changed
         ],
     }
 

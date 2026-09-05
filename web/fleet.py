@@ -57,6 +57,18 @@ class FleetHistory:
     def changed(self) -> list[FleetRow]:
         return [r for r in self.rows if r.changed]
 
+    @property
+    def steady(self) -> list[FleetRow]:
+        """Every endpoint that read the same way in every sweep that saw it.
+
+        Counted rather than drawn. A grid of 543 endpoints is 543 rows of which
+        the great majority are one repeated state, and a reader scanning for
+        what moved has to find it among them. The count is the fact worth
+        stating; the rows are noise, and each one is still a row in the listing
+        below with its own page.
+        """
+        return [r for r in self.rows if not r.changed]
+
 
 @dataclass
 class FleetStats:

@@ -232,5 +232,34 @@ def build_payload(store: Store) -> dict:
     }
 
 
+def endpoint_vocabulary(store: Store, endpoint: str) -> list[dict]:
+    """One endpoint's terms, with the state each one is in for THAT endpoint.
+
+    Built from the same pass the explorer's payload is, filtered, rather than
+    from a query of its own. Two readers answering "what vocabulary does this
+    endpoint have" would be two chances to disagree, on two pages a reader
+    moves between.
+
+    Sorted classes first and then by local name, which is how somebody looking
+    for a term looks: they know what it is called, not which namespace its
+    publisher chose.
+    """
+    terms = [
+        {
+            "iri": t["i"],
+            "kind": t["k"],
+            "local": t["l"],
+            "prefix": t["p"],
+            "namespace": t["n"],
+            "engine": t["e"],
+            "state": t["at"][endpoint],
+        }
+        for t in build_payload(store)["terms"]
+        if endpoint in t["at"]
+    ]
+    terms.sort(key=lambda t: (t["kind"] != "class", t["local"].lower(), t["iri"]))
+    return terms
+
+
 def build_payload_json(store: Store) -> str:
     return json.dumps(build_payload(store), sort_keys=False)

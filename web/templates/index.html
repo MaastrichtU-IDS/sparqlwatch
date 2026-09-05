@@ -380,9 +380,14 @@
   {% if fleet.has_history %}
   <section class="panel" data-section="overview">
     <h2>What has changed</h2>
-    <p class="lede">Every endpoint's answer to the smallest question, once per
-      sweep, oldest on the left. A blank cell is a sweep that did not cover that
-      endpoint, which is not a verdict about it.</p>
+    <p class="lede">{% if fleet.rows %}The endpoints whose availability has
+      moved, once per sweep, oldest on the left. A blank cell is a sweep that
+      did not cover that endpoint, which is not a verdict about it.
+      {% if fleet.steady %}The other {{ fleet.steady }} read the same way in
+      every sweep that saw them.{% endif %}
+      {% else %}No endpoint's availability has moved across these
+      {{ fleet.runs | length }} sweeps. All {{ fleet.steady }} read the same way
+      every time.{% endif %}</p>
 
     <ul class="stats">
       <li><span class="stat-n">{{ stats.endpoints }}</span>

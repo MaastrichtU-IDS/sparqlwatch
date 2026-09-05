@@ -1046,11 +1046,33 @@ def test_a_hostile_literal_is_escaped_in_the_attribute_and_the_text(
     text = page(client_for(store_hostile_literals), HOSTILE)
 
     # Nothing either literal asked for became an element or a raw tag.
-    tags = {tag for tag, _ in elements(text)}
-    assert "script" not in tags
+    #
+    # The page carries ONE script of its own since 2026-09-06, the timeline's,
+    # so "no script element at all" stopped being the check. What replaces it is
+    # stricter about the thing that matters: the page's own script is counted,
+    # so a literal cannot add a second, and its text is checked to be free of
+    # anything a literal supplied. A literal that reached inside the script
+    # would be inert to this page's markup checks and live to a browser.
+    tags = [tag for tag, _ in elements(text)]
     assert "img" not in tags
-    assert "<script" not in text
     assert "<img" not in text
+
+    # The page ships scripts of its own, so "no script element" stopped being
+    # the check on 2026-09-06. Asserted on CONTENT instead, which is the thing
+    # that matters and does not need revisiting each time the page gains one:
+    # no script anywhere holds anything a literal supplied. A literal that
+    # reached inside a script would be inert to every markup check here and
+    # live to a browser.
+    scripts = re.findall(r"<script[^>]*>(.*?)</script>", text, re.S)
+    assert scripts, "this test is about the page's scripts; it has none"
+    for body in scripts:
+        assert "alert(1)" not in body, "a literal reached inside a script"
+        assert HOSTILE_VERDICT not in body
+        assert HOSTILE_REASON not in body
+
+    # Every `<script` in the document opens one of those, and none was written
+    # by a literal.
+    assert text.count("<script") == len(scripts)
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in text
 
     # The unrecognised verdict, on both channels, unchanged.
@@ -2024,7 +2046,7 @@ def test_a_single_run_store_draws_no_timeline(client_for, store):
     from one observation. Every committed fixture is one or two runs, so this is
     the state most of this suite is in."""
     body = page(client_for(store), KADASTER)
-    assert 'class="m-history"' not in body, "a single run must draw no timeline"
+    assert 'data-section="history"' not in body, "a single run must draw no timeline"
 
 
 def test_the_timeline_draws_in_the_sites_own_encoding(client_for, store_two_sweeps):
@@ -2034,7 +2056,7 @@ def test_the_timeline_draws_in_the_sites_own_encoding(client_for, store_two_swee
     import verdict_encoding
 
     body = page(client_for(store_two_sweeps), KADASTER)
-    assert 'class="m-history"' in body, "two runs is a history"
+    assert 'data-section="history"' in body, "two runs is a history"
     drawn = set(re.findall(r'class="hcell (enc-[a-z-]+)"', body))
     assert drawn, "the timeline draws cells"
     known = {"enc-" + s.slug for s in verdict_encoding.STATES}
@@ -2046,7 +2068,14 @@ def test_every_timeline_cell_names_its_run_and_reading(client_for, store_two_swe
     """A row of coloured boxes is unreadable without them: the encoding says
     WHAT was read and only the tooltip says when, and which."""
     body = page(client_for(store_two_sweeps), KADASTER)
-    cells = re.findall(r'class="hcell[^"]*" title="([^"]*)"', body)
+    # Matched across the whole tag rather than requiring `title` to follow
+    # `class`: attribute ORDER is not a contract, and the first version of this
+    # broke when the cell gained data-at and data-reading between the two.
+    cells = [
+        re.search(r'title="([^"]*)"', tag).group(1)
+        for tag in re.findall(r'<span class="hcell[^>]*>', body)
+        if 'title="' in tag
+    ]
     assert cells, "the timeline draws cells"
     for title in cells:
         assert re.match(r"^\d{4}-\d{2}-\d{2}T", title), f"no run instant in {title!r}"
@@ -2104,3 +2133,67 @@ def test_a_metric_with_no_verdict_gets_no_row_either(client_for, store_declined)
         rows = _rows(endpoint_measurements(store_declined, endpoint))
         drawn = {r["metric"] for r in rows}
         assert not (drawn & verdictless), f"{drawn & verdictless} has no verdict to draw"
+
+
+# ---------------------------------------------------------------------------
+# The contract the page's scripts read
+# ---------------------------------------------------------------------------
+#
+# There is no harness in this project that drives inline script, so what these
+# pin is the half that CAN be checked: the attributes the scripts read, written
+# by the template. A script reading an attribute the template stopped writing
+# fails silently in a browser and passes every test here, so the attributes are
+# asserted by name.
+
+
+def test_every_timeline_cell_carries_the_column_and_instant_the_script_reads(
+    client_for, store_two_sweeps
+):
+    body = page(client_for(store_two_sweeps), KADASTER)
+    cells = re.findall(r"<span class=\"hcell[^>]*>", body)
+    assert cells, "the timeline draws cells"
+    for tag in cells:
+        assert 'data-at="' in tag, tag
+        assert 'data-reading="' in tag, tag
+    # The crosshair groups by column, so every cell and header needs one.
+    assert re.search(r'<td data-col="\d+">', body), "cells carry their column"
+    assert re.search(r'class="h-run" data-col="\d+"', body), "headers carry theirs"
+    assert 'id="h-readout"' in body, "the readout the script writes into"
+    assert 'data-empty="' in body, "and what it says before anything is pointed at"
+
+
+def test_every_vocabulary_row_carries_a_prebuilt_haystack(
+    client_for, store_content_profiles
+):
+    """The search reads `data-hay` rather than the row's text, so a keystroke
+    does not walk the DOM for every row. It has to contain what a reader would
+    type: the local name, the prefix, and the IRI, lowercased."""
+    body = page(client_for(store_content_profiles), "http://127.0.0.1:9200/sparql")
+    rows = re.findall(r"<li data-kind=\"[^\"]*\"[^>]*>", body)
+    assert rows, "the panel lists terms"
+    for tag in rows:
+        hay = re.search(r'data-hay="([^"]*)"', tag)
+        assert hay, tag
+        assert hay.group(1) == hay.group(1).lower(), "the needle is lowercased too"
+    total = re.search(r'class="vocab-count"[^>]*data-total="(\d+)"', body)
+    assert total, "the count carries its denominator for the script to restore"
+    assert int(total.group(1)) == len(rows), "and it is the number of rows"
+
+
+def test_the_vocabulary_states_are_the_sites_own(client_for, store_content_profiles):
+    """A term's state IS a verdict here, drawn in the same encoding as every
+    other reading on the site."""
+    import verdict_encoding
+
+    body = page(client_for(store_content_profiles), "http://127.0.0.1:9200/sparql")
+    drawn = set(re.findall(r'class="v-chip (enc-[a-z-]+)"', body))
+    assert drawn, "the panel draws chips"
+    known = {"enc-" + s.slug for s in verdict_encoding.STATES}
+    assert drawn <= known, f"{drawn - known} is not a state this site defines"
+
+
+def test_an_endpoint_with_no_profile_gets_no_vocabulary_panel(client_for, store):
+    """An empty searchable list would say this endpoint has no vocabulary, when
+    what happened is that nobody profiled it."""
+    body = page(client_for(store), KADASTER)
+    assert 'data-section="vocabulary"' not in body
