@@ -70,7 +70,12 @@ COPY web/ /app/web/
 # exclusion list. The exclusion list is re-read every run by design, so it is a
 # file in the image rather than something baked into a binary.
 COPY prober/metrics.toml /app/prober/metrics.toml
+COPY prober/endpoints.toml /app/prober/endpoints.toml
 COPY prober/registry/ /app/prober/registry/
+# The synthetic endpoint, so the compose file can run it as the local control
+# without a checkout. It needs nothing the web tier has not already installed:
+# both are pyoxigraph over the same Python.
+COPY tools/synthetic/ /app/tools/synthetic/
 
 COPY --from=prober-build /src/prober/target/release/sparqlwatch-prober /usr/local/bin/
 COPY --from=prober-build /src/prober/target/release/dormancy /usr/local/bin/
@@ -122,7 +127,7 @@ EXPOSE 8000
 # Sweeping is an explicit act:
 #
 #   docker exec <c> sparqlwatch-prober --at 2026-09-01T00:00:00Z \
-#       --endpoints /app/prober/registry/endpoints.toml \
+#       --endpoints /app/prober/endpoints.toml \
 #       --metrics /app/prober/metrics.toml \
 #       --state /data/state/dormancy.toml \
 #       --out /data/runs/run-2026-09-01T00-00-00Z.nq

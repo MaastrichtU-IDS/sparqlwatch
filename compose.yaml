@@ -1,0 +1,98 @@
+# Bring the site up and keep it up.
+#
+#   docker compose up -d --build
+#   docker compose logs -f site
+#   docker compose down
+#
+# WHAT MAKES IT COME BACK. `restart: unless-stopped` returns both services after
+# a crash and after the Docker daemon restarts, which on this machine means
+# after a reboot IF Docker Desktop is set to start at login. That setting is
+# outside this file and outside the repository: check it under Docker Desktop's
+# General preferences, or the containers come back only when somebody opens
+# Docker. `unless-stopped` and not `always` so that a deliberate
+# `docker compose stop` stays stopped rather than being undone by the next
+# daemon start.
+#
+# WHERE IT LISTENS, and this is the security-relevant line in the file.
+# SPARQLWATCH_BIND is the host address the site is published on, and it defaults
+# to loopback so that a `docker compose up` with no environment set cannot put
+# this on a network by accident. Publishing on the tailnet is opt-in:
+#
+#   SPARQLWATCH_BIND=$(tailscale ip -4) docker compose up -d
+#
+# Binding the TAILNET ADDRESS rather than 0.0.0.0 is deliberate. 0.0.0.0 also
+# publishes on whatever LAN this machine is joined to, which on a cafe network
+# is the room. It also collides: this machine already had 0.0.0.0:8000 taken by
+# an unrelated SurrealDB container on 2026-09-05, and a wildcard bind either
+# fails or silently shadows the other service on every address they share.
+#
+# The port default is 8420 for that same collision. The Dockerfile EXPOSEs 8000,
+# which is the port INSIDE the container and stays 8000; the host side is a
+# deployment choice and 8000 was taken.
+
+services:
+  site:
+    build: .
+    image: sparqlwatch:latest
+    restart: unless-stopped
+    ports:
+      # host address : host port : container port. The address half is what
+      # keeps this off the LAN.
+      - "${SPARQLWATCH_BIND:-127.0.0.1}:${SPARQLWATCH_PORT:-8420}:8000"
+    volumes:
+      # The store is DERIVED and rebuildable from the runs beside it; the runs
+      # are not. Separate volumes so that dropping a corrupt store is one
+      # command that cannot take the record with it.
+      - store:/data/store
+      - runs:/data/runs
+      - state:/data/state
+    environment:
+      SPARQLWATCH_STORE: /data/store/sparqlwatch.db
+    # The image's HEALTHCHECK asks a real route, so healthy means the store
+    # opened and a page rendered rather than that a socket is listening.
+
+  synthetic:
+    build: .
+    image: sparqlwatch:latest
+    restart: unless-stopped
+    command:
+      ["python", "/app/tools/synthetic/serve.py", "--port", "9200"]
+    ports:
+      # LOOPBACK ONLY, and not configurable. This is a generated dataset for
+      # probing against, not a service anybody should reach: publishing it on
+      # the tailnet would put a fake SPARQL endpoint on a real network under a
+      # name that suggests it means something.
+      - "127.0.0.1:9200:9200"
+
+  # Not started by `up`: it is in a profile, so it runs only when asked.
+  #
+  #   docker compose run --rm prober
+  #
+  # A sweep is an explicit act. The registry is 543 endpoints away from being
+  # harmless, and a service that swept on start would probe every one of them
+  # again on every restart, crash loop included.
+  prober:
+    build: .
+    image: sparqlwatch:latest
+    profiles: ["sweep"]
+    depends_on: [synthetic]
+    volumes:
+      - runs:/data/runs
+      - state:/data/state
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        AT=$$(date -u +%Y-%m-%dT%H:%M:%SZ)
+        sparqlwatch-prober \
+          --at "$$AT" \
+          --endpoints /app/prober/endpoints.container.toml \
+          --metrics /app/prober/metrics.toml \
+          --exclusions /app/prober/registry/exclusions.toml \
+          --state /data/state/dormancy.toml \
+          --max-cost "$${SPARQLWATCH_MAX_COST:-cheap}" \
+          --out "/data/runs/run-$${AT}.nq"
+
+volumes:
+  store:
+  runs:
+  state:

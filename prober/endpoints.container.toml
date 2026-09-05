@@ -1,0 +1,20 @@
+# prober/endpoints.container.toml
+#
+# The same registry as endpoints.toml, for a sweep running INSIDE compose.
+#
+# One line differs and it has to: the synthetic endpoint is `127.0.0.1:9200` on
+# the host and `synthetic:9200` between containers, because loopback inside a
+# container is that container rather than the machine. A single file cannot
+# name both, and a sweep run from the wrong one records the local control as
+# unreachable, which looks exactly like the control being down.
+#
+# THE TWO FILES MUST NOT DRIFT APART in any other entry.
+# `prober/tests/registry_pair.rs` compares them and fails on any difference
+# beyond the synthetic endpoint's host, so adding an endpoint to one and not the
+# other is a build failure rather than a sweep that quietly covers less than the
+# one beside it.
+endpoint = [
+  "http://synthetic:9200/sparql",
+  "https://bio2rdf.org/sparql",
+  "https://ontoexplorer.dev.k8s.semanticscience.org/api/v1/sparql/content",
+]
