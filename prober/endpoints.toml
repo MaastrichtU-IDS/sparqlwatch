@@ -1,6 +1,37 @@
 # prober/endpoints.toml
+#
+# The list this prober actually sweeps. Replaced 2026-09-05, from three
+# third-party endpoints taken out of the LOD Cloud dump to these three, which
+# are ours to probe: one we generate, two on infrastructure this project's
+# operator runs. That removes the consent question the earlier list carried,
+# and it is why `registry/lod-cloud.toml` and its 543 entries stay seeded but
+# unswept.
+#
+# The synthetic endpoint is FIRST on purpose. It is the only one whose right
+# answers are known, so it is the control: a metric that disagrees with it is
+# wrong about the metric, not about the endpoint. Start it with
+#
+#     cd web && .venv/bin/python ../tools/synthetic/serve.py
+#
+# and see tools/synthetic/README.md. A sweep run without it records the
+# endpoint as unreachable, which is honest and not a failure of the sweep.
+#
+# The state of the other two, measured 2026-09-05, recorded because a reader
+# comparing a run against this file should not have to rediscover it:
+#
+#   bio2rdf.org          DNS SERVFAIL from its own authoritative nameservers,
+#                        confirmed against 8.8.8.8 and 1.1.1.1. Not a timeout
+#                        and not a 500: the name does not resolve at all, so
+#                        every metric will read indeterminate until it does.
+#
+#   ontoexplorer...      Serves an HTML single-page app at /sparql, for every
+#                        path and every method (POST answers 405). It is a web
+#                        UI rather than a SPARQL protocol endpoint, so the
+#                        prober will read HTML where it expects results. Listed
+#                        as given; if the query service lives at another URL,
+#                        that URL is what belongs here.
 endpoint = [
-  "https://qlever.dev/api/osm-planet",
-  "https://data.kkg.kadaster.nl/query",
-  "https://ontop.certain.ai.ustp.at/sparql",
+  "http://127.0.0.1:9200/sparql",
+  "https://bio2rdf.org/sparql",
+  "https://ontoexplorer.dev.k8s.semanticscience.org/sparql",
 ]

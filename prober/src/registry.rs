@@ -889,8 +889,31 @@ mod tests {
     #[test]
     fn the_shipped_registry_file_loads_and_is_already_unique() {
         let loaded = load_unrestricted(include_str!("../endpoints.toml")).unwrap();
-        assert_eq!(loaded.len(), 3);
-        assert_eq!(loaded[0], "https://qlever.dev/api/osm-planet");
+        assert!(!loaded.is_empty(), "a registry nothing loads from sweeps nothing");
+        let unique: std::collections::BTreeSet<&String> = loaded.iter().collect();
+        assert_eq!(unique.len(), loaded.len(), "the file already lists each URL once");
+    }
+
+    /// The synthetic endpoint is FIRST, and that is a property of the list
+    /// rather than a detail of it.
+    ///
+    /// It is the only entry whose right answers are known, which makes it the
+    /// control: a metric disagreeing with it is wrong about the metric, not
+    /// about the endpoint. Endpoints are probed in file order, so first means
+    /// the control is measured before anything is concluded from the rest.
+    ///
+    /// Asserted as "loopback comes first" and not as a URL, because the
+    /// previous version of this test pinned `qlever.dev` by name and broke the
+    /// moment the list was replaced on 2026-09-05, having checked nothing
+    /// anyone cared about in the meantime.
+    #[test]
+    fn the_shipped_registry_leads_with_the_local_control() {
+        let loaded = load_unrestricted(include_str!("../endpoints.toml")).unwrap();
+        let first = loaded.first().expect("the registry lists at least one endpoint");
+        assert!(
+            first.contains("127.0.0.1") || first.contains("localhost"),
+            "the local control belongs first in the sweep order: {first}"
+        );
     }
 
     #[test]

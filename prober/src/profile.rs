@@ -131,6 +131,27 @@ impl ProfileOutcome {
 /// No `LIMIT` anywhere. The sample size is decided by the hash prefix, because
 /// adding a `LIMIT` cuts by the store's own iteration order and reintroduces
 /// exactly the bias the prefix exists to remove.
+///
+/// BOTH patterns are `{ ... } UNION { GRAPH ?g { ... } }`, and that is not
+/// decoration. Without it each pattern reads the DEFAULT GRAPH ONLY, so an
+/// endpoint keeping its data in named graphs profiles nothing at all, silently:
+/// the query returns no rows, an empty profile publishes nothing, and the run
+/// carries fewer profiles with no fact saying why. Measured 2026-09-05 against
+/// the synthetic endpoint, whose five classes sit one in the default graph and
+/// four in named ones: the previous shape returned rows for exactly the one.
+///
+/// It is the same defect and the same fix as `geo-data` and the class
+/// enumeration, both of which have carried the union since they shipped. Named
+/// graphs are the normal arrangement in Virtuoso, GraphDB and Blazegraph, so
+/// the default-graph-only form is wrong about most real endpoints rather than
+/// about an unusual one.
+///
+/// The graph variables are `?swg` and `?spg` and never `?p`, `?s`, `?o` or
+/// `?dt`: a `GRAPH ?p { ?s ?p ?o }` parses, runs, and can never bind, which is
+/// the collision `metrics.rs` refuses for the shipped queries.
+///
+/// The filter sits OUTSIDE the union rather than inside both arms, so the
+/// sampling rule is stated once and cannot come to differ between them.
 pub fn profile_query(class: &str, sampling: &Sampling) -> String {
     let filter = match sampling.prefix() {
         Some(p) => format!("\n      FILTER(STRSTARTS(SHA256(STR(?s)), \"{p}\"))"),
@@ -141,8 +162,8 @@ pub fn profile_query(class: &str, sampling: &Sampling) -> String {
          (COUNT(DISTINCT ?dt) AS ?datatypes) (SAMPLE(?dt) AS ?anyDatatype)\n\
          WHERE {{\n  \
          {{ SELECT ?s WHERE {{\n      \
-         ?s a <{class}> .{filter}\n  }} }}\n  \
-         ?s ?p ?o .\n  \
+         {{ ?s a <{class}> }} UNION {{ GRAPH ?swg {{ ?s a <{class}> }} }}{filter}\n  }} }}\n  \
+         {{ ?s ?p ?o }} UNION {{ GRAPH ?spg {{ ?s ?p ?o }} }}\n  \
          BIND(IF(isIRI(?o), \"IRI\", DATATYPE(?o)) AS ?dt)\n\
          }}\n\
          GROUP BY ?p"
@@ -192,4 +213,62 @@ pub async fn profile_classes(
     // cancelled pass does not run: naming the tail here would work on the happy
     // path and silently do nothing in the case it exists for. The caller calls
     // `name_unreached` on both paths instead.
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The defect the synthetic endpoint found on 2026-09-05, pinned.
+    ///
+    /// Both patterns must look in named graphs. Without it the pass profiles
+    /// nothing on any endpoint that keeps its data in one, and does so
+    /// SILENTLY: no rows, an empty profile, nothing published, and no fact
+    /// saying why. Wiremock cannot catch this, because a canned body answers
+    /// the same whatever the query asks, which is exactly why it shipped.
+    #[test]
+    fn both_patterns_look_in_named_graphs_as_well_as_the_default_one() {
+        let q = profile_query("http://example.org/C", &Sampling::Exact);
+        assert!(
+            q.contains("{ ?s a <http://example.org/C> } UNION { GRAPH ?swg"),
+            "the subject selection must union over named graphs: {q}"
+        );
+        assert!(
+            q.contains("{ ?s ?p ?o } UNION { GRAPH ?spg { ?s ?p ?o } }"),
+            "and so must the property walk: {q}"
+        );
+    }
+
+    /// A graph variable colliding with a reported one parses, runs, and can
+    /// never bind. `metrics.rs` refuses that collision for the queries in
+    /// `metrics.toml`; this query is built in code, so it needs its own guard.
+    #[test]
+    fn no_graph_variable_collides_with_a_variable_the_query_reports() {
+        let q = profile_query("http://example.org/C", &Sampling::HashPrefix("0".into()));
+        for reported in ["?p", "?s", "?o", "?dt", "?subjects", "?datatypes", "?anyDatatype"] {
+            assert!(
+                !q.contains(&format!("GRAPH {reported} ")),
+                "GRAPH {reported} can never bind: {q}"
+            );
+        }
+    }
+
+    /// One filter, outside the union, so the sampling rule is stated once and
+    /// cannot come to differ between the two arms.
+    #[test]
+    fn the_sampling_filter_is_stated_once() {
+        let q = profile_query("http://example.org/C", &Sampling::HashPrefix("00".into()));
+        assert_eq!(q.matches("STRSTARTS").count(), 1, "{q}");
+        assert!(q.contains("\"00\""), "the prefix reaches the query: {q}");
+    }
+
+    /// An exact profile sends no filter at all, rather than one that matches
+    /// everything: `STRSTARTS(SHA256(...), "")` is true for every subject, so
+    /// it would hash every subject in the store to decide nothing.
+    #[test]
+    fn an_exact_profile_hashes_nothing() {
+        let q = profile_query("http://example.org/C", &Sampling::Exact);
+        assert!(!q.contains("SHA256"), "{q}");
+    }
 }
