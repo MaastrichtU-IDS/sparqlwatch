@@ -1484,6 +1484,23 @@ def metric_abbreviations(metrics: list[str]) -> dict[str, str]:
             }
 
 
+def _yields_measurement(metric: str) -> bool:
+    """Whether this metric can produce a verdict, and so deserves a column.
+
+    The matrix is a grid of verdicts. A metric that publishes none has nothing
+    to draw in it, and drawing a gap instead states that the run recorded
+    nothing about that metric, which for a successful profile pass is false.
+
+    Unknown metrics are assumed to measure. A metric this build has never heard
+    of is one from a newer prober, and hiding its column would lose a real
+    verdict; showing an unexplained one is the lesser error and matches how
+    _detail treats an unrecognised verdict. The prober says the same thing on
+    its side in ProbeKind::yields_measurement.
+    """
+    name = metric.removeprefix(_METRIC_PREFIX)
+    return METRIC_DOCS.get(name, {}).get("yields_measurement", True)
+
+
 def _index_metrics(entries: list[EndpointMeasurements]) -> list[dict]:
     """Every metric any row has a fact for, in metric id order.
 
@@ -1493,8 +1510,14 @@ def _index_metrics(entries: list[EndpointMeasurements]) -> list[dict]:
     look like the metric set had changed.
     """
     metrics = sorted(
-        {verdict.metric for entry in entries for verdict in entry.verdicts}
-        | {declined.metric for entry in entries for declined in entry.declined}
+        {
+            metric
+            for metric in (
+                {verdict.metric for entry in entries for verdict in entry.verdicts}
+                | {declined.metric for entry in entries for declined in entry.declined}
+            )
+            if _yields_measurement(metric)
+        }
     )
     abbreviations = metric_abbreviations(metrics)
     return [
@@ -2258,6 +2281,13 @@ METRIC_DOCS = {
         "label": "Properties per class",
         "dimension": "content",
         "cost": "expensive",
+        # NO COLUMN, and the flag is read rather than the comment above it.
+        # _index_metrics unions every metric carrying a verdict OR a decline, so
+        # before this existed one endpoint's failed pass was enough to draw a
+        # column in which the two SUCCESSFUL passes rendered as gaps, whose
+        # documented meaning is that the run recorded nothing about the metric.
+        # The page stated the opposite of what happened.
+        "yields_measurement": False,
         "explains": (
             "For each class the endpoint holds, which properties its instances "
             "carry, how many instances carry each one, and whether the values "

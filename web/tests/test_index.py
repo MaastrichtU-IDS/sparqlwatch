@@ -2260,3 +2260,71 @@ def _endpoints_of(store):
         "SELECT DISTINCT ?e WHERE { GRAPH ?g { ?m dqv:computedOn ?e } }"
     )
     return {r["e"].value for r in rows}
+
+
+# ---------------------------------------------------------------------------
+# A metric with no verdict has no column
+# ---------------------------------------------------------------------------
+
+
+def test_a_metric_that_publishes_no_verdict_gets_no_column(store_content_profiles):
+    """The matrix is a grid of VERDICTS, and class-profiles publishes none.
+
+    Found by reading the live page on 2026-09-05. The column existed, because
+    _index_metrics unions every metric carrying a verdict OR a decline and one
+    endpoint's profile pass had failed, contributing a decline. So the column
+    was drawn with exactly one filled cell: the FAILURE. The two endpoints
+    whose passes succeeded, with 5 and 199 class profiles between them, drew a
+    gap, whose documented meaning is that the run "recorded nothing at all
+    about that metric, neither a measurement nor a decline".
+
+    That is the opposite of what happened, stated by the page as a positive
+    claim, which is the specific failure this project exists to prevent. There
+    is no verdict to draw instead: Ruling 2 says a profile is a description and
+    the six-verdict vocabulary is for what was observed. So the honest fix is no
+    column, and the profile's presence is carried by the row's `content` link,
+    which is already right for all three endpoints.
+    """
+    from app import _index_metrics
+    from endpoint_index import endpoint_index
+    from endpoint_measurements import DeclinedMetric
+
+    entries = endpoint_index(store_content_profiles)
+    assert entries, "the fixture describes at least one endpoint"
+
+    # The decline is added HERE rather than taken from the fixture, because in
+    # that run the profile pass SUCCEEDED, so no decline exists and the test
+    # would pass without exercising anything. This is the shape the live store
+    # had on 2026-09-05: one endpoint's pass failed and opened the column.
+    entries[0].declined.append(
+        DeclinedMetric(
+            metric="urn:sparqlwatch:metric:class-profiles",
+            reason="enumeration-failed",
+        )
+    )
+    metrics = {m["metric"] for m in _index_metrics(entries)}
+    assert "urn:sparqlwatch:metric:class-profiles" not in metrics, (
+        f"a verdictless metric must not be a column in a verdict grid: {sorted(metrics)}"
+    )
+    assert metrics, "the other metrics still have columns"
+
+
+def test_a_declined_verdictless_metric_does_not_conjure_a_column(store_declined):
+    """The route the column got in by, closed.
+
+    A decline alone used to be enough to add a column, so a metric that can
+    never produce a verdict appeared the moment one endpoint failed to run it.
+    Asked against a store whose declines are of ORDINARY metrics, so this also
+    pins that a decline still opens a column for a metric that does measure.
+    """
+    from app import METRIC_DOCS, _index_metrics
+    from endpoint_index import endpoint_index
+
+    metrics = {m["metric"] for m in _index_metrics(endpoint_index(store_declined))}
+    verdictless = {
+        "urn:sparqlwatch:metric:" + name
+        for name, facts in METRIC_DOCS.items()
+        if not facts.get("yields_measurement", True)
+    }
+    assert verdictless, "METRIC_DOCS must mark at least one metric as verdictless"
+    assert not (metrics & verdictless), f"{sorted(metrics & verdictless)} have no verdict to draw"
