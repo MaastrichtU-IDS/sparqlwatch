@@ -1908,7 +1908,10 @@ def test_a_store_with_no_endpoints_offers_no_chip_to_press():
     no quads is one _opened_store refuses: this page is reachable only for a
     store whose runs measured nothing, and it has to be right there too.
     """
-    page = _index_html([])
+    # An empty store, not just an empty entry list: the renderer now asks the
+    # store which endpoints the explorer has vocabulary for, so a page built
+    # from no entries still needs one to ask.
+    page = _index_html([], Store())
 
     assert with_attribute(page, "data-facet") == []
     assert with_attribute(page, "data-state") == []

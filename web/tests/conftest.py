@@ -48,6 +48,7 @@ RUN_TRUNCATED = FIXTURES / "run-truncated.nq"
 RUN_TWO_SWEEPS = FIXTURES / "run-two-sweeps.nq"
 RUN_ZERO_CLASSES = FIXTURES / "run-zero-classes.nq"
 RUN_PROPERTIES_SAMPLE = FIXTURES / "run-properties-sample.nq"
+RUN_CONTENT_PROFILES = FIXTURES / "run-content-profiles.nq"
 RUN_TWO_METRICS_SAMPLED = FIXTURES / "run-two-metrics-sampled.nq"
 RUN_PROPERTIES_LATER = FIXTURES / "run-properties-later.nq"
 RUN_DECLINED = FIXTURES / "run-declined.nq"
@@ -198,6 +199,18 @@ def store_declined(tmp_path):
     sw:metric:classes was declined for every endpoint. See the comment in
     web/tests/fixtures/run-declined.nq for its provenance."""
     return _loaded_store(tmp_path, "store-declined", RUN_DECLINED)
+
+
+@pytest.fixture
+def store_content_profiles(tmp_path):
+    """A sweep that PROFILED an endpoint's content, which no other fixture did.
+
+    The explorer reads profiles and declared vocabulary, and every run committed
+    before 2026-09-05 predates both, so this is the only store its tests can
+    read. See the comment in web/tests/fixtures/run-content-profiles.nq for what
+    it is shaped to show.
+    """
+    return _loaded_store(tmp_path, "store-content-profiles", RUN_CONTENT_PROFILES)
 
 
 @pytest.fixture

@@ -14,17 +14,26 @@ from urllib.parse import quote, unquote
 import pytest
 from starlette.testclient import TestClient
 
-from app import EXPLORE_PATH, EXPLORE_PAYLOAD_FILE, app, get_store
+from app import EXPLORE_PATH, app, explore_endpoints, get_store
 
 from test_page import with_attribute
 
 
 @pytest.fixture
-def client():
-    """No store. /explore reads a committed payload and never touches one, and a
-    fixture that supplied a store would hide it if that stopped being true."""
+def client(store_content_profiles):
+    """A client whose /explore reads a store holding content profiles.
+
+    This fixture supplied NO store until 2026-09-05, deliberately: the route
+    read a committed payload file and never touched one, and a fixture that
+    handed it a store would have hidden it if that stopped being true. It has
+    now stopped being true on purpose, so the guard is spent and its inversion
+    is the change. run-content-profiles.nq is the only committed run carrying a
+    profile, which is why every test here reads that one.
+    """
+    app.dependency_overrides[get_store] = lambda: store_content_profiles
     with TestClient(app) as built:
         yield built
+    app.dependency_overrides.clear()
 
 
 @pytest.fixture
@@ -50,16 +59,24 @@ def test_the_route_answers_and_carries_its_payload(client):
     assert "id=\"data\"" in body
     payload = json.loads(body.split('id="data">', 1)[1].split("</script>", 1)[0])
     assert payload["terms"], "the page ships no vocabulary"
-    assert len(payload["endpoints"]) == 2
+    # One, and it is the fixture's, rather than the prototype payload's fixed
+    # two: the page describes what the store holds now.
+    assert [e["url"] for e in payload["endpoints"]] == ["http://127.0.0.1:9200/sparql"]
 
 
-def test_the_payload_on_disk_is_what_the_page_serves(client):
-    """One file, read at import. A page built from a different payload than the
-    one committed would be a page nobody could rebuild, which is the state this
-    route was recovered from."""
+def test_the_payload_is_what_the_store_holds(client, store_content_profiles):
+    """Replaces a test that compared the page against a committed file.
+
+    That file was read at import and the assertion kept the two from drifting,
+    which mattered while nobody could rebuild it. It is computed now, so the
+    thing that can drift is the page against the STORE, and that is what this
+    asks instead.
+    """
+    from explore_payload import build_payload_json
+
     body = client.get(EXPLORE_PATH).text
     served = body.split('id="data">', 1)[1].split("</script>", 1)[0]
-    assert served == EXPLORE_PAYLOAD_FILE.read_text()
+    assert served == build_payload_json(store_content_profiles)
 
 
 def test_it_is_part_of_this_site_and_not_a_page_beside_it(client):
@@ -72,11 +89,18 @@ def test_it_is_part_of_this_site_and_not_a_page_beside_it(client):
     assert nav == [EXPLORE_PATH, "/docs"], f"nav is {nav}"
 
 
-def test_the_page_says_it_is_a_prototype(client):
-    """Two endpoints is not the registry. A reader who assumed otherwise would
-    draw conclusions about coverage the data does not support."""
+def test_the_page_says_what_it_is_a_reading_of(client):
+    """One endpoint is not the registry, and the page has to say so.
+
+    It said the literal word "prototype" while a static file backed it. A
+    hardcoded provenance note outlives the data it describes and this one had:
+    it still claimed two endpoints after the registry was replaced with three.
+    So the note is counted now, and what this asserts is that the count is
+    present and true rather than that a particular word is.
+    """
     body = client.get(EXPLORE_PATH).text
-    assert "prototype" in body.lower()
+    assert "1 endpoint with a content profile" in body, body[:0] or "note missing"
+    assert "2 endpoints" not in body, "the stale hardcoded note is gone"
 
 
 def test_the_states_it_draws_are_the_sites_own_vocabulary(client):
@@ -110,47 +134,47 @@ def test_the_index_links_only_the_rows_the_explorer_can_show(client_for, store):
     an absent qualifier is a positive claim, and so is a link that leads
     somewhere empty.
     """
-    from app import EXPLORE_ENDPOINTS
-
     body = client_for(store).get("/").text
     listed = set(re.findall(r'data-endpoint="([^"]+)"', body))
     linked = {unquote(u) for u in re.findall(r'href="/explore\?endpoint=([^"]+)"', body)}
 
     # The invariant, stated against whatever this store happens to hold rather
     # than against a fixed pair: a row is linked exactly when the explorer has
-    # that endpoint. The default fixture holds neither of the two the explorer
-    # knows, so `linked` is empty here and that is the correct answer, not a
-    # missing link.
-    assert linked == listed & set(EXPLORE_ENDPOINTS), (
-        f"linked {sorted(linked)}, expected {sorted(listed & set(EXPLORE_ENDPOINTS))}"
+    # that endpoint. This fixture carries no content profile, so `linked` is
+    # empty and that is the correct answer rather than a missing link.
+    explorable = set(explore_endpoints(store))
+    assert linked == listed & explorable, (
+        f"linked {sorted(linked)}, expected {sorted(listed & explorable)}"
     )
     assert linked <= listed, "a link for an endpoint this page does not list"
 
 
-def test_the_decision_itself_both_ways(store):
+def test_the_decision_itself_both_ways(store_content_profiles):
     """The positive case, asked of the function that makes the decision.
 
-    Written against `_index_row` rather than against a fixture, because no
-    committed fixture lists either endpoint the explorer holds, so a test that
-    went through the index would skip forever and prove nothing. A skipped test
-    passing beside a build that emits no links at all is worse than no test.
+    Written against `_index_row` because the negative half needs an endpoint the
+    store has no profile for, and a fixture cannot hold one of those and the
+    positive case at once. It used to read the static payload's endpoint list;
+    now the store supplies both sides, so this proves the link appears rather
+    than only that it is withheld.
     """
-    from app import EXPLORE_ENDPOINTS, _index_metrics, _index_row
+    from app import _index_metrics, _index_row
     from endpoint_measurements import endpoint_measurements
 
-    known = sorted(EXPLORE_ENDPOINTS)[0]
+    store = store_content_profiles
+    explorable = explore_endpoints(store)
+    known = sorted(explorable)[0]
     entries = [endpoint_measurements(store, e) for e in _endpoints_in(store)]
     metrics = _index_metrics(entries)
     sample = entries[0]
 
-    # Same entry, two endpoints: only the one the explorer holds gets a link.
     object.__setattr__(sample, "endpoint", known)
-    assert _index_row(sample, metrics)["content_href"] == (
+    assert _index_row(sample, metrics, explorable)["content_href"] == (
         "/explore?endpoint=" + quote(known, safe="")
     )
 
     object.__setattr__(sample, "endpoint", "http://example.org/not-probed")
-    assert _index_row(sample, metrics)["content_href"] is None
+    assert _index_row(sample, metrics, explorable)["content_href"] is None
 
 
 def _endpoints_in(store):
@@ -174,10 +198,7 @@ def test_a_linked_endpoint_is_one_the_payload_actually_holds(client_for, store):
     """The link and the data must agree, or the page opens with a chip selected
     that matches nothing and shows an empty listing: the exact failure the
     filtering above exists to prevent."""
-    import json
-
-    payload = json.loads(EXPLORE_PAYLOAD_FILE.read_text())
-    held = {e["url"] for e in payload["endpoints"]}
+    held = set(explore_endpoints(store))
     body = client_for(store).get("/").text
     for target in re.findall(r'href="/explore\?endpoint=([^"]+)"', body):
         assert unquote(target) in held, f"{unquote(target)} is linked but not in the payload"

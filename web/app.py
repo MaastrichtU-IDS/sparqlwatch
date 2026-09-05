@@ -66,6 +66,7 @@ from pyoxigraph import (
 
 import verdict_encoding
 from endpoint_content import CLASS_SAMPLING_METRICS, EndpointContent, endpoint_content
+from explore_payload import build_payload, build_payload_json
 from endpoint_index import endpoint_index
 from endpoint_measurements import EndpointMeasurements, endpoint_measurements
 from load_run import CURRENT_GRAPH, pointers_to_missing_runs
@@ -272,44 +273,51 @@ def choose_representation(accept: str | None) -> str | None:
 # ---------------------------------------------------------------------------
 # The store, injected
 # ---------------------------------------------------------------------------
-# The vocabulary explorer's data: one preserved probe of two endpoints, taken
-# 2026-08-28 and irreproducible, since re-running it would get different answers.
-# Built by tools/explorer/build.py from the run file and committed, so the route
-# does not depend on a directory outside the repository.
+# The vocabulary explorer's data was a committed 190 KB file here until
+# 2026-09-05: one preserved probe of two endpoints taken 2026-08-28, read at
+# import and handed to the browser as text. It existed because the store held no
+# content samples, `classes` being declined at the default cost ceiling on every
+# sweep, so there was nothing to compute a payload from.
 #
-# Read once at import and passed through as text. It is 190 KB, so parsing it per
-# request would be the most expensive thing on the page, and nothing here needs
-# it as Python: the template hands it straight to the browser.
-EXPLORE_PAYLOAD_FILE = Path(__file__).resolve().parent / "explore_payload.json"
+# It is computed from the store now. See web/explore_payload.py, and
+# explore_endpoints below for the index link that depended on the file's own
+# endpoint list and so went missing for every row once the registry changed.
+def _explore_probe_note(store: Store) -> str:
+    """What this page is a reading of, counted rather than asserted.
 
-# A prototype, and the page says so. Two endpoints is not the registry, and a
-# reader who assumed otherwise would draw conclusions about coverage that the
-# data does not support.
-EXPLORE_PROBE_NOTE = "prototype: 2 endpoints, probed 2026-08-28"
+    Was the literal string "prototype: 2 endpoints, probed 2026-08-28" while a
+    static file backed this page. A hardcoded provenance note outlives the data
+    it describes, and this one had: it still said two endpoints after the
+    registry was replaced with three.
+    """
+    payload = build_payload(store)
+    n = len(payload["endpoints"])
+    terms = len(payload["terms"])
+    return (
+        f"{n} endpoint{'' if n == 1 else 's'} with a content profile, "
+        f"{terms} term{'' if terms == 1 else 's'}"
+    )
 
 
-def _explore_endpoints() -> frozenset[str]:
+def explore_endpoints(store: Store) -> frozenset[str]:
     """The endpoints the explorer has vocabulary for.
 
-    The index links a row to /explore only when this holds its endpoint. Two of
-    543 today, and linking the other 541 would be a promise the data does not
-    keep: a `content` link that opens an explorer with nothing in it tells a
-    reader the endpoint has no vocabulary, when what happened is that nobody
-    looked. On these pages an absent qualifier is a positive claim, and so is a
-    link that leads somewhere empty.
+    The index links a row to /explore only when this holds its endpoint. A
+    `content` link that opens an explorer with nothing in it tells a reader the
+    endpoint has no vocabulary, when what happened is that nobody looked, and on
+    these pages an absent qualifier is a positive claim. So is a link that leads
+    somewhere empty.
 
-    The set will grow to the whole registry when the content-profile work lands,
-    at which point this stops being a filter and becomes a formality. It is still
-    the right shape then: an endpoint whose content sweep failed still should not
+    Read from the STORE since 2026-09-05. It read a static payload file until
+    then, listing the two endpoints a 2026-08-28 prototype probe covered, so
+    every other row lost its link no matter what the store knew. The file's own
+    comment predicted this: "the set will grow to the whole registry when the
+    content-profile work lands, at which point this stops being a filter and
+    becomes a formality". It is still the right shape rather than a formality:
+    an endpoint whose content sweep failed has no profile and still should not
     get the link.
     """
-    import json
-
-    payload = json.loads(EXPLORE_PAYLOAD_FILE.read_text())
-    return frozenset(e["url"] for e in payload["endpoints"])
-
-
-EXPLORE_ENDPOINTS = _explore_endpoints()
+    return frozenset(e["url"] for e in build_payload(store)["endpoints"])
 
 
 STORE_PATH_VARIABLE = "SPARQLWATCH_STORE"
@@ -1766,7 +1774,9 @@ def _matrix_states(matrix: list[dict]) -> list[dict]:
     ]
 
 
-def _index_row(entry: EndpointMeasurements, metrics: list[dict]) -> dict:
+def _index_row(
+    entry: EndpointMeasurements, metrics: list[dict], explorable: frozenset[str]
+) -> dict:
     """One row: the endpoint, its link, its cells, and any qualification.
 
     The link is percent-encoded with nothing left safe, because the endpoint
@@ -1797,11 +1807,11 @@ def _index_row(entry: EndpointMeasurements, metrics: list[dict]) -> dict:
         "endpoint": entry.endpoint,
         "href": ENDPOINT_PATH + "?url=" + quote(entry.endpoint, safe=""),
         # Present only where the explorer has something to show. See
-        # _explore_endpoints on why a link to an empty explorer would be a claim
+        # explore_endpoints on why a link to an empty explorer would be a claim
         # rather than a convenience.
         "content_href": (
             EXPLORE_PATH + "?endpoint=" + quote(entry.endpoint, safe="")
-            if entry.endpoint in EXPLORE_ENDPOINTS
+            if entry.endpoint in explorable
             else None
         ),
         "cells": _index_chips(entry, metrics),
@@ -1825,7 +1835,7 @@ def _index_row(entry: EndpointMeasurements, metrics: list[dict]) -> dict:
 
 
 def _index_rows(
-    entries: list[EndpointMeasurements], metrics: list[dict]
+    entries: list[EndpointMeasurements], metrics: list[dict], explorable: frozenset[str]
 ) -> list[dict]:
     """Every row, alphabetical by endpoint. One listing.
 
@@ -1851,7 +1861,7 @@ def _index_rows(
     scanning for one is scanning for.
     """
     return sorted(
-        (_index_row(entry, metrics) for entry in entries),
+        (_index_row(entry, metrics, explorable) for entry in entries),
         key=lambda row: row["endpoint"],
     )
 
@@ -1879,7 +1889,7 @@ def _newest_sweep_note(entries: list[EndpointMeasurements]) -> str | None:
     )
 
 
-def _index_context(entries: list[EndpointMeasurements]) -> dict:
+def _index_context(entries: list[EndpointMeasurements], store: Store) -> dict:
     """Everything the index template renders, decided here rather than in the
     page.
 
@@ -1888,7 +1898,10 @@ def _index_context(entries: list[EndpointMeasurements]) -> dict:
     all decisions with a right answer, and they belong where they can be tested.
     """
     metrics = _index_metrics(entries)
-    rows = _index_rows(entries, metrics)
+    # One pass over the store for every row, rather than one per row: the
+    # payload is built from a single query and 543 rows asking it 543 times
+    # would be the same answer 543 times.
+    rows = _index_rows(entries, metrics, explore_endpoints(store))
     # The legend counts the chips on this page, and it is built by the same
     # function as the endpoint page's legend from the same table, so the two
     # pages cannot explain the encoding differently. A cell that is a gap
@@ -2020,9 +2033,16 @@ def _index_context(entries: list[EndpointMeasurements]) -> dict:
     }
 
 
-def _index_html(entries: list[EndpointMeasurements]) -> str:
-    """The index, rendered."""
-    return _TEMPLATES.get_template("index.html").render(**_index_context(entries))
+def _index_html(entries: list[EndpointMeasurements], store: Store) -> str:
+    """The index, rendered.
+
+    Takes the store because a row's `content` link depends on whether the
+    explorer has vocabulary for that endpoint, which only the store knows. It
+    read a static file until 2026-09-05 and needed no store at all.
+    """
+    return _TEMPLATES.get_template("index.html").render(
+        **_index_context(entries, store)
+    )
 
 
 def _index_rdf(store: Store, media_type: str) -> bytes:
@@ -2062,7 +2082,7 @@ def index_resource(
 
     if media_type == HTML_MEDIA_TYPE:
         return Response(
-            content=_index_html(endpoint_index(store)),
+            content=_index_html(endpoint_index(store), store),
             media_type="text/html; charset=utf-8",
         )
     return Response(
@@ -2784,23 +2804,24 @@ def docs_states_resource(request: Request) -> Response:
 
 
 @app.get(EXPLORE_PATH)
-def explore(request: Request) -> Response:
-    """The vocabulary explorer.
+def explore(request: Request, store: Store = Depends(get_store)) -> Response:
+    """The vocabulary explorer, computed from the store.
 
-    Serves a static payload rather than querying the store, because the store
-    holds no content samples: `sw:metric:classes` is declined at the default cost
-    ceiling, so the registry sweep produced none. When the content-profile work
-    lands this route computes its facets server-side and the payload file goes.
+    Served a static payload until 2026-09-05, captured from a probe of two
+    endpoints and unable to describe any others. That file existed because the
+    store held no content samples: `classes` was declined at the default cost
+    ceiling on every sweep. The content-profile work publishes both halves of
+    the declared/observed axis now, so this reads them.
 
     HTML only. The other resources negotiate, and this one does not, because
     there is no RDF here that the store could be asked for: the payload is a
-    derived view of one run's samples, and publishing it as RDF would assert it
-    as a fact about the endpoints rather than as a reading of one probe.
+    derived view of one run's facts, and publishing it as RDF would assert it as
+    a fact about the endpoints rather than as a reading of one probe.
     """
     return Response(
         content=_TEMPLATES.get_template("explore.html").render(
-            payload=EXPLORE_PAYLOAD_FILE.read_text(),
-            probe_note=EXPLORE_PROBE_NOTE,
+            payload=build_payload_json(store),
+            probe_note=_explore_probe_note(store),
             index_path=INDEX_PATH,
             docs_path=DOCS_PATH,
             explore_path=EXPLORE_PATH,

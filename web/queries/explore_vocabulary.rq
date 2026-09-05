@@ -1,0 +1,75 @@
+# What vocabulary does each endpoint DECLARE and what does it USE?
+#
+# The explorer's whole axis. Every one of its four states is a pair of answers:
+# a term declared and observed is `verified`, observed but not declared is
+# `undeclared-but-verified`, declared but not observed is `declared-only`, and a
+# term in neither is not in the payload at all.
+#
+# ONE RUN SUPPLIES BOTH HALVES, and that is the load-bearing decision here. The
+# run that measured an endpoint most recently and the run that profiled its
+# content are routinely different, because a profile pass is expensive and
+# declined at the default cost ceiling. Taking `declaredClass` from the newest
+# measuring run and `profiledClass` from an older profiling one would compare a
+# description read on Tuesday against content read the week before, and publish
+# the difference as though one sweep had found it. So both are read from the
+# run the sample pointer names: the newest sweep that actually looked at this
+# endpoint's content.
+#
+# The consequence, stated because it is a real limitation rather than an
+# oversight: an endpoint whose description changed since its last content sweep
+# is described here as it was at that sweep. The endpoint page reports the
+# newer reading, and the two disagreeing is the store being honest about two
+# different observations rather than a defect.
+#
+# ?endpoint is NOT substituted. This query answers for every endpoint at once,
+# because the explorer's payload is built in one pass over the store rather
+# than per endpoint: a facet count that says "12 endpoints use foaf:name"
+# cannot be computed one endpoint at a time.
+#
+# `declared` is a plain boolean rather than two shapes, so a term declared and
+# used produces one row per role and the caller unions them. A term that is
+# declared and never used still yields a row, which is the `declared-only`
+# state and the one an absent row would silently erase.
+
+PREFIX sw: <urn:sparqlwatch:>
+
+SELECT ?endpoint ?term ?kind ?declared
+WHERE {
+  # The run that last profiled this endpoint. One quad, and the reason this
+  # query does no recency work: endpoint_content.rq's header measures why
+  # deciding recency at query time was the mistake it used to be.
+  GRAPH sw:current {
+    ?ptr sw:sampleRunFor ?endpoint ;
+         sw:sampleRunMetric <urn:sparqlwatch:metric:class-profiles> ;
+         sw:sampleRunIs ?run .
+  }
+  {
+    # DECLARED: what the description named, read in that same run.
+    GRAPH ?run {
+      { ?endpoint sw:declaredClass ?term . BIND("class" AS ?kind) }
+      UNION
+      { ?endpoint sw:declaredProperty ?term . BIND("property" AS ?kind) }
+    }
+    BIND(true AS ?declared)
+  }
+  UNION
+  {
+    # OBSERVED: what the profile pass actually found. A profile's class, and
+    # the properties its instances carried.
+    GRAPH ?run {
+      {
+        ?profile sw:profiledClass ?term ;
+                 sw:profiledFrom ?endpoint .
+        BIND("class" AS ?kind)
+      }
+      UNION
+      {
+        ?profile sw:profiledFrom ?endpoint ;
+                 sw:profileProperty ?row .
+        ?row sw:property ?term .
+        BIND("property" AS ?kind)
+      }
+    }
+    BIND(false AS ?declared)
+  }
+}

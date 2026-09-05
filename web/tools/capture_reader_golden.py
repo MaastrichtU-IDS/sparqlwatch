@@ -49,6 +49,7 @@ STORES: dict[str, tuple[Path, ...]] = {
     "store_two_sweeps": (conftest.RUN_TWO_SWEEPS,),
     "store_zero_classes": (conftest.RUN_ZERO_CLASSES,),
     "store_properties_sample": (conftest.RUN_PROPERTIES_SAMPLE,),
+    "store_content_profiles": (conftest.RUN_CONTENT_PROFILES,),
     # Added 2026-09-03 with the per-metric sample pointer. The first two are the
     # cases the old shape could not express, so the golden should hold what the
     # readers say about them.
