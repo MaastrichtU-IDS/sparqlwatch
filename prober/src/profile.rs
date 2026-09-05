@@ -60,6 +60,66 @@ impl Sampling {
     }
 }
 
+/// The rungs to try for one class, from `start` down to the smallest sample.
+///
+/// Escalation goes toward SMALLER samples, never larger: a class the endpoint
+/// could not profile exactly might manage a sixteenth of it. Starting at the
+/// metric's configured sampling rather than always at `Exact` means an operator
+/// who set `sample_prefix = "0"` gets a ladder from there, and is never
+/// escalated back up into the exact scan they asked to avoid.
+///
+/// Measured 2026-09-05 against ontoexplorer's content store, 12.5M triples:
+/// `owl:Restriction` (1,352,666 instances) answered 504 at its gateway's 30
+/// second limit on the exact scan and 1.8s with a one character prefix. Without
+/// this ladder that class is simply unprofiled, and it is the biggest class on
+/// the endpoint.
+///
+/// Two extra rungs and not more. Both prefixes cost the same 1.8s in that
+/// measurement, because the work is the SHA256 scan over every subject rather
+/// than the few that survive it, so a third rung would buy a worse sample for
+/// the same price as the second.
+pub fn ladder_from(start: &Sampling) -> Vec<Sampling> {
+    const RUNGS: [&str; 2] = ["0", "00"];
+    let from = match start {
+        Sampling::Exact => 0,
+        // A configured prefix is the floor: keep it and everything shorter-
+        // sampled than it. An unrecognised prefix length is its own only rung,
+        // because guessing which of these it sits between would silently widen
+        // or narrow what the operator asked for.
+        Sampling::HashPrefix(p) => match RUNGS.iter().position(|r| r == p) {
+            // `i` and not `i + 1`: the configured rung is the ladder's FIRST
+            // attempt, not the one above it. Skipping past it returned an EMPTY
+            // ladder for the last rung, which profiled nothing at all rather
+            // than profiling it once. A test caught that.
+            Some(i) => i,
+            None => return vec![start.clone()],
+        },
+    };
+    let mut rungs = Vec::new();
+    if matches!(start, Sampling::Exact) {
+        rungs.push(Sampling::Exact);
+    }
+    rungs.extend(RUNGS[from..].iter().map(|r| Sampling::HashPrefix(r.to_string())));
+    rungs
+}
+
+/// Whether a failed profile query is worth retrying on a smaller sample.
+///
+/// The distinction is "too much work" against "the wrong question". A gateway
+/// timeout, a 5xx, or no status at all (our own request budget ran out) all say
+/// the query was too big, and a smaller sample is a different query worth
+/// asking. A 4xx says the endpoint understood and refused, so every rung below
+/// would be refused too: escalating there would triple the cost of a malformed
+/// query against every class on the endpoint.
+fn worth_a_smaller_sample(status: Option<u16>) -> bool {
+    match status {
+        // Our own budget, or a connection that never produced a response.
+        None => true,
+        Some(s) if (500..=599).contains(&s) => true,
+        Some(_) => false,
+    }
+}
+
 /// One class's profile: the rows, and how they were sampled.
 #[derive(Debug, Clone)]
 pub struct ClassProfile {
@@ -188,24 +248,55 @@ pub async fn profile_classes(
     budget: Budget,
     out: &mut ProfileOutcome,
 ) {
+    let rungs = ladder_from(&sampling);
     for class in classes.iter() {
-        let query = profile_query(class, &sampling);
-        let observed = budget.with_metric_budget(client.profile_class(endpoint, &query)).await;
-        match observed {
-            // The budget for THIS class expired. The rest of the pass may still
-            // have time, so this is not the end: one slow class does not decide
-            // what happens to the others.
-            Err(_) => out.unreached.push(class.clone()),
-            Ok(o) => match o.profile {
-                Some(rows) => out.profiles.push(ClassProfile {
-                    class: class.clone(),
-                    sampling: sampling.clone(),
-                    rows,
-                }),
-                // A refusal, or a body we could not read. Not an empty profile:
-                // that would say the class carries no properties.
-                None => out.unreached.push(class.clone()),
-            },
+        // The ladder, per class. Each rung is a smaller sample of the same
+        // class, tried only when the rung above failed in a way a smaller
+        // sample could fix.
+        //
+        // THE WHOLE LADDER SHARES ONE METRIC BUDGET, taken per rung so the
+        // remaining time shrinks as the ladder is climbed. That is what stops a
+        // class from costing three full request budgets: an exact scan that
+        // burns 30 of the 60 seconds leaves 30 for the rest, and a second rung
+        // that burns the remainder leaves none for a third. The budget decides
+        // how far the ladder gets rather than the rung count.
+        for (rung, sampling) in rungs.iter().enumerate() {
+            let last = rung + 1 == rungs.len();
+            let query = profile_query(class, sampling);
+            let observed =
+                budget.with_metric_budget(client.profile_class(endpoint, &query)).await;
+            match observed {
+                // The metric budget for THIS class is gone, so there is no time
+                // for a lower rung either. The rest of the pass may still have
+                // time: one slow class does not decide what happens to the
+                // others.
+                Err(_) => {
+                    out.unreached.push(class.clone());
+                    break;
+                }
+                Ok(o) => match o.profile {
+                    Some(rows) => {
+                        out.profiles.push(ClassProfile {
+                            class: class.clone(),
+                            sampling: sampling.clone(),
+                            rows,
+                        });
+                        break;
+                    }
+                    // A refusal, or a body we could not read. Not an empty
+                    // profile: that would say the class carries no properties.
+                    None => {
+                        if last || !worth_a_smaller_sample(o.status) {
+                            out.unreached.push(class.clone());
+                            break;
+                        }
+                        // Fall through to the next rung. Nothing is recorded
+                        // yet: a class that succeeds on a smaller sample is
+                        // profiled, not unreached, and one that never succeeds
+                        // is named once by whichever arm above ends its ladder.
+                    }
+                },
+            }
         }
     }
     // Nothing names the tail here. The endpoint budget cancels this future
@@ -270,5 +361,79 @@ mod tests {
     fn an_exact_profile_hashes_nothing() {
         let q = profile_query("http://example.org/C", &Sampling::Exact);
         assert!(!q.contains("SHA256"), "{q}");
+    }
+
+    // -----------------------------------------------------------------------
+    // The fallback ladder
+    // -----------------------------------------------------------------------
+
+    fn prefixes(rungs: &[Sampling]) -> Vec<Option<&str>> {
+        rungs.iter().map(|r| r.prefix()).collect()
+    }
+
+    #[test]
+    fn an_exact_start_climbs_down_through_both_prefixes() {
+        assert_eq!(
+            prefixes(&ladder_from(&Sampling::Exact)),
+            [None, Some("0"), Some("00")]
+        );
+    }
+
+    /// A configured prefix is a FLOOR, not a starting hint. An operator who
+    /// asked for a sixteenth is asking not to pay for the exact scan, so the
+    /// ladder must never climb back up into it.
+    #[test]
+    fn a_configured_prefix_is_never_escalated_upward_into_an_exact_scan() {
+        let rungs = ladder_from(&Sampling::HashPrefix("0".into()));
+        // The configured rung is tried FIRST, then the smaller one below it.
+        assert_eq!(prefixes(&rungs), [Some("0"), Some("00")]);
+        assert!(
+            !rungs.iter().any(|r| matches!(r, Sampling::Exact)),
+            "an exact scan is what the operator asked to avoid"
+        );
+    }
+
+    #[test]
+    fn the_smallest_rung_has_nowhere_left_to_go() {
+        assert_eq!(prefixes(&ladder_from(&Sampling::HashPrefix("00".into()))), [Some("00")]);
+    }
+
+    /// An unrecognised prefix is its own only rung. Guessing where "abc" sits
+    /// between the known rungs would silently widen or narrow the sample an
+    /// operator configured, and either direction is a change they did not ask
+    /// for.
+    #[test]
+    fn an_unrecognised_prefix_is_its_own_only_rung() {
+        let rungs = ladder_from(&Sampling::HashPrefix("abc".into()));
+        assert_eq!(prefixes(&rungs), [Some("abc")]);
+    }
+
+    /// The rule that keeps the ladder from tripling the cost of every class on
+    /// an endpoint that refuses the query outright.
+    #[test]
+    fn only_a_failure_a_smaller_sample_could_fix_escalates() {
+        // Too much work: worth asking a smaller question.
+        assert!(worth_a_smaller_sample(None), "our own request budget ran out");
+        assert!(worth_a_smaller_sample(Some(504)), "the measured gateway timeout");
+        assert!(worth_a_smaller_sample(Some(500)));
+        assert!(worth_a_smaller_sample(Some(503)));
+        // The wrong question: every rung below is refused the same way.
+        assert!(!worth_a_smaller_sample(Some(400)), "a malformed query stays malformed");
+        assert!(!worth_a_smaller_sample(Some(404)));
+        assert!(!worth_a_smaller_sample(Some(403)));
+        // Not a failure at all, so this is never asked; pinned anyway, because
+        // a `true` here would retry a class that already answered.
+        assert!(!worth_a_smaller_sample(Some(200)));
+    }
+
+    /// Every rung is a real query, and a distinct one. Two rungs generating the
+    /// same text would make the ladder a retry loop that asks the identical
+    /// question and cannot succeed the second time.
+    #[test]
+    fn each_rung_asks_a_different_question() {
+        let rungs = ladder_from(&Sampling::Exact);
+        let queries: std::collections::BTreeSet<String> =
+            rungs.iter().map(|r| profile_query("http://example.org/C", r)).collect();
+        assert_eq!(queries.len(), rungs.len(), "every rung must be its own query");
     }
 }

@@ -154,3 +154,127 @@ async fn the_sampling_choice_reaches_the_query_and_the_fact() {
     assert!(q.contains("SHA256"), "the prefix must reach the query: {q}");
     assert!(q.contains("\"00\""), "with the prefix it claims: {q}");
 }
+
+
+// ---------------------------------------------------------------------------
+// The fallback ladder: a class too big to profile exactly, sampled instead
+// ---------------------------------------------------------------------------
+
+/// A server that refuses the exact scan the way ontoexplorer's gateway does
+/// and answers the sampled query, chosen by whether the query carries a hash
+/// filter. That is the real distinction: the URL and method are identical on
+/// every rung, so only the query text can tell them apart.
+async fn refuses_the_exact_scan(status: u16) -> MockServer {
+    let server = MockServer::start().await;
+    // Ordered: wiremock matches mounts in order, so the sampled case is
+    // mounted first and the catch-all below takes everything else.
+    Mock::given(method("GET"))
+        .and(path("/sparql"))
+        .and(wiremock::matchers::query_param_contains("query", "SHA256"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(ROWS))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(status))
+        .mount(&server)
+        .await;
+    server
+}
+
+/// The measurement this ladder exists for, as a test.
+///
+/// `owl:Restriction` on ontoexplorer's content store (1,352,666 instances)
+/// answered 504 at its gateway's 30 second limit on the exact scan and 1.8s
+/// with a one character prefix. Before the ladder that class was simply
+/// unprofiled, and it is the biggest class on the endpoint.
+#[tokio::test]
+async fn a_class_too_big_to_scan_exactly_is_profiled_from_a_sample() {
+    let server = refuses_the_exact_scan(504).await;
+    let c = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
+    let url = format!("{}/sparql", server.uri());
+    let mut out = ProfileOutcome::default();
+
+    profile_classes(&url, &classes(1), Sampling::Exact, &c, Budget::default(), &mut out).await;
+
+    assert!(out.unreached.is_empty(), "the sample succeeded: {:?}", out.unreached);
+    assert_eq!(out.profiles.len(), 1, "one class, one profile");
+    // And the fact says it is a SAMPLE. A reader who could not tell would take
+    // a sixteenth of the instances for an exact count.
+    assert_eq!(
+        out.profiles[0].sampling,
+        Sampling::HashPrefix("0".into()),
+        "the published sampling must name the rung that actually answered"
+    );
+}
+
+/// The cost guard. A 4xx says the endpoint understood the query and refused
+/// it, so every rung below is refused the same way: escalating there would
+/// triple the request count against every class on the endpoint for nothing.
+#[tokio::test]
+async fn a_refused_query_is_not_retried_on_a_smaller_sample() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(400))
+        .mount(&server)
+        .await;
+    let c = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
+    let url = format!("{}/sparql", server.uri());
+    let mut out = ProfileOutcome::default();
+
+    profile_classes(&url, &classes(1), Sampling::Exact, &c, Budget::default(), &mut out).await;
+
+    assert_eq!(out.unreached, classes(1), "named once, not profiled");
+    assert_eq!(
+        server.received_requests().await.unwrap().len(),
+        1,
+        "one request and no ladder: a malformed query stays malformed"
+    );
+}
+
+/// A 5xx on every rung ends the ladder with the class named ONCE, not once per
+/// rung. `unreached` is published as a fact per class, so a duplicate would
+/// publish the same class twice.
+#[tokio::test]
+async fn a_class_that_fails_every_rung_is_named_exactly_once() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&server)
+        .await;
+    let c = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
+    let url = format!("{}/sparql", server.uri());
+    let mut out = ProfileOutcome::default();
+
+    profile_classes(&url, &classes(1), Sampling::Exact, &c, Budget::default(), &mut out).await;
+
+    assert_eq!(out.unreached, classes(1));
+    assert!(out.profiles.is_empty());
+    assert_eq!(
+        server.received_requests().await.unwrap().len(),
+        3,
+        "every rung was tried, because a 5xx is what a smaller sample could fix"
+    );
+}
+
+/// A class that answers the exact scan costs ONE request. The ladder must be
+/// free when it is not needed, which is the common case.
+#[tokio::test]
+async fn a_class_that_answers_exactly_costs_one_request() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(ROWS))
+        .mount(&server)
+        .await;
+    let c = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
+    let url = format!("{}/sparql", server.uri());
+    let mut out = ProfileOutcome::default();
+
+    profile_classes(&url, &classes(3), Sampling::Exact, &c, Budget::default(), &mut out).await;
+
+    assert_eq!(server.received_requests().await.unwrap().len(), 3, "one per class");
+    assert!(out.profiles.iter().all(|p| p.sampling == Sampling::Exact));
+}
