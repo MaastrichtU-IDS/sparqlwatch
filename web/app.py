@@ -522,6 +522,18 @@ def _metric_name(metric: str) -> str:
 
 
 def _rows(measurements: EndpointMeasurements) -> list[dict]:
+    # Verdictless metrics are excluded here, as they are from the index's
+    # columns and for the same reason, found by reading a real timeline. A
+    # `class-profiles` row drew `not measured` on the days its pass was
+    # declined and a GAP on the day it SUCCEEDED, because a successful pass
+    # publishes no measurement and no decline. A gap means "this run recorded
+    # nothing", so the one day the pass worked was the one day the row looked
+    # like nothing happened.
+    #
+    # Nothing is lost by dropping the row: the class sample section below
+    # already states this run's account of the pass in words, including which
+    # reason it was declined for, and the `content` link says whether there is
+    # a profile to read.
     """One row per metric the run recorded, verdicts and declines together.
 
     They are merged into one list, sorted by metric id, rather than shown as
@@ -531,6 +543,8 @@ def _rows(measurements: EndpointMeasurements) -> list[dict]:
     """
     rows = []
     for verdict in measurements.verdicts:
+        if not _yields_measurement(verdict.metric):
+            continue
         state = verdict_encoding.presentation(verdict.verdict)
         recognised = state is not verdict_encoding.UNRECOGNISED
         rows.append(
@@ -551,6 +565,8 @@ def _rows(measurements: EndpointMeasurements) -> list[dict]:
             }
         )
     for declined in measurements.declined:
+        if not _yields_measurement(declined.metric):
+            continue
         state = verdict_encoding.presentation(verdict_encoding.NOT_MEASURED)
         rows.append(
             {
@@ -569,7 +585,11 @@ def _rows(measurements: EndpointMeasurements) -> list[dict]:
                 "elapsed_ms": None,
             }
         )
-    return sorted(rows, key=lambda row: row["metric"])
+    # The SAME order the index draws its columns in. Sorted by metric id until
+    # 2026-09-05, which meant the listing and the detail page disagreed about
+    # what order these ten things come in, and a reader moving between them had
+    # to find each metric twice.
+    return sorted(rows, key=lambda row: _column_rank(row["metric"]))
 
 
 # What each decline reason means in words, keyed by the slug the graph

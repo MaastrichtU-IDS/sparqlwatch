@@ -2061,3 +2061,46 @@ def test_a_run_that_said_nothing_is_a_gap_and_says_so(client_for, store_two_swee
     gaps = re.findall(r'class="hcell hgap" title="([^"]*)"', body)
     for title in gaps:
         assert "recorded nothing" in title, title
+
+
+def test_the_endpoint_page_lists_metrics_in_the_index_order(client_for, store):
+    """One order for both pages.
+
+    They disagreed until 2026-09-05: the index drew columns in reading order
+    and this page sorted by metric id, so a reader moving between them had to
+    find each metric twice.
+    """
+    from app import _column_rank, _index_metrics, _rows
+    from endpoint_measurements import endpoint_measurements
+
+    m = endpoint_measurements(store, KADASTER)
+    page_order = [r["metric"] for r in _rows(m)]
+    assert page_order == sorted(page_order, key=_column_rank)
+
+
+def test_a_metric_with_no_verdict_gets_no_row_either(client_for, store_declined):
+    """The index drops those columns; this page dropped them too on 2026-09-05,
+    found by reading a real timeline.
+
+    A class-profiles row drew `not measured` on every day its pass was declined
+    and a GAP on the day it SUCCEEDED, because a successful pass publishes
+    neither a measurement nor a decline. A gap means "this run recorded
+    nothing", so the one day the pass worked was the one day the row looked
+    like nothing had happened.
+
+    Nothing is lost: the class sample section states this run's account of the
+    pass in words, and the `content` link says whether a profile exists.
+    """
+    from app import METRIC_DOCS, _rows
+    from endpoint_measurements import endpoint_measurements
+
+    verdictless = {
+        "urn:sparqlwatch:metric:" + name
+        for name, facts in METRIC_DOCS.items()
+        if not facts.get("yields_measurement", True)
+    }
+    assert verdictless, "METRIC_DOCS must mark at least one metric as verdictless"
+    for endpoint in (KADASTER, QLEVER):
+        rows = _rows(endpoint_measurements(store_declined, endpoint))
+        drawn = {r["metric"] for r in rows}
+        assert not (drawn & verdictless), f"{drawn & verdictless} has no verdict to draw"
