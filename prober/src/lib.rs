@@ -644,7 +644,7 @@ async fn probe_one_endpoint(
                 endpoint: ep.to_string(),
                 metric_id: def.id.clone(),
                 verdict: resolve(def, Declared { claimed: false, value: None }, Err(Expired)),
-                level: None,
+                level: None, declared_count: None, observed_count: None,
                 elapsed_ms: None,
             });
         }
@@ -737,6 +737,10 @@ async fn probe_endpoint(
                 // ever exist) gets exactly the row shape its definition asks
                 // for, not one implied by its probe kind.
                 level: if def.graded { fetch_level } else { None },
+                // Not a counting metric: it grades a description's
+                // informativeness, which is a level rather than a number.
+                declared_count: None,
+                observed_count: None,
                 elapsed_ms: fetch_elapsed,
             });
             continue;
@@ -763,7 +767,7 @@ async fn probe_endpoint(
                 endpoint: ep.to_string(),
                 metric_id: def.id.clone(),
                 verdict: Verdict::Indeterminate,
-                level: None,
+                level: None, declared_count: None, observed_count: None,
                 elapsed_ms: None,
             });
             continue;
@@ -849,11 +853,32 @@ async fn probe_endpoint(
         // An expired metric budget measured nothing, so it reports no elapsed
         // time rather than a zero one.
         let elapsed = observed.as_ref().ok().map(|o| o.elapsed_ms);
+        // The two numbers a counting metric compared, published beside its
+        // verdict. Without them `verified` says a declaration was right and
+        // never what it said, and a consumer asking how big an endpoint is
+        // gets a grade rather than a number.
+        //
+        // Read from the same places `resolve` read them, so the published pair
+        // is the pair that was actually compared rather than a second reading
+        // that could differ. None for every other kind.
+        let (declared_count, observed_count) = if def.kind == ProbeKind::Counted {
+            let counted = observed
+                .as_ref()
+                .ok()
+                .filter(|o| is_a_readable_result(o))
+                .and_then(|o| o.bindings.first())
+                .and_then(|b| b.trim().parse::<u64>().ok());
+            (declared.value, counted)
+        } else {
+            (None, None)
+        };
         acc.rows.push(MeasurementRow {
             endpoint: ep.to_string(),
             metric_id: def.id.clone(),
             verdict,
             level: None,
+            declared_count,
+            observed_count,
             elapsed_ms: elapsed,
         });
     }
@@ -1000,6 +1025,9 @@ async fn probe_endpoint(
             metric_id: def.id.clone(),
             verdict: resolve(def, declared, Ok(&observation)),
             level: None,
+            // Not a counting metric: it compares vocabularies, not numbers.
+            declared_count: None,
+            observed_count: None,
             // No request, so no time to report. A zero would read as the
             // fastest measurement in the dataset.
             elapsed_ms: None,
@@ -1084,7 +1112,7 @@ mod tests {
                     endpoint: ep.to_string(),
                     metric_id: d.id.clone(),
                     verdict: Verdict::Verified,
-                    level: None,
+                    level: None, declared_count: None, observed_count: None,
                     elapsed_ms: Some(7),
                 })
                 .collect(),

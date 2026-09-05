@@ -3632,3 +3632,87 @@ fn every_counting_query_looks_in_named_graphs() {
         );
     }
 }
+
+
+/// The numbers reach the graph, not just the grade.
+///
+/// The first version of the count metrics published only the verdict, so
+/// `verified` said a declaration was right and never what it said. A consumer
+/// asking how big an endpoint is got a grade rather than a number, which is
+/// not what a "number of triples" metric is for.
+#[tokio::test]
+async fn a_counting_metric_publishes_both_numbers_it_compared() {
+    let server = an_endpoint_stating_and_holding(Some(1_000_000), Some(1_020_000)).await;
+    let defs = load_shipped_metrics();
+    let client =
+        std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
+    let url = format!("{}/sparql", server.uri());
+    let Sweep { rows, declarations_read: read, .. } = without_deadlocking(run_sweep(
+        std::slice::from_ref(&url), &defs, &[], &client,
+        Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding(),
+    )).await.unwrap();
+    let nq = emit_nquads(RunEmission {
+        run: &RunId("test".into()),
+        generated_at: "2026-08-20T08:00:00Z",
+        metric_revision: "test-revision",
+        rows: &rows,
+        declarations_read: &read,
+        not_measured: &[],
+        max_cost: Cost::Expensive,
+        concurrency: NonZeroUsize::new(1).unwrap(),
+        failed_endpoints: 0,
+        content_samples: &[],
+        content_profiles: &[],
+    })
+    .unwrap();
+
+    assert!(nq.contains("urn:sparqlwatch:declaredCount"), "the claim must be published");
+    assert!(nq.contains("urn:sparqlwatch:observedCount"), "and the count beside it");
+    assert!(nq.contains("\"1000000\""), "the declared number itself: {nq}");
+    assert!(nq.contains("\"1020000\""), "and the counted one");
+}
+
+/// Each number stands alone. An endpoint that declared a size we could not
+/// count publishes the claim by itself, which is what `declared-only` means,
+/// and publishing a zero beside it would invent a measurement.
+#[tokio::test]
+async fn a_declared_count_we_could_not_verify_publishes_the_claim_alone() {
+    let server = an_endpoint_stating_and_holding(Some(500), None).await;
+    let defs = load_shipped_metrics();
+    let client =
+        std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
+    let url = format!("{}/sparql", server.uri());
+    let Sweep { rows, .. } = without_deadlocking(run_sweep(
+        std::slice::from_ref(&url), &defs, &[], &client,
+        Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding(),
+    )).await.unwrap();
+    let row = rows.iter().find(|r| r.metric_id == "triple-count").unwrap();
+    assert_eq!(row.declared_count, Some(500));
+    assert_eq!(row.observed_count, None, "no count came back, so none is published");
+}
+
+/// Only a counting metric carries them. A number on an availability row would
+/// be a fact about nothing.
+#[tokio::test]
+async fn no_other_metric_carries_a_count() {
+    let server = an_endpoint_stating_and_holding(Some(10), Some(10)).await;
+    let defs = load_shipped_metrics();
+    let client =
+        std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
+    let url = format!("{}/sparql", server.uri());
+    let Sweep { rows, .. } = without_deadlocking(run_sweep(
+        std::slice::from_ref(&url), &defs, &[], &client,
+        Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding(),
+    )).await.unwrap();
+    let counting: std::collections::BTreeSet<&str> = defs
+        .iter()
+        .filter(|d| d.kind == ProbeKind::Counted)
+        .map(|d| d.id.as_str())
+        .collect();
+    for r in &rows {
+        if !counting.contains(r.metric_id.as_str()) {
+            assert_eq!(r.declared_count, None, "{} carries a count", r.metric_id);
+            assert_eq!(r.observed_count, None, "{} carries a count", r.metric_id);
+        }
+    }
+}

@@ -322,7 +322,7 @@ mod tests {
                 endpoint: endpoint.into(),
                 metric_id: "availability".into(),
                 verdict: Verdict::Verified,
-                level: None,
+                level: None, declared_count: None, observed_count: None,
                 elapsed_ms: Some(12),
             }],
             declarations_read: vec![DeclarationsRead { endpoint: endpoint.into(), read: true, classes: Vec::new(), properties: Vec::new() }],

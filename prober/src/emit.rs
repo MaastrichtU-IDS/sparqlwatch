@@ -69,6 +69,19 @@ pub struct MeasurementRow {
     pub metric_id: String,
     pub verdict: Verdict,
     pub level: Option<Level>,
+    /// The number the endpoint's description STATED, for a counting metric.
+    ///
+    /// `None` for every other kind, and for a counting metric whose
+    /// description stated nothing. Published because the verdict alone throws
+    /// away the interesting part: `verified` says a declaration was right and
+    /// not what it said, and a consumer asking how big an endpoint is wants
+    /// the number rather than a grade of it. This was missing from the first
+    /// version of the count metrics and made them half a feature.
+    pub declared_count: Option<u64>,
+    /// The number we COUNTED, for a counting metric. `None` when the query did
+    /// not come back with one, which is not the same as a count of zero: see
+    /// `resolve`'s `Counted` arm.
+    pub observed_count: Option<u64>,
     /// How long the probe took, when we actually measured it. `None` when the
     /// measurement came from an expired budget: a timed-out probe that
     /// published `elapsedMs 0` would read as the fastest observation in the
@@ -1177,6 +1190,25 @@ pub fn emit_endpoint(state: &mut EmitState, facts: EndpointFacts) -> anyhow::Res
             Term::NamedNode(nn(&format!("urn:sparqlwatch:metric:{}", r.metric_id))?),
             graph.clone(),
         ));
+        // The two numbers a counting metric compared, BEFORE the verdict they
+        // explain, so no fact family publishes its summary before the things
+        // it summarises. Absent for every other kind, and absent
+        // independently: an endpoint that declared a size we could not count
+        // publishes the claim alone, which is what its `declared-only` verdict
+        // means, and one we counted without a claim publishes the count alone.
+        for (predicate, value) in [
+            ("urn:sparqlwatch:declaredCount", r.declared_count),
+            ("urn:sparqlwatch:observedCount", r.observed_count),
+        ] {
+            if let Some(n) = value {
+                quads.push(Quad::new(
+                    subj.clone(),
+                    nn(predicate)?,
+                    Term::Literal(Literal::new_typed_literal(n.to_string(), xsd::INTEGER)),
+                    graph.clone(),
+                ));
+            }
+        }
         quads.push(Quad::new(
             subj.clone(),
             nn(&format!("{DQV}value"))?,
@@ -1816,7 +1848,7 @@ mod tests {
             endpoint: endpoint.into(),
             metric_id: metric_id.into(),
             verdict,
-            level: None,
+            level: None, declared_count: None, observed_count: None,
             elapsed_ms: Some(1),
         }
     }
@@ -1827,7 +1859,7 @@ mod tests {
                 endpoint: "https://qlever.dev/api/osm-planet".into(),
                 metric_id: "geo-functions".into(),
                 verdict: Verdict::UndeclaredButVerified,
-                level: None,
+                level: None, declared_count: None, observed_count: None,
                 elapsed_ms: Some(210),
             },
             MeasurementRow {
@@ -1835,6 +1867,8 @@ mod tests {
                 metric_id: "service-description".into(),
                 verdict: Verdict::DeclaredOnly,
                 level: Some(Level(2)),
+                declared_count: None,
+                observed_count: None,
                 elapsed_ms: Some(5714),
             },
         ]
@@ -1882,7 +1916,7 @@ mod tests {
                 endpoint: "https://a.example/sparql".into(),
                 metric_id: "availability".into(),
                 verdict: Verdict::Verified,
-                level: None,
+                level: None, declared_count: None, observed_count: None,
                 elapsed_ms: Some(12),
             },
             MeasurementRow {
@@ -1890,6 +1924,8 @@ mod tests {
                 metric_id: "cors".into(),
                 verdict: Verdict::Absent,
                 level: Some(Level(2)),
+                declared_count: None,
+                observed_count: None,
                 elapsed_ms: Some(34),
             },
             MeasurementRow {
@@ -1897,6 +1933,8 @@ mod tests {
                 metric_id: "service-description".into(),
                 verdict: Verdict::DeclaredOnly,
                 level: Some(Level(1)),
+                declared_count: None,
+                observed_count: None,
                 elapsed_ms: None,
             },
         ];
@@ -2060,7 +2098,7 @@ mod tests {
                 endpoint: "https://a.example/sparql".into(),
                 metric_id: "availability".into(),
                 verdict: Verdict::Verified,
-                level: None,
+                level: None, declared_count: None, observed_count: None,
                 elapsed_ms: Some(12),
             },
             MeasurementRow {
@@ -2068,6 +2106,8 @@ mod tests {
                 metric_id: "cors".into(),
                 verdict: Verdict::Absent,
                 level: Some(Level(2)),
+                declared_count: None,
+                observed_count: None,
                 elapsed_ms: None,
             },
             MeasurementRow {
@@ -2075,6 +2115,8 @@ mod tests {
                 metric_id: "service-description".into(),
                 verdict: Verdict::DeclaredOnly,
                 level: Some(Level(1)),
+                declared_count: None,
+                observed_count: None,
                 elapsed_ms: Some(340),
             },
         ];
@@ -3250,7 +3292,7 @@ mod tests {
                 endpoint: "not an iri at all".into(),
                 metric_id: "availability".into(),
                 verdict: Verdict::Verified,
-                level: None,
+                level: None, declared_count: None, observed_count: None,
                 elapsed_ms: Some(3),
             },
         );
@@ -3304,7 +3346,7 @@ mod tests {
             endpoint: "https://qlever.dev/api/osm-planet".into(),
             metric_id: "classes".into(),
             verdict: Verdict::Verified,
-            level: None,
+            level: None, declared_count: None, observed_count: None,
             elapsed_ms: Some(12),
         });
         let qs = emit(&rs);

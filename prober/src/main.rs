@@ -765,6 +765,8 @@ mod tests {
             metric_id: metric_id.into(),
             verdict,
             level: None,
+            declared_count: None,
+            observed_count: None,
             elapsed_ms,
         }
     }
