@@ -77,6 +77,20 @@ services:
       # the tailnet would put a fake SPARQL endpoint on a real network under a
       # name that suggests it means something.
       - "127.0.0.1:9200:9200"
+    # Its OWN healthcheck. Both services run the same image, whose HEALTHCHECK
+    # asks the site's /about on port 8000, so without this override the
+    # synthetic endpoint reported `unhealthy` while answering queries perfectly:
+    # a wrong health status that some orchestrators would restart-loop on.
+    #
+    # /truth rather than /sparql, because it is the route that proves the
+    # DATASET loaded rather than only that the socket is open: it returns the
+    # counts read back out of the store the generator built.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9200/truth"]
+      interval: 30s
+      timeout: 10s
+      start_period: 15s
+      retries: 3
 
   # Not started by `up`: it is in a profile, so it runs only when asked.
   #
