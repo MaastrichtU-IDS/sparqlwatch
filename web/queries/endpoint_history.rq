@@ -1,0 +1,54 @@
+# What has each metric read for this endpoint, across every run in the store?
+#
+# The page this feeds answers the question the name of this project makes: not
+# "is it up" but "has it changed". Every other read query here is about ONE run,
+# the newest that measured an endpoint, and deliberately so; this one is about
+# all of them and is the only query that crosses run graphs on purpose.
+#
+# ?endpoint is the input, substituted as a NamedNode (SEP-0007), which is why it
+# appears in the projection: pyoxigraph substitutes projected variables only.
+#
+# NO `urn:sparqlwatch:current` HERE, unlike every other query in this
+# directory. current names the newest run per endpoint, and a history that read
+# it would be a history of one run. The run graphs are the record and they are
+# never rewritten, so walking them IS the history.
+#
+# ORDERED BY THE RUN'S OWN TIMESTAMP, not by the run IRI. The IRI happens to
+# contain an ISO instant today and sorting on it would work by accident; a run
+# named any other way would silently reorder the history, and a reordered
+# history reads as an endpoint that recovered when it broke.
+#
+# ONE ROW PER (run, metric) THAT SAID SOMETHING, and no row where a run said
+# nothing. A run that predates a metric has no fact about it, and neither does a
+# run whose sweep never reached it. Both are absences the CALLER renders as a
+# gap, which is the same reading the index gives an empty cell: this run
+# recorded nothing about that metric, which is not a verdict about the endpoint.
+#
+# A DECLINE IS A ROW, with ?reason bound and ?verdict unbound. "We chose not to
+# look" is something a run said, and drawing it as a gap would lose the
+# difference between a sweep that declined a metric and a sweep that had never
+# heard of it.
+
+PREFIX dqv: <http://www.w3.org/ns/dqv#>
+PREFIX prov: <http://www.w3.org/ns/prov#>
+PREFIX sw: <urn:sparqlwatch:>
+
+SELECT ?endpoint ?run ?generatedAt ?metric ?verdict ?reason
+WHERE {
+  GRAPH ?run {
+    ?activity a prov:Activity ;
+              prov:generatedAtTime ?generatedAt .
+    {
+      ?measurement dqv:computedOn ?endpoint ;
+                   dqv:isMeasurementOf ?metric ;
+                   dqv:value ?verdict .
+    }
+    UNION
+    {
+      ?notMeasured sw:notMeasuredOn ?endpoint ;
+                   sw:notMeasuredMetric ?metric ;
+                   sw:notMeasuredReason ?reason .
+    }
+  }
+}
+ORDER BY ?generatedAt ?metric

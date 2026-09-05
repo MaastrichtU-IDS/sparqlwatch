@@ -68,6 +68,7 @@ import verdict_encoding
 from endpoint_content import CLASS_SAMPLING_METRICS, EndpointContent, endpoint_content
 from explore_payload import build_payload, build_payload_json
 from endpoint_index import endpoint_index
+from endpoint_history import EndpointHistory, endpoint_history
 from endpoint_measurements import EndpointMeasurements, endpoint_measurements
 from load_run import CURRENT_GRAPH, pointers_to_missing_runs
 from queries import read_query
@@ -608,6 +609,45 @@ def _declined_detail(reason: str) -> str:
     return _DECLINE_DETAILS.get(reason, _UNRECOGNISED_DECLINE_DETAIL)
 
 
+def _history_cells(history: EndpointHistory, metric: str) -> list[dict]:
+    """One cell per run for `metric`, oldest first, aligned to the run list.
+
+    Drawn with the SAME encoding the grid uses, because a reading in a timeline
+    is the same fact as a reading in a cell and a second visual language for it
+    would be a second thing to learn. A run that said nothing is a gap, exactly
+    as an empty cell on the index is: this run recorded nothing about that
+    metric, which is not a verdict about the endpoint.
+    """
+    for m in history.metrics:
+        if m.metric != metric:
+            continue
+        cells = []
+        for at, reading in zip(history.runs, m.readings):
+            if reading is None:
+                cells.append({"present": False, "at": at})
+                continue
+            slug = reading.verdict or verdict_encoding.NOT_MEASURED
+            state = verdict_encoding.presentation(slug)
+            # `presentation` returns UNRECOGNISED rather than None for a slug
+            # this build does not know, so the check is against that object and
+            # not against None.
+            recognised = state is not verdict_encoding.UNRECOGNISED
+            cells.append(
+                {
+                    "present": True,
+                    "at": at,
+                    "verdict": reading.verdict,
+                    "reason": reading.reason,
+                    "css_class": verdict_encoding.css_class(state.slug),
+                    # The store's own word where this build does not know it,
+                    # the same way a row's state text does.
+                    "label": state.label if recognised else (reading.verdict or ""),
+                }
+            )
+        return cells
+    return []
+
+
 def _detail(verdict, recognised: bool) -> str | None:
     """The extra clause a row carries beside its state, or nothing."""
     if not recognised:
@@ -1050,6 +1090,7 @@ def _page_context(
     endpoint: str,
     measurements: EndpointMeasurements,
     content: EndpointContent,
+    history: EndpointHistory,
 ) -> dict:
     """Everything the template renders, decided here rather than in the page.
 
@@ -1058,7 +1099,15 @@ def _page_context(
     right answer, and they belong where they can be tested.
     """
     rows = _rows(measurements)
+    # Each row gains its own timeline, aligned to the shared run list. Attached
+    # to the row rather than rendered as a separate block, because a reading is
+    # the same fact as the verdict beside it and the two belong on one line.
+    for row in rows:
+        row["history"] = _history_cells(history, row["metric"])
     return {
+        # Oldest first, and only where there is more than one: a single-cell
+        # timeline implies a trend from one observation.
+        "history_runs": history.runs if history.has_history else [],
         "endpoint": endpoint,
         # The MEASURING sweep, and only that one. The class sample carries
         # its own run and timestamp (see _sample), because the two are
@@ -1123,10 +1172,11 @@ def _endpoint_html(
     endpoint: str,
     measurements: EndpointMeasurements,
     content: EndpointContent,
+    history: EndpointHistory,
 ) -> str:
     """The page, rendered."""
     return _TEMPLATES.get_template("endpoint.html").render(
-        **_page_context(endpoint, measurements, content)
+        **_page_context(endpoint, measurements, content, history)
     )
 
 
@@ -1245,7 +1295,7 @@ def endpoint_resource(
 
     if media_type == HTML_MEDIA_TYPE:
         return Response(
-            content=_endpoint_html(url, measurements, content),
+            content=_endpoint_html(url, measurements, content, endpoint_history(store, url)),
             media_type="text/html; charset=utf-8",
         )
     return Response(

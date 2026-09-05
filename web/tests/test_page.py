@@ -2012,3 +2012,52 @@ def test_a_conformance_level_still_wins_the_clause():
 
     d = _detail(_counting_verdict(metric=M + "service-description", level=3), True)
     assert d == "conformance level 3", d
+
+
+# ---------------------------------------------------------------------------
+# The timeline
+# ---------------------------------------------------------------------------
+
+
+def test_a_single_run_store_draws_no_timeline(client_for, store):
+    """One run is not a history, and a one-cell timeline would imply a trend
+    from one observation. Every committed fixture is one or two runs, so this is
+    the state most of this suite is in."""
+    body = page(client_for(store), KADASTER)
+    assert 'class="m-history"' not in body, "a single run must draw no timeline"
+
+
+def test_the_timeline_draws_in_the_sites_own_encoding(client_for, store_two_sweeps):
+    """A reading in a timeline is the same fact as a reading in a cell. A second
+    visual language for it would be a second thing to learn, and /docs/states
+    would stop describing half of them."""
+    import verdict_encoding
+
+    body = page(client_for(store_two_sweeps), KADASTER)
+    assert 'class="m-history"' in body, "two runs is a history"
+    drawn = set(re.findall(r'class="hcell (enc-[a-z-]+)"', body))
+    assert drawn, "the timeline draws cells"
+    known = {"enc-" + s.slug for s in verdict_encoding.STATES}
+    known.add("enc-" + verdict_encoding.NOT_MEASURED)
+    assert drawn <= known, f"{drawn - known} is not a state this site defines"
+
+
+def test_every_timeline_cell_names_its_run_and_reading(client_for, store_two_sweeps):
+    """A row of coloured boxes is unreadable without them: the encoding says
+    WHAT was read and only the tooltip says when, and which."""
+    body = page(client_for(store_two_sweeps), KADASTER)
+    cells = re.findall(r'class="hcell[^"]*" title="([^"]*)"', body)
+    assert cells, "the timeline draws cells"
+    for title in cells:
+        assert re.match(r"^\d{4}-\d{2}-\d{2}T", title), f"no run instant in {title!r}"
+        assert ": " in title, f"no reading in {title!r}"
+
+
+def test_a_run_that_said_nothing_is_a_gap_and_says_so(client_for, store_two_sweeps):
+    """The reading a gap must carry, in words, because "this run recorded
+    nothing" is not a verdict about the endpoint and an empty box in a row of
+    boxes reads as one."""
+    body = page(client_for(store_two_sweeps), KADASTER)
+    gaps = re.findall(r'class="hcell hgap" title="([^"]*)"', body)
+    for title in gaps:
+        assert "recorded nothing" in title, title

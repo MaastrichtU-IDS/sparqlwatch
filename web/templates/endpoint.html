@@ -78,6 +78,27 @@
   .m-time { margin-left: auto; font-size: 12px; color: var(--text-muted);
             font-variant-numeric: tabular-nums; white-space: nowrap; }
 
+  /* The timeline: one cell per run, oldest on the left, drawn in the SAME
+     encoding as the chip beside it. A reading in a timeline is the same fact as
+     a reading in a cell, and a second visual language for it would be a second
+     thing to learn.
+
+     Small, and after the elapsed time rather than before it, because the row's
+     subject is what is true NOW. The history qualifies that answer; it does not
+     replace it.
+
+     A gap is a dot on the baseline and never an empty box: an empty box in a
+     row of boxes reads as a state, and "this run recorded nothing" is not one.
+     Same reading the index gives an empty cell. */
+  .m-history { display: flex; gap: 3px; align-items: center; flex-shrink: 0;
+               margin-left: 10px; }
+  .hcell { width: 9px; height: 14px; border-radius: 2px; }
+  .hgap { width: 9px; height: 14px; border: 0; background: none;
+          position: relative; }
+  .hgap::after { content: ""; position: absolute; left: 3px; bottom: 6px;
+                 width: 3px; height: 3px; border-radius: 50%;
+                 background: var(--text-muted); }
+
   /* A grid rather than a wrapping flex row, so the swatches, the labels and
      the counts line up in columns. Ragged rows make the reader compare
      swatches across different indents, which is the opposite of what a key
@@ -226,6 +247,7 @@
         <span class="m-state tok-{{ row.token }}">{{ row.state_text }}</span>
         {% if row.detail %}<span class="m-detail">{{ row.detail }}</span>{% endif %}
         <span class="m-time">{% if row.elapsed_ms is not none %}{{ row.elapsed_ms }} ms{% endif %}</span>
+      {%- if history_runs %}<span class="m-history">{% for c in row.history %}{% if c.present %}<span class="hcell {{ c.css_class }}" title="{{ c.at }}: {{ c.label }}{% if c.reason %} ({{ c.reason }}){% endif %}"></span>{% else %}<span class="hcell hgap" title="{{ c.at }}: this run recorded nothing about this metric"></span>{% endif %}{% endfor %}</span>{% endif %}
       </li>
       {% endfor %}
     </ul>
