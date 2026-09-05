@@ -882,3 +882,97 @@ fn another_services_counts_are_not_borrowed() {
     let d = parse_declarations(&doc, Some("text/turtle"), STUB_ENDPOINT);
     assert_eq!(d.declared_triples, None, "that count belongs to the other service");
 }
+
+
+// ---------------------------------------------------------------------------
+// The vocabulary a description names, not merely that it names some
+// ---------------------------------------------------------------------------
+
+/// A description that partitions its dataset by class and by property, which
+/// is what a real VoID description does and what the explorer needs: the
+/// classes and properties an endpoint SAYS it holds, to set against the ones a
+/// profile pass actually found.
+fn partitioned_description() -> String {
+    format!(
+        r#"@prefix sd: <{SD}> .
+@prefix void: <{VOID}> .
+@prefix foaf: <http://xmlns.com/foaf/0.1/> .
+<http://example.org/service> a sd:Service ;
+    sd:endpoint <http://example.org/sparql> ;
+    sd:defaultDataset <http://example.org/dataset> .
+<http://example.org/dataset> a void:Dataset ;
+    void:classPartition [ void:class foaf:Person ; void:entities 100 ] ,
+                        [ void:class foaf:Organization ; void:entities 4 ] ;
+    void:propertyPartition [ void:property foaf:name ; void:triples 98 ] .
+"#
+    )
+}
+
+#[test]
+fn the_classes_a_partition_names_are_collected() {
+    let d = parse_declarations(&partitioned_description(), Some("text/turtle"), STUB_ENDPOINT);
+    assert!(d.partitioned_classes.contains("http://xmlns.com/foaf/0.1/Person"));
+    assert!(d.partitioned_classes.contains("http://xmlns.com/foaf/0.1/Organization"));
+    assert_eq!(d.partitioned_classes.len(), 2);
+    assert!(d.partitioned_properties.contains("http://xmlns.com/foaf/0.1/name"));
+    assert_eq!(d.partitioned_properties.len(), 1);
+}
+
+#[test]
+fn the_partition_flag_still_says_what_it_always_said() {
+    // `has_void_partitions` is a GRADE input and stays unscoped. Collecting the
+    // vocabulary must not change what the grade sees, or every graded
+    // description silently regrades.
+    let d = parse_declarations(&partitioned_description(), Some("text/turtle"), STUB_ENDPOINT);
+    assert!(d.has_void_partitions);
+}
+
+#[test]
+fn a_description_with_no_partitions_names_no_vocabulary() {
+    let d = parse_declarations(
+        include_str!("fixtures/virtuoso-stub.ttl"),
+        Some("text/turtle"),
+        STUB_ENDPOINT,
+    );
+    assert!(d.partitioned_classes.is_empty());
+    assert!(d.partitioned_properties.is_empty());
+}
+
+#[test]
+fn another_services_vocabulary_is_not_borrowed() {
+    // The same scoping rule the capability sets and the counts follow. Reading
+    // another service's declared classes as ours would say this endpoint
+    // describes a vocabulary it never mentioned.
+    let doc = format!(
+        r#"@prefix sd: <{SD}> .
+@prefix void: <{VOID}> .
+@prefix foaf: <http://xmlns.com/foaf/0.1/> .
+<http://example.org/ours> a sd:Service ;
+    sd:endpoint <http://example.org/sparql> .
+<http://example.org/theirs> a sd:Service ;
+    sd:endpoint <http://elsewhere.example/sparql> ;
+    sd:defaultDataset <http://elsewhere.example/dataset> .
+<http://elsewhere.example/dataset> void:classPartition [ void:class foaf:Person ] .
+"#
+    );
+    let d = parse_declarations(&doc, Some("text/turtle"), STUB_ENDPOINT);
+    assert!(d.partitioned_classes.is_empty(), "that vocabulary belongs to the other service");
+}
+
+#[test]
+fn a_partition_naming_a_literal_names_no_class() {
+    // A class is an IRI. A literal in that position names nothing a profile
+    // could ever be set against, and admitting it would put a string where
+    // every consumer expects a term.
+    let doc = format!(
+        r#"@prefix sd: <{SD}> .
+@prefix void: <{VOID}> .
+<http://example.org/service> a sd:Service ;
+    sd:endpoint <http://example.org/sparql> ;
+    sd:defaultDataset <http://example.org/dataset> .
+<http://example.org/dataset> void:classPartition [ void:class "Person" ] .
+"#
+    );
+    let d = parse_declarations(&doc, Some("text/turtle"), STUB_ENDPOINT);
+    assert!(d.partitioned_classes.is_empty());
+}

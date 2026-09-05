@@ -18,6 +18,8 @@ const SD_DEFAULT_DATASET: &str = "http://www.w3.org/ns/sparql-service-descriptio
 const SD_GRAPH: &str = "http://www.w3.org/ns/sparql-service-description#graph";
 const SD_DEFAULT_ENTAILMENT_REGIME: &str =
     "http://www.w3.org/ns/sparql-service-description#defaultEntailmentRegime";
+const VOID_CLASS: &str = "http://rdfs.org/ns/void#class";
+const VOID_PROPERTY: &str = "http://rdfs.org/ns/void#property";
 const VOID_TRIPLES: &str = "http://rdfs.org/ns/void#triples";
 const VOID_CLASSES: &str = "http://rdfs.org/ns/void#classes";
 const VOID_ENTITIES: &str = "http://rdfs.org/ns/void#entities";
@@ -32,7 +34,16 @@ const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 /// Linking predicates: a service's subtree includes what it points at.
 /// `defaultGraph` and `namedGraph` are here because real descriptions hang
 /// VoID partitions off them, not only off `defaultDataset`.
-const LINKING: [&str; 6] = [
+///
+/// The two partition predicates were added on 2026-09-05, when the vocabulary
+/// INSIDE a partition started being collected. Until then only the boolean
+/// `has_void_partitions` was read, unscoped in pass one, so the expansion never
+/// had to reach a partition node; now `void:class` and `void:property` are read
+/// scoped in pass two, and without these a partition hung off the dataset sits
+/// outside the service's subtree and its vocabulary is silently dropped.
+const LINKING: [&str; 8] = [
+    "http://rdfs.org/ns/void#classPartition",
+    "http://rdfs.org/ns/void#propertyPartition",
     "http://www.w3.org/ns/sparql-service-description#defaultDataset",
     "http://www.w3.org/ns/sparql-service-description#availableGraphs",
     "http://www.w3.org/ns/sparql-service-description#namedGraph",
@@ -84,7 +95,28 @@ pub struct Declarations {
     /// `sd:defaultDataset` or `sd:graph` appeared at least once.
     pub names_dataset: bool,
     /// `void:classPartition` or `void:propertyPartition` appeared at least once.
+    ///
+    /// A GRADE input, read UNSCOPED in pass one, and deliberately unchanged by
+    /// the two sets below: it answers "how informative is the document this
+    /// operator published", so scoping it would regrade every description
+    /// covering more than one service.
     pub has_void_partitions: bool,
+    /// The classes a `void:classPartition` names, through `void:class`.
+    ///
+    /// The vocabulary the endpoint SAYS it holds, which is only half a fact.
+    /// Set against the classes a profile pass actually found, it becomes the
+    /// declared/observed axis the whole project is about: a class in here and
+    /// not in a profile is declared and unconfirmed, one in a profile and not
+    /// in here is confirmed and undeclared.
+    ///
+    /// NOT to be confused with `declared_classes`, which is the COUNT from
+    /// `void:classes`. A count and a set are different facts and a shared name
+    /// would let one be read as the other; the compiler caught exactly that
+    /// when these were first written.
+    pub partitioned_classes: BTreeSet<String>,
+    /// The properties a `void:propertyPartition` names, through
+    /// `void:property`. Same reading as `partitioned_classes`.
+    pub partitioned_properties: BTreeSet<String>,
     /// `sd:defaultEntailmentRegime` appeared at least once.
     pub has_entailment: bool,
     /// `void:exampleResource` appeared at least once. One of the three things
@@ -225,6 +257,8 @@ pub fn parse_declarations_for(body: &str, content_type: Option<&str>, endpoints:
             SD_FEATURE => &mut d.features,
             SD_EXTENSION_FUNCTION => &mut d.extension_functions,
             SD_SUPPORTED_LANGUAGE => &mut d.languages,
+            VOID_CLASS => &mut d.partitioned_classes,
+            VOID_PROPERTY => &mut d.partitioned_properties,
             _ => continue,
         };
         // A capability is an IRI. A literal or blank node in that position
