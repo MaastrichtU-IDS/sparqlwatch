@@ -1,0 +1,40 @@
+# Every endpoint's availability, in every run. The fleet, over time.
+#
+# The index's grid answers "what is true now" across endpoints and metrics. This
+# answers the other question a watcher has, which is the one the name of this
+# project makes: what has moved.
+#
+# AVAILABILITY ALONE, and not every metric. A grid of endpoints by runs is
+# already two dimensions; adding metrics makes it three, and the honest ways to
+# draw three are small multiples or a filter rather than a denser cell. The
+# per-endpoint page carries every metric's timeline, which is where a reader who
+# has picked an endpoint goes.
+#
+# NO `urn:sparqlwatch:current`, like endpoint_history.rq and for the same
+# reason: current names one run per endpoint, so a history read through it would
+# be a history of one run. The run graphs are the record.
+#
+# ONE ROW PER (run, endpoint) THAT WAS MEASURED, and no row otherwise. A sweep
+# that did not cover an endpoint says nothing about it, and the caller draws
+# that as a gap. This is not hypothetical here: this store holds two registries
+# swept on overlapping dates, so most runs cover some endpoints and not others,
+# and a chart that filled those in would invent measurements.
+#
+# A DECLINE IS NOT A ROW HERE, unlike endpoint_history.rq. Availability is cheap
+# and no sweep declines it, so the join stays a plain one; a metric that IS
+# declined would need the UNION that query carries.
+
+PREFIX dqv: <http://www.w3.org/ns/dqv#>
+PREFIX prov: <http://www.w3.org/ns/prov#>
+
+SELECT ?generatedAt ?endpoint ?verdict
+WHERE {
+  GRAPH ?run {
+    ?activity a prov:Activity ;
+              prov:generatedAtTime ?generatedAt .
+    ?measurement dqv:computedOn ?endpoint ;
+                 dqv:isMeasurementOf <urn:sparqlwatch:metric:availability> ;
+                 dqv:value ?verdict .
+  }
+}
+ORDER BY ?generatedAt ?endpoint

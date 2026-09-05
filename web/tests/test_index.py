@@ -2418,3 +2418,45 @@ def test_a_row_nobody_counted_says_nothing_rather_than_zero():
         verdicts=[MetricVerdict(metric=M + "triple-count", verdict="indeterminate")],
     )
     assert _row_size(entry) == []
+
+
+# ---------------------------------------------------------------------------
+# The overview grid
+# ---------------------------------------------------------------------------
+
+
+def test_the_overview_grid_does_not_look_like_an_endpoint_row(client_for, store_two_sweeps):
+    """The grid's rows carry their own attribute, not data-endpoint.
+
+    They shared it when the grid was written, so the page counted eleven
+    endpoints as twenty-two and the facet filters, which select
+    [data-endpoint] in three places, would have hidden grid rows along with
+    listing rows.
+    """
+    body = client_for(store_two_sweeps).get("/").text
+    listed = re.findall(r'<li data-endpoint="([^"]+)"', body)
+    grid = re.findall(r'data-fleet-endpoint="([^"]+)"', body)
+    assert len(re.findall(r'data-endpoint="', body)) == len(listed), (
+        "only listing rows may carry data-endpoint"
+    )
+    if grid:
+        assert set(grid) <= set(listed), "the grid shows endpoints the listing has"
+
+
+def test_the_overview_draws_in_the_sites_own_encoding(client_for, store_two_sweeps):
+    """A state in the grid is the same fact as a state in the matrix below."""
+    import verdict_encoding
+
+    body = client_for(store_two_sweeps).get("/").text
+    drawn = set(re.findall(r'class="fcell (enc-[a-z-]+)"', body))
+    if not drawn:
+        pytest.skip("this fixture has one sweep, so no grid is drawn")
+    known = {"enc-" + s.slug for s in verdict_encoding.STATES}
+    assert drawn <= known, f"{drawn - known} is not a state this site defines"
+
+
+def test_a_single_sweep_store_draws_no_overview(client_for, store):
+    """One sweep is not a history, and a one-column grid implies a trend from
+    one observation."""
+    body = client_for(store).get("/").text
+    assert 'data-section="overview"' not in body

@@ -50,7 +50,7 @@ import re
 from collections import Counter
 from functools import lru_cache
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from fastapi import Depends, FastAPI, Query, Request, Response
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -69,6 +69,7 @@ from endpoint_content import CLASS_SAMPLING_METRICS, EndpointContent, endpoint_c
 from explore_payload import build_payload, build_payload_json
 from endpoint_index import endpoint_index
 from endpoint_history import EndpointHistory, endpoint_history
+from fleet import FleetHistory, fleet_history, fleet_stats
 from endpoint_measurements import EndpointMeasurements, endpoint_measurements
 from load_run import CURRENT_GRAPH, pointers_to_missing_runs
 from queries import read_query
@@ -2095,6 +2096,57 @@ def _newest_sweep_note(entries: list[EndpointMeasurements]) -> str | None:
     )
 
 
+def _short_endpoint(url: str) -> str:
+    """Host and enough path to tell two services on one host apart.
+
+    The grid's row labels are a column of urls, and the scheme and a repeated
+    `/sparql` are the parts none of them differ by.
+    """
+    parsed = urlparse(url)
+    host = parsed.hostname or url
+    if parsed.port:
+        host = f"{host}:{parsed.port}"
+    path = parsed.path.rstrip("/")
+    return host if path in ("", "/sparql", "/query") else f"{host}{path}"
+
+
+def _fleet_view(history: FleetHistory) -> dict:
+    """The overview grid, with every cell already resolved to how it is drawn.
+
+    Resolved here rather than in the template for the reason every other
+    decision on this page is: how a state is drawn has a right answer and
+    belongs where it can be tested.
+    """
+    def cell(at: str, verdict: str | None) -> dict:
+        if verdict is None:
+            return {"present": False, "at": at}
+        state = verdict_encoding.presentation(verdict)
+        known = state is not verdict_encoding.UNRECOGNISED
+        return {
+            "present": True,
+            "at": at,
+            "css_class": verdict_encoding.css_class(state.slug),
+            # The store's own word where this build does not know the state, as
+            # every other reading on this site does.
+            "label": state.label if known else verdict,
+        }
+
+    return {
+        "runs": history.runs,
+        "has_history": history.has_history,
+        "rows": [
+            {
+                "endpoint": row.endpoint,
+                "short": _short_endpoint(row.endpoint),
+                "href": ENDPOINT_PATH + "?url=" + quote(row.endpoint, safe=""),
+                "changed": row.changed,
+                "cells": [cell(at, v) for at, v in zip(history.runs, row.cells)],
+            }
+            for row in history.rows
+        ],
+    }
+
+
 def _index_context(entries: list[EndpointMeasurements], store: Store) -> dict:
     """Everything the index template renders, decided here rather than in the
     page.
@@ -2108,6 +2160,7 @@ def _index_context(entries: list[EndpointMeasurements], store: Store) -> dict:
     # payload is built from a single query and 543 rows asking it 543 times
     # would be the same answer 543 times.
     rows = _index_rows(entries, metrics, explore_endpoints(store))
+    history = fleet_history(store)
     # The legend counts the chips on this page, and it is built by the same
     # function as the endpoint page's legend from the same table, so the two
     # pages cannot explain the encoding differently. A cell that is a gap
@@ -2119,6 +2172,9 @@ def _index_context(entries: list[EndpointMeasurements], store: Store) -> dict:
         if cell["present"]
     ]
     return {
+        # The overview, above the listing: what has changed, before what is.
+        "fleet": _fleet_view(history),
+        "stats": fleet_stats(store, history, entries),
         "endpoint_count": len(entries),
         "metrics": metrics,
         "metric_count": len(metrics),
