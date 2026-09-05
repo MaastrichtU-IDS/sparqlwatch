@@ -24,14 +24,49 @@
 #                        and not a 500: the name does not resolve at all, so
 #                        every metric will read indeterminate until it does.
 #
-#   ontoexplorer...      Serves an HTML single-page app at /sparql, for every
-#                        path and every method (POST answers 405). It is a web
-#                        UI rather than a SPARQL protocol endpoint, so the
-#                        prober will read HTML where it expects results. Listed
-#                        as given; if the query service lives at another URL,
-#                        that URL is what belongs here.
+#   ontoexplorer...      /sparql is the single-page app's own route and serves
+#                        HTML for every path and method, so it was replaced on
+#                        2026-09-05 with the query service the site's OpenAPI
+#                        schema names. Two are published, both unsecured while
+#                        nearly every other route on that API requires a bearer
+#                        token; this is the content one. The other,
+#                        /api/v1/sparql over a Fuseki metadata store, answers 0
+#                        to every count and is not listed.
+#
+#                        It is the only LARGE endpoint here: 12,510,532 triples
+#                        across 45 named graphs and 204 classes, measured
+#                        2026-09-05. That makes it the one that will actually
+#                        exercise a budget, and the one an expensive sweep
+#                        costs something to run.
+#
+#                        WHAT AN EXPENSIVE SWEEP COSTS IT, measured the same
+#                        day, one class at a time rather than by sweeping:
+#
+#                          class enumeration            2.9s
+#                          a typical class              0.15s
+#                          owl:Restriction (1,352,666)  504 at 30s
+#                          owl:Class       (1,080,907)  504 at 30s
+#                          owl:Restriction, prefix "0"  1.8s
+#                          owl:Restriction, prefix "00" 1.8s
+#
+#                        So the pass would profile about 197 of its 200 classes
+#                        in some 30 seconds of their CPU, and spend another 90
+#                        holding their gateway open on three that cannot finish
+#                        inside its 30 second limit. The prober's own request
+#                        budget is also 30s, so those three land in `unreached`,
+#                        which is the designed outcome and not a failure.
+#
+#                        The hash prefix removes the timeout outright, and both
+#                        prefixes cost the same 1.8s: the work is the SHA256
+#                        scan over every subject, not the few that survive it.
+#                        The shortest prefix that fits is therefore the right
+#                        one, and this is the endpoint the fallback ladder in
+#                        docs/superpowers/specs/2026-08-29-content-profiles-
+#                        design.md exists for. That ladder is specified and not
+#                        yet built, so today the three big classes are simply
+#                        unreached.
 endpoint = [
   "http://127.0.0.1:9200/sparql",
   "https://bio2rdf.org/sparql",
-  "https://ontoexplorer.dev.k8s.semanticscience.org/sparql",
+  "https://ontoexplorer.dev.k8s.semanticscience.org/api/v1/sparql/content",
 ]
