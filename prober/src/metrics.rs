@@ -31,6 +31,18 @@ pub enum ProbeKind {
     /// threshold at which "four properties" is a pass. Whether a publisher
     /// described what they hold IS a judgement, and it has one.
     VocabularyDescribed,
+    /// One number the endpoint states about itself, counted and set against the
+    /// statement.
+    ///
+    /// Sends ONE aggregate query. The declared value is the answer this service
+    /// reports for "how big is this endpoint"; the count exists to say whether
+    /// the statement is true, which is the only reason to spend a scan on it.
+    ///
+    /// `declared_by` names the VoID predicate that speaks for it, and unlike
+    /// every other metric's `declared_by` it is read for a VALUE rather than
+    /// for presence. `tolerance` is what keeps a description written last year
+    /// from being called wrong because the dataset grew since.
+    Counted,
     FetchWellKnown,
     /// Enumerate an endpoint's classes, then profile each one: which properties
     /// its instances carry and how many carry each.
@@ -50,7 +62,7 @@ impl ProbeKind {
     /// Kept honest by `sequence` below rather than by discipline: a
     /// hand-maintained list in a test looks like it enforces coverage and does
     /// not, which is the defect shape this crate keeps finding in itself.
-    pub const ALL: [ProbeKind; 9] = [
+    pub const ALL: [ProbeKind; 10] = [
         ProbeKind::Liveness,
         ProbeKind::Cors,
         ProbeKind::CorsPreflight,
@@ -60,6 +72,7 @@ impl ProbeKind {
         ProbeKind::FetchWellKnown,
         ProbeKind::ClassProfile,
         ProbeKind::VocabularyDescribed,
+        ProbeKind::Counted,
     ];
 
     /// Whether a metric of this kind produces a measurement row, and so a
@@ -86,7 +99,8 @@ impl ProbeKind {
             // Derived: it sends nothing, and grades the profile pass's own
             // results against the description already fetched. A measurement
             // all the same, and the only content verdict there is.
-            | ProbeKind::VocabularyDescribed => true,
+            | ProbeKind::VocabularyDescribed
+            | ProbeKind::Counted => true,
             ProbeKind::ClassProfile => false,
         }
     }
@@ -115,7 +129,9 @@ impl ProbeKind {
             | ProbeKind::AskFilter
             | ProbeKind::AskData
             | ProbeKind::SelectIris
-            | ProbeKind::FetchWellKnown => true,
+            | ProbeKind::FetchWellKnown
+            // Sends one aggregate query, so the ordinary dispatch handles it.
+            | ProbeKind::Counted => true,
             ProbeKind::ClassProfile | ProbeKind::VocabularyDescribed => false,
         }
     }
@@ -140,6 +156,7 @@ impl ProbeKind {
             ProbeKind::FetchWellKnown => 6,
             ProbeKind::ClassProfile => 7,
             ProbeKind::VocabularyDescribed => 8,
+            ProbeKind::Counted => 9,
         }
     }
 
@@ -165,7 +182,8 @@ impl ProbeKind {
             | ProbeKind::ClassProfile
             // Derived, and therefore always "implemented": it sends no request
             // at all, so there is no probe that could be missing.
-            | ProbeKind::VocabularyDescribed => true,
+            | ProbeKind::VocabularyDescribed
+            | ProbeKind::Counted => true,
         }
     }
 }
@@ -253,6 +271,21 @@ pub struct MetricDef {
     /// every class unreached, honestly but uselessly.
     #[serde(default)]
     pub sample_prefix: Option<String>,
+    /// How far a declared count may be from the counted one and still be
+    /// called right, as a fraction: `0.05` is five percent.
+    ///
+    /// `None` demands exact equality, which is almost never what anybody wants
+    /// for a live dataset. A VoID file is written once and the data keeps
+    /// growing, so exact matching would report `declared-but-wrong`, the
+    /// harshest verdict in the vocabulary, for a dataset that gained a dozen
+    /// triples since its description was published. That is a false accusation
+    /// at registry scale.
+    ///
+    /// Read only by `ProbeKind::Counted`. A metric of any other kind carrying
+    /// one is a load error, because a tolerance that silently does nothing
+    /// reads as a threshold somebody set on purpose.
+    #[serde(default)]
+    pub tolerance: Option<f64>,
 }
 
 /// The query with everything that is not SPARQL *code* blanked out: comments
@@ -614,9 +647,14 @@ pub fn definitions_revision(defs: &[MetricDef]) -> String {
             // Sharing one revision forever would be exactly the failure the
             // comment above describes.
             sample_prefix,
+            // IN THE REVISION, for the same reason. The tolerance decides
+            // where `verified` stops and `declared-but-wrong` begins, so two
+            // definition sets differing only in it grade the same observation
+            // differently and must not share a revision.
+            tolerance,
         } = d;
         canonical.push_str(&format!(
-            "{}\x1f{}\x1f{}\x1f{:?}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{:?}\x1f{}\x1f{}\x1e",
+            "{}\x1f{}\x1f{}\x1f{:?}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{:?}\x1f{}\x1f{}\x1f{}\x1e",
             id,
             label,
             dimension,
@@ -629,6 +667,10 @@ pub fn definitions_revision(defs: &[MetricDef]) -> String {
             cost,
             sample_limit.map(|n| n.to_string()).unwrap_or_default(),
             sample_prefix.as_deref().unwrap_or(""),
+            // Formatted rather than Debug-printed so that 0.05 and 5e-2 hash
+            // the same: they are the same threshold and a reader who wrote
+            // either meant the same thing.
+            tolerance.map(|t| format!("{t:.6}")).unwrap_or_default(),
         ));
     }
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
@@ -785,6 +827,7 @@ query = "SELECT ?thing WHERE {{ ?s ?p ?thing }} LIMIT 1"
             cost,
             sample_limit,
             sample_prefix,
+            tolerance,
         } = d.clone();
 
         let variants: Vec<(&str, MetricDef)> = vec![
@@ -854,6 +897,17 @@ query = "SELECT ?thing WHERE {{ ?s ?p ?thing }} LIMIT 1"
                         Some("0") => "00".to_string(),
                         _ => "0".to_string(),
                     }),
+                    ..d.clone()
+                },
+            ),
+            // It decides where `verified` stops and `declared-but-wrong` begins,
+            // so two sets differing only in it grade the same count
+            // differently. Sharing a revision would make the history of a
+            // count metric uninterpretable.
+            (
+                "tolerance",
+                MetricDef {
+                    tolerance: Some(tolerance.unwrap_or(0.0) + 0.01),
                     ..d.clone()
                 },
             ),

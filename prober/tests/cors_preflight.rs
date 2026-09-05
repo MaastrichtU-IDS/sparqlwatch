@@ -37,7 +37,7 @@ fn preflight_def() -> MetricDef {
         graded: false,
         cost: Cost::Cheap,
         sample_limit: None,
-        sample_prefix: None,
+        sample_prefix: None, tolerance: None,
     }
 }
 
@@ -46,7 +46,7 @@ fn preflight_def() -> MetricDef {
 async fn preflight_and_resolve(url: &str) -> (Verdict, Observation) {
     let c = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
     let o = without_deadlocking(c.preflight(url)).await;
-    let v = resolve(&preflight_def(), Declared { claimed: false }, Ok(&o));
+    let v = resolve(&preflight_def(), Declared { claimed: false, value: None }, Ok(&o));
     (v, o)
 }
 

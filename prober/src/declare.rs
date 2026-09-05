@@ -148,6 +148,29 @@ impl Declarations {
     /// supported language. This is the one query a caller needs to ask
     /// "did the endpoint claim this capability" -- it does not ask whether
     /// the endpoint actually has it.
+    /// The number this description stated under `iri`, if it stated one.
+    ///
+    /// A lookup rather than four public fields read at the call site, so that
+    /// `metrics.toml` names the predicate it means and nothing in `resolve`
+    /// has to know which VoID term maps to which field. An unrecognised
+    /// predicate returns `None`: a metric pointed at a term this build cannot
+    /// read has no declaration to compare against, which is the same answer as
+    /// a description that stated nothing, and both are honest.
+    pub fn count_of(&self, iri: &str) -> Option<u64> {
+        match iri {
+            "http://rdfs.org/ns/void#triples" => self.declared_triples,
+            "http://rdfs.org/ns/void#classes" => self.declared_classes,
+            "http://rdfs.org/ns/void#entities" => self.declared_entities,
+            // No VoID or service-description predicate states a number of
+            // graphs, so the claim is the length of the sd:namedGraph list.
+            // Keyed on that predicate because it is the one a metric can name.
+            "http://www.w3.org/ns/sparql-service-description#namedGraph" => {
+                self.declared_named_graphs
+            }
+            _ => None,
+        }
+    }
+
     pub fn declares(&self, iri: &str) -> bool {
         self.features.contains(iri) || self.extension_functions.contains(iri) || self.languages.contains(iri)
     }

@@ -109,6 +109,14 @@ async fn a_sweep_over_one_mock_endpoint_produces_nquads() {
         // `indeterminate` is what a declined or failed pass produces, and
         // an_unreachable_endpoint_yields_indeterminate_not_a_panic covers that.
         ("vocabulary-described", Verdict::Absent),
+        // The three counts, all `indeterminate`. This mock answers every query
+        // with a result set carrying no rows, and a COUNT with no GROUP BY
+        // returns exactly one row from any real engine, so no row means the
+        // number was never learned. NOT `absent`, which is reserved for an
+        // endpoint that answered and said zero.
+        ("triple-count", Verdict::Indeterminate),
+        ("graph-count", Verdict::Indeterminate),
+        ("class-count", Verdict::Indeterminate),
     ]);
     assert_eq!(got, expected);
 
@@ -231,7 +239,7 @@ async fn a_metric_binding_a_nonstandard_variable_is_extracted_via_its_declared_v
         graded: false,
         cost: Cost::Cheap,
         sample_limit: None,
-        sample_prefix: None,
+        sample_prefix: None, tolerance: None,
     };
 
     let client = std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
@@ -329,7 +337,7 @@ async fn a_non_graded_fetch_metric_carries_no_level() {
         graded: false,
         cost: Cost::Cheap,
         sample_limit: None,
-        sample_prefix: None,
+        sample_prefix: None, tolerance: None,
     };
 
     let client = std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
@@ -558,7 +566,7 @@ async fn an_endpoint_budget_expiry_still_yields_one_row_per_metric() {
             graded: false,
             cost: Cost::Cheap,
             sample_limit: None,
-            sample_prefix: None,
+            sample_prefix: None, tolerance: None,
         })
         .collect();
 
@@ -625,7 +633,7 @@ async fn a_budget_expiry_after_the_fetch_still_publishes_declarations_read() {
             graded: false,
             cost: Cost::Cheap,
             sample_limit: None,
-            sample_prefix: None,
+            sample_prefix: None, tolerance: None,
         })
         .collect();
 
@@ -700,7 +708,7 @@ async fn a_partial_endpoint_keeps_the_verdicts_it_already_earned() {
         graded: false,
         cost: Cost::Cheap,
         sample_limit: Some(5),
-        sample_prefix: None,
+        sample_prefix: None, tolerance: None,
     }];
     // Then the metrics that stall, so the endpoint budget expires with the
     // first metric's results already in hand.
@@ -716,7 +724,7 @@ async fn a_partial_endpoint_keeps_the_verdicts_it_already_earned() {
         graded: false,
         cost: Cost::Cheap,
         sample_limit: None,
-        sample_prefix: None,
+        sample_prefix: None, tolerance: None,
     }));
 
     let budget = Budget {
@@ -1281,7 +1289,14 @@ async fn an_unreadable_description_never_manufactures_a_declaration() {
         // weaker one. Revision 1 asserted only that the verdict was not
         // `declared-only` or `declared-but-wrong`, which a `verified` slips
         // past; that sharpness is kept above.
-        if d.kind.dispatched_per_metric() {
+        // ...and only for a kind this fixture's mock can actually satisfy. It
+        // answers ASK and SELECT with one generic body and binds no aggregate,
+        // so a `Counted` metric probed and confirmed NOTHING here: its COUNT
+        // came back with no row, which is not a number, and it reads
+        // `indeterminate`. The rule above still binds it, which is the part
+        // that matters; pinning it to `undeclared-but-verified` would be
+        // pinning the mock rather than the prober.
+        if d.kind.dispatched_per_metric() && d.kind != ProbeKind::Counted {
             assert_eq!(
                 verdict,
                 Verdict::UndeclaredButVerified,
@@ -1762,7 +1777,7 @@ fn enumerating_metric(limit: usize) -> MetricDef {
         graded: false,
         cost: Cost::Expensive,
         sample_limit: Some(limit),
-        sample_prefix: None,
+        sample_prefix: None, tolerance: None,
     }
 }
 
@@ -2277,7 +2292,7 @@ fn probe_and_declined() -> (Vec<MetricDef>, Vec<MetricDef>) {
             graded: false,
             cost: Cost::Cheap,
             sample_limit: None,
-            sample_prefix: None,
+            sample_prefix: None, tolerance: None,
         },
         MetricDef {
             id: "classes-small".into(),
@@ -2291,7 +2306,7 @@ fn probe_and_declined() -> (Vec<MetricDef>, Vec<MetricDef>) {
             graded: false,
             cost: Cost::Cheap,
             sample_limit: Some(1),
-            sample_prefix: None,
+            sample_prefix: None, tolerance: None,
         },
     ];
     let declined = vec![MetricDef {
@@ -2306,7 +2321,7 @@ fn probe_and_declined() -> (Vec<MetricDef>, Vec<MetricDef>) {
         graded: false,
         cost: Cost::Expensive,
         sample_limit: Some(200),
-        sample_prefix: None,
+        sample_prefix: None, tolerance: None,
     }];
     (run, declined)
 }
@@ -2608,7 +2623,7 @@ fn panicking_metric() -> MetricDef {
         graded: false,
         cost: Cost::Cheap,
         sample_limit: None,
-        sample_prefix: None,
+        sample_prefix: None, tolerance: None,
     }
 }
 
@@ -3460,4 +3475,160 @@ async fn the_content_verdict_issues_no_request_of_its_own() {
     let with = server2.received_requests().await.unwrap().len();
 
     assert_eq!(with, baseline, "the derived metric must cost no request");
+}
+
+
+// ---------------------------------------------------------------------------
+// The counts, against what the endpoint says about itself
+// ---------------------------------------------------------------------------
+
+/// An endpoint that states `declared` triples in its description and answers
+/// every COUNT with `counted`.
+async fn an_endpoint_stating_and_holding(
+    declared: Option<u64>,
+    counted: Option<u64>,
+) -> MockServer {
+    let void = declared
+        .map(|n| format!("    void:triples {n} ;\n"))
+        .unwrap_or_default();
+    let description = format!(
+        "@prefix sd: <http://www.w3.org/ns/sparql-service-description#> .\n\
+         @prefix void: <http://rdfs.org/ns/void#> .\n\
+         <http://example.org/s> a sd:Service ;\n\
+         \x20   sd:defaultDataset <http://example.org/d> .\n\
+         <http://example.org/d> a void:Dataset ;\n{void}\
+         \x20   a void:Dataset .\n"
+    );
+    let rows = match counted {
+        Some(n) => format!(
+            r#"{{"head":{{"vars":["n"]}},"results":{{"bindings":[{{"n":{{"type":"literal","value":"{n}"}}}}]}}}}"#
+        ),
+        // No row at all, which a real engine never returns for a COUNT and
+        // which must therefore not be read as zero.
+        None => r#"{"head":{"vars":["n"]},"results":{"bindings":[]}}"#.to_string(),
+    };
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/sparql"))
+        .and(wiremock::matchers::query_param_is_missing("query"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            description.into_bytes(),
+            "text/turtle",
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            rows.into_bytes(),
+            "application/sparql-results+json",
+        ))
+        .mount(&server)
+        .await;
+    server
+}
+
+async fn triple_count_verdict(declared: Option<u64>, counted: Option<u64>) -> Verdict {
+    let server = an_endpoint_stating_and_holding(declared, counted).await;
+    let defs = load_shipped_metrics();
+    let client =
+        std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
+    let url = format!("{}/sparql", server.uri());
+    let Sweep { rows, .. } = without_deadlocking(run_sweep(
+        std::slice::from_ref(&url), &defs, &[], &client,
+        Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding(),
+    )).await.unwrap();
+    rows.iter()
+        .find(|r| r.metric_id == "triple-count")
+        .expect("the shipped set declares triple-count")
+        .verdict
+}
+
+#[tokio::test]
+async fn a_count_that_matches_its_declaration_is_verified() {
+    assert_eq!(triple_count_verdict(Some(1_000_000), Some(1_000_000)).await, Verdict::Verified);
+}
+
+/// The tolerance earning its place. A VoID file written before the dataset grew
+/// is the ordinary case, not a fault, and calling it wrong would be crying wolf
+/// on nearly every real endpoint.
+#[tokio::test]
+async fn a_declaration_a_few_percent_out_is_still_verified() {
+    // 2% high and 4% low, both inside the shipped 5%.
+    assert_eq!(triple_count_verdict(Some(1_000_000), Some(1_020_000)).await, Verdict::Verified);
+    assert_eq!(triple_count_verdict(Some(1_000_000), Some(960_000)).await, Verdict::Verified);
+}
+
+/// The verdict this metric exists to be able to reach, and the most useful
+/// thing a monitor can tell a consumer: the description is wrong.
+#[tokio::test]
+async fn a_declaration_an_order_of_magnitude_out_is_declared_but_wrong() {
+    assert_eq!(
+        triple_count_verdict(Some(1_000_000), Some(12_500_000)).await,
+        Verdict::DeclaredButWrong
+    );
+    assert_eq!(triple_count_verdict(Some(9_000_000), Some(400)).await, Verdict::DeclaredButWrong);
+}
+
+/// Counted and never declared. The common case in the wild.
+#[tokio::test]
+async fn a_count_nobody_declared_is_undeclared_but_verified() {
+    assert_eq!(triple_count_verdict(None, Some(12_500_532)).await, Verdict::UndeclaredButVerified);
+}
+
+/// Declared, and the count did not come back. The claim stands unchecked.
+#[tokio::test]
+async fn a_declared_count_we_could_not_verify_is_declared_only() {
+    assert_eq!(triple_count_verdict(Some(1_000_000), None).await, Verdict::DeclaredOnly);
+}
+
+/// The distinction that was wrong in the first version of this rule. A COUNT
+/// with no GROUP BY returns exactly one row from any real engine, so no row
+/// means the number was never learned, while a row saying 0 means the endpoint
+/// told us it holds nothing.
+#[tokio::test]
+async fn no_row_is_not_zero() {
+    assert_eq!(
+        triple_count_verdict(None, None).await,
+        Verdict::Indeterminate,
+        "no row means we never learned the count"
+    );
+    assert_eq!(
+        triple_count_verdict(None, Some(0)).await,
+        Verdict::Absent,
+        "a row saying zero is the endpoint telling us it holds nothing"
+    );
+}
+
+/// A declaration of zero against real content is wrong by any tolerance,
+/// because a fraction of zero is zero. Asserted because the relative test would
+/// otherwise divide by it.
+#[tokio::test]
+async fn a_declaration_of_zero_against_real_content_is_wrong() {
+    assert_eq!(triple_count_verdict(Some(0), Some(4_000)).await, Verdict::DeclaredButWrong);
+    assert_eq!(triple_count_verdict(Some(0), Some(0)).await, Verdict::Verified);
+}
+
+/// Every count query must union the default and named graphs.
+///
+/// Measured 2026-09-05 against ontoexplorer's content store: the
+/// default-graph-only form answered 0 where the union form answered
+/// 12,510,532. Not an undercount, a flat zero, on a real production store, and
+/// it would have been published as a confident fact. Named graphs are the
+/// normal arrangement in Virtuoso, GraphDB and Blazegraph.
+#[test]
+fn every_counting_query_looks_in_named_graphs() {
+    for d in load_shipped_metrics().iter().filter(|d| d.kind == ProbeKind::Counted) {
+        let q = d.query.as_deref().unwrap_or("");
+        assert!(
+            q.contains("GRAPH ?"),
+            "{} must look in named graphs: {q}",
+            d.id
+        );
+        assert!(
+            d.tolerance.is_some(),
+            "{} must state a tolerance, or an exact match calls a grown dataset wrong",
+            d.id
+        );
+    }
 }

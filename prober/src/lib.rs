@@ -643,7 +643,7 @@ async fn probe_one_endpoint(
             acc.rows.push(MeasurementRow {
                 endpoint: ep.to_string(),
                 metric_id: def.id.clone(),
-                verdict: resolve(def, Declared { claimed: false }, Err(Expired)),
+                verdict: resolve(def, Declared { claimed: false, value: None }, Err(Expired)),
                 level: None,
                 elapsed_ms: None,
             });
@@ -781,6 +781,12 @@ async fn probe_endpoint(
             match def.kind {
                 ProbeKind::AskData => client.ask_literal(ep, &q, var.as_deref().expect(VAR_REQUIRED)).await,
                 ProbeKind::SelectIris => client.select_iris(ep, &q, var.as_deref().expect(VAR_REQUIRED)).await,
+                // One aggregate, read as a literal. `ask_literal` already
+                // extracts literal bindings and a COUNT comes back as one, so
+                // this needs no new client path. It does need the metric's own
+                // `var`: a caller passing the wrong name gets a silent empty
+                // result, which reads as "counted nothing".
+                ProbeKind::Counted => client.ask_literal(ep, &q, var.as_deref().expect(VAR_REQUIRED)).await,
                 // The two probes that announce an `Origin`, so the others
                 // cannot be perturbed by a server that filters on it.
                 ProbeKind::Cors => client.cors(ep, &q).await,
@@ -988,7 +994,7 @@ async fn probe_endpoint(
         // `claimed` here is whether the description named ANY class, which is a
         // different question from the capability sets `Declared::from` reads,
         // so it is stated rather than looked up.
-        let declared = Declared { claimed: !declarations.partitioned_classes.is_empty() };
+        let declared = Declared { claimed: !declarations.partitioned_classes.is_empty(), value: None };
         acc.rows.push(MeasurementRow {
             endpoint: ep.to_string(),
             metric_id: def.id.clone(),
@@ -1064,7 +1070,7 @@ mod tests {
             graded: false,
             cost: Cost::Cheap,
             sample_limit: None,
-            sample_prefix: None,
+            sample_prefix: None, tolerance: None,
         }
     }
 

@@ -1708,6 +1708,9 @@ def _state_facets(rows: list[dict]) -> list[dict]:
 # A metric with no entry here gets no tooltip rather than an invented one.
 METRIC_DESCRIPTIONS = {
     "vocabulary-described": "Describes its own vocabulary",
+    "triple-count": "States how many triples it holds",
+    "graph-count": "States how many graphs it holds",
+    "class-count": "States how many classes it holds",
     "availability": "Answers a trivial query",
     "cors": "Sends access-control-allow-origin on a simple GET",
     "cors-preflight": "Answers a CORS preflight for a cross-origin GET",
@@ -2247,6 +2250,51 @@ METRIC_DOCS = {
             "reporting was whether a query came back. Availability asks that, "
             "with a smaller query. Measurements already taken are still shown "
             "and still true of the sweep that took them."
+        ),
+    },
+    # The three counts. Each states a number the endpoint claims about itself
+    # and grades it against one we counted, so `declared-but-wrong` is
+    # reachable here and nowhere else on this page.
+    "triple-count": {
+        "label": "States how many triples it holds",
+        "dimension": "content",
+        "cost": "expensive",
+        "explains": (
+            "How many triples the endpoint says it holds, in "
+            "void:triples, set against a count of them. A description that is "
+            "a few percent out is still 'verified': a VoID file is written "
+            "once and the dataset keeps growing, so calling that wrong would "
+            "be crying wolf on nearly every real endpoint. An order of "
+            "magnitude out reads 'declared but incorrect', which is the most "
+            "useful thing this service can tell a consumer about a "
+            "description. The count unions the default and named graphs, "
+            "because the default-graph-only form answered 0 against a store "
+            "holding 12.5 million triples across 45 named graphs, measured "
+            "2026-09-05."
+        ),
+    },
+    "graph-count": {
+        "label": "States how many graphs it holds",
+        "dimension": "content",
+        "cost": "expensive",
+        "explains": (
+            "How many named graphs the endpoint says it has, against a count "
+            "of them. No VoID or service-description term states a NUMBER of "
+            "graphs, so the claim is the length of the sd:namedGraph list, "
+            "which means an endpoint listing none reads as declaring none "
+            "rather than as declaring zero."
+        ),
+    },
+    "class-count": {
+        "label": "States how many classes it holds",
+        "dimension": "content",
+        "cost": "expensive",
+        "explains": (
+            "How many distinct classes the endpoint says it holds, in "
+            "void:classes, against a count of them. Distinct from 'describes "
+            "its own vocabulary', which asks WHICH classes were named rather "
+            "than how many: an endpoint can state the right number and name "
+            "none of them."
         ),
     },
     # The content dimension's only verdict, and the one that replaced the two

@@ -187,3 +187,79 @@ dimension = "content"
 kind = "VocabularyDescribed"
 cost = "cheap"
 declared_by = "http://rdfs.org/ns/void#classPartition"
+
+# ---------------------------------------------------------------------------
+# The three counts, each set against what the endpoint says about itself
+# ---------------------------------------------------------------------------
+#
+# The DECLARED value is what this service reports for "how big is this
+# endpoint". The count exists to say whether that statement is true, which is
+# the only reason to spend a scan on it. So a description that states its size
+# is believed, and checked whenever a sweep runs at the expensive ceiling.
+#
+# EVERY QUERY UNIONS THE DEFAULT AND NAMED GRAPHS, and this is not stylistic.
+# Measured 2026-09-05 against ontoexplorer's content store, which holds
+# 12,510,532 triples across 45 named graphs:
+#
+#   SELECT (COUNT(*)) WHERE { ?s ?p ?o }                              -> 0
+#   SELECT (COUNT(*)) WHERE { {?s ?p ?o} UNION {GRAPH ?g {?s ?p ?o}} } -> 12,510,532
+#
+# Not an undercount, a flat ZERO, on a real production store, which would have
+# been published as a confident fact. Named graphs are the normal arrangement
+# in Virtuoso, GraphDB and Blazegraph, so the default-graph-only form is wrong
+# about most real endpoints rather than about an unusual one.
+#
+# `tolerance = 0.05` on all three. A VoID file is written once and the dataset
+# keeps growing, so exact matching would report `declared-but-wrong` -- the
+# harshest verdict in the vocabulary -- for a dataset that gained a dozen
+# triples since its description was published. Five percent is a judgement, not
+# a measurement, and it is here rather than in code so that changing it is one
+# line and a re-run.
+#
+# `expensive`, all three. A COUNT over the default and named graphs is a full
+# scan, and on a large endpoint it is the second most costly thing this prober
+# does after the profile pass.
+
+[[metric]]
+id = "triple-count"
+label = "States how many triples it holds"
+dimension = "content"
+kind = "Counted"
+var = "n"
+cost = "expensive"
+declared_by = "http://rdfs.org/ns/void#triples"
+tolerance = 0.05
+query = """
+SELECT (COUNT(*) AS ?n) WHERE { { ?s ?p ?o } UNION { GRAPH ?g { ?s ?p ?o } } }
+"""
+
+[[metric]]
+id = "graph-count"
+label = "States how many graphs it holds"
+dimension = "content"
+kind = "Counted"
+var = "n"
+cost = "expensive"
+# No VoID or service-description predicate states a NUMBER of graphs, so the
+# claim is the length of the `sd:namedGraph` list. Keyed on that predicate
+# because it is the one this metric can name; `declare.rs` counts the
+# statements rather than reading a value.
+declared_by = "http://www.w3.org/ns/sparql-service-description#namedGraph"
+tolerance = 0.05
+query = """
+SELECT (COUNT(DISTINCT ?g) AS ?n) WHERE { GRAPH ?g { ?s ?p ?o } }
+"""
+
+[[metric]]
+id = "class-count"
+label = "States how many classes it holds"
+dimension = "content"
+kind = "Counted"
+var = "n"
+cost = "expensive"
+declared_by = "http://rdfs.org/ns/void#classes"
+tolerance = 0.05
+query = """
+SELECT (COUNT(DISTINCT ?c) AS ?n) WHERE { { ?s a ?c } UNION { GRAPH ?g { ?s a ?c } } }
+"""
+

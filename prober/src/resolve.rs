@@ -21,6 +21,12 @@ use crate::verdict::{Level, Verdict};
 #[derive(Debug, Clone, Copy)]
 pub struct Declared {
     pub claimed: bool,
+    /// The NUMBER the description stated, for a metric that compares one.
+    ///
+    /// `None` for every other kind, and `None` also when a counting metric's
+    /// description stated nothing. Those two are the same thing here: no claim
+    /// was made, so there is nothing to be right or wrong about.
+    pub value: Option<u64>,
 }
 
 impl Declared {
@@ -30,7 +36,18 @@ impl Declared {
     /// liveness, response time, CORS headers -- is never "claimed": there is
     /// no declaration in the vocabulary that could confirm or deny it.
     pub fn from(defs: &Declarations, def: &MetricDef) -> Declared {
-        Declared { claimed: def.declared_by.as_deref().is_some_and(|iri| defs.declares(iri)) }
+        // A counting metric's `declared_by` names a predicate carrying a
+        // NUMBER, so it is read for its value and `claimed` follows from
+        // whether that value is there. Every other kind asks `declares`,
+        // which answers whether the capability was mentioned at all.
+        if def.kind == ProbeKind::Counted {
+            let value = def.declared_by.as_deref().and_then(|iri| defs.count_of(iri));
+            return Declared { claimed: value.is_some(), value };
+        }
+        Declared {
+            claimed: def.declared_by.as_deref().is_some_and(|iri| defs.declares(iri)),
+            value: None,
+        }
     }
 }
 
@@ -40,6 +57,28 @@ impl Declared {
 /// only the former is safe to report as `Absent`.
 fn answered_ok(o: &Observation) -> bool {
     matches!(o.status, Some(s) if (200..=299).contains(&s))
+}
+
+/// Whether a declared count and a counted one agree.
+///
+/// The comparison is RELATIVE, not absolute: a thousand triples out of a
+/// million is noise and a thousand out of two thousand is a different dataset.
+/// `None` demands exact equality.
+///
+/// Zero declared and zero counted agree. Zero declared against anything else
+/// does not, whatever the tolerance, because a fraction of zero is zero: an
+/// endpoint that said it holds nothing and holds a million is wrong by any
+/// reading, and the relative test alone would divide by it.
+fn within_tolerance(stated: u64, found: u64, tolerance: Option<f64>) -> bool {
+    if stated == found {
+        return true;
+    }
+    let Some(tolerance) = tolerance else { return false };
+    if stated == 0 {
+        return false;
+    }
+    let drift = (found as f64 - stated as f64).abs() / stated as f64;
+    drift <= tolerance
 }
 
 /// Whether an observation is a SPARQL result set this prober may read, empty
@@ -335,6 +374,54 @@ pub fn resolve(def: &MetricDef, declared: Declared, obs: Result<&Observation, Ex
                 Verdict::Indeterminate
             }
         }
+        // One number the endpoint states about itself, against the number we
+        // counted. The declared value is what this service reports as the
+        // endpoint's size; this says whether that statement is true.
+        //
+        // `declared-but-wrong` IS reachable here, unlike anywhere else in this
+        // file, and it is the whole point: a description claiming ten times the
+        // triples an endpoint holds is the most useful thing a monitor can tell
+        // a consumer. It is gated on the metric's `tolerance` so that a
+        // description written before the dataset grew is not called wrong for
+        // being a few percent out.
+        ProbeKind::Counted => {
+            // A count we may believe, or none. `None` here is NOT zero, and
+            // conflating the two was the first version of this arm: a COUNT
+            // query with no GROUP BY returns exactly one row from any real
+            // engine, so no row at all means we never learned the number,
+            // while a row saying 0 means the endpoint told us it holds
+            // nothing. Reading the first as the second publishes "this
+            // endpoint is empty" about an endpoint that never answered.
+            let counted = if is_a_readable_result(o) {
+                o.bindings.first().and_then(|b| b.trim().parse::<u64>().ok())
+            } else {
+                None
+            };
+            match (declared.value, counted) {
+                // Both in hand: the comparison this metric exists for. Two
+                // zeros agree, which `within_tolerance` handles directly.
+                (Some(stated), Some(found)) => {
+                    if within_tolerance(stated, found, def.tolerance) {
+                        Verdict::Verified
+                    } else {
+                        Verdict::DeclaredButWrong
+                    }
+                }
+                // Counted zero and nothing declared. The endpoint answered and
+                // told us it holds none, which is a finding rather than a gap.
+                (None, Some(0)) => Verdict::Absent,
+                // Counted, never declared. The endpoint holds this much and
+                // says nothing about it.
+                (None, Some(_)) => confirmed(def, declared),
+                // Declared, and we could not count it. The claim stands
+                // unchecked, which is exactly what `declared-only` means.
+                (Some(_), None) => Verdict::DeclaredOnly,
+                // Neither stated nor learned. Nothing is known, and saying
+                // `absent` here would be the false negative this project
+                // exists to prevent.
+                (None, None) => Verdict::Indeterminate,
+            }
+        }
         ProbeKind::SelectIris => {
             if !o.bindings.is_empty() {
                 // Gated like `AskData`'s positive case, and for the same
@@ -488,7 +575,7 @@ mod tests {
             graded: false,
             cost: Cost::Cheap,
             sample_limit: None,
-            sample_prefix: None,
+            sample_prefix: None, tolerance: None,
         }
     }
 
@@ -498,7 +585,7 @@ mod tests {
 
     #[test]
     fn works_and_declared_is_verified() {
-        let v = resolve(&def(ProbeKind::AskFilter, Some(true)), Declared { claimed: true }, Ok(&obs(Some(true))));
+        let v = resolve(&def(ProbeKind::AskFilter, Some(true)), Declared { claimed: true, value: None }, Ok(&obs(Some(true))));
         assert_eq!(v, Verdict::Verified);
     }
 
@@ -510,7 +597,7 @@ mod tests {
         // only where a declaration was possible in the first place.
         let mut d = def(ProbeKind::AskFilter, Some(true));
         d.declared_by = Some(SF_WITHIN.into());
-        let v = resolve(&d, Declared { claimed: false }, Ok(&obs(Some(true))));
+        let v = resolve(&d, Declared { claimed: false, value: None }, Ok(&obs(Some(true))));
         assert_eq!(v, Verdict::UndeclaredButVerified);
     }
 
@@ -518,13 +605,13 @@ mod tests {
     fn wrong_answer_is_worse_than_absent() {
         // 9 endpoints answered `false` to a filter a conformant engine must
         // answer `true`: the function is bound but the semantics are wrong.
-        let v = resolve(&def(ProbeKind::AskFilter, Some(true)), Declared { claimed: false }, Ok(&obs(Some(false))));
+        let v = resolve(&def(ProbeKind::AskFilter, Some(true)), Declared { claimed: false, value: None }, Ok(&obs(Some(false))));
         assert_eq!(v, Verdict::DeclaredButWrong);
     }
 
     #[test]
     fn a_timeout_is_indeterminate_never_absent() {
-        let v = resolve(&def(ProbeKind::AskFilter, Some(true)), Declared { claimed: false }, Err(Expired));
+        let v = resolve(&def(ProbeKind::AskFilter, Some(true)), Declared { claimed: false, value: None }, Err(Expired));
         assert_eq!(v, Verdict::Indeterminate);
     }
 
@@ -532,7 +619,7 @@ mod tests {
     fn an_html_front_end_is_indeterminate_not_absent() {
         let mut o = obs(None);
         o.body_kind = BodyKind::Html;
-        let v = resolve(&def(ProbeKind::AskFilter, Some(true)), Declared { claimed: false }, Ok(&o));
+        let v = resolve(&def(ProbeKind::AskFilter, Some(true)), Declared { claimed: false, value: None }, Ok(&o));
         assert_eq!(v, Verdict::Indeterminate);
     }
 
@@ -545,7 +632,7 @@ mod tests {
         // regardless of what some other declaration claims elsewhere.
         let mut o = obs(None);
         o.body_kind = BodyKind::Other;
-        let v = resolve(&def(ProbeKind::FetchWellKnown, None), Declared { claimed: true }, Ok(&o));
+        let v = resolve(&def(ProbeKind::FetchWellKnown, None), Declared { claimed: true, value: None }, Ok(&o));
         assert_eq!(v, Verdict::Indeterminate);
     }
 
@@ -556,7 +643,7 @@ mod tests {
         // confirming the function is bound.
         let mut o = obs(Some(true));
         o.status = Some(500);
-        let v = resolve(&def(ProbeKind::AskFilter, Some(true)), Declared { claimed: false }, Ok(&o));
+        let v = resolve(&def(ProbeKind::AskFilter, Some(true)), Declared { claimed: false, value: None }, Ok(&o));
         assert_eq!(v, Verdict::Indeterminate);
     }
 
@@ -564,7 +651,7 @@ mod tests {
     fn ask_data_true_with_no_expectation_from_a_503_is_indeterminate() {
         let mut o = obs(Some(true));
         o.status = Some(503);
-        let v = resolve(&def(ProbeKind::AskData, None), Declared { claimed: false }, Ok(&o));
+        let v = resolve(&def(ProbeKind::AskData, None), Declared { claimed: false, value: None }, Ok(&o));
         assert_eq!(v, Verdict::Indeterminate);
     }
 
@@ -572,7 +659,7 @@ mod tests {
     fn a_matching_boolean_from_a_2xx_is_still_a_capability_claim() {
         // The gate must not swallow the ordinary success case. This `def`
         // carries no `declared_by`, so the confirmation stands on its own.
-        let v = resolve(&def(ProbeKind::AskFilter, Some(true)), Declared { claimed: false }, Ok(&obs(Some(true))));
+        let v = resolve(&def(ProbeKind::AskFilter, Some(true)), Declared { claimed: false, value: None }, Ok(&obs(Some(true))));
         assert_eq!(v, Verdict::Verified);
     }
 
@@ -674,13 +761,13 @@ mod tests {
         // covers the `error.is_some()` half.
         let mut o = obs(None);
         o.error = Some("connection reset".into());
-        let v = resolve(&def(ProbeKind::AskFilter, Some(true)), Declared { claimed: false }, Ok(&o));
+        let v = resolve(&def(ProbeKind::AskFilter, Some(true)), Declared { claimed: false, value: None }, Ok(&o));
         assert_eq!(v, Verdict::Indeterminate);
     }
 
     #[test]
     fn ask_data_false_with_no_expectation_is_absent() {
-        let v = resolve(&def(ProbeKind::AskData, None), Declared { claimed: false }, Ok(&obs(Some(false))));
+        let v = resolve(&def(ProbeKind::AskData, None), Declared { claimed: false, value: None }, Ok(&obs(Some(false))));
         assert_eq!(v, Verdict::Absent);
     }
 
@@ -689,7 +776,7 @@ mod tests {
         // cors: true by default in `obs`, whatever the status. No term in the
         // service-description vocabulary can declare CORS, so the metric
         // carries no `declared_by` and a confirmation is simply `Verified`.
-        let v = resolve(&def(ProbeKind::Cors, None), Declared { claimed: false }, Ok(&obs(None)));
+        let v = resolve(&def(ProbeKind::Cors, None), Declared { claimed: false, value: None }, Ok(&obs(None)));
         assert_eq!(v, Verdict::Verified);
     }
 
@@ -697,7 +784,7 @@ mod tests {
     fn cors_header_absent_with_a_successful_status_is_absent() {
         let mut o = obs(None);
         o.cors = false;
-        let v = resolve(&def(ProbeKind::Cors, None), Declared { claimed: false }, Ok(&o));
+        let v = resolve(&def(ProbeKind::Cors, None), Declared { claimed: false, value: None }, Ok(&o));
         assert_eq!(v, Verdict::Absent);
     }
 
@@ -708,7 +795,7 @@ mod tests {
         let mut o = obs(None);
         o.cors = false;
         o.status = Some(503);
-        let v = resolve(&def(ProbeKind::Cors, None), Declared { claimed: false }, Ok(&o));
+        let v = resolve(&def(ProbeKind::Cors, None), Declared { claimed: false, value: None }, Ok(&o));
         assert_eq!(v, Verdict::Indeterminate);
     }
 
@@ -753,7 +840,7 @@ mod tests {
         o.status = Some(405);
         o.allow_origin = Some("*".into());
         o.allow_methods = Some("GET, POST, OPTIONS".into());
-        let v = resolve(&def(ProbeKind::CorsPreflight, None), Declared { claimed: false }, Ok(&o));
+        let v = resolve(&def(ProbeKind::CorsPreflight, None), Declared { claimed: false, value: None }, Ok(&o));
         assert_eq!(v, Verdict::Absent, "the status gate must be consulted before any header");
     }
 
@@ -772,7 +859,7 @@ mod tests {
             o.body_kind = BodyKind::None;
             o.status = Some(status);
             o.allow_origin = Some("*".into());
-            let v = resolve(&def(ProbeKind::CorsPreflight, None), Declared { claimed: false }, Ok(&o));
+            let v = resolve(&def(ProbeKind::CorsPreflight, None), Declared { claimed: false, value: None }, Ok(&o));
             assert_eq!(
                 v,
                 Verdict::Indeterminate,
@@ -784,7 +871,7 @@ mod tests {
             o.body_kind = BodyKind::None;
             o.status = Some(status);
             o.allow_origin = Some("*".into());
-            let v = resolve(&def(ProbeKind::CorsPreflight, None), Declared { claimed: false }, Ok(&o));
+            let v = resolve(&def(ProbeKind::CorsPreflight, None), Declared { claimed: false, value: None }, Ok(&o));
             assert_eq!(v, Verdict::Indeterminate, "status {status} describes our request, not a CORS policy");
         }
     }
@@ -792,17 +879,17 @@ mod tests {
     #[test]
     fn an_expired_or_failed_preflight_is_indeterminate_never_absent() {
         let d = def(ProbeKind::CorsPreflight, None);
-        assert_eq!(resolve(&d, Declared { claimed: false }, Err(Expired)), Verdict::Indeterminate);
+        assert_eq!(resolve(&d, Declared { claimed: false, value: None }, Err(Expired)), Verdict::Indeterminate);
         let mut o = obs(None);
         o.body_kind = BodyKind::None;
         o.status = None;
         o.error = Some("connection reset".into());
-        assert_eq!(resolve(&d, Declared { claimed: false }, Ok(&o)), Verdict::Indeterminate);
+        assert_eq!(resolve(&d, Declared { claimed: false, value: None }, Ok(&o)), Verdict::Indeterminate);
     }
 
     #[test]
     fn liveness_sparql_json_is_verified() {
-        let v = resolve(&def(ProbeKind::Liveness, None), Declared { claimed: false }, Ok(&obs(None)));
+        let v = resolve(&def(ProbeKind::Liveness, None), Declared { claimed: false, value: None }, Ok(&obs(None)));
         assert_eq!(v, Verdict::Verified);
     }
 
@@ -810,7 +897,7 @@ mod tests {
     fn liveness_other_body_is_absent() {
         let mut o = obs(None);
         o.body_kind = BodyKind::Other;
-        let v = resolve(&def(ProbeKind::Liveness, None), Declared { claimed: false }, Ok(&o));
+        let v = resolve(&def(ProbeKind::Liveness, None), Declared { claimed: false, value: None }, Ok(&o));
         assert_eq!(v, Verdict::Absent);
     }
 
@@ -818,7 +905,7 @@ mod tests {
     fn select_iris_with_bindings_is_verified() {
         let mut o = obs(None);
         o.bindings = vec!["http://example.org/x".into()];
-        let v = resolve(&def(ProbeKind::SelectIris, None), Declared { claimed: false }, Ok(&o));
+        let v = resolve(&def(ProbeKind::SelectIris, None), Declared { claimed: false, value: None }, Ok(&o));
         assert_eq!(v, Verdict::Verified);
     }
 
@@ -832,7 +919,7 @@ mod tests {
         let mut o = obs(None);
         o.status = Some(500);
         o.bindings = vec!["http://example.org/C".into()];
-        let v = resolve(&def(ProbeKind::SelectIris, None), Declared { claimed: false }, Ok(&o));
+        let v = resolve(&def(ProbeKind::SelectIris, None), Declared { claimed: false, value: None }, Ok(&o));
         assert_eq!(v, Verdict::Indeterminate);
     }
 
@@ -865,7 +952,7 @@ mod tests {
             // Nothing in the vocabulary could declare this one.
             let undeclarable = def(kind, expect);
             assert_eq!(
-                resolve(&undeclarable, Declared { claimed: false }, Ok(&o)),
+                resolve(&undeclarable, Declared { claimed: false, value: None }, Ok(&o)),
                 Verdict::Verified,
                 "{kind:?}: a confirmation of a capability nothing could declare is Verified"
             );
@@ -873,12 +960,12 @@ mod tests {
             let mut declarable = def(kind, expect);
             declarable.declared_by = Some(SF_WITHIN.into());
             assert_eq!(
-                resolve(&declarable, Declared { claimed: false }, Ok(&o)),
+                resolve(&declarable, Declared { claimed: false, value: None }, Ok(&o)),
                 Verdict::UndeclaredButVerified,
                 "{kind:?}: a declarable capability confirmed but not declared is undeclared-but-verified"
             );
             assert_eq!(
-                resolve(&declarable, Declared { claimed: true }, Ok(&o)),
+                resolve(&declarable, Declared { claimed: true, value: None }, Ok(&o)),
                 Verdict::Verified,
                 "{kind:?}: declared and confirmed is Verified"
             );
@@ -888,7 +975,7 @@ mod tests {
     #[test]
     fn select_iris_empty_bindings_from_a_parsed_result_is_absent() {
         // body_kind SparqlJson and status 200 by default in `obs`.
-        let v = resolve(&def(ProbeKind::SelectIris, None), Declared { claimed: false }, Ok(&obs(None)));
+        let v = resolve(&def(ProbeKind::SelectIris, None), Declared { claimed: false, value: None }, Ok(&obs(None)));
         assert_eq!(v, Verdict::Absent);
     }
 
@@ -896,7 +983,7 @@ mod tests {
     fn select_iris_empty_bindings_from_an_unparsed_body_is_indeterminate() {
         let mut o = obs(None);
         o.body_kind = BodyKind::Other;
-        let v = resolve(&def(ProbeKind::SelectIris, None), Declared { claimed: false }, Ok(&o));
+        let v = resolve(&def(ProbeKind::SelectIris, None), Declared { claimed: false, value: None }, Ok(&o));
         assert_eq!(v, Verdict::Indeterminate);
     }
 
@@ -904,7 +991,7 @@ mod tests {
     fn fetch_well_known_unparsed_body_unclaimed_is_indeterminate_not_absent() {
         let mut o = obs(None);
         o.body_kind = BodyKind::Other;
-        let v = resolve(&def(ProbeKind::FetchWellKnown, None), Declared { claimed: false }, Ok(&o));
+        let v = resolve(&def(ProbeKind::FetchWellKnown, None), Declared { claimed: false, value: None }, Ok(&o));
         assert_eq!(v, Verdict::Indeterminate);
     }
 
@@ -916,7 +1003,7 @@ mod tests {
         let mut o = obs(None);
         o.body_kind = BodyKind::Other;
         o.status = Some(429);
-        let v = resolve(&def(ProbeKind::Liveness, None), Declared { claimed: false }, Ok(&o));
+        let v = resolve(&def(ProbeKind::Liveness, None), Declared { claimed: false, value: None }, Ok(&o));
         assert_eq!(v, Verdict::Indeterminate);
     }
 
@@ -925,7 +1012,7 @@ mod tests {
         let mut o = obs(None);
         o.body_kind = BodyKind::Other;
         o.status = Some(503);
-        let v = resolve(&def(ProbeKind::Liveness, None), Declared { claimed: false }, Ok(&o));
+        let v = resolve(&def(ProbeKind::Liveness, None), Declared { claimed: false, value: None }, Ok(&o));
         assert_eq!(v, Verdict::Indeterminate);
     }
 
@@ -935,7 +1022,7 @@ mod tests {
         // is not evidence that the data is missing.
         let mut o = obs(Some(false));
         o.status = Some(500);
-        let v = resolve(&def(ProbeKind::AskData, None), Declared { claimed: false }, Ok(&o));
+        let v = resolve(&def(ProbeKind::AskData, None), Declared { claimed: false, value: None }, Ok(&o));
         assert_eq!(v, Verdict::Indeterminate);
     }
 
@@ -945,7 +1032,7 @@ mod tests {
         // response the endpoint never authored is the worst available error.
         let mut o = obs(Some(false));
         o.status = Some(502);
-        let v = resolve(&def(ProbeKind::AskFilter, Some(true)), Declared { claimed: false }, Ok(&o));
+        let v = resolve(&def(ProbeKind::AskFilter, Some(true)), Declared { claimed: false, value: None }, Ok(&o));
         assert_eq!(v, Verdict::Indeterminate);
     }
 
