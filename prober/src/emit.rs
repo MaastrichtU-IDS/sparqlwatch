@@ -90,6 +90,17 @@ pub struct MeasurementRow {
 pub struct DeclarationsRead {
     pub endpoint: String,
     pub read: bool,
+    /// The classes the description named, through `void:classPartition` and
+    /// `void:class`. Empty when it named none, which is different from not
+    /// having been read at all: `read` answers that.
+    ///
+    /// Published beside `read` rather than as its own fact family because it
+    /// answers the same question, "what did this endpoint's description say",
+    /// and hangs off the same subject.
+    pub classes: Vec<String>,
+    /// The properties the description named, through `void:propertyPartition`
+    /// and `void:property`.
+    pub properties: Vec<String>,
 }
 
 /// Why a metric was never measured. An enum, not a string, so a second reason
@@ -1511,6 +1522,35 @@ pub fn emit_endpoint(state: &mut EmitState, facts: EndpointFacts) -> anyhow::Res
                 graph.clone(),
             ));
         }
+        // The declared vocabulary first, then the boolean that summarises
+        // whether anything was read at all. Section protocol: no fact family
+        // publishes its summary before the things it summarises.
+        //
+        // A term that will not parse as an IRI is SKIPPED WITH A WARNING rather
+        // than dropped silently or admitted as a literal. A description is a
+        // stranger's file and may hold anything; what it may not do is put a
+        // non-IRI where every consumer of this graph expects a term.
+        for (predicate, terms) in [
+            ("urn:sparqlwatch:declaredClass", &fact.classes),
+            ("urn:sparqlwatch:declaredProperty", &fact.properties),
+        ] {
+            for term in terms {
+                match nn(term) {
+                    Ok(t) => quads.push(Quad::new(
+                        NamedOrBlankNode::NamedNode(endpoint.clone()),
+                        nn(predicate)?,
+                        Term::NamedNode(t),
+                        graph.clone(),
+                    )),
+                    Err(e) => tracing::warn!(
+                        endpoint = %fact.endpoint,
+                        term = %term,
+                        error = %e,
+                        "skipping a declared term: the description named something that is not an IRI"
+                    ),
+                }
+            }
+        }
         quads.push(Quad::new(
             NamedOrBlankNode::NamedNode(endpoint),
             nn("urn:sparqlwatch:declarationsRead")?,
@@ -1861,8 +1901,8 @@ mod tests {
             },
         ];
         let declarations_read = vec![
-            DeclarationsRead { endpoint: "https://a.example/sparql".into(), read: true },
-            DeclarationsRead { endpoint: "https://b.example/sparql".into(), read: false },
+            DeclarationsRead { endpoint: "https://a.example/sparql".into(), read: true, classes: Vec::new(), properties: Vec::new() },
+            DeclarationsRead { endpoint: "https://b.example/sparql".into(), read: false, classes: Vec::new(), properties: Vec::new() },
         ];
         let not_measured = vec![NotMeasured {
             endpoint: "https://b.example/sparql".into(),
@@ -2039,9 +2079,9 @@ mod tests {
             },
         ];
         let declarations_read = vec![
-            DeclarationsRead { endpoint: "https://a.example/sparql".into(), read: true },
-            DeclarationsRead { endpoint: "https://b.example/sparql".into(), read: false },
-            DeclarationsRead { endpoint: "https://c.example/sparql".into(), read: true },
+            DeclarationsRead { endpoint: "https://a.example/sparql".into(), read: true, classes: Vec::new(), properties: Vec::new() },
+            DeclarationsRead { endpoint: "https://b.example/sparql".into(), read: false, classes: Vec::new(), properties: Vec::new() },
+            DeclarationsRead { endpoint: "https://c.example/sparql".into(), read: true, classes: Vec::new(), properties: Vec::new() },
         ];
         let not_measured = vec![
             NotMeasured {
@@ -2282,6 +2322,8 @@ mod tests {
                 declarations_read: &[DeclarationsRead {
                     endpoint: "https://a.example/sparql".into(),
                     read: true,
+                    classes: Vec::new(),
+                    properties: Vec::new(),
                 }],
                 not_measured: &[],
                 content_samples: &[],
@@ -3291,7 +3333,7 @@ mod tests {
 
     #[test]
     fn declarations_read_emits_a_boolean_quad_shaped_for_the_run() {
-        let facts = vec![DeclarationsRead { endpoint: "https://qlever.dev/api/osm-planet".into(), read: true }];
+        let facts = vec![DeclarationsRead { endpoint: "https://qlever.dev/api/osm-planet".into(), read: true, classes: Vec::new(), properties: Vec::new() }];
         let out = emit_nquads(RunEmission {
             run: &RunId("r1".into()),
             generated_at: "2026-08-20T08:00:00Z",
@@ -3327,11 +3369,93 @@ mod tests {
         );
     }
 
+    /// The declared vocabulary reaches the graph, as IRIs on the endpoint.
+    ///
+    /// This is the declared half of the explorer's axis. Without it the web
+    /// tier can say which classes a profile FOUND and nothing about which ones
+    /// the endpoint claimed, so three of the explorer's four states are
+    /// unreachable.
+    #[test]
+    fn a_declared_vocabulary_is_published_as_terms_on_the_endpoint() {
+        let facts = vec![DeclarationsRead {
+            endpoint: "https://a.example/sparql".into(),
+            read: true,
+            classes: vec!["http://xmlns.com/foaf/0.1/Person".into()],
+            properties: vec!["http://xmlns.com/foaf/0.1/name".into()],
+        }];
+        let out = emit_nquads(RunEmission {
+            run: &RunId("r1".into()),
+            generated_at: "2026-08-20T08:00:00Z",
+            metric_revision: REV,
+            rows: &[],
+            declarations_read: &facts,
+            not_measured: &[],
+            max_cost: Cost::Expensive,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
+            content_samples: &[],
+            content_profiles: &[],
+        })
+        .unwrap();
+        let quads = quads_of(&out);
+        let object_of = |p: &str| {
+            quads
+                .iter()
+                .filter(|q| q.predicate.as_str() == p)
+                .map(|q| q.object.to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            object_of("urn:sparqlwatch:declaredClass"),
+            ["<http://xmlns.com/foaf/0.1/Person>"]
+        );
+        assert_eq!(
+            object_of("urn:sparqlwatch:declaredProperty"),
+            ["<http://xmlns.com/foaf/0.1/name>"]
+        );
+    }
+
+    /// A description is a stranger's file. A term that is not an IRI is skipped
+    /// rather than admitted as a literal, because every consumer of this graph
+    /// expects a term in that position, and rather than dropped silently,
+    /// because a vocabulary quietly missing an entry reads as an endpoint that
+    /// declared less than it did.
+    #[test]
+    fn a_declared_term_that_is_not_an_iri_is_skipped_not_published() {
+        let facts = vec![DeclarationsRead {
+            endpoint: "https://a.example/sparql".into(),
+            read: true,
+            classes: vec!["not an iri".into(), "http://ok.example/C".into()],
+            properties: Vec::new(),
+        }];
+        let out = emit_nquads(RunEmission {
+            run: &RunId("r1".into()),
+            generated_at: "2026-08-20T08:00:00Z",
+            metric_revision: REV,
+            rows: &[],
+            declarations_read: &facts,
+            not_measured: &[],
+            max_cost: Cost::Expensive,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
+            content_samples: &[],
+            content_profiles: &[],
+        })
+        .unwrap();
+        let quads = quads_of(&out);
+        let declared: Vec<String> = quads
+            .iter()
+            .filter(|q| q.predicate.as_str() == "urn:sparqlwatch:declaredClass")
+            .map(|q| q.object.to_string())
+            .collect();
+        assert_eq!(declared, ["<http://ok.example/C>"], "the good term still lands");
+    }
+
     #[test]
     fn every_endpoint_with_a_fact_gets_its_own_quad_whatever_the_boolean() {
         let facts = vec![
-            DeclarationsRead { endpoint: "https://a.example/sparql".into(), read: true },
-            DeclarationsRead { endpoint: "https://b.example/sparql".into(), read: false },
+            DeclarationsRead { endpoint: "https://a.example/sparql".into(), read: true, classes: Vec::new(), properties: Vec::new() },
+            DeclarationsRead { endpoint: "https://b.example/sparql".into(), read: false, classes: Vec::new(), properties: Vec::new() },
         ];
         let out = emit_nquads(RunEmission {
             run: &RunId("r1".into()),

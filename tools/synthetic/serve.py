@@ -71,6 +71,28 @@ def description(truth, mode: str) -> str:
         )
 
     graphs = " ,\n        ".join(f"<{g}>" for g in GRAPHS)
+
+    # VoID partitions naming the vocabulary, which is the DECLARED half of the
+    # explorer's axis. Deliberately incomplete: Person and Measurement are
+    # declared and really present, Ghost is declared and absent, and Record,
+    # Organisation and Dataset are present and undeclared. So one endpoint
+    # produces three of the explorer's four states at once, and a UI that
+    # renders them all the same is visibly wrong against it.
+    partitions = ""
+    if mode != "none":
+        declared_classes = [EX + "Person", EX + "Measurement", EX + "Ghost"]
+        declared_props = [EX + "name", EX + "value", EX + "neverUsed"]
+        partitions = (
+            "".join(
+                f"    void:classPartition [ void:class <{c}> ] ;\n"
+                for c in declared_classes
+            )
+            + "".join(
+                f"    void:propertyPartition [ void:property <{p}> ] ;\n"
+                for p in declared_props
+            )
+        )
+
     return f"""@prefix sd: <{SD}> .
 @prefix void: <{VOID}> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
@@ -83,7 +105,7 @@ def description(truth, mode: str) -> str:
         {graphs} .
 
 <{EX}dataset> a void:Dataset ;
-{counts}    rdfs:label "The synthetic sparqlwatch dataset" ;
+{counts}{partitions}    rdfs:label "The synthetic sparqlwatch dataset" ;
     void:exampleResource <{EX}dataset/1> .
 """
 

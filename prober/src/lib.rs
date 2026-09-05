@@ -438,7 +438,12 @@ fn assemble_endpoint(
         Some(swept) => {
             facts
                 .declarations_read
-                .push(DeclarationsRead { endpoint: ep.to_string(), read: swept.declarations_read });
+                .push(DeclarationsRead {
+                    endpoint: ep.to_string(),
+                    read: swept.declarations_read,
+                    classes: swept.declared_classes,
+                    properties: swept.declared_properties,
+                });
             facts.rows = swept.rows;
             facts.content_samples = swept.content_samples;
             facts.content_profiles = swept.content_profiles;
@@ -569,6 +574,12 @@ struct EndpointSweep {
     /// before the fetch finished publishes an honest `false` rather than
     /// nothing.
     declarations_read: bool,
+    /// The classes and properties the description named. Empty until the fetch
+    /// parses, like `declarations_read` starting `false`, so an endpoint whose
+    /// budget expired before the fetch finished publishes an honest nothing
+    /// rather than an unset value.
+    declared_classes: Vec<String>,
+    declared_properties: Vec<String>,
     /// This endpoint's share of `Sweep::content_samples`, under the same rules.
     content_samples: Vec<ContentSample>,
     /// This endpoint's class profiles, under the same rules: whatever the pass
@@ -689,6 +700,11 @@ async fn probe_endpoint(
     // keeps what parsed before the error) reads `true` even though
     // `resolve_fetch` below grades that same fetch `Indeterminate`.
     acc.declarations_read = declarations.triples > 0;
+    // Cloned out of the parsed declarations here, where they exist, because
+    // `Declarations` is dropped at the end of this function and the fact is
+    // assembled by the caller.
+    acc.declared_classes = declarations.partitioned_classes.iter().cloned().collect();
+    acc.declared_properties = declarations.partitioned_properties.iter().cloned().collect();
     let (fetch_verdict, fetch_level) = resolve_fetch(&declarations, fetch_outcome.as_ref().map_err(|e| *e));
     // Same principle as every other row: an expired or failed fetch measured
     // nothing, so it reports no elapsed time rather than a zero one.
@@ -1015,6 +1031,8 @@ mod tests {
                 })
                 .collect(),
             declarations_read: true,
+            declared_classes: Vec::new(),
+            declared_properties: Vec::new(),
             content_samples: vec![ContentSample {
                 endpoint: ep.to_string(),
                 metric_id: defs[0].id.clone(),
