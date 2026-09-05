@@ -50,6 +50,7 @@ PREFIX prov: <http://www.w3.org/ns/prov#>
 PREFIX sw: <urn:sparqlwatch:>
 
 SELECT ?endpoint ?run ?generatedAt ?metric ?verdict ?level ?elapsedMs ?reason
+       ?declaredCount ?observedCount
        ?emission ?finalised
        ?newestRun ?newestGeneratedAt ?newestEmission ?newestFinalised
        ?newestCompleted ?newestDormant ?newestDormancyReason
@@ -88,6 +89,12 @@ WHERE {
       # time either.
       OPTIONAL { ?measurement sw:level ?level }
       OPTIONAL { ?measurement sw:elapsedMs ?elapsedMs }
+      # The two numbers a counting metric compared. The listing shows only the
+      # counted one (see _row_size), but both are projected so the index reader
+      # and the endpoint reader return the same shape: a row that carried one
+      # here and both there would be two dataclasses wearing one name.
+      OPTIONAL { ?measurement sw:declaredCount ?declaredCount }
+      OPTIONAL { ?measurement sw:observedCount ?observedCount }
     }
     UNION
     {

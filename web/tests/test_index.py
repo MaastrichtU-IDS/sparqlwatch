@@ -2328,3 +2328,93 @@ def test_a_declined_verdictless_metric_does_not_conjure_a_column(store_declined)
     }
     assert verdictless, "METRIC_DOCS must mark at least one metric as verdictless"
     assert not (metrics & verdictless), f"{sorted(metrics & verdictless)} have no verdict to draw"
+
+
+# ---------------------------------------------------------------------------
+# Column order, and what a row says about size
+# ---------------------------------------------------------------------------
+
+
+def test_the_columns_are_in_reading_order_not_alphabetical():
+    """Alphabetical put class-count second and cors third: a reading order
+    decided by spelling. This groups by the question a reader is asking."""
+    from app import METRIC_COLUMN_ORDER, _column_rank
+
+    M = "urn:sparqlwatch:metric:"
+    shuffled = [M + n for n in sorted(METRIC_COLUMN_ORDER)]
+    assert [m.removeprefix(M) for m in sorted(shuffled, key=_column_rank)] == list(
+        METRIC_COLUMN_ORDER
+    )
+
+
+def test_a_metric_this_build_does_not_know_still_gets_a_column():
+    """A newer prober's metric must not vanish from the grid. An unexplained
+    column at the end is the lesser error, and the same call _yields_measurement
+    makes about an unknown kind."""
+    from app import METRIC_COLUMN_ORDER, _column_rank
+
+    M = "urn:sparqlwatch:metric:"
+    order = sorted([M + "availability", M + "zz-from-the-future"], key=_column_rank)
+    assert order[-1].endswith("zz-from-the-future"), "unknown metrics sort last"
+    assert _column_rank(M + "zz-from-the-future")[0] == len(METRIC_COLUMN_ORDER)
+
+
+def _entry_with(**counts):
+    from endpoint_measurements import EndpointMeasurements, MetricVerdict
+
+    M = "urn:sparqlwatch:metric:"
+    return EndpointMeasurements(
+        endpoint="https://e.example/sparql",
+        assessed=True,
+        run="urn:sparqlwatch:run:x",
+        generated_at="2026-09-05T00:00:00Z",
+        verdicts=[
+            MetricVerdict(metric=M + k, verdict="undeclared-but-verified",
+                          observed_count=v)
+            for k, v in counts.items()
+        ],
+    )
+
+
+def test_a_row_states_what_was_counted_largest_unit_first():
+    from app import _row_size
+
+    got = _row_size(_entry_with(**{
+        "class-count": 205, "triple-count": 12_510_784, "graph-count": 46,
+    }))
+    assert [(s["n"], s["unit"]) for s in got] == [
+        (12_510_784, "triples"), (46, "graphs"), (205, "classes")
+    ]
+
+
+def test_a_row_shows_the_counted_number_and_never_the_declared_one():
+    """A row is this service's own reading. Showing an endpoint's CLAIM in the
+    listing, beside a verdict saying the claim is wrong, would put the wrong
+    number where a reader actually looks."""
+    from app import _row_size
+    from endpoint_measurements import EndpointMeasurements, MetricVerdict
+
+    M = "urn:sparqlwatch:metric:"
+    entry = EndpointMeasurements(
+        endpoint="https://e.example/sparql", assessed=True,
+        run="urn:sparqlwatch:run:x", generated_at="2026-09-05T00:00:00Z",
+        verdicts=[MetricVerdict(metric=M + "triple-count", verdict="declared-but-wrong",
+                                declared_count=1_000_000, observed_count=12_500_000)],
+    )
+    assert _row_size(entry) == [{"n": 12_500_000, "unit": "triples"}]
+
+
+def test_a_row_nobody_counted_says_nothing_rather_than_zero():
+    """At the default cheap ceiling nothing counts anything, so this is every
+    row. "0 triples" for an endpoint nobody counted is the confident false
+    negative this project exists to prevent."""
+    from app import _row_size
+    from endpoint_measurements import EndpointMeasurements, MetricVerdict
+
+    M = "urn:sparqlwatch:metric:"
+    entry = EndpointMeasurements(
+        endpoint="https://e.example/sparql", assessed=True,
+        run="urn:sparqlwatch:run:x", generated_at="2026-09-05T00:00:00Z",
+        verdicts=[MetricVerdict(metric=M + "triple-count", verdict="indeterminate")],
+    )
+    assert _row_size(entry) == []

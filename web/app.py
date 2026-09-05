@@ -1515,6 +1515,46 @@ def metric_abbreviations(metrics: list[str]) -> dict[str, str]:
             }
 
 
+# The order the matrix draws its columns in, left to right.
+#
+# NOT alphabetical, which is what it was until 2026-09-05 and which put
+# `class-count` second and `cors` third: a reading order decided by spelling.
+# This groups by what a reader is asking. Does it answer at all, does it
+# describe itself, how big is it, does it describe what it holds, what kind of
+# data, and can a browser reach it.
+#
+# A metric missing from here still gets a column, appended alphabetically after
+# these. A newer prober's metric must not vanish from the grid because this
+# build has never heard of it; an unexplained column at the end is the lesser
+# error, and the same choice `_yields_measurement` makes about an unknown kind.
+METRIC_COLUMN_ORDER = (
+    "availability",
+    "service-description",
+    "triple-count",
+    "graph-count",
+    "class-count",
+    "vocabulary-described",
+    "geo-data",
+    "geo-functions",
+    "cors",
+    "cors-preflight",
+)
+
+
+def _column_rank(metric: str) -> tuple[int, str]:
+    """Where this metric's column sits, and the tiebreak for one not listed.
+
+    The second half of the key is the metric id, so two unlisted metrics keep a
+    stable order between two identical requests: SPARQL solution order is not
+    specified, and columns that moved would look like the metric set changed.
+    """
+    name = metric.removeprefix(_METRIC_PREFIX)
+    try:
+        return (METRIC_COLUMN_ORDER.index(name), "")
+    except ValueError:
+        return (len(METRIC_COLUMN_ORDER), name)
+
+
 def _yields_measurement(metric: str) -> bool:
     """Whether this metric can produce a verdict, and so deserves a column.
 
@@ -1548,7 +1588,8 @@ def _index_metrics(entries: list[EndpointMeasurements]) -> list[dict]:
                 | {declined.metric for entry in entries for declined in entry.declined}
             )
             if _yields_measurement(metric)
-        }
+        },
+        key=_column_rank,
     )
     abbreviations = metric_abbreviations(metrics)
     return [
@@ -1832,6 +1873,42 @@ def _matrix_states(matrix: list[dict]) -> list[dict]:
     ]
 
 
+# The counting metrics whose numbers a row summarises, and the word each one
+# counts. Ordered largest unit first, which is the order somebody sizing up an
+# endpoint reads them in.
+_ROW_SIZES = (
+    ("triple-count", "triples"),
+    ("graph-count", "graphs"),
+    ("class-count", "classes"),
+)
+
+
+def _row_size(entry: EndpointMeasurements) -> list[dict]:
+    """What this endpoint holds, for the row, as far as anything counted it.
+
+    THE COUNTED NUMBER AND NEVER THE DECLARED ONE. A row is this service's own
+    reading, and an endpoint's claim about its size belongs to the endpoint:
+    showing 1,000,000 in the listing because a description said so, beside a
+    verdict saying that claim is wrong, would put the wrong number in the place
+    a reader actually looks. The endpoint page shows both, which is where the
+    comparison is the subject.
+
+    Absent rather than zero where nothing counted. A row that reads "0 triples"
+    for an endpoint nobody counted is the confident false negative this project
+    exists to prevent, and at the default cheap ceiling nothing counts anything.
+    """
+    counted = {
+        v.metric.removeprefix(_METRIC_PREFIX): v.observed_count
+        for v in entry.verdicts
+        if v.observed_count is not None
+    }
+    return [
+        {"n": counted[metric], "unit": unit}
+        for metric, unit in _ROW_SIZES
+        if metric in counted
+    ]
+
+
 def _index_row(
     entry: EndpointMeasurements, metrics: list[dict], explorable: frozenset[str]
 ) -> dict:
@@ -1872,6 +1949,7 @@ def _index_row(
             if entry.endpoint in explorable
             else None
         ),
+        "size": _row_size(entry),
         "cells": _index_chips(entry, metrics),
         "run_unfinished": entry.run_did_not_finish,
         "never_reached": entry.newer_run_did_not_reach_this_endpoint,
