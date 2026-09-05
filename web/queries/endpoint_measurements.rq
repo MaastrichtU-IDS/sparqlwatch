@@ -110,6 +110,7 @@ PREFIX prov: <http://www.w3.org/ns/prov#>
 PREFIX sw: <urn:sparqlwatch:>
 
 SELECT ?endpoint ?run ?generatedAt ?metric ?verdict ?level ?elapsedMs ?reason
+       ?declaredCount ?observedCount
        ?emission ?finalised
        ?newestRun ?newestGeneratedAt ?newestEmission ?newestFinalised
        ?newestCompleted ?newestDormant ?newestDormancyReason
@@ -159,6 +160,10 @@ WHERE {
       FILTER (?measurementType = dqv:QualityMeasurement)
       OPTIONAL { ?measurement sw:level ?level }
       OPTIONAL { ?measurement sw:elapsedMs ?elapsedMs }
+      # The two numbers a counting metric compared. Separately OPTIONAL,
+      # because either can be absent on its own.
+      OPTIONAL { ?measurement sw:declaredCount ?declaredCount }
+      OPTIONAL { ?measurement sw:observedCount ?observedCount }
     }
     UNION
     {

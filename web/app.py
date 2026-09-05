@@ -614,7 +614,34 @@ def _detail(verdict, recognised: bool) -> str | None:
         return "unrecognised verdict, shown as the store recorded it"
     if verdict.level is not None:
         return f"conformance level {verdict.level}"
-    return None
+    return _counts_detail(verdict)
+
+
+def _counts_detail(verdict) -> str | None:
+    """The numbers a counting metric compared, in words.
+
+    The verdict alone is a grade of a claim and never the claim: `verified`
+    says a description was right without saying what it said, and a reader
+    asking how big an endpoint is wants the number. The prober publishes both
+    numbers beside the verdict for exactly this, and they went unread on this
+    page until 2026-09-05.
+
+    Thousands separators, because these are the numbers on this site anybody
+    reads as a magnitude rather than a value: 12510784 and 1251078 are one
+    glance apart and an order of magnitude different.
+    """
+    declared, observed = verdict.declared_count, verdict.observed_count
+    if declared is None and observed is None:
+        return None
+    if declared is not None and observed is not None:
+        # Both, so the comparison is the story. Named in the order the verdict
+        # grades them: the claim first, then what we found.
+        return f"declares {declared:,}, counted {observed:,}"
+    if observed is not None:
+        return f"counted {observed:,}, declared nothing"
+    # A claim we could not check. Said as a claim rather than as a fact, since
+    # nothing here confirmed it.
+    return f"declares {declared:,}, not counted"
 
 
 def _unfinished_run_text(measurements: EndpointMeasurements) -> str | None:

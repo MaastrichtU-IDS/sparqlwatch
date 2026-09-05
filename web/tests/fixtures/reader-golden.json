@@ -238,51 +238,67 @@
         "run": "urn:sparqlwatch:run:2026-08-22T16:00:00Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 77,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 73,
             "level": null,
             "metric": "urn:sparqlwatch:metric:classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 41,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 26,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 45,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 58,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "undeclared-but-verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 117,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 151,
             "level": 1,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "verified"
           }
         ]
@@ -474,51 +490,67 @@
         "run": "urn:sparqlwatch:run:2026-08-22T16:00:00Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 43,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 81,
             "level": null,
             "metric": "urn:sparqlwatch:metric:classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 41,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 41,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 42,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "absent"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 42,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 43,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 255,
             "level": null,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "indeterminate"
           }
         ]
@@ -605,51 +637,67 @@
         "run": "urn:sparqlwatch:run:2026-08-22T16:00:00Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 537,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 30003,
             "level": null,
             "metric": "urn:sparqlwatch:metric:classes",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 500,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 33,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 194,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 43,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 141,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 162,
             "level": 0,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "absent"
           }
         ]
@@ -734,15 +782,19 @@
         "run": "urn:sparqlwatch:run:2026-08-22T20:00:00Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 37,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 42,
             "level": null,
             "metric": "urn:sparqlwatch:metric:classes",
+            "observed_count": null,
             "verdict": "absent"
           }
         ]
@@ -838,39 +890,51 @@
         "run": "urn:sparqlwatch:run:2026-09-05T14:00:00Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 1,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 0,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 0,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 15,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "absent"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 1,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "undeclared-but-verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 0,
             "level": 4,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "verified"
           }
         ]
@@ -1040,51 +1104,67 @@
         "run": "urn:sparqlwatch:run:2026-08-23T04:00:00Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 30003,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 80,
             "level": null,
             "metric": "urn:sparqlwatch:metric:classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 44,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 27,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 48,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 61,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "undeclared-but-verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 120,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 155,
             "level": 1,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "verified"
           }
         ]
@@ -1279,51 +1359,67 @@
         "run": "urn:sparqlwatch:run:2026-08-22T16:00:00Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 43,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 81,
             "level": null,
             "metric": "urn:sparqlwatch:metric:classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 41,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 41,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 42,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "absent"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 42,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 43,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 255,
             "level": null,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "indeterminate"
           }
         ]
@@ -1413,51 +1509,67 @@
         "run": "urn:sparqlwatch:run:2026-08-22T16:00:00Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 537,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 30003,
             "level": null,
             "metric": "urn:sparqlwatch:metric:classes",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 500,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 33,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 194,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 43,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 141,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 162,
             "level": 0,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "absent"
           }
         ]
@@ -1583,45 +1695,59 @@
         "run": "urn:sparqlwatch:run:2026-08-22T18:00:00Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 63,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 39,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 25,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 43,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 55,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "undeclared-but-verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 95,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 139,
             "level": 1,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "verified"
           }
         ]
@@ -1711,45 +1837,59 @@
         "run": "urn:sparqlwatch:run:2026-08-22T18:00:00Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 41,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 38,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 37,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 49,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "absent"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 40,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 36,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 272,
             "level": null,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "indeterminate"
           }
         ]
@@ -1840,45 +1980,59 @@
         "run": "urn:sparqlwatch:run:2026-08-22T18:00:00Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 30002,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 30002,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 117,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 30003,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 6187,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 30002,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 6730,
             "level": 0,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "absent"
           }
         ]
@@ -2043,45 +2197,59 @@
         "run": "urn:sparqlwatch:run:2026-08-27T10:00:00Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 70,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 71,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 44,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 68,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 76,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 69,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 197,
             "level": null,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "indeterminate"
           }
         ]
@@ -2175,45 +2343,59 @@
         "run": "urn:sparqlwatch:run:2026-08-27T10:00:00Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 512,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 488,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 31,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 192,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 33,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 111,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 146,
             "level": 0,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "absent"
           }
         ]
@@ -2466,51 +2648,67 @@
         "run": "urn:sparqlwatch:run:2026-08-22T16:00:00Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 77,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 73,
             "level": null,
             "metric": "urn:sparqlwatch:metric:classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 41,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 26,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 45,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 58,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "undeclared-but-verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 117,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 151,
             "level": 1,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "verified"
           }
         ]
@@ -2705,51 +2903,67 @@
         "run": "urn:sparqlwatch:run:2026-08-22T16:00:00Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 43,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 81,
             "level": null,
             "metric": "urn:sparqlwatch:metric:classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 41,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 41,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 42,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "absent"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 42,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 43,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 255,
             "level": null,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "indeterminate"
           }
         ]
@@ -2839,51 +3053,67 @@
         "run": "urn:sparqlwatch:run:2026-08-22T16:00:00Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 537,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 30003,
             "level": null,
             "metric": "urn:sparqlwatch:metric:classes",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 500,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 33,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 194,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 43,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 141,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 162,
             "level": 0,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "absent"
           }
         ]
@@ -3138,51 +3368,67 @@
         "run": "urn:sparqlwatch:run:2026-08-22T16:00:00Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 77,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 73,
             "level": null,
             "metric": "urn:sparqlwatch:metric:classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 41,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 26,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 45,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 58,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "undeclared-but-verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 117,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 151,
             "level": 1,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "verified"
           }
         ]
@@ -3383,45 +3629,59 @@
         "run": "urn:sparqlwatch:run:2026-08-27T10:00:00Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 70,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 71,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 44,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 68,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 76,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 69,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 197,
             "level": null,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "indeterminate"
           }
         ]
@@ -3515,45 +3775,59 @@
         "run": "urn:sparqlwatch:run:2026-08-27T10:00:00Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 512,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 488,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 31,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 192,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 33,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 111,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 146,
             "level": 0,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "absent"
           }
         ]
@@ -3808,51 +4082,67 @@
         "run": "urn:sparqlwatch:run:2026-08-22T16:00:00Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 77,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 73,
             "level": null,
             "metric": "urn:sparqlwatch:metric:classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 41,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 26,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 45,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 58,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "undeclared-but-verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 117,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 151,
             "level": 1,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "verified"
           }
         ]
@@ -4053,45 +4343,59 @@
         "run": "urn:sparqlwatch:run:2026-08-27T10:00:00Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 70,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 71,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 44,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 68,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 76,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 69,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 197,
             "level": null,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "indeterminate"
           }
         ]
@@ -4185,45 +4489,59 @@
         "run": "urn:sparqlwatch:run:2026-08-27T10:00:00Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 512,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 488,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 31,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 192,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 33,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 111,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 146,
             "level": 0,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "absent"
           }
         ]
@@ -4312,9 +4630,11 @@
         "run": "urn:sparqlwatch:run:2026-08-23T00:00:00Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 11,
             "level": null,
             "metric": "urn:sparqlwatch:metric:classes",
+            "observed_count": null,
             "verdict": "\"><script>alert(1)</script>"
           }
         ]
@@ -4448,51 +4768,67 @@
         "run": "urn:sparqlwatch:run:2026-08-22T16:00:00Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 77,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 73,
             "level": null,
             "metric": "urn:sparqlwatch:metric:classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 41,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 26,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 45,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 58,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "undeclared-but-verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 117,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 151,
             "level": 1,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "verified"
           }
         ]
@@ -4686,51 +5022,67 @@
         "run": "urn:sparqlwatch:run:2026-08-22T16:00:00Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 43,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 81,
             "level": null,
             "metric": "urn:sparqlwatch:metric:classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 41,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 41,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 42,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "absent"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 42,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 43,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 255,
             "level": null,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "indeterminate"
           }
         ]
@@ -4819,51 +5171,67 @@
         "run": "urn:sparqlwatch:run:2026-08-22T16:00:00Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 537,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 30003,
             "level": null,
             "metric": "urn:sparqlwatch:metric:classes",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 500,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 33,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 194,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 43,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 141,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 162,
             "level": 0,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "absent"
           }
         ]
@@ -5196,51 +5564,67 @@
         "run": "urn:sparqlwatch:run:2026-08-22T20:00:00Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 77,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 73,
             "level": null,
             "metric": "urn:sparqlwatch:metric:classes",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 41,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 26,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 45,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 58,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "undeclared-but-verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 117,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 151,
             "level": 1,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "verified"
           }
         ]
@@ -5432,51 +5816,67 @@
         "run": "urn:sparqlwatch:run:2026-08-22T20:00:00Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 43,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 81,
             "level": null,
             "metric": "urn:sparqlwatch:metric:classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 41,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 41,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 42,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "absent"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 42,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 43,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 255,
             "level": null,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "indeterminate"
           }
         ]
@@ -5563,51 +5963,67 @@
         "run": "urn:sparqlwatch:run:2026-08-22T20:00:00Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 537,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 30003,
             "level": null,
             "metric": "urn:sparqlwatch:metric:classes",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 500,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 33,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 194,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 43,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 141,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 162,
             "level": 0,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "absent"
           }
         ]
@@ -5797,9 +6213,11 @@
         "run": "urn:sparqlwatch:run:2026-08-23T08:00:00Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 42,
             "level": null,
             "metric": "urn:sparqlwatch:metric:classes",
+            "observed_count": null,
             "verdict": "absent"
           }
         ]
@@ -6115,45 +6533,59 @@
         "run": "urn:sparqlwatch:run:2026-08-24T19:45:03Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 30035,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 177,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "absent"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 75,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "absent"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 141,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "absent"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 144,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 30037,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 225,
             "level": 1,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "verified"
           }
         ]
@@ -6246,45 +6678,59 @@
         "run": "urn:sparqlwatch:run:2026-08-24T19:45:03Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 69,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 60,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 65,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 67,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 58,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 60,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 187,
             "level": null,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "indeterminate"
           }
         ]
@@ -6412,45 +6858,59 @@
         "run": "urn:sparqlwatch:run:2026-08-24T19:45:03Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 314,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 322,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 322,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "absent"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 337,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 953,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 315,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 1320,
             "level": null,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "indeterminate"
           }
         ]
@@ -6544,45 +7004,59 @@
         "run": "urn:sparqlwatch:run:2026-08-24T19:45:03Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 343,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 259,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 238,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "absent"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 217,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "absent"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 165,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "declared-but-wrong"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 273,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 341,
             "level": 0,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "absent"
           }
         ]
@@ -6788,45 +7262,59 @@
         "run": "urn:sparqlwatch:run:2026-08-24T19:45:03Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 146,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 141,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 1764,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 135,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 1007,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 399,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 510,
             "level": null,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "indeterminate"
           }
         ]
@@ -6919,45 +7407,59 @@
         "run": "urn:sparqlwatch:run:2026-08-24T19:45:03Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 1265,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "absent"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 968,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "absent"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 343,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "absent"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 1242,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 826,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 840,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 8837,
             "level": null,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "indeterminate"
           }
         ]
@@ -7050,45 +7552,59 @@
         "run": "urn:sparqlwatch:run:2026-08-24T19:45:03Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 20,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "absent"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 16,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 29,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 17,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 73,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 18,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 312,
             "level": null,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "indeterminate"
           }
         ]
@@ -7181,45 +7697,59 @@
         "run": "urn:sparqlwatch:run:2026-08-24T19:45:03Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 1337,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 36,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 38,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 189,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "absent"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 50,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 564,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 225,
             "level": null,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "indeterminate"
           }
         ]
@@ -7313,45 +7843,59 @@
         "run": "urn:sparqlwatch:run:2026-08-24T19:45:03Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 44,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 41,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 57,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 46,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 50,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "undeclared-but-verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 48,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 280,
             "level": 1,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "verified"
           }
         ]
@@ -7447,45 +7991,59 @@
         "run": "urn:sparqlwatch:run:2026-08-24T19:45:03Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 30035,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 177,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "absent"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 75,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "absent"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 141,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "absent"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 144,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 30037,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 225,
             "level": 1,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "verified"
           }
         ]
@@ -7578,45 +8136,59 @@
         "run": "urn:sparqlwatch:run:2026-08-24T19:45:03Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 69,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 60,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 65,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 67,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 58,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 60,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 187,
             "level": null,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "indeterminate"
           }
         ]
@@ -7744,45 +8316,59 @@
         "run": "urn:sparqlwatch:run:2026-08-24T19:45:03Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 314,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 322,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 322,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "absent"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 337,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 953,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 315,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 1320,
             "level": null,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "indeterminate"
           }
         ]
@@ -7876,45 +8462,59 @@
         "run": "urn:sparqlwatch:run:2026-08-24T19:45:03Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 343,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 259,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 238,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "absent"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 217,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "absent"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 165,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "declared-but-wrong"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 273,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 341,
             "level": 0,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "absent"
           }
         ]
@@ -8007,45 +8607,59 @@
         "run": "urn:sparqlwatch:run:2026-08-24T19:45:03Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 146,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 141,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 1764,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 135,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 1007,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 399,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 510,
             "level": null,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "indeterminate"
           }
         ]
@@ -8138,45 +8752,59 @@
         "run": "urn:sparqlwatch:run:2026-08-24T19:45:03Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 1265,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "absent"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 968,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "absent"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 343,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "absent"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 1242,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 826,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 840,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 8837,
             "level": null,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "indeterminate"
           }
         ]
@@ -8269,45 +8897,59 @@
         "run": "urn:sparqlwatch:run:2026-08-24T19:45:03Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 20,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "absent"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 16,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 29,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 17,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 73,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 18,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 312,
             "level": null,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "indeterminate"
           }
         ]
@@ -8400,45 +9042,59 @@
         "run": "urn:sparqlwatch:run:2026-08-24T19:45:03Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 1337,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 36,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 38,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 189,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "absent"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 50,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 564,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 225,
             "level": null,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "indeterminate"
           }
         ]
@@ -8532,45 +9188,59 @@
         "run": "urn:sparqlwatch:run:2026-08-24T19:45:03Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 44,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 41,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 57,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 46,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 50,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "undeclared-but-verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 48,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 280,
             "level": 1,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "verified"
           }
         ]
@@ -8822,45 +9492,59 @@
         "run": "urn:sparqlwatch:run:2026-08-22T18:00:00Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 63,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 39,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 25,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 43,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 55,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "undeclared-but-verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 95,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 139,
             "level": 1,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "verified"
           }
         ]
@@ -9058,45 +9742,59 @@
         "run": "urn:sparqlwatch:run:2026-08-22T18:00:00Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 41,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 38,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 37,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 49,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "absent"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 40,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 36,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 272,
             "level": null,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "indeterminate"
           }
         ]
@@ -9187,45 +9885,59 @@
         "run": "urn:sparqlwatch:run:2026-08-22T18:00:00Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 30002,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 30002,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 117,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 30003,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 6187,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 30002,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 6730,
             "level": 0,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "absent"
           }
         ]
@@ -9400,45 +10112,59 @@
         "run": "urn:sparqlwatch:run:2026-08-24T19:45:03Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 30035,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 177,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "absent"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 75,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "absent"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 141,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "absent"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 144,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 30037,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 225,
             "level": 1,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "verified"
           }
         ]
@@ -9531,45 +10257,59 @@
         "run": "urn:sparqlwatch:run:2026-08-24T19:45:03Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 69,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 60,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 65,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 67,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 58,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 60,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 187,
             "level": null,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "indeterminate"
           }
         ]
@@ -9697,45 +10437,59 @@
         "run": "urn:sparqlwatch:run:2026-08-24T19:45:03Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 314,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 322,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 322,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "absent"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 337,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 953,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 315,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 1320,
             "level": null,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "indeterminate"
           }
         ]
@@ -9829,45 +10583,59 @@
         "run": "urn:sparqlwatch:run:2026-08-24T19:45:03Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 343,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 259,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 238,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "absent"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 217,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "absent"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 165,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "declared-but-wrong"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 273,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 341,
             "level": 0,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "absent"
           }
         ]
@@ -9960,45 +10728,59 @@
         "run": "urn:sparqlwatch:run:2026-08-24T19:45:03Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 146,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 141,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 1764,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 135,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 1007,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 399,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 510,
             "level": null,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "indeterminate"
           }
         ]
@@ -10052,15 +10834,19 @@
         "run": "urn:sparqlwatch:run:2026-08-22T20:00:00Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 37,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 42,
             "level": null,
             "metric": "urn:sparqlwatch:metric:classes",
+            "observed_count": null,
             "verdict": "absent"
           }
         ]
@@ -10153,45 +10939,59 @@
         "run": "urn:sparqlwatch:run:2026-08-24T19:45:03Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 1265,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "absent"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 968,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "absent"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 343,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "absent"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 1242,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 826,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 840,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 8837,
             "level": null,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "indeterminate"
           }
         ]
@@ -10284,45 +11084,59 @@
         "run": "urn:sparqlwatch:run:2026-08-24T19:45:03Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 20,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "absent"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 16,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 29,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 17,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 73,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 18,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 312,
             "level": null,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "indeterminate"
           }
         ]
@@ -10415,45 +11229,59 @@
         "run": "urn:sparqlwatch:run:2026-08-24T19:45:03Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 1337,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 36,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 38,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 189,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "absent"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 50,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 564,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 225,
             "level": null,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "indeterminate"
           }
         ]
@@ -10547,45 +11375,59 @@
         "run": "urn:sparqlwatch:run:2026-08-24T19:45:03Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 44,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 41,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 57,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 46,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 50,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "undeclared-but-verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 48,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 280,
             "level": 1,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "verified"
           }
         ]
@@ -10991,51 +11833,67 @@
         "run": "urn:sparqlwatch:run:2026-08-22T16:00:00Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 77,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 73,
             "level": null,
             "metric": "urn:sparqlwatch:metric:classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 41,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 26,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 45,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 58,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "undeclared-but-verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 117,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 151,
             "level": 1,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "verified"
           }
         ]
@@ -11227,51 +12085,67 @@
         "run": "urn:sparqlwatch:run:2026-08-22T16:00:00Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 43,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 81,
             "level": null,
             "metric": "urn:sparqlwatch:metric:classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 41,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 41,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 42,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "absent"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 42,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 43,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 255,
             "level": null,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "indeterminate"
           }
         ]
@@ -11358,51 +12232,67 @@
         "run": "urn:sparqlwatch:run:2026-08-22T16:00:00Z",
         "verdicts": [
           {
+            "declared_count": null,
             "elapsed_ms": 537,
             "level": null,
             "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 30003,
             "level": null,
             "metric": "urn:sparqlwatch:metric:classes",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 500,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 33,
             "level": null,
             "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 194,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 43,
             "level": null,
             "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
             "verdict": "indeterminate"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 141,
             "level": null,
             "metric": "urn:sparqlwatch:metric:has-classes",
+            "observed_count": null,
             "verdict": "verified"
           },
           {
+            "declared_count": null,
             "elapsed_ms": 162,
             "level": 0,
             "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
             "verdict": "absent"
           }
         ]

@@ -41,6 +41,13 @@ class MetricVerdict:
     metric: str
     verdict: str
     level: int | None = None
+    # The two numbers a counting metric compared: what the description
+    # STATED and what we counted. `None` for every other metric, and
+    # independently `None` for a counting one, since a claim without a count
+    # is what `declared-only` means and a count without a claim is what
+    # `undeclared-but-verified` means.
+    declared_count: int | None = None
+    observed_count: int | None = None
     elapsed_ms: int | None = None
 
 
@@ -382,6 +389,16 @@ def measurements_from_rows(endpoint: str, rows: list) -> EndpointMeasurements:
                     level=(
                         int(row["level"].value)
                         if row["level"] is not None
+                        else None
+                    ),
+                    declared_count=(
+                        int(row["declaredCount"].value)
+                        if row["declaredCount"] is not None
+                        else None
+                    ),
+                    observed_count=(
+                        int(row["observedCount"].value)
+                        if row["observedCount"] is not None
                         else None
                     ),
                     elapsed_ms=(

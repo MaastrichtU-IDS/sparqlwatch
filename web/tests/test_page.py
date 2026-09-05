@@ -1948,3 +1948,67 @@ def test_the_pinned_tab_mask_is_monochrome(client_for, store_content_profiles):
     body = client_for(store_content_profiles).get("/icon-mono.svg").text
     assert "#81d4fa" not in body, "the mask must not carry the brand colour"
     assert "<rect" not in body, "a background rect would mask the whole square"
+
+
+# ---------------------------------------------------------------------------
+# A counting metric shows its numbers
+# ---------------------------------------------------------------------------
+
+
+def _counting_verdict(**kw):
+    from endpoint_measurements import MetricVerdict
+
+    base = dict(metric=M + "triple-count", verdict="verified")
+    base.update(kw)
+    return MetricVerdict(**base)
+
+
+def test_a_counting_row_states_both_numbers():
+    """The verdict is a grade of a claim and never the claim.
+
+    `verified` says a description was right without saying what it said, and a
+    reader asking how big an endpoint is wants the number. The prober publishes
+    both beside the verdict, and this page did not read them until 2026-09-05.
+    """
+    from app import _detail
+
+    d = _detail(_counting_verdict(declared_count=1000000, observed_count=1020000), True)
+    assert d == "declares 1,000,000, counted 1,020,000", d
+
+
+def test_a_count_with_no_claim_says_so_rather_than_showing_a_zero():
+    """`undeclared-but-verified` on a count means the endpoint holds this much
+    and says nothing. A zero in the declared slot would be a claim it made."""
+    from app import _detail
+
+    d = _detail(
+        _counting_verdict(verdict="undeclared-but-verified", observed_count=12510784),
+        True,
+    )
+    assert d == "counted 12,510,784, declared nothing", d
+
+
+def test_a_claim_we_could_not_check_is_stated_as_a_claim():
+    """`declared-only`: the number is the endpoint's word, not our finding, and
+    the wording must not present it as measured."""
+    from app import _detail
+
+    d = _detail(_counting_verdict(verdict="declared-only", declared_count=500), True)
+    assert d == "declares 500, not counted", d
+
+
+def test_a_metric_with_no_counts_carries_no_count_clause():
+    """Every other metric. A clause about numbers on an availability row would
+    be a sentence about nothing."""
+    from app import _detail
+
+    assert _detail(_counting_verdict(metric=M + "availability"), True) is None
+
+
+def test_a_conformance_level_still_wins_the_clause():
+    """service-description carries a level and no counts, and the level is what
+    its row has always said. Pinned so adding the counts did not displace it."""
+    from app import _detail
+
+    d = _detail(_counting_verdict(metric=M + "service-description", level=3), True)
+    assert d == "conformance level 3", d

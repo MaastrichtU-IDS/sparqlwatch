@@ -108,6 +108,8 @@ CONSTRUCT {
                dqv:value ?verdict ;
                prov:wasGeneratedBy ?activity ;
                sw:level ?level ;
+               sw:declaredCount ?declaredCount ;
+               sw:observedCount ?observedCount ;
                sw:elapsedMs ?elapsedMs .
   ?notMeasured a ?notMeasuredType ;
                sw:notMeasuredOn ?endpoint ;
@@ -194,6 +196,12 @@ WHERE {
       # template simply drops its triple rather than failing the solution.
       OPTIONAL { ?measurement sw:level ?level }
       OPTIONAL { ?measurement sw:elapsedMs ?elapsedMs }
+      # The two numbers a counting metric compared. Separately OPTIONAL,
+      # because either can be absent on its own: an endpoint that declared a
+      # size we could not count has the claim and no count, and one counted
+      # without a claim has the count and no claim.
+      OPTIONAL { ?measurement sw:declaredCount ?declaredCount }
+      OPTIONAL { ?measurement sw:observedCount ?observedCount }
     }
     # One hop to the run current names, for the facts that belong to the run
     # rather than to the endpoint. OPTIONAL with a FILTER that requires what it
