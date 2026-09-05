@@ -1895,3 +1895,56 @@ def test_a_run_declining_the_profile_pass_reports_that_decline():
     assert "no measurement of the classes metric" not in sample["this_run_text"], (
         "that sentence is for a run that never looked at all"
     )
+
+
+# ---------------------------------------------------------------------------
+# The tab icon
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("path", ["/", "/about", "/docs", "/explore"])
+def test_every_page_carries_the_tab_icon(client_for, store_content_profiles, path):
+    """A pinned tab shows an icon or it shows nothing, per page.
+
+    Parameterised over the routes rather than asserted on one, because the
+    templates have no shared head: each declares its own, so an icon added to
+    six of seven is a page that silently has none. /explore was exactly that
+    when this was written, and worse, it had no <head> AT ALL.
+    """
+    body = client_for(store_content_profiles).get(path).text
+    assert '<link rel="icon" href="/icon.svg"' in body, f"{path} has no tab icon"
+    assert 'rel="mask-icon"' in body, f"{path} has no Safari pinned-tab mask"
+
+
+@pytest.mark.parametrize("path", ["/", "/about", "/docs", "/explore"])
+def test_every_page_is_a_document_and_says_what_it_is(client_for, store_content_profiles, path):
+    """The other half of what a pinned tab needs: a name.
+
+    /explore served a bare fragment starting at <style>, with no doctype, no
+    <head>, no charset and no <title>, so a browser rendered it in quirks mode
+    and the tab read as a URL. Found while adding the icon, since a page with no
+    head has nowhere to put one.
+    """
+    body = client_for(store_content_profiles).get(path).text
+    assert body.lstrip().lower().startswith("<!doctype html>"), f"{path} is not a document"
+    assert "<title>" in body, f"{path} has no title, so its tab has no name"
+    assert 'charset="utf-8"' in body, f"{path} declares no encoding"
+
+
+def test_the_icon_is_served_and_is_an_svg(client_for, store_content_profiles):
+    """The link points somewhere real, in both spellings, plus the /favicon.ico
+    a browser asks for whether or not the head mentions it."""
+    client = client_for(store_content_profiles)
+    for path in ("/icon.svg", "/icon-mono.svg", "/favicon.ico"):
+        r = client.get(path)
+        assert r.status_code == 200, f"{path} is {r.status_code}"
+        assert r.headers["content-type"].startswith("image/svg+xml"), path
+        assert r.text.lstrip().startswith("<svg"), path
+
+
+def test_the_pinned_tab_mask_is_monochrome(client_for, store_content_profiles):
+    """Safari paints the mask itself with the colour on the <link>, so a mask
+    carrying its own colours renders as a solid blob."""
+    body = client_for(store_content_profiles).get("/icon-mono.svg").text
+    assert "#81d4fa" not in body, "the mask must not carry the brand colour"
+    assert "<rect" not in body, "a background rect would mask the whole square"

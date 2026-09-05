@@ -126,6 +126,10 @@ EXPLORE_PATH = "/explore"
 
 ABOUT_PATH = "/about"
 
+# The tab icon, and the separate monochrome mask a Safari pinned tab uses.
+ICON_PATH = "/icon.svg"
+ICON_MASK_PATH = "/icon-mono.svg"
+
 # ---------------------------------------------------------------------------
 # Representations
 # ---------------------------------------------------------------------------
@@ -2857,6 +2861,53 @@ def explore(request: Request, store: Store = Depends(get_store)) -> Response:
             explore_path=EXPLORE_PATH,
         ),
         media_type="text/html; charset=utf-8",
+    )
+
+
+# The icon, and the mask Safari's pinned tab wants instead.
+#
+# Read once at import and served from memory. They are under a kilobyte each,
+# and a per-request file read for something every page requests is work the
+# store's own queries should have.
+#
+# Served from routes rather than a StaticFiles mount because these two files are
+# the whole of this site's static content: a mount would publish the directory
+# they sit in, and the directory they sit in is the source tree.
+_ICON = (Path(__file__).resolve().parent / "icon.svg").read_bytes()
+_ICON_MONO = (Path(__file__).resolve().parent / "icon-mono.svg").read_bytes()
+_SVG = "image/svg+xml"
+# A year, and immutable: the bytes never change under a given URL, and a pinned
+# tab that refetched its icon on every page load would be asking for a file it
+# already has, forever.
+_ICON_CACHE = "public, max-age=31536000, immutable"
+
+
+@app.get(ICON_PATH)
+def icon() -> Response:
+    """The tab icon."""
+    return Response(
+        content=_ICON, media_type=_SVG, headers={"Cache-Control": _ICON_CACHE}
+    )
+
+
+@app.get(ICON_MASK_PATH)
+def icon_mask() -> Response:
+    """The monochrome mask Safari paints for a pinned tab."""
+    return Response(
+        content=_ICON_MONO, media_type=_SVG, headers={"Cache-Control": _ICON_CACHE}
+    )
+
+
+@app.get("/favicon.ico")
+def favicon_ico() -> Response:
+    """The path browsers ask for without being told to.
+
+    A 404 here is harmless and also noise in every log, and some contexts (a
+    bookmark, a reader that does not parse the head) only ever try this one. It
+    answers with the SVG, which every browser this decade renders.
+    """
+    return Response(
+        content=_ICON, media_type=_SVG, headers={"Cache-Control": _ICON_CACHE}
     )
 
 

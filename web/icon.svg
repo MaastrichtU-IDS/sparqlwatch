@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="sparqlwatch">
+  <title>sparqlwatch</title>
+  <!--
+    The site's own logo, which every page header already draws, redrawn at
+    favicon proportions. Not a second mark: a pinned tab showing something the
+    header does not is an identity a reader has to learn twice.
+
+    Redrawn rather than scaled. The header's version is 24-space with a 2 unit
+    stroke at 18px, which is fine there and turns to mush at 16. Thickening that
+    artwork instead closed the gap between the inner bar and the circle wall,
+    and at 64px it read as a crossed-out circle rather than a magnifier with a
+    bar in it. So the circle is larger relative to the frame and the bar is
+    shorter, which keeps both legible from 16 up.
+
+    Checked by rendering, not by eye on a big screen: qlmanage -t -s 16.
+  -->
+  <rect width="32" height="32" rx="6" fill="#0a1929"/>
+  <g fill="none" stroke="#81d4fa" stroke-width="2.8" stroke-linecap="round">
+    <circle cx="13" cy="13" r="8"/>
+    <path d="M19 19 L26.5 26.5"/>
+    <path d="M9.5 13h7"/>
+  </g>
+</svg>

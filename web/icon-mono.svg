@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Safari pinned tab mask. One colour, no background: Safari fills the
+       shapes with the `color` given on the <link rel="mask-icon">. -->
+  <g fill="none" stroke="black" stroke-width="2.8" stroke-linecap="round">
+    <circle cx="13" cy="13" r="8"/>
+    <path d="M19 19 L26.5 26.5"/>
+    <path d="M9.5 13h7"/>
+  </g>
+</svg>
