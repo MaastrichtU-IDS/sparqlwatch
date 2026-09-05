@@ -99,8 +99,16 @@ async fn a_sweep_over_one_mock_endpoint_produces_nquads() {
         ("service-description", Verdict::Indeterminate),
         // `classes` was here, reading `absent` because ?c is unbound. It was
         // retired as a verdict on 2026-09-04 and its cheap counterpart
-        // `has-classes` on 2026-08-28, so the content dimension contributes no
-        // row at all now: `class-profiles` publishes samples and profiles.
+        // `has-classes` on 2026-08-28.
+        //
+        // The content dimension's verdict is this one now. `absent` and not
+        // `indeterminate`: this sweep declines nothing, so the profile pass RAN
+        // and the enumeration answered, with ?c unbound and therefore no
+        // classes at all. The endpoint holds no typed subjects and declares
+        // none, which is the one case where absent is the true reading.
+        // `indeterminate` is what a declined or failed pass produces, and
+        // an_unreachable_endpoint_yields_indeterminate_not_a_panic covers that.
+        ("vocabulary-described", Verdict::Absent),
     ]);
     assert_eq!(got, expected);
 
@@ -1253,12 +1261,34 @@ async fn an_unreadable_description_never_manufactures_a_declaration() {
     let backed: Vec<&MetricDef> = defs.iter().filter(|d| d.declared_by.is_some()).collect();
     assert!(!backed.is_empty(), "there must be a declaration-backed metric or this proves nothing");
     for d in backed {
-        assert_eq!(
-            verdict_of(&run, &d.id),
-            Verdict::UndeclaredButVerified,
-            "metric {} claimed a declaration from a description we could not read",
+        let verdict = verdict_of(&run, &d.id);
+        // THE RULE, of every declaration-backed metric: a description we could
+        // not read supports no claim about what was declared. All three of
+        // these assert one.
+        assert!(
+            !matches!(
+                verdict,
+                Verdict::Verified | Verdict::DeclaredOnly | Verdict::DeclaredButWrong
+            ),
+            "metric {} claimed a declaration from a description we could not read: {verdict:?}",
             d.id
         );
+        // And for a metric that actually SENT a probe here, the confirmation is
+        // real, so the verdict is pinned exactly. A derived metric is excluded
+        // because nothing confirmed anything for it: `vocabulary-described`
+        // grades the class profile pass, which this sweep never ran, so it
+        // reads `indeterminate` and that is the honest answer rather than a
+        // weaker one. Revision 1 asserted only that the verdict was not
+        // `declared-only` or `declared-but-wrong`, which a `verified` slips
+        // past; that sharpness is kept above.
+        if d.kind.dispatched_per_metric() {
+            assert_eq!(
+                verdict,
+                Verdict::UndeclaredButVerified,
+                "metric {} probed and confirmed, so it must read undeclared-but-verified",
+                d.id
+            );
+        }
     }
 }
 
@@ -3240,4 +3270,194 @@ async fn a_profile_pass_that_enumerates_publishes_no_enumeration_failure() {
         not_measured.iter().all(|n| n.reason != NotMeasuredReason::EnumerationFailed),
         "the enumeration answered, so nothing may say it failed: {not_measured:?}"
     );
+}
+
+
+// ---------------------------------------------------------------------------
+// The content verdict: does the endpoint describe the vocabulary it uses?
+// ---------------------------------------------------------------------------
+
+/// An endpoint that answers the class enumeration and the profile queries, and
+/// serves `description` as its service description.
+async fn an_endpoint_describing(description: &str, classes: &[&str]) -> MockServer {
+    let bindings: Vec<String> = classes
+        .iter()
+        .map(|c| format!(r#"{{"c":{{"type":"uri","value":"{c}"}}}}"#))
+        .collect();
+    let results = format!(
+        r#"{{"head":{{"vars":["c","p","subjects","datatypes","anyDatatype"]}},"results":{{"bindings":[{}]}},"boolean":true}}"#,
+        bindings.join(",")
+    );
+    let server = MockServer::start().await;
+    // The queryless fetch: the description.
+    Mock::given(method("GET"))
+        .and(path("/sparql"))
+        .and(wiremock::matchers::query_param_is_missing("query"))
+        // set_body_raw, not set_body_string with a content-type header:
+        // set_body_string OVERWRITES the mime with text/plain (wiremock
+        // response_template.rs:208), so the description arrived as plain text,
+        // never classified as RDF, and the metric under test saw no declared
+        // vocabulary. The header looked right and did nothing.
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            description.to_string().into_bytes(),
+            "text/turtle",
+        ))
+        .mount(&server)
+        .await;
+    // Requires a `query` param rather than being a catch-all, so the two mocks
+    // are disjoint and neither depends on mount order. As a catch-all it also
+    // answered the QUERYLESS description fetch, with SPARQL JSON, so the
+    // description never parsed as RDF and the metric under test saw no declared
+    // vocabulary at all.
+    Mock::given(method("GET"))
+        .and(path("/sparql"))
+        .and(wiremock::matchers::query_param_contains("query", "SELECT"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(results.clone()))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/sparql"))
+        .and(wiremock::matchers::query_param_contains("query", "ASK"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(results))
+        .mount(&server)
+        .await;
+    server
+}
+
+fn description_naming(classes: &[&str]) -> String {
+    let partitions: String = classes
+        .iter()
+        .map(|c| format!("    void:classPartition [ void:class <{c}> ] ;\n"))
+        .collect();
+    format!(
+        "@prefix sd: <http://www.w3.org/ns/sparql-service-description#> .\n\
+         @prefix void: <http://rdfs.org/ns/void#> .\n\
+         <http://example.org/s> a sd:Service ;\n\
+         \x20   sd:defaultDataset <http://example.org/d> .\n\
+         <http://example.org/d> a void:Dataset ;\n{partitions}\
+         \x20   a void:Dataset .\n"
+    )
+}
+
+async fn vocabulary_verdict(description: &str, classes: &[&str]) -> Verdict {
+    let server = an_endpoint_describing(description, classes).await;
+    let defs = load_shipped_metrics();
+    let client =
+        std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
+    let url = format!("{}/sparql", server.uri());
+    let Sweep { rows, .. } = without_deadlocking(run_sweep(
+        std::slice::from_ref(&url),
+        &defs,
+        &[],
+        &client,
+        Budget::default(),
+        NonZeroUsize::new(1).unwrap(),
+        &mut common::discarding(),
+    ))
+    .await
+    .unwrap();
+    rows.iter()
+        .find(|r| r.metric_id == "vocabulary-described")
+        .expect("the shipped set declares the content metric")
+        .verdict
+}
+
+
+const C1: &str = "http://example.org/vocab#Alpha";
+const C2: &str = "http://example.org/vocab#Beta";
+
+/// Declared and found: the endpoint describes what it holds.
+#[tokio::test]
+async fn a_described_vocabulary_that_is_really_there_is_verified() {
+    assert_eq!(
+        vocabulary_verdict(&description_naming(&[C1]), &[C1]).await,
+        Verdict::Verified
+    );
+}
+
+/// Found and never declared. The common case in the wild, and the one this
+/// metric exists to count: ontoexplorer holds 204 classes and declares none.
+#[tokio::test]
+async fn a_vocabulary_nobody_declared_is_undeclared_but_verified() {
+    assert_eq!(
+        vocabulary_verdict(&description_naming(&[]), &[C1, C2]).await,
+        Verdict::UndeclaredButVerified
+    );
+}
+
+/// Declared, and the pass found nothing at all. The description makes a claim
+/// this run could not confirm.
+#[tokio::test]
+async fn a_declared_vocabulary_with_nothing_behind_it_is_declared_only() {
+    assert_eq!(
+        vocabulary_verdict(&description_naming(&[C1]), &[]).await,
+        Verdict::DeclaredOnly
+    );
+}
+
+/// Neither declared nor found. The endpoint answered and holds no typed
+/// subjects, which is a real finding rather than a gap.
+#[tokio::test]
+async fn an_endpoint_with_no_vocabulary_at_all_is_absent() {
+    assert_eq!(
+        vocabulary_verdict(&description_naming(&[]), &[]).await,
+        Verdict::Absent
+    );
+}
+
+/// The verdict this metric must NEVER reach, asserted as a property of the
+/// shipped rules rather than of one fixture.
+///
+/// `declared-but-wrong` would mean the description named classes and the
+/// endpoint holds none of them. Nothing here can tell that apart from a pass
+/// that reached only a subset: the enumeration is capped at 200 and the ladder
+/// samples, so a named class missing from the profiles may never have been
+/// asked about. It is the harshest verdict in the vocabulary and this evidence
+/// cannot support it.
+#[tokio::test]
+async fn the_content_verdict_never_accuses_a_description_of_being_wrong() {
+    for (declared, found) in [
+        (vec![C1], vec![C2]),
+        (vec![C1, C2], vec![C1]),
+        (vec![C1], vec![]),
+    ] {
+        let v = vocabulary_verdict(&description_naming(&declared), &found).await;
+        assert_ne!(
+            v, Verdict::DeclaredButWrong,
+            "declared {declared:?} found {found:?} must not be an accusation"
+        );
+    }
+}
+
+/// It sends NOTHING. The whole argument for this metric is that it costs an
+/// operator no request, so a regression that made it probe would be a real
+/// cost increase across the registry.
+#[tokio::test]
+async fn the_content_verdict_issues_no_request_of_its_own() {
+    let server = an_endpoint_describing(&description_naming(&[C1]), &[C1]).await;
+    let all = load_shipped_metrics();
+    let without: Vec<MetricDef> = all
+        .iter()
+        .filter(|d| d.kind != ProbeKind::VocabularyDescribed)
+        .cloned()
+        .collect();
+    let client =
+        std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
+    let url = format!("{}/sparql", server.uri());
+
+    without_deadlocking(run_sweep(
+        std::slice::from_ref(&url), &without, &[], &client,
+        Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding(),
+    )).await.unwrap();
+    let baseline = server.received_requests().await.unwrap().len();
+
+    let server2 = an_endpoint_describing(&description_naming(&[C1]), &[C1]).await;
+    let url2 = format!("{}/sparql", server2.uri());
+    without_deadlocking(run_sweep(
+        std::slice::from_ref(&url2), &all, &[], &client,
+        Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding(),
+    )).await.unwrap();
+    let with = server2.received_requests().await.unwrap().len();
+
+    assert_eq!(with, baseline, "the derived metric must cost no request");
 }

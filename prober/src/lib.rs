@@ -580,6 +580,16 @@ struct EndpointSweep {
     /// rather than an unset value.
     declared_classes: Vec<String>,
     declared_properties: Vec<String>,
+    /// Whether a class profile pass asked this endpoint what classes it holds
+    /// AND got a readable answer, whatever that answer was.
+    ///
+    /// Recorded explicitly rather than inferred from the ContentSample, which
+    /// was the first attempt and is wrong: the pass publishes no sample when it
+    /// finds nothing, on purpose, so that a size of 0 cannot be misread as a
+    /// finding. Inferring from the sample therefore reported "we never looked"
+    /// for an endpoint that looked and found none, which is the exact
+    /// distinction `Observation::derived` exists to keep.
+    profile_pass_enumerated: bool,
     /// This endpoint's share of `Sweep::content_samples`, under the same rules.
     content_samples: Vec<ContentSample>,
     /// This endpoint's class profiles, under the same rules: whatever the pass
@@ -740,7 +750,7 @@ async fn probe_endpoint(
         // `continue` and not a row: a row would put this metric in the matrix as
         // a column of verdicts it does not have, which is the column Ruling 4
         // exists to remove.
-        if !def.kind.yields_measurement() {
+        if !def.kind.dispatched_per_metric() {
             continue;
         }
         // A kind with no implemented probe is skipped before any request is
@@ -781,6 +791,7 @@ async fn probe_endpoint(
                 ProbeKind::AskFilter => client.ask(ep, &q).await,
                 ProbeKind::FetchWellKnown => unreachable!("FetchWellKnown is handled once per endpoint before the per-metric dispatch"),
                 ProbeKind::ClassProfile => unreachable!("ClassProfile is handled after the per-metric dispatch, and pushes no measurement row"),
+                ProbeKind::VocabularyDescribed => unreachable!("VocabularyDescribed sends no request; it is derived after the profile pass"),
             }
         };
         let observed = budget.with_metric_budget(fut).await;
@@ -883,6 +894,9 @@ async fn probe_endpoint(
                 continue;
             }
         };
+        // The enumeration answered, whatever it answered. Set before the
+        // empty check below, because "answered with none" is an answer.
+        acc.profile_pass_enumerated = true;
         if classes.is_empty() {
             // A readable result that bound nothing, so the endpoint really has
             // no typed subjects and there is nothing to profile. NOT an
@@ -946,6 +960,44 @@ async fn probe_endpoint(
             acc.profile_unreached
                 .push((def.id.clone(), outcome.unreached));
         }
+    }
+
+    // ---------------------------------------------------------------------
+    // The content verdict, derived. No request is sent for it.
+    // ---------------------------------------------------------------------
+    //
+    // Whether the endpoint DESCRIBES the vocabulary it uses, from two things
+    // already in hand: the classes a `void:classPartition` named, and the
+    // classes the profile pass found. The comparison is `resolve`'s, as every
+    // other verdict's is, so this assembles the evidence and decides nothing.
+    //
+    // LAST, after the pass, because it grades the pass's results. It is also
+    // after the endpoint budget may have expired, and that is the honest
+    // outcome: a pass that never ran leaves no classes, the synthesised
+    // observation says so, and `resolve` reads `indeterminate` rather than
+    // claiming the endpoint describes nothing.
+    for def in defs.iter().filter(|d| d.kind == ProbeKind::VocabularyDescribed) {
+        // The observation is synthesised rather than fetched. `bindings` is
+        // what the pass FOUND; the status is 200 only when a pass actually
+        // produced a class list, which is what tells "found nothing" apart
+        // from "never looked".
+        let found: Vec<String> =
+            acc.content_profiles.iter().map(|p| p.class.clone()).collect();
+        let looked = acc.profile_pass_enumerated;
+        let observation = crate::observe::Observation::derived(found, looked);
+        // `claimed` here is whether the description named ANY class, which is a
+        // different question from the capability sets `Declared::from` reads,
+        // so it is stated rather than looked up.
+        let declared = Declared { claimed: !declarations.partitioned_classes.is_empty() };
+        acc.rows.push(MeasurementRow {
+            endpoint: ep.to_string(),
+            metric_id: def.id.clone(),
+            verdict: resolve(def, declared, Ok(&observation)),
+            level: None,
+            // No request, so no time to report. A zero would read as the
+            // fastest measurement in the dataset.
+            elapsed_ms: None,
+        });
     }
 }
 
@@ -1033,6 +1085,7 @@ mod tests {
             declarations_read: true,
             declared_classes: Vec::new(),
             declared_properties: Vec::new(),
+            profile_pass_enumerated: false,
             content_samples: vec![ContentSample {
                 endpoint: ep.to_string(),
                 metric_id: defs[0].id.clone(),

@@ -18,6 +18,19 @@ pub enum ProbeKind {
     /// An ASK over data, testing presence. Uses the literal guard.
     AskData,
     SelectIris,
+    /// Whether the endpoint DESCRIBES the vocabulary it actually uses.
+    ///
+    /// Sends nothing. It is graded from two things already gathered: the
+    /// classes a `void:classPartition` named in the description, and the
+    /// classes the profile pass actually found. That comparison is the
+    /// declared-against-observed axis this whole project is about, applied to
+    /// content, and it costs an endpoint no request at all.
+    ///
+    /// Distinct from `ClassProfile`, which publishes the profiles themselves
+    /// and no verdict, because a profile is a description and there is no
+    /// threshold at which "four properties" is a pass. Whether a publisher
+    /// described what they hold IS a judgement, and it has one.
+    VocabularyDescribed,
     FetchWellKnown,
     /// Enumerate an endpoint's classes, then profile each one: which properties
     /// its instances carry and how many carry each.
@@ -37,7 +50,7 @@ impl ProbeKind {
     /// Kept honest by `sequence` below rather than by discipline: a
     /// hand-maintained list in a test looks like it enforces coverage and does
     /// not, which is the defect shape this crate keeps finding in itself.
-    pub const ALL: [ProbeKind; 8] = [
+    pub const ALL: [ProbeKind; 9] = [
         ProbeKind::Liveness,
         ProbeKind::Cors,
         ProbeKind::CorsPreflight,
@@ -46,6 +59,7 @@ impl ProbeKind {
         ProbeKind::SelectIris,
         ProbeKind::FetchWellKnown,
         ProbeKind::ClassProfile,
+        ProbeKind::VocabularyDescribed,
     ];
 
     /// Whether a metric of this kind produces a measurement row, and so a
@@ -68,8 +82,41 @@ impl ProbeKind {
             | ProbeKind::AskFilter
             | ProbeKind::AskData
             | ProbeKind::SelectIris
-            | ProbeKind::FetchWellKnown => true,
+            | ProbeKind::FetchWellKnown
+            // Derived: it sends nothing, and grades the profile pass's own
+            // results against the description already fetched. A measurement
+            // all the same, and the only content verdict there is.
+            | ProbeKind::VocabularyDescribed => true,
             ProbeKind::ClassProfile => false,
+        }
+    }
+
+    /// Whether the per-metric dispatch in `probe_endpoint` handles this kind.
+    ///
+    /// False for the two kinds handled elsewhere, and they are elsewhere for
+    /// opposite reasons. `ClassProfile` runs its own pass AFTER the loop,
+    /// because it fans out over classes discovered during the same sweep and
+    /// its cost cannot be known before the list comes back.
+    /// `VocabularyDescribed` sends nothing at all: it grades that pass's
+    /// results against the description, so it can only be decided once the
+    /// pass has finished.
+    ///
+    /// Not the same question as `yields_measurement`. A `ClassProfile` answers
+    /// no to both; `VocabularyDescribed` answers no here and YES there, and
+    /// conflating them either sends a request for a derived metric or drops its
+    /// row on the floor. The two were one predicate until this kind existed.
+    ///
+    /// Exhaustive with no catch-all, so a new kind must state which it is.
+    pub fn dispatched_per_metric(self) -> bool {
+        match self {
+            ProbeKind::Liveness
+            | ProbeKind::Cors
+            | ProbeKind::CorsPreflight
+            | ProbeKind::AskFilter
+            | ProbeKind::AskData
+            | ProbeKind::SelectIris
+            | ProbeKind::FetchWellKnown => true,
+            ProbeKind::ClassProfile | ProbeKind::VocabularyDescribed => false,
         }
     }
 
@@ -92,6 +139,7 @@ impl ProbeKind {
             ProbeKind::SelectIris => 5,
             ProbeKind::FetchWellKnown => 6,
             ProbeKind::ClassProfile => 7,
+            ProbeKind::VocabularyDescribed => 8,
         }
     }
 
@@ -114,7 +162,10 @@ impl ProbeKind {
             | ProbeKind::AskData
             | ProbeKind::SelectIris
             | ProbeKind::FetchWellKnown
-            | ProbeKind::ClassProfile => true,
+            | ProbeKind::ClassProfile
+            // Derived, and therefore always "implemented": it sends no request
+            // at all, so there is no probe that could be missing.
+            | ProbeKind::VocabularyDescribed => true,
         }
     }
 }

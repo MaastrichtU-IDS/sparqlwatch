@@ -1707,6 +1707,7 @@ def _state_facets(rows: list[dict]) -> list[dict]:
 #
 # A metric with no entry here gets no tooltip rather than an invented one.
 METRIC_DESCRIPTIONS = {
+    "vocabulary-described": "Describes its own vocabulary",
     "availability": "Answers a trivial query",
     "cors": "Sends access-control-allow-origin on a simple GET",
     "cors-preflight": "Answers a CORS preflight for a cross-origin GET",
@@ -2246,6 +2247,30 @@ METRIC_DOCS = {
             "reporting was whether a query came back. Availability asks that, "
             "with a smaller query. Measurements already taken are still shown "
             "and still true of the sweep that took them."
+        ),
+    },
+    # The content dimension's only verdict, and the one that replaced the two
+    # retired below. It sends NOTHING: both halves are already in hand when it
+    # is graded, so it costs an operator no request at all.
+    "vocabulary-described": {
+        "label": "Describes its own vocabulary",
+        "dimension": "content",
+        "cost": "cheap",
+        "explains": (
+            "Whether the endpoint's own description names the classes it "
+            "actually holds. The class profile pass finds what is there; a "
+            "VoID class partition is how a publisher says what should be "
+            "there; this is the two set against each other. 'Confirmed, not "
+            "declared' is the common reading and not a fault in the data: an "
+            "endpoint can hold hundreds of classes and describe none of them, "
+            "which is exactly the gap this service exists to measure. It "
+            "reads 'not determined' wherever the profile pass did not run, "
+            "which at the default cheap ceiling is everywhere, because there "
+            "is nothing to set the description against. It never reports a "
+            "description as WRONG: the class enumeration is capped and the "
+            "profile pass samples, so a declared class missing from the "
+            "profiles may simply never have been asked about, and that is not "
+            "evidence enough for the harshest verdict in the vocabulary."
         ),
     },
     # RETIRED 2026-09-04, as a VERDICT, and still here for the reason

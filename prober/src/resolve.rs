@@ -300,6 +300,41 @@ pub fn resolve(def: &MetricDef, declared: Declared, obs: Result<&Observation, Ex
                 Verdict::Indeterminate
             }
         }
+        // The content verdict, and the only one there is.
+        //
+        // The "observation" here is synthesised by `probe_endpoint` from the
+        // profile pass's own results: `bindings` holds the classes the pass
+        // actually found, and the status says whether the pass ran at all.
+        // Nothing is sent to the endpoint for it.
+        //
+        // `declared.claimed` is whether the description NAMED any classes,
+        // through a `void:classPartition`. So the four states are the four
+        // corners of declared against observed, which is the axis this project
+        // exists to report, applied to what an endpoint holds:
+        //
+        //   declared, found     -> verified
+        //   found, undeclared   -> undeclared-but-verified
+        //   declared, not found -> declared-only
+        //   neither             -> absent
+        //
+        // `declared-but-wrong` is deliberately NOT produced. It would mean the
+        // description named classes and the endpoint holds none of them, and
+        // this metric cannot tell that apart from a pass that reached a subset:
+        // the enumeration is capped at 200 classes and the ladder samples, so a
+        // named class missing from the profiles may simply not have been
+        // reached. Reporting the harshest verdict in the vocabulary on that
+        // evidence would be a false accusation.
+        ProbeKind::VocabularyDescribed => {
+            if !o.bindings.is_empty() {
+                confirmed(def, declared)
+            } else if is_a_readable_result(o) {
+                // The pass ran and found no classes at all.
+                if declared.claimed { Verdict::DeclaredOnly } else { Verdict::Absent }
+            } else {
+                // The pass did not run, or could not finish. Nothing is known.
+                Verdict::Indeterminate
+            }
+        }
         ProbeKind::SelectIris => {
             if !o.bindings.is_empty() {
                 // Gated like `AskData`'s positive case, and for the same

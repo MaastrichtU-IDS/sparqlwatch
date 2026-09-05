@@ -131,13 +131,40 @@ def prober_defaults() -> dict[str, int]:
         "request-budget-seconds": budget_secs("request"),
         "metric-budget-seconds": budget_secs("metric"),
         "endpoint-budget-seconds": budget_secs("endpoint"),
-        # One request per metric measurable at the default cost ceiling,
-        # which is `Cost::Cheap`: `main.rs` declares
+        # One request per metric measurable at the default cost ceiling, which
+        # is `Cost::Cheap`: `main.rs` declares
         # `#[arg(long, value_enum, default_value_t = Cost::Cheap)]`.
-        "requests-per-endpoint": (PROBER / "metrics.toml")
-        .read_text()
-        .count('cost = "cheap"'),
+        #
+        # MINUS the derived ones, which is not a nicety. A derived metric is
+        # cheap because it sends NOTHING: `vocabulary-described` grades the
+        # profile pass's results against the description already fetched. This
+        # counted every cheap metric until 2026-09-05, and adding that metric
+        # made the page promise operators one more request per endpoint than it
+        # sends, on the very page that exists to tell them what we do to their
+        # server. Mirrors ProbeKind::dispatched_per_metric.
+        "requests-per-endpoint": _cheap_metrics_that_send_a_request(),
     }
+
+
+# Kinds in prober/metrics.toml that send no request. Kept beside the count they
+# correct, as a set so a second derived kind is one edit.
+_DERIVED_KINDS = {"VocabularyDescribed"}
+
+
+def _cheap_metrics_that_send_a_request() -> int:
+    """How many requests one endpoint receives at the default cost ceiling."""
+    import re
+
+    text = (PROBER / "metrics.toml").read_text()
+    n = 0
+    for block in text.split("[[metric]]")[1:]:
+        if not re.search(r'^cost = "cheap"', block, re.M):
+            continue
+        kind = re.search(r'^kind = "([^"]+)"', block, re.M)
+        if kind and kind.group(1) in _DERIVED_KINDS:
+            continue
+        n += 1
+    return n
 
 
 def const_int(source: str, name: str) -> int:

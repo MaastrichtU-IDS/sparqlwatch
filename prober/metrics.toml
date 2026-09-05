@@ -161,3 +161,29 @@ sample_prefix = ""
 query = """
 SELECT DISTINCT ?c WHERE { { ?s a ?c } UNION { GRAPH ?anyg { ?s a ?c } } } LIMIT 200
 """
+
+# Does this endpoint DESCRIBE the vocabulary it actually uses?
+#
+# The content dimension's only verdict, and the question this project exists to
+# ask, applied to what an endpoint holds rather than to what it can do.
+#
+# IT SENDS NOTHING. Both halves are already in hand by the time it is graded:
+# the classes a `void:classPartition` named, from the description fetched once
+# per endpoint, and the classes the profile pass above actually found. So it is
+# `cheap` in the only sense that matters to an operator being probed, and yet it
+# is listed after `class-profiles` and reads `indeterminate` without it, because
+# it grades that pass's results and there is nothing to grade until it has run.
+#
+# `declared-but-wrong` is deliberately unreachable here. It would mean the
+# description named classes and the endpoint holds none of them, and this cannot
+# tell that apart from a pass that reached only a subset: the enumeration is
+# capped at 200 and the ladder samples, so a named class missing from the
+# profiles may simply never have been asked about. The harshest verdict in the
+# vocabulary is not one to hand out on that evidence.
+[[metric]]
+id = "vocabulary-described"
+label = "Describes its own vocabulary"
+dimension = "content"
+kind = "VocabularyDescribed"
+cost = "cheap"
+declared_by = "http://rdfs.org/ns/void#classPartition"

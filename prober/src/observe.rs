@@ -106,6 +106,37 @@ pub struct Observation {
 }
 
 impl Observation {
+    /// The evidence for a DERIVED metric, which sent no request.
+    ///
+    /// `found` is what some earlier pass in this same sweep observed, and
+    /// `looked` says whether that pass ran at all. The two are separate on
+    /// purpose: an empty `found` with `looked` true is "we looked and there was
+    /// nothing", which `resolve` may read as `absent`, while an empty `found`
+    /// with `looked` false is "we never found out", which it must read as
+    /// `indeterminate`. Collapsing them would publish a confident negative
+    /// about an endpoint nobody asked.
+    ///
+    /// It carries no `elapsed_ms` that means anything, and the caller publishes
+    /// none: a zero would read as the fastest measurement in the dataset.
+    pub fn derived(found: Vec<String>, looked: bool) -> Self {
+        Self {
+            status: if looked { Some(200) } else { None },
+            body_kind: if looked { BodyKind::SparqlJson } else { BodyKind::None },
+            bindings: found,
+            cors: false,
+            boolean: None,
+            body: None,
+            final_url: None,
+            content_type: None,
+            allow_origin: None,
+            allow_methods: None,
+            allow_headers: None,
+            profile: None,
+            elapsed_ms: 0,
+            error: None,
+        }
+    }
+
     pub fn failed(error: String, elapsed_ms: u64) -> Self {
         Self {
             status: None,
