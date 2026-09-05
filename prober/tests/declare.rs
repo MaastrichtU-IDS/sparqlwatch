@@ -785,3 +785,100 @@ fn a_non_iri_endpoint_still_counts_as_a_service_so_the_document_is_not_read_whol
     assert!(!d.declares(SFCONTAINS), "nor must the real service's: nothing matched, so the scope is empty");
     assert!(d.triples > 0, "the document is still graded, only the claim is withheld");
 }
+
+
+// ---------------------------------------------------------------------------
+// The counts an endpoint declares about itself
+// ---------------------------------------------------------------------------
+
+const VOID: &str = "http://rdfs.org/ns/void#";
+
+/// A description stating what the dataset holds, linked to the probed service
+/// the way a real VoID description links one: the counts hang off a
+/// `void:Dataset` that `sd:defaultDataset` names, not off the service itself.
+fn counted_description() -> String {
+    format!(
+        r#"@prefix sd: <{SD}> .
+@prefix void: <{VOID}> .
+<http://example.org/service> a sd:Service ;
+    sd:endpoint <http://example.org/sparql> ;
+    sd:defaultDataset <http://example.org/dataset> ;
+    sd:namedGraph <http://example.org/g1> , <http://example.org/g2> .
+<http://example.org/dataset> a void:Dataset ;
+    void:triples 1200000 ;
+    void:classes 47 ;
+    void:entities 90000 .
+"#
+    )
+}
+
+#[test]
+fn a_description_stating_its_counts_has_them_read() {
+    let d = parse_declarations(&counted_description(), Some("text/turtle"), STUB_ENDPOINT);
+    assert_eq!(d.declared_triples, Some(1_200_000), "void:triples is the dataset's own claim");
+    assert_eq!(d.declared_classes, Some(47));
+    assert_eq!(d.declared_named_graphs, Some(2), "counted from the sd:namedGraph statements");
+}
+
+#[test]
+fn the_documents_own_size_is_not_the_datasets_triple_count() {
+    // `Declarations::triples` is how many triples the DESCRIPTION parsed to,
+    // which is a handful. `declared_triples` is what the dataset says it holds.
+    // Two fields, two meanings, and conflating them would report every
+    // endpoint as holding about ten triples.
+    let d = parse_declarations(&counted_description(), Some("text/turtle"), STUB_ENDPOINT);
+    assert_eq!(d.declared_triples, Some(1_200_000));
+    assert!(d.triples < 100, "the description document itself is small: {}", d.triples);
+}
+
+#[test]
+fn a_description_stating_no_counts_claims_none() {
+    // None and not Some(0). A dataset that declares nothing has made no claim,
+    // and zero is a claim: that the endpoint is empty.
+    let d = parse_declarations(
+        include_str!("fixtures/virtuoso-stub.ttl"),
+        Some("text/turtle"),
+        STUB_ENDPOINT,
+    );
+    assert_eq!(d.declared_triples, None);
+    assert_eq!(d.declared_classes, None);
+    assert_eq!(d.declared_named_graphs, None, "no sd:namedGraph is no claim, not zero graphs");
+}
+
+#[test]
+fn a_count_that_is_not_a_number_is_no_claim_rather_than_a_zero() {
+    // Real descriptions carry typos. "lots" parsed as 0 would publish a
+    // confident wrong answer, and `declared-but-wrong` is the harshest verdict
+    // in the vocabulary to hand out on a parse failure of our own.
+    let doc = format!(
+        r#"@prefix sd: <{SD}> .
+@prefix void: <{VOID}> .
+<http://example.org/service> a sd:Service ;
+    sd:endpoint <http://example.org/sparql> ;
+    sd:defaultDataset <http://example.org/dataset> .
+<http://example.org/dataset> void:triples "lots" .
+"#
+    );
+    let d = parse_declarations(&doc, Some("text/turtle"), STUB_ENDPOINT);
+    assert_eq!(d.declared_triples, None);
+}
+
+#[test]
+fn another_services_counts_are_not_borrowed() {
+    // The same scoping rule the capability sets follow. A two-service document
+    // whose OTHER service declares a size must not have that size read as ours,
+    // which is the false claim `scope_of` exists to prevent.
+    let doc = format!(
+        r#"@prefix sd: <{SD}> .
+@prefix void: <{VOID}> .
+<http://example.org/ours> a sd:Service ;
+    sd:endpoint <http://example.org/sparql> .
+<http://example.org/theirs> a sd:Service ;
+    sd:endpoint <http://elsewhere.example/sparql> ;
+    sd:defaultDataset <http://elsewhere.example/dataset> .
+<http://elsewhere.example/dataset> void:triples 999999999 .
+"#
+    );
+    let d = parse_declarations(&doc, Some("text/turtle"), STUB_ENDPOINT);
+    assert_eq!(d.declared_triples, None, "that count belongs to the other service");
+}

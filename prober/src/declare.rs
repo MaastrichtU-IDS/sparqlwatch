@@ -18,6 +18,10 @@ const SD_DEFAULT_DATASET: &str = "http://www.w3.org/ns/sparql-service-descriptio
 const SD_GRAPH: &str = "http://www.w3.org/ns/sparql-service-description#graph";
 const SD_DEFAULT_ENTAILMENT_REGIME: &str =
     "http://www.w3.org/ns/sparql-service-description#defaultEntailmentRegime";
+const VOID_TRIPLES: &str = "http://rdfs.org/ns/void#triples";
+const VOID_CLASSES: &str = "http://rdfs.org/ns/void#classes";
+const VOID_ENTITIES: &str = "http://rdfs.org/ns/void#entities";
+const SD_NAMED_GRAPH: &str = "http://www.w3.org/ns/sparql-service-description#namedGraph";
 const VOID_CLASS_PARTITION: &str = "http://rdfs.org/ns/void#classPartition";
 const VOID_EXAMPLE_RESOURCE: &str = "http://rdfs.org/ns/void#exampleResource";
 const VOID_PROPERTY_PARTITION: &str = "http://rdfs.org/ns/void#propertyPartition";
@@ -50,7 +54,33 @@ pub struct Declarations {
     /// Object IRIs of `sd:supportedLanguage` triples.
     pub languages: BTreeSet<String>,
     /// Total triples successfully parsed before any error.
+    ///
+    /// THE DESCRIPTION DOCUMENT'S OWN SIZE, not the dataset's. A description is
+    /// a handful of triples; the dataset it describes may hold millions. See
+    /// `declared_triples` for the other one, and never conflate them.
     pub triples: usize,
+    /// What the dataset says it holds, from `void:triples`.
+    ///
+    /// `None` means no claim was made. NOT `Some(0)`: zero is itself a claim,
+    /// that the endpoint is empty, and a description that says nothing has not
+    /// made it. The same distinction the six-verdict vocabulary draws between
+    /// `absent` and `indeterminate`, one layer down.
+    ///
+    /// A value that will not parse as a non-negative integer is also `None`.
+    /// Real descriptions carry typos, and `declared-but-wrong` is the harshest
+    /// verdict in the vocabulary to hand out over a parse failure of our own.
+    pub declared_triples: Option<u64>,
+    /// What the dataset says it holds, from `void:classes`. `None` as above.
+    pub declared_classes: Option<u64>,
+    /// What the dataset says it holds, from `void:entities`. `None` as above.
+    pub declared_entities: Option<u64>,
+    /// How many `sd:namedGraph` statements the probed service makes.
+    ///
+    /// COUNTED, not read: there is no VoID or service-description predicate
+    /// that states a number of graphs, so the claim is the length of the list
+    /// the description gives. `None` when the description names none, which is
+    /// no claim rather than a claim of zero graphs.
+    pub declared_named_graphs: Option<u64>,
     /// `sd:defaultDataset` or `sd:graph` appeared at least once.
     pub names_dataset: bool,
     /// `void:classPartition` or `void:propertyPartition` appeared at least once.
@@ -167,6 +197,28 @@ pub fn parse_declarations_for(body: &str, content_type: Option<&str>, endpoints:
         if scope.as_ref().is_some_and(|in_scope| !in_scope.contains(&quad.subject)) {
             continue;
         }
+        // The counts, before the capability sets: their objects are literals,
+        // so the IRI-only guard below would drop every one of them.
+        //
+        // SCOPED, like the sets and for the same reason. A two-service document
+        // whose other service declares a size must not have that size read as
+        // this one's, which would be a false assertive claim about how big an
+        // endpoint is.
+        //
+        // Last statement wins if a document repeats one. Repeats are not a
+        // shape worth policing here: `resolve()` compares one number against
+        // one observation, and a description contradicting itself is a problem for
+        // its publisher rather than a case this parser can settle.
+        match quad.predicate.as_str() {
+            VOID_TRIPLES => d.declared_triples = count_of(&quad.object).or(d.declared_triples),
+            VOID_CLASSES => d.declared_classes = count_of(&quad.object).or(d.declared_classes),
+            VOID_ENTITIES => d.declared_entities = count_of(&quad.object).or(d.declared_entities),
+            // Counted rather than read: one statement, one graph.
+            SD_NAMED_GRAPH => {
+                d.declared_named_graphs = Some(d.declared_named_graphs.unwrap_or(0) + 1)
+            }
+            _ => {}
+        }
         // Predicate first, so a document full of unrelated triples costs no
         // allocation here.
         let set = match quad.predicate.as_str() {
@@ -182,6 +234,24 @@ pub fn parse_declarations_for(body: &str, content_type: Option<&str>, endpoints:
         }
     }
     d
+}
+
+/// A declared count, or `None` when the object is not one.
+///
+/// Accepts any literal whose lexical form parses as a non-negative integer,
+/// whatever its datatype: real descriptions type these as `xsd:integer`,
+/// `xsd:nonNegativeInteger`, `xsd:long`, and quite often as a plain string.
+/// Refusing on datatype would discard true claims over a detail no reader
+/// cares about, while a lexical form that is not a number is refused outright.
+///
+/// A negative count is `None` rather than clamped: it is not a number of
+/// things, so treating it as zero would invent a claim the publisher did not
+/// make.
+fn count_of(object: &Term) -> Option<u64> {
+    match object {
+        Term::Literal(l) => l.value().trim().parse::<u64>().ok(),
+        _ => None,
+    }
 }
 
 /// Which subjects the capability sets may be read from.
