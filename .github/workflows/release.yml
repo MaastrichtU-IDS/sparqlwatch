@@ -14,10 +14,15 @@
 # a registry the cluster pulls from.
 name: Release
 
+# workflow_dispatch as well, for the republish that has no commit behind it:
+# rebuilding `edge` onto a patched base image after a CVE, or re-running a
+# push that failed on a registry outage. Without it the only way to reissue an
+# image is an empty commit, which puts a lie in the history to work a button.
 on:
   push:
     branches: [main]
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: read
