@@ -229,6 +229,45 @@
 
     .endpoint-url, .ep, .v-iri { overflow-wrap: anywhere; }
   }
+
+  /* `absent` IS A VERDICT, AND IN A GRID IT WAS DRAWN AS NOTHING.
+     The canonical encoding (docs/design/verdict-encoding.md) gives `absent`
+     border "none", and that is deliberate and stays: the channel means
+     "nothing was there", and beside its own label -- in the metric list, in
+     the legend, in a listing row -- a chip that draws nothing next to the word
+     "absent" reads exactly right.
+
+     A GRID HAS NO LABEL BESIDE THE CELL. There a borderless chip is not "we
+     established nothing is there", it is indistinguishable from no cell at
+     all, and an endpoint whose geo-data was absent in every sweep rendered as
+     an entirely blank row -- which reads as missing data, or as a bug. Found
+     by looking at the page on a phone, but it renders the same way at every
+     width.
+
+     So in the two label-free grids, and ONLY there, `absent` gets the slot it
+     occupies drawn in the structural border colour rather than in transparent.
+     It is the frame of an empty box, not a state colour, so it cannot be
+     mistaken for `declared-only` (a solid border in --text-muted, brighter and
+     meaning something else), and it stays distinct from a gap, which draws a
+     dot on the baseline and no frame at all.
+
+     THE SLOT IS THE GRID'S, THE MARK IS THE STATE'S. This is done on the
+     cell that holds the chip and not on `.enc-absent`, and that is not a
+     detail. verdict_encoding.py generates exactly one rule per state and
+     test_page.py asserts the page carries no second one, because two copies of
+     this encoding drifted twice before. A `.hcell.enc-absent` override is that
+     second copy. Giving `absent` a plain border instead is also wrong, and for
+     a deeper reason: `declared-only` is already solid/empty/1px, so desaturated
+     the two would be the same mark, which is the one property the whole
+     encoding rests on.
+
+     So the state table is untouched. The grid draws the box every reading sits
+     in; the state draws what goes in it. `absent` puts nothing in the box, and
+     an empty box is legible where nothing at all was not. */
+  /* Every cell is a slot. See the note above the history caption. */
+  .history td > .hcell { position: relative; }
+  .history td { background: var(--slot, rgba(255,255,255,0.045)); border-radius: 2px;
+                background-clip: padding-box; }
 </style>
 </head>
 <body>
@@ -354,8 +393,10 @@
   <section class="panel" data-section="history">
     <h2>What has changed here</h2>
     <p class="note">Every sweep that said anything about this endpoint, oldest
-      on the left. Point at a column to read that sweep. A blank cell is a sweep
-      that recorded nothing about that metric, which is not a verdict.</p>
+      on the left. Point at a column to read that sweep. A faint empty box is
+      <em>absent</em>, which is a verdict: the sweep looked and found nothing
+      there. A dot on the baseline is a sweep that recorded nothing about that
+      metric at all, which is not a verdict.</p>
 
     <!-- A real table: the rows and columns ARE rows and columns, so a screen
          reader gets the structure and the accessible view is the view. The

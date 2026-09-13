@@ -358,6 +358,15 @@
        word as wide as the URL is long. */
     .ep, .ep a, .when, .counts { overflow-wrap: anywhere; }
   }
+
+  /* `absent` in the fleet grid, for the reason spelled out in endpoint.html:
+     the canonical encoding draws it borderless, which is right beside its own
+     label and unreadable in a grid that has none. The grid draws the box every
+     reading sits in; the state draws what goes in it. Not an .enc- override:
+     that is the second copy test_page.py exists to refuse. */
+  /* Every cell is a slot. */
+  .fleet td { background: var(--slot, rgba(255,255,255,0.045)); border-radius: 2px;
+              background-clip: padding-box; }
 </style>
 </head>
 <body>
@@ -432,8 +441,10 @@
   <section class="panel" data-section="overview">
     <h2>What has changed</h2>
     <p class="lede">{% if fleet.rows %}The endpoints whose availability has
-      moved, once per sweep, oldest on the left. A blank cell is a sweep that
-      did not cover that endpoint, which is not a verdict about it.
+      moved, once per sweep, oldest on the left. A faint empty box is
+      <em>absent</em>, a verdict: the sweep looked and found nothing there. A
+      dot on the baseline is a sweep that did not cover that endpoint, which is
+      not a verdict about it.
       {% if fleet.steady %}The other {{ fleet.steady }} read the same way in
       every sweep that saw them.{% endif %}
       {% else %}No endpoint's availability has moved across these
