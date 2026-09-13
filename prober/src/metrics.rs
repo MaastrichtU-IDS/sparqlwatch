@@ -197,12 +197,27 @@ impl ProbeKind {
 /// planet-scale OSM endpoint, the same class query answers in 0.166s with
 /// `LIMIT 1` and no `DISTINCT`, and times out past 45s with
 /// `DISTINCT ... LIMIT 200`.
+///
+/// `Exhaustive` is a third thing, and the distinction it draws is NOT "an even
+/// slower scan". It is one request PER THING DISCOVERED: a metric at this tier
+/// issues a query per class it found, so its cost scales with the endpoint's
+/// vocabulary rather than with its size. That difference is worth a tier
+/// because it is worth a different SCHEDULE, which is the whole reason this
+/// variant exists.
+///
+/// Measured on this project's own deployment on 2026-09-13, against
+/// ontoexplorer: the nine metric probes and the three counts cost 12 requests,
+/// while `class-profiles` alone cost 199 -- one per class, each paying the 2s
+/// per-host politeness gap. 398 seconds of deliberate waiting, which was 75%
+/// of a 9m15s sweep. Under one ceiling the only way to keep the counts hourly
+/// was to pay for the profile hourly too.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum Cost {
     #[default]
     Cheap,
     Expensive,
+    Exhaustive,
 }
 
 impl Cost {
@@ -213,6 +228,7 @@ impl Cost {
         match self {
             Cost::Cheap => "cheap",
             Cost::Expensive => "expensive",
+            Cost::Exhaustive => "exhaustive",
         }
     }
 }
@@ -592,9 +608,15 @@ pub fn within_cost(defs: &[MetricDef], ceiling: Cost) -> (Vec<MetricDef>, Vec<Me
     let mut run = Vec::new();
     let mut declined = Vec::new();
     for d in defs {
+        // The tiers are ordered, and each ceiling admits everything at or
+        // below it. Spelled out per ceiling rather than derived from a
+        // PartialOrd, so that adding a tier fails to compile here -- which is
+        // the one place that decides what a ceiling means -- instead of
+        // quietly inheriting an ordering nobody chose.
         let within = match ceiling {
             Cost::Cheap => d.cost == Cost::Cheap,
-            Cost::Expensive => true,
+            Cost::Expensive => d.cost != Cost::Exhaustive,
+            Cost::Exhaustive => true,
         };
         if within {
             run.push(d.clone());
@@ -876,7 +898,8 @@ query = "SELECT ?thing WHERE {{ ?s ?p ?thing }} LIMIT 1"
                 MetricDef {
                     cost: match cost {
                         Cost::Cheap => Cost::Expensive,
-                        Cost::Expensive => Cost::Cheap,
+                        Cost::Expensive => Cost::Exhaustive,
+                        Cost::Exhaustive => Cost::Cheap,
                     },
                     ..d.clone()
                 },
@@ -1110,6 +1133,64 @@ query = "SELECT ?s WHERE { ?s ?p ?o } LIMIT 1"
     }
 
     #[test]
+    fn the_exhaustive_tier_is_what_expensive_does_not_reach() {
+        // The tier exists so a sweep can take the counts without taking the
+        // class profile, which costs one request per class rather than one
+        // request. A ceiling of `expensive` that dragged the profile along
+        // would leave the split unexpressible and the tier pointless, so the
+        // gap between the two ceilings is the thing asserted here.
+        let defs = load_metrics(concat!(
+            "[[metric]]\nid=\"cheap\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"Liveness\"\nquery=\"ASK{}\"\ncost=\"cheap\"\n",
+            "[[metric]]\nid=\"scan\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"Liveness\"\nquery=\"ASK{}\"\ncost=\"expensive\"\n",
+            "[[metric]]\nid=\"fanout\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"Liveness\"\nquery=\"ASK{}\"\ncost=\"exhaustive\"\n",
+        )).unwrap();
+
+        let (run, declined) = within_cost(&defs, Cost::Cheap);
+        assert_eq!(run.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(), ["cheap"]);
+        assert_eq!(declined.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(), ["scan", "fanout"]);
+
+        let (run, declined) = within_cost(&defs, Cost::Expensive);
+        assert_eq!(run.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(), ["cheap", "scan"],
+                   "expensive takes the scan and stops short of the fan-out");
+        assert_eq!(declined.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(), ["fanout"]);
+
+        let (run, declined) = within_cost(&defs, Cost::Exhaustive);
+        assert_eq!(run.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(), ["cheap", "scan", "fanout"],
+                   "the top ceiling runs everything, still in file order");
+        assert!(declined.is_empty());
+    }
+
+    #[test]
+    fn the_shipped_profile_pass_and_its_grader_decline_together() {
+        // `vocabulary-described` grades what `class-profiles` found. A ceiling
+        // that ran the grader without the pass would publish a verdict about
+        // an endpoint nobody asked -- `indeterminate`, hourly, forever. They
+        // are tiered together so they decline together, and this is the test
+        // that says so about the SHIPPED definitions rather than about a
+        // fixture.
+        let defs = crate::metrics::load_metrics(
+            &std::fs::read_to_string(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("metrics.toml"),
+            )
+            .expect("the shipped metrics.toml"),
+        )
+        .expect("the shipped metrics.toml parses");
+
+        let (run, declined) = within_cost(&defs, Cost::Expensive);
+        let ran: Vec<&str> = run.iter().map(|d| d.id.as_str()).collect();
+        let out: Vec<&str> = declined.iter().map(|d| d.id.as_str()).collect();
+        for id in ["class-profiles", "vocabulary-described"] {
+            assert!(out.contains(&id), "{id} must be declined below the exhaustive ceiling");
+            assert!(!ran.contains(&id), "{id} must not run below the exhaustive ceiling");
+        }
+        // The counts are the reason the middle tier exists at all: they are the
+        // expensive thing an hourly sweep still wants.
+        for id in ["triple-count", "graph-count", "class-count"] {
+            assert!(ran.contains(&id), "{id} is what `expensive` is for");
+        }
+    }
+
+    #[test]
     fn cost_is_part_of_the_definitions_revision() {
         // The revision exists so a measurement can be read against the definition
         // that produced it, and cost changes which metrics run at all.
@@ -1127,7 +1208,7 @@ query = "SELECT ?s WHERE { ?s ?p ?o } LIMIT 1"
         // token `cost = "..."` accepts and the same one `--max-cost` accepts.
         // Three spellings of one ceiling would make the published value
         // unjoinable against the definitions that produced it.
-        for c in [Cost::Cheap, Cost::Expensive] {
+        for c in [Cost::Cheap, Cost::Expensive, Cost::Exhaustive] {
             let src = format!(
                 "[[metric]]\nid=\"m\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"Liveness\"\nquery=\"ASK{{}}\"\ncost=\"{}\"\n",
                 c.slug()

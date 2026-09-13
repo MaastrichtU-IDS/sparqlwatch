@@ -2611,10 +2611,17 @@ METRIC_DOCS = {
     # The content dimension's only verdict, and the one that replaced the two
     # retired below. It sends NOTHING: both halves are already in hand when it
     # is graded, so it costs an operator no request at all.
+    #
+    # Tiered `exhaustive` all the same, and the tier here is not a claim about
+    # this metric's own cost. It grades what `class-profiles` found, so a sweep
+    # that declined the profile pass leaves it nothing to grade. Sharing the
+    # pass's tier makes the two decline together and publish one honest "not
+    # measured" instead of an hourly "indeterminate" about an endpoint nobody
+    # asked.
     "vocabulary-described": {
         "label": "Describes its own vocabulary",
         "dimension": "content",
-        "cost": "cheap",
+        "cost": "exhaustive",
         "explains": (
             "Whether the endpoint's own description names the classes it "
             "actually holds. The class profile pass finds what is there; a "
@@ -2668,7 +2675,7 @@ METRIC_DOCS = {
     "class-profiles": {
         "label": "Properties per class",
         "dimension": "content",
-        "cost": "expensive",
+        "cost": "exhaustive",
         # NO COLUMN, and the flag is read rather than the comment above it.
         # _index_metrics unions every metric carrying a verdict OR a decline, so
         # before this existed one endpoint's failed pass was enough to draw a

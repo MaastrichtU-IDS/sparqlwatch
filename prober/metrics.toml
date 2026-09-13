@@ -155,7 +155,12 @@ label = "Properties per class"
 dimension = "content"
 kind = "ClassProfile"
 var = "c"
-cost = "expensive"
+# EXHAUSTIVE, not expensive, and the tier is about the schedule rather than
+# about how slow one query is. This metric issues one query PER CLASS it
+# finds -- 199 of them against ontoexplorer, each paying the 2s per-host gap,
+# which was 75% of every sweep. At `expensive` there was no way to keep the
+# three counts hourly without paying for this hourly too.
+cost = "exhaustive"
 sample_limit = 200
 sample_prefix = ""
 query = """
@@ -185,7 +190,18 @@ id = "vocabulary-described"
 label = "Describes its own vocabulary"
 dimension = "content"
 kind = "VocabularyDescribed"
-cost = "cheap"
+# EXHAUSTIVE, though it sends no request of its own, and that is the point.
+# This metric grades what `class-profiles` found, so on a sweep that declined
+# the profile pass it has nothing to grade. Left at `cheap` it still ran, and
+# `resolve` read `indeterminate` -- correct in the narrow sense, and badly
+# wrong in a history: an hourly sweep would have published "we could not
+# determine it" twenty-three times a day about an endpoint nobody had asked.
+#
+# Tiering it with the pass it grades makes the two decline together, and
+# `within_cost` already says so honestly: one NotMeasured { CostCeiling } per
+# declined metric, which the page draws as "not measured" rather than as a
+# verdict about the endpoint.
+cost = "exhaustive"
 declared_by = "http://rdfs.org/ns/void#classPartition"
 
 # ---------------------------------------------------------------------------
