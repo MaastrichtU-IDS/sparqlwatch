@@ -150,6 +150,52 @@
   .enc-absent { border: 1px solid transparent; background: transparent; }
   .enc-not-measured { border: 1px dotted var(--text-dim); background: transparent; }
   .enc-unrecognised { border: 3px double var(--accent); background: transparent; }
+
+  /* ---- NARROW SCREENS ---------------------------------------------------
+     The worst page of the seven: +534px at 375px, measured by
+     web/tests/mobile/probe_mobile.py. Two causes, and only one of them is
+     about width.
+
+     THE FLEX MIN-WIDTH RULE, which is a bug at every width rather than a
+     phone problem. .t-iri asks to shrink (flex: 1 1 auto) and to ellipsise
+     what does not fit, but a flex item's floor is its content by default, so
+     an IRI with no spaces never shrank and the ellipsis never applied. It
+     needs min-width: 0 to be allowed below its content width. */
+  ul.terms li .t-iri { min-width: 0; }
+
+  @media (max-width: 640px) {
+    header { padding: 10px 14px; gap: 4px 10px; flex-wrap: wrap; }
+    /* Standalone nav links are tap targets, unlike links inside a
+       sentence: WCAG 2.2's 24px floor applies and they were 15px tall. */
+    header a { min-height: 24px; display: inline-flex; align-items: center; }
+    main { padding: 16px 14px; }
+    h1 { font-size: 19px; line-height: 1.25; }
+
+    .fchips { width: 100%; }
+    .filters, .toolbar { flex-wrap: wrap; }
+
+    /* A facet button here is labelled with a whole endpoint URL, so it was
+       418px wide on a 375px screen: the widest single thing on the site. It
+       wraps onto as many lines as the URL needs rather than setting the page's
+       width, and the height goes with it. */
+    .facet { max-width: 100%; height: auto; min-height: 26px; text-align: left;
+             overflow-wrap: anywhere; padding-top: 3px; padding-bottom: 3px; }
+    .facet .f-count { flex: none; }
+
+    /* A local name can be long enough on its own, and overflow-wrap alone
+       does nothing here: .t-local is `flex: none` at base, and a flex item
+       that refuses to shrink is sized to its content no matter how its text
+       is allowed to break. The flex value has to give first. */
+    .t-local { flex: 0 1 auto; min-width: 0; overflow-wrap: anywhere; }
+
+    /* A term row is term, kind, IRI, then a chip per endpoint the term appears
+       in — and the endpoint chips carry full URLs, which is what ran 423px
+       wide. The row wraps and the endpoint chips take their own line. */
+    ul.terms li { flex-wrap: wrap; gap: 4px 8px; padding: 8px 12px; }
+    ul.terms li .t-iri { flex-basis: 100%; }
+    .t-eps { flex-wrap: wrap; width: 100%; }
+    .t-ep { overflow-wrap: anywhere; }
+  }
 </style>
 
 <header>

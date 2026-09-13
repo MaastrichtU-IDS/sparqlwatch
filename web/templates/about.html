@@ -80,6 +80,20 @@
      the index and the endpoint page use for the same kind of claim. It reads
      identically with no styling at all. */
   .warn-note { color: var(--warn); }
+
+  /* ---- NARROW SCREENS ---------------------------------------------------
+     Only 2px over at 375px, and it was .contact: a monospace URL with no
+     spaces is one unbreakable word. */
+  @media (max-width: 640px) {
+    header { padding: 10px 14px; gap: 4px 10px; flex-wrap: wrap; }
+    /* Standalone nav links are tap targets, unlike links inside a
+       sentence: WCAG 2.2's 24px floor applies and they were 15px tall. */
+    header a { min-height: 24px; display: inline-flex; align-items: center; }
+    main { padding: 16px 14px; }
+    h1 { font-size: 19px; line-height: 1.25; }
+    .contact, .contact a { overflow-wrap: anywhere; }
+    table { display: block; overflow-x: auto; max-width: 100%; }
+  }
 </style>
 </head>
 <body>

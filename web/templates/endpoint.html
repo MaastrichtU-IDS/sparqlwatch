@@ -191,6 +191,44 @@
      instead would turn a quote in a future token value into &#34; inside a
      stylesheet, which is a silent drawing bug rather than an escape. */
 {{ encoding_css | safe }}
+
+  /* ---- NARROW SCREENS ---------------------------------------------------
+     Measured with web/tests/mobile/probe_mobile.py, which reported +103px at
+     375px on this page. The offenders it named were .m-time, .m-detail and
+     the vocabulary grid. */
+
+  /* The history table is this page's .fleet: one column per sweep, and a
+     column narrow enough to fit forty sweeps is a column nobody can tell
+     apart. So it scrolls sideways at every width rather than shrinking. */
+  table.history { display: block; overflow-x: auto; max-width: 100%; }
+
+  @media (max-width: 640px) {
+    header { padding: 10px 14px; gap: 4px 10px; flex-wrap: wrap; }
+    /* Standalone nav links are tap targets, unlike links inside a
+       sentence: WCAG 2.2's 24px floor applies and they were 15px tall. */
+    header a { min-height: 24px; display: inline-flex; align-items: center; }
+    main { padding: 16px 14px; }
+    h1 { font-size: 18px; line-height: 1.3; overflow-wrap: anywhere; }
+
+    /* A metric row is chip, name, state, detail, elapsed — five things in a
+       nowrap flex row, and `margin-left: auto` on the elapsed time pinned it
+       to a right edge the row had already passed. Wrapping lets the row use a
+       second line; the elapsed time then sits after the state rather than
+       against an edge that is not there. */
+    .metric-row { flex-wrap: wrap; gap: 6px 10px; padding: 10px 10px; }
+    .m-time { margin-left: 0; }
+    .m-detail { flex-basis: 100%; }
+
+    /* Five fixed columns, of which two were 4.5rem each. Prefix and kind go
+       under the term; the IRI gets the full width because it is the longest
+       thing on the page. */
+    .vocab li { grid-template-columns: 14px 1fr auto; gap: 4px 8px; }
+    .vocab li .v-iri { grid-column: 1 / -1; overflow-wrap: anywhere; }
+    .legend { grid-template-columns: minmax(0, 1fr); }
+    .legend li { grid-template-columns: 20px 1fr auto; }
+
+    .endpoint-url, .ep, .v-iri { overflow-wrap: anywhere; }
+  }
 </style>
 </head>
 <body>

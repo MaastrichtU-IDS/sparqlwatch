@@ -307,6 +307,57 @@
      would turn a quote in a future token value into &#34; inside a stylesheet,
      which is a silent drawing bug rather than an escape. */
 {{ encoding_css | safe }}
+
+  /* ---- NARROW SCREENS ---------------------------------------------------
+     The site is read on phones, and every rule below was written against a
+     measured overflow rather than a guess: web/tests/mobile/probe_mobile.py
+     reports the horizontal overflow per route per viewport, and these are the
+     offenders it named at 375px.
+
+     THE MATRIX SCROLLS RATHER THAN SHRINKS, at every width, and it is the same
+     trade .fleet already makes for the same reason: a metric column narrow
+     enough to fit ten metrics on a phone is a column nobody can read. It
+     overflowed by 242px at 375px because it was the one wide table on this
+     page with no scroll container. max-width keeps it from scrolling when it
+     does not need to. */
+  table.matrix { display: block; overflow-x: auto; max-width: 100%; }
+
+  @media (max-width: 640px) {
+    /* 48px of side padding is an eighth of a 375px screen. 14px still reads as
+       a margin and gives the matrix and the facets 20px each back. */
+    /* Three ragged lines at 375px, because the run stamp is 30 monospace
+       characters wedged between the logo and the nav. It takes its own line;
+       the nav links then sit together on one. */
+    header { padding: 10px 14px; gap: 4px 10px; flex-wrap: wrap; row-gap: 2px; }
+    header .run { flex-basis: 100%; order: 3; font-size: 11px; }
+    /* Standalone nav links are tap targets, unlike links inside a sentence:
+       WCAG 2.2's 24px floor applies and they were 15px tall. */
+    header a { min-height: 24px; display: inline-flex; align-items: center; }
+    main { padding: 16px 14px; }
+    h1 { font-size: 19px; line-height: 1.25; }
+
+    /* The search field and its count stack: side by side they left the input
+       too narrow to show a hostname. */
+    .tools { flex-wrap: wrap; }
+    .tools input { max-width: none; width: 100%; }
+
+    /* The legend rows are a five-column grid whose meaning column is a
+       sentence. On a phone the sentence gets its own line rather than a
+       column 40px wide: chip and name stay on the first row, the meaning
+       spans beneath. */
+    .facet-row { grid-template-columns: 20px 1fr auto; gap: 6px 8px; }
+    .facet-row .l-mean { grid-column: 1 / -1; font-size: 12px; }
+    .legend { grid-template-columns: minmax(0, 1fr); }
+
+    /* 92px was chosen against a desktop row. Here it is what pushed the facet
+       head 238px past the edge. */
+    .f-head-label { max-width: none; }
+    .facet { height: auto; min-height: 26px; padding-top: 3px; padding-bottom: 3px; }
+
+    /* An endpoint URL has no spaces, so without this it is one unbreakable
+       word as wide as the URL is long. */
+    .ep, .ep a, .when, .counts { overflow-wrap: anywhere; }
+  }
 </style>
 </head>
 <body>
@@ -403,6 +454,15 @@
       {% endif %}
     </ul>
 
+    <!-- GUARDED ON ROWS, not only on has_history. `rows` is history.changed,
+         so a fleet where nothing has moved renders as column headers above an
+         empty body: rotated dates with nothing under them, which reads as a
+         broken grid rather than as good news. The lede above already says it
+         in a sentence ("No endpoint's availability has moved..."), and a
+         sentence is the better way to say that nothing happened. The stats
+         stay either way. Found at 375px, where the rotated headers crowd, but
+         it rendered the same way at every width. -->
+    {% if fleet.rows %}
     <!-- A real table, not a div grid. The rows and columns ARE rows and columns,
          so a screen reader gets the structure for free and the accessible view
          is the view rather than a second rendering kept in step by hand. -->
@@ -426,6 +486,7 @@
         {% endfor %}
       </tbody>
     </table>
+    {% endif %}
   </section>
   {% endif %}
 

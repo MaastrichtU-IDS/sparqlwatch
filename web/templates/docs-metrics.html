@@ -67,6 +67,19 @@
      the index and the endpoint page use for the same kind of claim. It reads
      identically with no styling at all. */
   .warn-note { color: var(--warn); }
+
+  /* ---- NARROW SCREENS ---------------------------------------------------
+     These pages already fit at 375px; the padding still costs an eighth of the
+     screen, and a table added later should scroll rather than push the page. */
+  @media (max-width: 640px) {
+    header { padding: 10px 14px; gap: 4px 10px; flex-wrap: wrap; }
+    /* Standalone nav links are tap targets, unlike links inside a
+       sentence: WCAG 2.2's 24px floor applies and they were 15px tall. */
+    header a { min-height: 24px; display: inline-flex; align-items: center; }
+    main { padding: 16px 14px; }
+    h1 { font-size: 19px; line-height: 1.25; }
+    table { display: block; overflow-x: auto; max-width: 100%; }
+  }
 </style>
 <style>
   /* The docs section's own rules, after about's stylesheet rather than beside
