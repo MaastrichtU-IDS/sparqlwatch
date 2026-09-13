@@ -211,10 +211,16 @@ fn sha256_hex(bytes: &[u8]) -> String {
     }
     padded.extend_from_slice(&bit_len.to_be_bytes());
 
-    for block in padded.chunks_exact(64) {
+    // as_chunks rather than chunks_exact, for both the 64-byte blocks and the
+    // 4-byte words. The padding above guarantees a whole number of blocks, so
+    // `.0` is the whole of `padded` and the discarded remainder is empty. What
+    // this buys beyond clippy's approval is the `try_into` below: as_chunks
+    // yields arrays rather than slices, so the length is known to the type
+    // system and the runtime check that could not fail is gone with it.
+    for block in padded.as_chunks::<64>().0 {
         let mut w = [0u32; 64];
-        for (word, raw) in w.iter_mut().zip(block.chunks_exact(4)) {
-            *word = u32::from_be_bytes(raw.try_into().expect("chunks_exact(4) yields four bytes"));
+        for (word, raw) in w.iter_mut().zip(block.as_chunks::<4>().0) {
+            *word = u32::from_be_bytes(*raw);
         }
         for i in 16..64 {
             let a = w[i - 15];

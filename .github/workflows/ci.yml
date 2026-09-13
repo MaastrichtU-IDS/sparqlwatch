@@ -17,10 +17,23 @@ jobs:
         working-directory: prober
     steps:
       - uses: actions/checkout@v4
-      - name: Install stable Rust
+      # PINNED TO THE DECLARED FLOOR, not `stable`, and this was learned the
+      # hard way. prober/Cargo.toml declares rust-version = "1.96" and the
+      # Dockerfile pins rust:1.96 with a comment saying a toolchain floating
+      # ahead of the declared floor is a build that can break without a commit.
+      # CI did the floating thing anyway, and on 2026-09-13 a clippy newer than
+      # 1.96 failed two pushes in a row on `chunks_exact_to_as_chunks`, a lint
+      # that did not exist when the code was written. `cargo build` and
+      # `cargo test` passed both times: nothing was broken except the gate.
+      #
+      # Pinning costs the early warning about new lints. That is a real loss,
+      # and the way to buy it back is to raise rust-version deliberately — one
+      # commit, one review, one place — rather than by having every unrelated
+      # push be the canary.
+      - name: Install Rust 1.96
         run: |
-          rustup toolchain install stable --profile minimal --component clippy
-          rustup default stable
+          rustup toolchain install 1.96 --profile minimal --component clippy
+          rustup default 1.96
       - run: cargo build
       - run: cargo test
       # Warnings are errors here, matching the local contract. The live_smoke
