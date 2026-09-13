@@ -70,7 +70,15 @@ COPY web/ /app/web/
 # exclusion list. The exclusion list is re-read every run by design, so it is a
 # file in the image rather than something baked into a binary.
 COPY prober/metrics.toml /app/prober/metrics.toml
+# BOTH registries, because which one is right depends on where the sweep runs.
+# endpoints.toml names the synthetic endpoint on 127.0.0.1, which is the host;
+# endpoints.container.toml names it `synthetic`, which is a sibling container
+# (compose) or a Service (kubernetes). Shipping only the first is how
+# `docker compose run --rm prober` came to fail on a file that was not there:
+# the compose file and the kubernetes CronJob both ask for the container one.
+# prober/tests/registry_pair.rs is what keeps the two from drifting apart.
 COPY prober/endpoints.toml /app/prober/endpoints.toml
+COPY prober/endpoints.container.toml /app/prober/endpoints.container.toml
 COPY prober/registry/ /app/prober/registry/
 # The synthetic endpoint, so the compose file can run it as the local control
 # without a checkout. It needs nothing the web tier has not already installed:
