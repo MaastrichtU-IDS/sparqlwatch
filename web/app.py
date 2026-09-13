@@ -381,7 +381,37 @@ def _opened_store(path: str) -> Store:
             f"endpoint would then answer 404 as though no sweep had ever "
             f"run. Build the store first with web/load_run.py."
         )
-    store = Store(path)
+    # READ-ONLY, which is both what this tier does and what lets anything else
+    # write. RocksDB allows one writer, and the site held that lock until
+    # 2026-09-13: a loader running beside it could not open the store at all,
+    # so every load meant stopping the site first. That is workable by hand and
+    # not workable for a nightly sweep in a cluster.
+    #
+    # It is also a guard. Opening read-write is what let a store be replaced
+    # underneath a running site on 2026-09-05, which came back as
+    # "Corruption: mismatch in unique ID on table file 10". A reader cannot do
+    # that.
+    #
+    # THE COST, stated because it shapes the deployment: a read-only handle
+    # takes its snapshot at open and never sees a later write. A fresh handle
+    # sees them. So a site serving from this must be restarted after a load,
+    # which is what the CronJob does in ids3/projects/sparqlwatch/dev.
+    try:
+        store = Store.read_only(path)
+    except (OSError, ValueError) as exc:
+        # A read-only open of a directory that is not a RocksDB store fails
+        # with the store's own message about a missing CURRENT file, which
+        # names neither the variable nor the mistake. Read-write used to create
+        # a store here instead and fall through to the empty-store refusal
+        # below, so the explanation lived there; it has to be raised here now.
+        raise RuntimeError(
+            f"{STORE_PATH_VARIABLE} is {path!r}, which is a directory but not "
+            f"a store this can open ({exc}). That is either a store nothing "
+            f"has been loaded into yet, or a path that is not the store at all "
+            f"(the run directory load_run.py's second argument names, say, "
+            f"rather than its first). Build the store first with "
+            f"web/load_run.py."
+        ) from exc
     if len(store) == 0:
         raise RuntimeError(
             f"{STORE_PATH_VARIABLE} is {path!r}, which opened as a store "
