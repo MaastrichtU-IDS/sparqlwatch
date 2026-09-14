@@ -80,6 +80,26 @@
     h1 { font-size: 19px; line-height: 1.25; }
     table { display: block; overflow-x: auto; max-width: 100%; }
   }
+
+  /* The footer. One line, and the version is the reason it exists: a reader
+     looking at a verdict needs to know which build produced it, and an
+     operator who found sparqlwatch in their logs needs to match the number
+     against the User-Agent that knocked. `version` is a Jinja global, so it is
+     the same string the /about page quotes.
+
+     NO LINKS HERE. The nav already carries them, and
+     test_the_index_carries_one_nav_link_and_never_one_per_row counts them: its
+     invariant is that a link must not be emitted per row, which at 543 rows is
+     1,200 bytes against 24,000. A footer link is constant rather than per-row
+     and does not break that, but loosening the count to fit decoration nobody
+     asked for is a bad trade for a guard that cheap. */
+  .site-foot { border-top: 1px solid var(--border); margin: 30px 0 0;
+               padding: 14px 24px; display: flex; flex-wrap: wrap;
+               gap: 6px 14px; align-items: baseline;
+               font-size: 12px; color: var(--text-muted); }
+  .site-foot .v { font-family: var(--mono); }
+  .site-foot a { color: var(--text-muted); }
+  @media (max-width: 640px) { .site-foot { padding: 12px 14px; } }
 </style>
 <style>
   /* The docs section's own rules, after about's stylesheet rather than beside
@@ -139,5 +159,9 @@
   </p>
 
 </main>
+<footer class="site-foot">
+  <span>sparqlwatch <span class="v">{{ version }}</span></span>
+</footer>
+
 </body>
 </html>

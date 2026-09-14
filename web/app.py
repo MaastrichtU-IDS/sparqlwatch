@@ -2850,6 +2850,28 @@ PROBER_USER_AGENT = (
     "sparqlwatch/0.2.0 (+https://sparqlwatch.dev.k8s.semanticscience.org/about)"
 )
 
+# The version this build is, for the footer, READ OUT OF THE USER-AGENT rather
+# than written down a second time. That string is already pinned to
+# prober/Cargo.toml by test_the_user_agent_shown_is_the_one_the_prober_sends,
+# so deriving from it means the footer inherits that check for free and a
+# version bump cannot leave the page claiming the old one.
+#
+# The alternative was reading prober/Cargo.toml at runtime, and it does not
+# work: the runtime image ships web/ and the prober's data files, not its
+# sources. See the Dockerfile, and the 18 tests that skip inside the image for
+# the same reason.
+VERSION = PROBER_USER_AGENT.removeprefix("sparqlwatch/").split(" ", 1)[0]
+
+# A GLOBAL RATHER THAN A CONTEXT KEY, because the footer is on every page and
+# seven render calls would be seven chances to forget one. A page missing its
+# version would not fail, it would just quietly say nothing, which is the
+# failure mode a global removes entirely.
+#
+# Registered here and not beside `_TEMPLATES` because PROBER_USER_AGENT, which
+# this reads, is declared with the /about page it documents and that is far
+# below the environment.
+_TEMPLATES.globals["version"] = VERSION
+
 # prober/src/client.rs's MAX_REDIRECT_HOPS: how long a redirect chain the
 # prober follows before it gives up. On the page because "follows a redirect
 # from it if there is one, and stops" understated what a server's log will

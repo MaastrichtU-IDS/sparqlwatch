@@ -2197,3 +2197,40 @@ def test_an_endpoint_with_no_profile_gets_no_vocabulary_panel(client_for, store)
     what happened is that nobody profiled it."""
     body = page(client_for(store), KADASTER)
     assert 'data-section="vocabulary"' not in body
+
+
+def test_every_page_footer_shows_the_version_the_prober_sends(client_for, store):
+    """The footer's number is the number in the User-Agent, on every page.
+
+    A version in a footer is only worth putting there if it IS the version. A
+    reader matching a verdict to the build that produced it, or an operator
+    matching a line in their logs to this service, is misled by a stale one
+    rather than merely unhelped.
+
+    `app.VERSION` is read out of PROBER_USER_AGENT, and
+    test_about.py::test_the_user_agent_shown_is_the_one_the_prober_sends
+    already pins that string to prober/Cargo.toml. Asserting the footer carries
+    `app.VERSION` therefore closes the chain: a version bump that forgets a
+    file reds one of the two.
+    """
+    import urllib.parse
+
+    import app as app_module
+
+    version = app_module.VERSION
+    assert version and version[0].isdigit(), f"VERSION looks unparsed: {version!r}"
+
+    client = client_for(store)
+    endpoint = urllib.parse.quote(KADASTER, safe="")
+    for path in (
+        "/",
+        "/about",
+        "/docs",
+        "/docs/metrics",
+        "/docs/states",
+        "/explore",
+        f"/endpoint?url={endpoint}",
+    ):
+        body = client.get(path, headers={"accept": "text/html"}).text
+        assert '<footer class="site-foot">' in body, f"{path} has no footer"
+        assert version in body, f"{path} does not show version {version}"
