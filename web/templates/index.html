@@ -607,13 +607,6 @@
   </p>
   {% endif %}
 
-  {% if dormant_note %}
-  {# Once for the page, where it was once per group until 2026-08-28. A group
-     holding no marked row correctly carried no note, so three sections could
-     say three different things about one marker; one listing says it once. #}
-  <p class="note warn-note" data-page-dormant="true">{{ dormant_note }}</p>
-  {% endif %}
-
   {# ONE LISTING, alphabetical by endpoint. Three sections headed "availability
      verified: 57 of 543 endpoints" and so on stood here until 2026-08-28, and
      the grid's availability row states those same three counts, keeping 482

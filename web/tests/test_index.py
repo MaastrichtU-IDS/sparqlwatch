@@ -63,7 +63,6 @@ from app import (
     INDEX_PATH,
     ROW_DORMANT_TEXT,
     _ROW_DORMANCY_REASONS,
-    _group_dormancy_note,
     _row_dormancy_text,
     app,
     get_store,
@@ -1070,13 +1069,6 @@ def test_a_dormant_row_keeps_the_verdict_its_last_probe_produced(
         }
     )
 
-    # ONE note for the page, where it was one per group and a group holding no
-    # marked row correctly carried none.
-    note = texts_with(page, "data-page-dormant")
-    assert len(note) == 1, f"{len(note)} page-level dormancy notes"
-    assert "1" in note[0], note[0]
-    assert "did not ask" in note[0], note[0]
-
 
 def test_a_group_no_dormant_row_is_in_carries_no_dormancy_note(
     client_for, store_registry_sample
@@ -1340,57 +1332,6 @@ def test_the_row_marker_reads_every_reason_a_run_graph_can_carry():
     for reading in [*readings, "no reason"]:
         assert reading not in unknown, unknown
 
-
-def test_the_group_note_agrees_with_itself_in_number():
-    """One marked row is "1 of these 2 rows carries", not "carry".
-
-    Four words in the sentence move with the count, and a note reading "1 of
-    these 2 rows carry the marker ... published them as endpoints" is a sentence
-    a reader trips over on a page whose whole argument is that it says exactly
-    what it means. Asserted on the function, because reaching the singular case
-    through a store means a fixture with exactly one dormant row in its group
-    and reaching the plural case means another one.
-    """
-    one = _group_dormancy_note(1, 2, 1)
-    assert "1 of these 2 rows carries" in one, one
-    for plural in (" carry ", " them as endpoints", "They are in", "their last"):
-        assert plural not in one, f"{plural!r} is in the singular note: {one!r}"
-
-    many = _group_dormancy_note(4, 9, 4)
-    assert "4 of these 9 rows carry" in many, many
-    assert "them as endpoints" in many, many
-    for singular in ("carries", " it as an endpoint", "It is in", " its last"):
-        assert singular not in many, f"{singular!r} is in the plural note: {many!r}"
-
-
-def test_the_group_note_claims_a_reason_only_for_the_rows_that_carry_one():
-    """"And said why" is counted off the rows, not asserted of the marker.
-
-    The note used to end "declined to ask, and said why" whatever the rows said,
-    and _row_dormancy_text renders "and gave no reason" for a declaration with no
-    sw:dormancyReason beside it. A store whose newest run declares an endpoint
-    dormant and records no reason therefore printed the group note "... declined
-    to ask, and said why" directly above the row "... and gave no reason", which
-    is the page contradicting itself inside one group.
-
-    Unreachable from prober output, because the prober always writes a reason.
-    The branch exists because _row_dormancy_text and _NO_DORMANCY_REASON both
-    decline to assume one, and on this page a qualifier stated with no condition
-    is a claim: the fix is to count, not to drop the clause, so the common case
-    still reads as the strong sentence it is.
-    """
-    assert "and said why" in _group_dormancy_note(3, 9, 3)
-
-    none_at_all = _group_dormancy_note(3, 9, 0)
-    assert "and recorded no reason for any of them" in none_at_all, none_at_all
-    assert "said why" not in none_at_all, none_at_all
-
-    one_of_one = _group_dormancy_note(1, 4, 0)
-    assert "and recorded no reason." in one_of_one, one_of_one
-    assert "any of them" not in one_of_one, one_of_one
-
-    some = _group_dormancy_note(3, 9, 2)
-    assert "and said why for 2 of them" in some, some
 
 # ---------------------------------------------------------------------------
 # The three facet groups

@@ -1162,25 +1162,6 @@ def _provenance(
     return None
 
 
-def _page_dormancy_note(rows: list[dict]) -> str | None:
-    """One sentence for the whole listing, or None when no row is marked.
-
-    None and not an empty string, for the reason the per-group version gave: a
-    note saying some of these rows were not asked is false of every row on a
-    page that holds none.
-    """
-    marked = [row for row in rows if row.get("dormant")]
-    if not marked:
-        return None
-    # A COUNT and not a set of reasons. _group_dormancy_note compares it against
-    # the marked count to choose between "and said why", "and said why for N of
-    # them" and saying nothing, so a set of the distinct reasons would compare
-    # two unlike things and pick the wrong clause: two reasons across fifty
-    # marked rows would read as two rows having said why.
-    with_reason = sum(1 for row in marked if row.get("dormancy_reason"))
-    return _group_dormancy_note(len(marked), len(rows), with_reason)
-
-
 def _page_context(
     endpoint: str,
     measurements: EndpointMeasurements,
@@ -1565,47 +1546,6 @@ def _row_dormancy_text(reason: str | None) -> str:
     if reason in _ROW_DORMANCY_REASONS:
         return f"{ROW_DORMANT_TEXT}, {_ROW_DORMANCY_REASONS[reason][0]}"
     return f"{ROW_DORMANT_TEXT}, for a reason this page cannot read: {reason}"
-
-
-def _group_dormancy_note(dormant: int, total: int, with_reason: int) -> str:
-    """What the marker means for the group it appears in.
-
-    A note on the group rather than a group of its own, for the reason
-    ROW_DORMANT_TEXT gives: the row's verdict is the one its last real probe
-    produced, and that verdict is what this group is keyed on. It carries its
-    denominator like every other count on this page, and it points at the row
-    for the instant rather than repeating one instant for rows that may not
-    share it.
-
-    ``with_reason`` IS COUNTED AND NOT ASSUMED. This note used to end "declined
-    to ask, and said why" unconditionally, directly above rows that
-    _row_dormancy_text renders as "and gave no reason": a declaration with no
-    sw:dormancyReason beside it made the declaration, which is the half that
-    matters, and the note asserted the other half for it. The prober always
-    writes a reason, so no prober output reaches the mismatch; the branch exists
-    because _row_dormancy_text and _NO_DORMANCY_REASON both decline to assume
-    it, and on these pages a qualifier stated without a condition is a claim.
-    """
-    one = dormant == 1
-    if with_reason == dormant:
-        said = "and said why"
-    elif with_reason == 0:
-        said = "and recorded no reason" + ("" if one else " for any of them")
-    else:
-        said = f"and said why for {with_reason} of them"
-    return (
-        f"{dormant} of these {total} rows "
-        f"{'carries' if one else 'carry'} the marker "
-        f"\u201c{ROW_DORMANT_TEXT}\u201d: the newest sweep in this store "
-        f"published {'it as an endpoint' if one else 'them as endpoints'} it "
-        f"declined to ask, {said}. "
-        f"{'It is' if one else 'They are'} in this group because this is the "
-        f"verdict {'its' if one else 'their'} last real probe produced, and "
-        f"{'that row names' if one else 'each of those rows names'} the sweep "
-        f"that produced it. Whichever reason the row names, and the panel "
-        f"below spells out every reason a sweep can give, it is a fact about "
-        f"this service and not a finding about the endpoint."
-    )
 
 
 def _abbreviation(name: str, width: int) -> str:
@@ -2298,7 +2238,6 @@ def _index_context(entries: list[EndpointMeasurements], store: Store) -> dict:
         # The dormancy note, once for the page where it was once per group. A
         # group that held no marked row correctly carried none, so three notes
         # could say three different things; one listing says it once.
-        "dormant_note": _page_dormancy_note(rows),
         "matrix": _metric_state_matrix(rows, metrics),
         "matrix_states": _matrix_states(_metric_state_matrix(rows, metrics)),
         # The column headers' counts. A header carries one for the same reason
