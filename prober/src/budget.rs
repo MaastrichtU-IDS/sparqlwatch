@@ -42,6 +42,7 @@ impl Budget {
     {
         tokio::time::timeout(self.endpoint, f).await.map_err(|_| Expired)
     }
+
 }
 
 #[cfg(test)]

@@ -205,13 +205,110 @@ async fn the_two_cors_metrics_are_not_the_same_probe() {
     assert!(sent.iter().any(|r| r.method == Method::GET), "no simple GET was ever sent");
 }
 
+/// An endpoint nothing answers costs ONE request and one row, not the battery.
+///
+/// This test asserted the opposite until 2026-09-14: every metric got an
+/// `Indeterminate` row, which meant a dead endpoint was asked the same
+/// unanswerable question once per metric. bio2rdf.org, whose zone stopped
+/// resolving, was costing ~68 seconds a sweep that way. The reachability gate
+/// in `probe_endpoint` sends one request and, when nothing answers it,
+/// declines the rest as `Unreachable`.
+///
+/// `Indeterminate` is still right for availability itself: we asked, and not
+/// getting an answer is what we found out. It is the OTHER nine that were
+/// wrong, because an indeterminate verdict asserts a measurement happened.
 #[tokio::test]
-async fn an_unreachable_endpoint_yields_indeterminate_not_a_panic() {
+async fn an_endpoint_that_answers_nothing_is_asked_once_and_declined_for_the_rest() {
     let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
     let client = std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
-    let Sweep { rows, declarations_read: _declarations_read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(&["http://127.0.0.1:1/sparql".to_string()], &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
-    assert_eq!(rows.len(), measured(&defs));
-    assert!(rows.iter().all(|r| r.verdict == Verdict::Indeterminate));
+    let Sweep { rows, not_measured, declarations_read: _declarations_read, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(&["http://127.0.0.1:1/sparql".to_string()], &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
+
+    assert_eq!(rows.len(), 1, "only availability is measured on an endpoint nothing answers");
+    assert_eq!(rows[0].metric_id, "availability");
+    assert_eq!(rows[0].verdict, Verdict::Indeterminate);
+
+    // Every other metric in the run's definition set is declined, and the
+    // reason names the endpoint rather than our budget or our crash.
+    let declined: Vec<&str> = not_measured
+        .iter()
+        .filter(|n| n.reason == NotMeasuredReason::LivenessFailed)
+        .map(|n| n.metric_id.as_str())
+        .collect();
+    assert_eq!(declined.len(), defs.len() - 1, "every metric but availability is declined");
+    assert!(!declined.contains(&"availability"), "availability was measured, not declined");
+}
+
+/// REACHABLE IS NOT THE SAME AS WORKING, and the gate must not confuse them.
+///
+/// A host answering HTML is answering: its CORS headers and its service
+/// description are plain HTTP facts that can be true while the query engine
+/// refuses work. Three of the nine endpoints the DBpedia KG catalog declares
+/// are exactly this shape -- `https://query.wikidata.org/` serves the console,
+/// not the protocol -- so gating on "availability is not verified" rather than
+/// on "nothing answered" would have silently stopped measuring them.
+#[tokio::test]
+async fn an_endpoint_answering_html_is_reachable_and_gets_the_whole_battery() {
+    let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw("<html>a console</html>", "text/html"))
+        .mount(&server)
+        .await;
+
+    let client = std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
+    let url = format!("{}/sparql", server.uri());
+    let Sweep { rows, not_measured, declarations_read: _declarations_read, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
+
+    assert_eq!(rows.len(), measured(&defs), "an answering host is measured in full");
+    assert!(
+        !not_measured.iter().any(|n| n.reason == NotMeasuredReason::LivenessFailed),
+        "a host that answered must never have its battery declined"
+    );
+}
+
+/// The gate's answer IS the availability measurement, so it is paid for once.
+///
+/// Without this the cheapest metric in the set would be the only one probed
+/// twice, and an operator reading their logs would see two identical queries a
+/// few hundred milliseconds apart -- which is precisely the complaint the
+/// once-per-endpoint description fetch exists to avoid.
+#[tokio::test]
+async fn a_reachable_endpoint_is_asked_the_liveness_question_only_once() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            r#"{"head":{"vars":["s"]},"results":{"bindings":[{"s":{"type":"uri","value":"http://e.org/a"}}]}}"#,
+            "application/sparql-results+json",
+        ))
+        .mount(&server)
+        .await;
+
+    let live = MetricDef {
+        id: "availability".into(),
+        label: "Answers a trivial query".into(),
+        dimension: "availability".into(),
+        kind: ProbeKind::Liveness,
+        query: Some("SELECT ?s WHERE { ?s ?p ?o } LIMIT 1".into()),
+        expect: None,
+        var: None,
+        declared_by: None,
+        graded: false,
+        cost: Cost::Cheap,
+        sample_limit: None,
+        sample_prefix: None,
+        tolerance: None,
+    };
+
+    let client = std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
+    let url = format!("{}/sparql", server.uri());
+    let Sweep { rows, .. } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &[live], &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap(), &mut common::discarding())).await.unwrap();
+    assert_eq!(rows.len(), 1);
+
+    // One liveness query, plus the one queryless description fetch every
+    // endpoint gets. Two requests, never three.
+    let sent = server.received_requests().await.unwrap();
+    let with_query = sent.iter().filter(|r| r.url.query().is_some_and(|q| q.contains("query="))).count();
+    assert_eq!(with_query, 1, "the liveness question was asked more than once: {sent:#?}");
 }
 
 /// Controller amendment: `run_sweep` must read the variable a metric's query
@@ -555,10 +652,18 @@ async fn an_endpoint_budget_expiry_still_yields_one_row_per_metric() {
 
     let defs: Vec<MetricDef> = (0..3)
         .map(|i| MetricDef {
-            id: format!("liveness-{i}"),
-            label: "answers a trivial query".into(),
+            // NOT `Liveness`, and the distinction is load-bearing since
+            // 2026-09-14. Liveness is the reachability gate: `probe_endpoint`
+            // probes it before anything else, so a slow one here would spend
+            // the endpoint budget this test needs spent on the metrics AFTER
+            // the fast one. `AskFilter` dispatches through the same
+            // `client.ask` and takes no `var`, so it stalls identically
+            // without being hoisted. What this test is about -- a budget
+            // running out mid-loop -- is unchanged.
+            id: format!("stalls-{i}"),
+            label: "a metric that stalls".into(),
             dimension: "availability".into(),
-            kind: ProbeKind::Liveness,
+            kind: ProbeKind::AskFilter,
             query: Some("SELECT ?s WHERE { ?s ?p ?o } LIMIT 1".into()),
             expect: None,
             var: None,
@@ -622,10 +727,18 @@ async fn a_budget_expiry_after_the_fetch_still_publishes_declarations_read() {
 
     let defs: Vec<MetricDef> = (0..3)
         .map(|i| MetricDef {
-            id: format!("liveness-{i}"),
-            label: "answers a trivial query".into(),
+            // NOT `Liveness`, and the distinction is load-bearing since
+            // 2026-09-14. Liveness is the reachability gate: `probe_endpoint`
+            // probes it before anything else, so a slow one here would spend
+            // the endpoint budget this test needs spent on the metrics AFTER
+            // the fast one. `AskFilter` dispatches through the same
+            // `client.ask` and takes no `var`, so it stalls identically
+            // without being hoisted. What this test is about -- a budget
+            // running out mid-loop -- is unchanged.
+            id: format!("stalls-{i}"),
+            label: "a metric that stalls".into(),
             dimension: "availability".into(),
-            kind: ProbeKind::Liveness,
+            kind: ProbeKind::AskFilter,
             query: Some("SELECT ?s WHERE { ?s ?p ?o } LIMIT 1".into()),
             expect: None,
             var: None,
@@ -713,10 +826,14 @@ async fn a_partial_endpoint_keeps_the_verdicts_it_already_earned() {
     // Then the metrics that stall, so the endpoint budget expires with the
     // first metric's results already in hand.
     defs.extend((0..2).map(|i| MetricDef {
-        id: format!("liveness-{i}"),
-        label: "answers a trivial query".into(),
+        // NOT `Liveness`: it is the reachability gate and is probed before
+        // everything else, which would spend this test's 400 ms endpoint
+        // budget before the metric whose earned verdict is the point. Same
+        // dispatch (`client.ask`), same stall, no hoisting.
+        id: format!("stalls-{i}"),
+        label: "a metric that stalls".into(),
         dimension: "availability".into(),
-        kind: ProbeKind::Liveness,
+        kind: ProbeKind::AskFilter,
         query: Some(SLOW_QUERY.into()),
         expect: None,
         var: None,
@@ -1722,13 +1839,21 @@ async fn a_host_that_asked_for_an_hour_indeterminates_the_rest_of_its_sweep() {
         .collect();
     assert!(not_indeterminate.is_empty(),
             "a metric we never got to ask about must read indeterminate, got {not_indeterminate:?}");
-    // Exactly one row measured anything: the queryless description fetch, which
-    // is the request that was throttled. Every other metric was cancelled while
+    // Exactly one row measured anything: whichever request went first is the
+    // one that met the 429. Since 2026-09-14 that is `availability`, because
+    // the reachability gate asks the liveness question before anything else --
+    // it used to be `service-description`, the queryless description fetch.
+    // What this test is about is unchanged: one request, and the hour it asked
+    // for held every later probe back. Every other metric was cancelled while
     // waiting at the gate, so it carries no `elapsedMs`, because nothing was
     // measured.
+    //
+    // A 429 carries a status line, so the endpoint is REACHABLE and the gate
+    // does not decline anything here. That is the intended reading: a host
+    // refusing us for an hour is not a host that is not there.
     let measured: Vec<&str> = rows.iter().filter(|r| r.elapsed_ms.is_some())
         .map(|r| r.metric_id.as_str()).collect();
-    assert_eq!(measured, ["service-description"],
+    assert_eq!(measured, ["availability"],
                "only the throttled request measured a time; the cancelled metrics measured nothing");
 }
 

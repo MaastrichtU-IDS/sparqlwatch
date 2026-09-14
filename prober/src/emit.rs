@@ -146,6 +146,28 @@ pub enum NotMeasuredReason {
     /// has no classes, refused, or was too slow is not knowable from the
     /// enumeration's own failure, and this reason deliberately does not guess.
     EnumerationFailed,
+    /// The endpoint did not answer the one trivial query that decides whether
+    /// the rest is worth sending, so the rest was not sent.
+    ///
+    /// TWO SHAPES, ONE NAME, and the name is chosen to be true of both: no
+    /// HTTP response came back at all (DNS that did not resolve, a connection
+    /// refused, a TLS handshake rejected), or one did not arrive inside the
+    /// liveness bound. `Unreachable` was the first name here and it was wrong
+    /// for the second shape: a server answering a `LIMIT 1` in 15 seconds is
+    /// reachable, it is just too slow to be worth nine more questions, and
+    /// publishing "nothing answered" about it would be a false statement about
+    /// somebody's service.
+    ///
+    /// What it never covers: a host that ANSWERED with something we could not
+    /// use. An HTML console, a 500, a 404 all carry a status line, and their
+    /// endpoints get the whole battery, because CORS headers and a service
+    /// description are plain HTTP facts that can be true of a host whose query
+    /// engine is refusing work.
+    ///
+    /// Distinct from `ProberFailed`, which blames us, and from `CostCeiling`,
+    /// which is a decision made before probing began. This one is about the
+    /// endpoint, and it says only what was observed: it did not answer.
+    LivenessFailed,
 }
 
 impl NotMeasuredReason {
@@ -155,6 +177,7 @@ impl NotMeasuredReason {
             NotMeasuredReason::CostCeiling => "cost-ceiling",
             NotMeasuredReason::ProberFailed => "prober-failed",
             NotMeasuredReason::EnumerationFailed => "enumeration-failed",
+            NotMeasuredReason::LivenessFailed => "liveness-failed",
         }
     }
 }

@@ -420,6 +420,24 @@ pub struct Outcome {
     pub url: String,
     pub cost_ms: u64,
     pub positive: bool,
+    /// This endpoint did not answer the liveness question, so the gate in
+    /// `probe_endpoint` declined the rest of the battery.
+    ///
+    /// A SECOND WAY TO EARN A STRIKE, and it exists because the first one
+    /// stopped firing. `cost_ms > thresholds.cost_ms` was always a proxy for
+    /// "this endpoint is taking our time and telling us nothing": a dead host
+    /// earned it by letting nine probes each run out their own budget, which
+    /// is how bio2rdf.org reached 68 s a sweep. The gate made that same host
+    /// cost one ~10 s request, which is the point of the gate and also puts it
+    /// under every threshold a flag is allowed to set (`MIN_COST_MS` is 30 s).
+    /// Without this flag the gate would silently switch relegation off for
+    /// precisely the endpoints relegation exists for, and they would be probed
+    /// hourly forever.
+    ///
+    /// The proxy is kept beside it rather than replaced: an endpoint that
+    /// answers slowly and says nothing useful is still expensive and still
+    /// earns strikes, and that is a different failure from not answering.
+    pub liveness_failed: bool,
 }
 
 /// What an entry's hold means for the sweep happening now.
@@ -795,7 +813,7 @@ pub fn update(
             // E
             entry.strikes = 0;
             entry.dormant_since = None;
-        } else if outcome.cost_ms > thresholds.cost_ms {
+        } else if outcome.cost_ms > thresholds.cost_ms || outcome.liveness_failed {
             // F
             entry.strikes = base.saturating_add(1);
             if entry.strikes >= thresholds.strikes.get()
@@ -1142,16 +1160,45 @@ mod tests {
 
     /// The calibration's own number: 48 of the 57 spent 210,010 to 210,021 ms.
     fn expensive(u: &str) -> Outcome {
-        Outcome { url: ep(u), cost_ms: 210_000, positive: false }
+        Outcome { url: ep(u), cost_ms: 210_000, positive: false, liveness_failed: false }
     }
 
     /// One of the 339 silent-and-free endpoints the policy keeps in every sweep.
     fn cheap(u: &str) -> Outcome {
-        Outcome { url: ep(u), cost_ms: 4_000, positive: false }
+        Outcome { url: ep(u), cost_ms: 4_000, positive: false, liveness_failed: false }
     }
 
     fn answered(u: &str, cost_ms: u64) -> Outcome {
-        Outcome { url: ep(u), cost_ms, positive: true }
+        Outcome { url: ep(u), cost_ms, positive: true, liveness_failed: false }
+    }
+
+    /// Nothing answered, and it was cheap BECAUSE nothing answered.
+    fn liveness_failed(u: &str) -> Outcome {
+        Outcome { url: ep(u), cost_ms: 500, positive: false, liveness_failed: true }
+    }
+
+    /// An endpoint nothing answers is relegated, though it is now cheap.
+    ///
+    /// The cost rule alone would never fire for it again. Before the
+    /// reachability gate a dead host earned its strikes by letting nine probes
+    /// each run out their own budget -- 68 s a sweep, for bio2rdf.org -- and
+    /// the gate cut that to one ~10 s request by design. 500 ms here is under
+    /// every ceiling a flag may set (`MIN_COST_MS` is 30 s), so without the
+    /// second signal the gate would have quietly switched relegation off for
+    /// exactly the endpoints it exists for.
+    #[test]
+    fn nothing_answering_is_a_strike_even_when_it_was_cheap() {
+        let t = Thresholds::default();
+        let endpoints = vec![ep("a")];
+        let first = update(&State::empty(), &endpoints, &[liveness_failed("a")], "2026-09-14T00:00:00Z", &t).unwrap();
+        let e = first.get(&ep("a")).unwrap();
+        assert_eq!(e.strikes, 1, "first silence is a strike");
+        assert!(e.dormant_since.is_none(), "one strike is not relegation");
+
+        let second = update(&first, &endpoints, &[liveness_failed("a")], "2026-09-14T01:00:00Z", &t).unwrap();
+        let e = second.get(&ep("a")).unwrap();
+        assert_eq!(e.strikes, 2);
+        assert!(e.dormant_since.is_some(), "two consecutive silences relegate it");
     }
 
     fn entry(url: &str) -> EndpointState {
@@ -1248,7 +1295,7 @@ mod tests {
         state = update(
             &state,
             &endpoints,
-            &[Outcome { url: ep("http://silent.example/s"), cost_ms: 60_000, positive: false }],
+            &[Outcome { url: ep("http://silent.example/s"), cost_ms: 60_000, positive: false, liveness_failed: false }],
             "2026-08-11T00:00:00Z",
             &t,
         )

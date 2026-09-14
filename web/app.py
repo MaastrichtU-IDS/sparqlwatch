@@ -653,6 +653,15 @@ _DECLINE_DETAILS = {
         "we asked which classes the endpoint holds and got no readable "
         "answer, so nothing was profiled"
     ),
+    # The fourth party, and the only one that blames the endpoint outright.
+    # Note what it does NOT say: nothing about being unreachable, because it
+    # covers a host that answers too slowly as well as one that does not answer
+    # at all. And a host that answered with HTML or a 500 was probed in full,
+    # so this never appears for an endpoint that merely refused the query.
+    "liveness-failed": (
+        "the endpoint did not answer a trivial query, so the rest of the "
+        "checks were never sent"
+    ),
 }
 
 # The detail for a reason this build has no sentence for, from a prober newer

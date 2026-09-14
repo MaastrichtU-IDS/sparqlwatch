@@ -6,7 +6,7 @@ use sparqlwatch_prober::{
         self, plan_sweep, Outcome, Thresholds, DEFAULT_CADENCE_DAYS, DEFAULT_COST_MS,
         DEFAULT_GRACE_DAYS, DEFAULT_STRIKES, MIN_COST_MS,
     },
-    emit::{DormancyFact, MeasurementRow, RunFooter, RunHeader, RunId},
+    emit::{DormancyFact, MeasurementRow, NotMeasured, NotMeasuredReason, RunFooter, RunHeader, RunId},
     metrics::{definitions_revision, load_metrics, within_cost, Cost},
     politeness::{Politeness, DEFAULT_MIN_GAP, DEFAULT_RETRY_AFTER_CAP},
     registry::{load_endpoints, read_exclusions},
@@ -279,11 +279,27 @@ fn validate_thresholds(thresholds: &Thresholds) -> anyhow::Result<()> {
 /// that ran out its own 30 s budget, comes back as a failed `Observation`
 /// carrying its elapsed time, which is why the 57 endpoints behind this policy
 /// measure 210,010 ms rather than nothing.
-fn outcomes_from(rows: &[MeasurementRow], probed: &[String]) -> Vec<Outcome> {
+fn outcomes_from(
+    rows: &[MeasurementRow],
+    not_measured: &[NotMeasured],
+    probed: &[String],
+) -> Vec<Outcome> {
     let mut by_url: BTreeMap<&str, Outcome> = probed
         .iter()
-        .map(|url| (url.as_str(), Outcome { url: url.clone(), cost_ms: 0, positive: false }))
+        .map(|url| {
+            (url.as_str(), Outcome { url: url.clone(), cost_ms: 0, positive: false, liveness_failed: false })
+        })
         .collect();
+    // The gate's verdict, read from the declines rather than re-derived from
+    // the rows: `LivenessFailed` is the only reason meaning "it did not
+    // answer", and reading it here keeps that definition in `probe_endpoint`.
+    for fact in not_measured {
+        if fact.reason == NotMeasuredReason::LivenessFailed {
+            if let Some(outcome) = by_url.get_mut(fact.endpoint.as_str()) {
+                outcome.liveness_failed = true;
+            }
+        }
+    }
     for row in rows {
         let Some(outcome) = by_url.get_mut(row.endpoint.as_str()) else { continue };
         outcome.cost_ms = outcome.cost_ms.saturating_add(row.elapsed_ms.unwrap_or(0));
@@ -578,7 +594,7 @@ async fn main() -> anyhow::Result<()> {
     // failing toward probing LESS in the case the spec calls immediate. The
     // recovery is a re-run of the same `--at`, which `plan_sweep` rule 2 and
     // `update` rule B make exact rather than approximate.
-    let outcomes = outcomes_from(&rows, &plan.probe);
+    let outcomes = outcomes_from(&rows, &not_measured, &plan.probe);
     merge_state(Path::new(&args.state), |on_disk| {
         dormancy::update(on_disk, &endpoints, &outcomes, &args.at, &thresholds)
     })?;
@@ -789,10 +805,10 @@ mod tests {
             measured(ep, "cors", Verdict::Indeterminate, None),
             measured(ep, "classes", Verdict::Absent, Some(30_002)),
         ];
-        let outcomes = outcomes_from(&rows, &[ep.to_string()]);
+        let outcomes = outcomes_from(&rows, &[], &[ep.to_string()]);
         assert_eq!(
             outcomes,
-            vec![Outcome { url: ep.into(), cost_ms: 60_003, positive: false }],
+            vec![Outcome { url: ep.into(), cost_ms: 60_003, positive: false, liveness_failed: false }],
             "the two measured metrics sum and the unmeasured one adds nothing"
         );
     }
@@ -809,7 +825,7 @@ mod tests {
                 measured(ep, "availability", Verdict::Absent, Some(90_000)),
                 measured(ep, "cors", positive, Some(1)),
             ];
-            let outcomes = outcomes_from(&rows, &[ep.to_string()]);
+            let outcomes = outcomes_from(&rows, &[], &[ep.to_string()]);
             assert!(outcomes[0].positive, "{positive:?} is a positive verdict");
         }
         for other in [
@@ -820,7 +836,7 @@ mod tests {
         ] {
             let rows = vec![measured(ep, "cors", other, Some(1))];
             assert!(
-                !outcomes_from(&rows, &[ep.to_string()])[0].positive,
+                !outcomes_from(&rows, &[], &[ep.to_string()])[0].positive,
                 "{other:?} is not a positive verdict"
             );
         }
@@ -840,12 +856,12 @@ mod tests {
         let failed = "https://gone.example/sparql";
         let ok = "https://a.example/sparql";
         let rows = vec![measured(ok, "availability", Verdict::Absent, Some(7))];
-        let outcomes = outcomes_from(&rows, &[failed.to_string(), ok.to_string()]);
+        let outcomes = outcomes_from(&rows, &[], &[failed.to_string(), ok.to_string()]);
         assert_eq!(
             outcomes,
             vec![
-                Outcome { url: ok.into(), cost_ms: 7, positive: false },
-                Outcome { url: failed.into(), cost_ms: 0, positive: false },
+                Outcome { url: ok.into(), cost_ms: 7, positive: false, liveness_failed: false },
+                Outcome { url: failed.into(), cost_ms: 0, positive: false, liveness_failed: false },
             ],
             "every probed endpoint gets exactly one outcome, in url order"
         );
@@ -861,7 +877,7 @@ mod tests {
         let skipped = "https://slow.example/sparql";
         let probed = "https://a.example/sparql";
         let rows = vec![measured(probed, "availability", Verdict::Absent, Some(7))];
-        let outcomes = outcomes_from(&rows, &[probed.to_string()]);
+        let outcomes = outcomes_from(&rows, &[], &[probed.to_string()]);
         assert_eq!(outcomes.len(), 1, "one probed endpoint, one outcome");
         assert!(
             outcomes.iter().all(|o| o.url != skipped),
@@ -878,7 +894,7 @@ mod tests {
     fn a_duplicate_in_the_probe_list_cannot_yield_two_outcomes() {
         let ep = "https://a.example/sparql";
         let rows = vec![measured(ep, "availability", Verdict::Absent, Some(5))];
-        let outcomes = outcomes_from(&rows, &[ep.to_string(), ep.to_string()]);
+        let outcomes = outcomes_from(&rows, &[], &[ep.to_string(), ep.to_string()]);
         assert_eq!(outcomes.len(), 1, "one url, one outcome: {outcomes:?}");
         assert_eq!(outcomes[0].cost_ms, 5, "and its cost is counted once");
     }
@@ -891,7 +907,7 @@ mod tests {
     #[test]
     fn a_row_for_an_unprobed_endpoint_does_not_invent_an_outcome() {
         let rows = vec![measured("https://stray.example/sparql", "cors", Verdict::Verified, Some(9))];
-        assert_eq!(outcomes_from(&rows, &[]), Vec::new());
+        assert_eq!(outcomes_from(&rows, &[], &[]), Vec::new());
     }
 
     /// The default ceiling is the whole safety property of the cost class:

@@ -671,6 +671,107 @@ async fn probe_endpoint(
     budget: Budget,
     acc: &mut EndpointSweep,
 ) {
+    // THE REACHABILITY GATE, and it runs before anything else sends a byte.
+    //
+    // One request decides whether the other nine are worth sending. If nothing
+    // answers it, nothing will answer them either: there is no state of the
+    // world where DNS does not resolve and a CORS preflight still lands.
+    // Before this, a dead endpoint cost the full battery every sweep --
+    // bio2rdf.org, whose zone stopped resolving on 2026-09-13, was costing
+    // ~68 seconds a sweep to be told nine times that it was not there.
+    //
+    // WHAT GATES AND WHAT DOES NOT. `status.is_some()` means an HTTP response
+    // came back, whatever it said: an HTML console, a 500, a 404 all get the
+    // whole battery, because CORS headers and a service description are plain
+    // HTTP facts that can be true of a host whose query engine is refusing
+    // work. Three of the nine endpoints the DBpedia KG catalog declares are
+    // exactly that shape.
+    //
+    // Two things gate: nothing answered, and nothing answered IN TIME. The
+    // second is a policy call rather than an observation about the network --
+    // an endpoint taking 15 seconds over `LIMIT 1` is reachable -- and it is
+    // made because it is still true that it will not answer nine harder
+    // questions inside their budgets. The decline is named `LivenessFailed`
+    // and not `Unreachable` for exactly that reason: the published fact has to
+    // be true of the slow case too.
+    //
+    // The observation is kept rather than thrown away: it IS the availability
+    // measurement, so a reachable endpoint pays for this request once and the
+    // loop below reads the result instead of asking again.
+    let live_def = defs.iter().find(|d| d.kind == ProbeKind::Liveness);
+    let mut prefetched_liveness = match live_def {
+        Some(def) => {
+            let q = def.query.clone().unwrap_or_default();
+            Some(budget.with_metric_budget(client.ask(ep, &q)).await)
+        }
+        // No liveness metric in this run's definition set -- a cost ceiling can
+        // decline it, and a hand-built set may omit it. Nothing to gate on, so
+        // nothing is gated: probe as before rather than inventing a reason to
+        // skip an endpoint nobody asked us to test for reachability.
+        None => None,
+    };
+    let reachable = match &prefetched_liveness {
+        Some(Ok(o)) => o.status.is_some(),
+        // OUR BUDGET EXPIRING IS NOT THE ENDPOINT'S SILENCE. An earlier draft
+        // gated here too, on the reasoning that a host too slow for `LIMIT 1`
+        // will not answer nine harder questions. That is probably true and it
+        // is still the wrong place to act on it, for two reasons the tests
+        // found. It would publish a decline about a server that is merely
+        // under load, which is the one population a monitor must be most
+        // careful about; and it would silently take away the partial-endpoint
+        // property that `a_partial_endpoint_keeps_the_verdicts_it_already_earned`
+        // exists to hold, where a metric that answered before a stall keeps
+        // the verdict it earned.
+        //
+        // The measurement that settled it, taken 2026-09-14 over the ten
+        // endpoints the DBpedia KG catalog declares: transport failures came
+        // back in 11-24 ms and every live endpoint answered within 2.25 s.
+        // Nothing sat in between. A short bound was solving a case the data
+        // does not show, while risking the case it does.
+        Some(Err(_)) => true,
+        None => true,
+    };
+
+    if !reachable {
+        // Availability still gets its row: we asked, and "nothing answered" is
+        // what we found out. `Declared` is empty because no description was
+        // read -- we did not fetch one -- and liveness declares nothing in the
+        // service-description vocabulary anyway.
+        if let (Some(def), Some(observed)) = (live_def, prefetched_liveness.as_ref()) {
+            acc.rows.push(MeasurementRow {
+                endpoint: ep.to_string(),
+                metric_id: def.id.clone(),
+                verdict: resolve(
+                    def,
+                    Declared { claimed: false, value: None },
+                    observed.as_ref().map_err(|e| *e),
+                ),
+                level: None,
+                declared_count: None,
+                observed_count: None,
+                // An expired bound measured nothing, so it reports no elapsed
+                // time rather than a zero one -- the same rule every other row
+                // follows.
+                elapsed_ms: observed.as_ref().ok().map(|o| o.elapsed_ms),
+            });
+        }
+        // Everything else is declined, with the reason naming the endpoint
+        // rather than us or our budget. Not `Indeterminate` rows: an
+        // indeterminate verdict asserts a measurement happened and was
+        // inconclusive, and no measurement happened here.
+        for def in defs {
+            if live_def.is_some_and(|l| l.id == def.id) {
+                continue;
+            }
+            acc.not_measured.push(NotMeasured {
+                endpoint: ep.to_string(),
+                metric_id: def.id.clone(),
+                reason: NotMeasuredReason::LivenessFailed,
+            });
+        }
+        return;
+    }
+
     // One queryless fetch per endpoint, not one per metric: six metrics must
     // not mean six identical GETs landing in an operator's log. Its outcome
     // feeds two things below: the `Declarations` every metric's `Declared`
@@ -804,7 +905,21 @@ async fn probe_endpoint(
                 ProbeKind::VocabularyDescribed => unreachable!("VocabularyDescribed sends no request; it is derived after the profile pass"),
             }
         };
-        let observed = budget.with_metric_budget(fut).await;
+        // The gate above already asked the liveness question, under its own
+        // shorter bound, and its answer is what let us get this far. Taking it
+        // here rather than awaiting `fut` is what keeps the gate free for a
+        // reachable endpoint: without this, every endpoint would pay for the
+        // availability request twice, and an operator's log would show two
+        // identical queries a few hundred milliseconds apart.
+        //
+        // `take()` so it is consumed once. A definition set with two Liveness
+        // metrics -- which nothing forbids -- gets one prefetched answer and
+        // then probes the second normally, rather than silently publishing one
+        // observation under two metric ids.
+        let observed = match (def.kind, prefetched_liveness.take()) {
+            (ProbeKind::Liveness, Some(o)) => o,
+            _ => budget.with_metric_budget(fut).await,
+        };
         let declared = Declared::from(&declarations, def);
         let verdict = resolve(def, declared, observed.as_ref().map_err(|e| *e));
         // The bindings are kept only for a metric that asked to enumerate. Up
