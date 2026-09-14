@@ -1,0 +1,33 @@
+# Where kg-catalog.toml came from, and what was checked. Hand-written, like the
+# file it describes: see its header for why `seed-registry` cannot produce it.
+
+[source]
+catalog = "https://kg-catalog.dbpedia.org/"
+# The site renders with JavaScript and its HTML carries no endpoint at all. The
+# list is not readable from the page; it is readable from the metadata store
+# the page queries.
+metadata_store = "https://moss.dev.dbpedia.link/sparql"
+query = "SELECT DISTINCT ?s ?e WHERE { ?s void:sparqlEndpoint ?e }"
+# The only property in that store that carries an endpoint. The single
+# `sd:endpoint` value is Virtuoso's own internal `local:/sparql`, and no
+# `dcat:accessURL` holds a SPARQL url.
+property = "http://rdfs.org/ns/void#sparqlEndpoint"
+read = "2026-09-14"
+
+[counts]
+# Roughly 673 knowledge graphs carry a databus:Group in the catalog account.
+catalogued_graphs = 673
+declared_endpoints = 10
+# `http://example.org/sparql`, from a `hello-world` entry.
+placeholders_dropped = 1
+declared_urls_that_answer_sparql = 3
+declared_urls_corrected = 5
+superseded_service = 1
+seeded = 9
+
+[validation]
+# Every url in kg-catalog.toml answered a real query before it was listed, and
+# every correction was probed with the same sweep that probes the rest.
+prober = "sparqlwatch-prober 0.1.0"
+max_cost = "expensive"
+swept = "2026-09-14"

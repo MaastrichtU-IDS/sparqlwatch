@@ -1,0 +1,30 @@
+# The SPARQL endpoints of the DBpedia Knowledge Graph Catalog, as they ACTUALLY
+# ANSWER rather than as the catalog declares them.
+#
+# HAND-WRITTEN, unlike lod-cloud.toml beside it. `seed-registry` cannot produce
+# this file: six of the nine urls the catalog states do not serve SPARQL, and
+# the working ones were found by probing candidates, which is a judgement no
+# extraction rule makes. Editing this by hand is therefore correct, and nothing
+# overwrites it.
+#
+# Provenance, every verdict and every correction: kg-catalog.provenance.toml
+# beside this file, and docs/kg-catalog-endpoints.md.
+#
+# NOT A DEVELOPMENT LIST. The default --endpoints is prober/endpoints.toml.
+# These are nine strangers' servers; sweeping them is an explicit act.
+endpoint = [
+    # Correct as the catalog declares them.
+    "https://kaiko.getalp.org/sparql",
+    "http://dskg.org/sparql",
+    "https://semrepo.org/sparql",
+    # Corrected. The catalog's url answers with an HTML console in every case
+    # below, so the endpoint reads as unreachable without the correction.
+    "https://sparql.dblp.org/sparql",
+    "https://query.wikidata.org/sparql",
+    "https://sidekick.bio2vec.net/fuseki/sidekick/query",
+    "https://orkg.org/triplestore",
+    "https://yago-knowledge.org/sparql/qlever",
+    # MAKG's successor. makg.org refuses the TLS handshake and the project it
+    # served was superseded; this is the service, under its current name.
+    "https://semopenalex.org/sparql",
+]
