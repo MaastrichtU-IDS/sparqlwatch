@@ -408,9 +408,22 @@
     <a href="{{ docs_path }}" data-nav="docs">docs</a>
 </header>
 <main>
-  <h1>SPARQL Watch - Public SPARQL endpoint monitoring service</h1>
+  {# FIND, REACH, REUSE are Findable, Accessible and Reusable, in the words a
+     reader who has never heard of FAIR still understands. The heading named the
+     mechanism ("monitoring service") until 2026-09-14, which told a visitor what
+     this does to endpoints rather than what it does for them. #}
+  <h1>SPARQL endpoints you can find, reach, and reuse</h1>
   <p class="sub" data-endpoint-count="{{ endpoint_count }}" data-metric-count="{{ metric_count }}">
     {% if endpoint_count %}
+      {# The benefit, in one sentence, in the slot that held nothing between
+         2026-08-28 and 2026-09-14. Two audiences and one sentence: a consumer
+         reads the first half and picks an endpoint, a provider reads the second
+         and gets a to-do list. "Measured, not asserted" is the whole difference
+         between this and a catalogue -- five of nine urls in the DBpedia KG
+         catalogue did not serve SPARQL when we probed them. #}
+      A registry of public SPARQL endpoints, measured rather than asserted: what
+      each one holds, whether tools can reach it, and what its own description
+      leaves out.
       {# The endpoint and metric counts used to open this paragraph and were
          removed on 2026-08-27: every facet chip below now carries its own count
          and the group headings carry the denominator, so the sentence was
