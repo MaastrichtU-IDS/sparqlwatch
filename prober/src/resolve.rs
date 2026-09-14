@@ -207,24 +207,50 @@ pub fn resolve(def: &MetricDef, declared: Declared, obs: Result<&Observation, Ex
         // broken and the graph says so honestly.
         ProbeKind::ClassProfile => Verdict::Indeterminate,
         ProbeKind::AskFilter | ProbeKind::AskData => match (o.boolean, def.expect) {
-            // This arm serves both probe kinds, and the two readings differ:
-            // for `AskFilter` a wrong boolean means broken semantics; for
-            // `AskData` a `false` means the data is absent. It is safe today
-            // only because no shipped `AskData` metric sets `expect`, and the
-            // day one does, genuine data absence would silently become
-            // `DeclaredButWrong` instead of `Absent`.
             // A capability claim needs the endpoint's own successful answer just
             // as much as an absence claim does: a 500 body that happens to carry
             // {"boolean": true} is not the engine confirming anything.
             (Some(got), Some(want)) if got == want => {
                 if answered_ok(o) { confirmed(def, declared) } else { Verdict::Indeterminate }
             }
-            // Bound but wrong: the function answered, and answered
-            // incorrectly. Only claimable when the endpoint itself answered
-            // with a success status; a 502 body that happens to parse is not
-            // the engine's answer.
+            // Bound but not what was expected, and WHAT THAT MEANS DEPENDS ON
+            // WHETHER ANYTHING CLAIMED IT.
+            //
+            // `declared-but-wrong` is defined, in docs/design/verdict-encoding
+            // .md, as "declared, but incorrect", and it is the harshest verdict
+            // in the vocabulary. Returning it without consulting `declared`
+            // published that sentence about endpoints that had declared
+            // nothing at all: SIDEKICK is Fuseki without GeoSPARQL, so
+            // `geof:sfWithin` evaluates false, and on 2026-09-14 it was graded
+            // declared-but-wrong on a run whose `declarationsRead` was false.
+            // Its only fault was not implementing an optional feature, which
+            // is what `absent` means -- "neither declared nor confirmed".
+            //
+            // The incentive was backwards too. DSKG errored on the same probe
+            // and got `indeterminate`; SIDEKICK answered cleanly and got the
+            // worst grade on the page. An endpoint is not made worse by
+            // replying.
+            //
+            // This also closes the hazard the old comment here described
+            // rather than fixed: it warned that the day a shipped `AskData`
+            // metric set `expect`, genuine data absence would silently become
+            // `DeclaredButWrong` instead of `Absent`. With the declaration
+            // consulted, that case now reads `Absent` on its own.
+            //
+            // `DeclaredButWrong` stays reachable, and means what it says:
+            // `geo-functions` carries `declared_by` geosparql/sfWithin, so an
+            // endpoint whose description claims that function and whose engine
+            // then answers wrongly still earns it. Only claimable when the
+            // endpoint itself answered with a success status; a 502 body that
+            // happens to parse is not the engine's answer.
             (Some(_), Some(_)) => {
-                if answered_ok(o) { Verdict::DeclaredButWrong } else { Verdict::Indeterminate }
+                if !answered_ok(o) {
+                    Verdict::Indeterminate
+                } else if declared.claimed {
+                    Verdict::DeclaredButWrong
+                } else {
+                    Verdict::Absent
+                }
             }
             (Some(true), None) => {
                 if answered_ok(o) { confirmed(def, declared) } else { Verdict::Indeterminate }
@@ -562,6 +588,48 @@ mod tests {
     /// capability the declared/observed axis can currently apply to.
     const SF_WITHIN: &str = "http://www.opengis.net/def/function/geosparql/sfWithin";
 
+    /// A wrong boolean is only "declared but wrong" if something declared it.
+    ///
+    /// `declared-but-wrong` is the harshest verdict in the vocabulary and
+    /// docs/design/verdict-encoding.md defines it as "declared, but
+    /// incorrect". Until 2026-09-15 this arm returned it without looking at
+    /// the declaration, so an endpoint that had declared nothing and simply
+    /// did not implement an optional feature got it: SIDEKICK is Fuseki
+    /// without GeoSPARQL, `geof:sfWithin` evaluates false, and the run that
+    /// graded it recorded `declarationsRead` false.
+    ///
+    /// Both halves are asserted, because a fix that made the verdict
+    /// unreachable would be a different bug. `geo-functions` does carry
+    /// `declared_by`, so an endpoint whose description claims the function and
+    /// whose engine then contradicts it still earns the verdict.
+    #[test]
+    fn a_wrong_boolean_is_absent_unless_something_declared_the_capability() {
+        let metric = def(ProbeKind::AskFilter, Some(true));
+        let answered_false = obs(Some(false));
+
+        assert_eq!(
+            resolve(&metric, Declared { claimed: false, value: None }, Ok(&answered_false)),
+            Verdict::Absent,
+            "nothing claimed it and it said no: that is what `absent` means",
+        );
+        assert_eq!(
+            resolve(&metric, Declared { claimed: true, value: None }, Ok(&answered_false)),
+            Verdict::DeclaredButWrong,
+            "a description claimed it and the engine contradicted it",
+        );
+
+        // Unchanged either way: a body we cannot trust is not the engine's
+        // answer, whatever the description said.
+        let refused = Observation { status: Some(502), ..obs(Some(false)) };
+        for claimed in [false, true] {
+            assert_eq!(
+                resolve(&metric, Declared { claimed, value: None }, Ok(&refused)),
+                Verdict::Indeterminate,
+                "a 502 body that happens to parse is not an answer",
+            );
+        }
+    }
+
     fn def(kind: ProbeKind, expect: Option<bool>) -> MetricDef {
         MetricDef {
             id: "t".into(),
@@ -602,10 +670,29 @@ mod tests {
     }
 
     #[test]
-    fn wrong_answer_is_worse_than_absent() {
-        // 9 endpoints answered `false` to a filter a conformant engine must
-        // answer `true`: the function is bound but the semantics are wrong.
-        let v = resolve(&def(ProbeKind::AskFilter, Some(true)), Declared { claimed: false, value: None }, Ok(&obs(Some(false))));
+    fn a_wrong_answer_from_something_that_claimed_the_capability_is_worse_than_absent() {
+        // 9 endpoints in the survey answered `false` to a filter a conformant
+        // engine must answer `true`.
+        //
+        // THE PREMISE THIS TEST USED TO REST ON WAS NOT OBSERVABLE. It read
+        // "the function is bound but the semantics are wrong", and asserted
+        // `DeclaredButWrong` for an endpoint that had declared nothing. A
+        // probe cannot tell those apart: an unknown function in a FILTER
+        // raises, the solution is eliminated, and the ASK answers `false`. So
+        // `false` means "unbound" and "bound but wrong" equally, and the old
+        // reading picked the harsher one on no evidence.
+        //
+        // The declaration is the evidence that separates them. An endpoint
+        // whose description claims geosparql/sfWithin is asserting the
+        // function IS bound, so a `false` from it really is broken semantics.
+        // One that claims nothing has only told us it does not do this, which
+        // is `absent`. See a_wrong_boolean_is_absent_unless_something_declared
+        // _the_capability for the other half.
+        let v = resolve(
+            &def(ProbeKind::AskFilter, Some(true)),
+            Declared { claimed: true, value: None },
+            Ok(&obs(Some(false))),
+        );
         assert_eq!(v, Verdict::DeclaredButWrong);
     }
 
