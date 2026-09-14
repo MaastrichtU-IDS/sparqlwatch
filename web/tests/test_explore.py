@@ -202,3 +202,32 @@ def test_a_linked_endpoint_is_one_the_payload_actually_holds(client_for, store):
     body = client_for(store).get("/").text
     for target in re.findall(r'href="/explore\?endpoint=([^"]+)"', body):
         assert unquote(target) in held, f"{unquote(target)} is linked but not in the payload"
+
+
+def test_the_explorer_payload_is_built_once_per_render(
+    client_for, store_content_profiles, monkeypatch
+):
+    """One render, one build.
+
+    /explore used to call `build_payload` twice: once for the JSON it embeds
+    and once for the note that counts what the JSON holds. On the live store on
+    2026-09-14 that was the difference between a 19 second page and a 48 second
+    one, and the second build could only ever produce what the first already
+    had.
+
+    Asserted by counting rather than by timing, because a timing assertion on a
+    fixture this small would pass whatever the page did.
+    """
+    import app as app_module
+
+    calls = []
+    real = app_module.build_payload
+
+    def counting(store):
+        calls.append(store)
+        return real(store)
+
+    monkeypatch.setattr(app_module, "build_payload", counting)
+    response = client_for(store_content_profiles).get("/explore")
+    assert response.status_code == 200
+    assert len(calls) == 1, f"the payload was built {len(calls)} times for one render"

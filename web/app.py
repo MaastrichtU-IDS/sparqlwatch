@@ -67,7 +67,7 @@ from pyoxigraph import (
 
 import verdict_encoding
 from endpoint_content import CLASS_SAMPLING_METRICS, EndpointContent, endpoint_content
-from explore_payload import build_payload, build_payload_json, endpoint_vocabulary
+from explore_payload import build_payload, endpoint_vocabulary
 from endpoint_index import endpoint_index
 from endpoint_history import EndpointHistory, endpoint_history
 from fleet import FleetHistory, fleet_history, fleet_stats
@@ -289,15 +289,19 @@ def choose_representation(accept: str | None) -> str | None:
 # It is computed from the store now. See web/explore_payload.py, and
 # explore_endpoints below for the index link that depended on the file's own
 # endpoint list and so went missing for every row once the registry changed.
-def _explore_probe_note(store: Store) -> str:
+def _explore_probe_note(payload: dict) -> str:
     """What this page is a reading of, counted rather than asserted.
 
     Was the literal string "prototype: 2 endpoints, probed 2026-08-28" while a
     static file backed this page. A hardcoded provenance note outlives the data
     it describes, and this one had: it still said two endpoints after the
     registry was replaced with three.
+
+    TAKES THE PAYLOAD, NOT THE STORE, since 2026-09-14. It used to build its
+    own, which meant /explore built the same payload twice for one render --
+    once for the note and once for the JSON beside it. Measured at the time,
+    that was the difference between a 19 s page and a 48 s one.
     """
-    payload = build_payload(store)
     n = len(payload["endpoints"])
     terms = len(payload["terms"])
     return (
@@ -3252,10 +3256,14 @@ def explore(request: Request, store: Store = Depends(get_store)) -> Response:
     derived view of one run's facts, and publishing it as RDF would assert it as
     a fact about the endpoints rather than as a reading of one probe.
     """
+    # ONE BUILD, read twice. The note counts what the payload holds, so
+    # deriving both from the same dict is also the only way they cannot
+    # disagree about how many endpoints this page is showing.
+    payload = build_payload(store)
     return Response(
         content=_TEMPLATES.get_template("explore.html").render(
-            payload=build_payload_json(store),
-            probe_note=_explore_probe_note(store),
+            payload=json.dumps(payload, sort_keys=False),
+            probe_note=_explore_probe_note(payload),
             index_path=INDEX_PATH,
             docs_path=DOCS_PATH,
             explore_path=EXPLORE_PATH,

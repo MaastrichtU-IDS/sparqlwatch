@@ -33,43 +33,76 @@
 
 PREFIX sw: <urn:sparqlwatch:>
 
+# FOUR FLAT ARMS, EACH REPEATING THE POINTER, and the repetition is the whole
+# reason this query is fast. The same question written as one pointer block
+# followed by a nested UNION took 18.63 s against an 85,810-quad store to
+# return these same 1,383 rows; written this way it takes 0.02 s. Measured
+# 2026-09-14, in the pod, against the live store.
+#
+# Why: with the pointer outside, the planner does not push `?run` into the
+# arms, so each branch is evaluated across all 21 run graphs and joined
+# afterwards. Every branch on its own is already fast -- 0.00 s, 0.02 s, 0.03 s
+# when timed separately -- so the cost was never the data. Repeating the
+# pointer inside each arm gives the planner a bound `?run` before it touches a
+# run graph.
+#
+# The arms are the two roles crossed with the two kinds, spelled out rather
+# than nested, because nesting them is exactly what produced the slow plan. The
+# results are identical: both forms were run and their row sets compared.
+
 SELECT ?endpoint ?term ?kind ?declared
 WHERE {
-  # The run that last profiled this endpoint. One quad, and the reason this
-  # query does no recency work: endpoint_content.rq's header measures why
-  # deciding recency at query time was the mistake it used to be.
-  GRAPH sw:current {
-    ?ptr sw:sampleRunFor ?endpoint ;
-         sw:sampleRunMetric <urn:sparqlwatch:metric:class-profiles> ;
-         sw:sampleRunIs ?run .
-  }
+  # DECLARED: what the description named, read in the run the pointer names.
   {
-    # DECLARED: what the description named, read in that same run.
-    GRAPH ?run {
-      { ?endpoint sw:declaredClass ?term . BIND("class" AS ?kind) }
-      UNION
-      { ?endpoint sw:declaredProperty ?term . BIND("property" AS ?kind) }
+    GRAPH sw:current {
+      ?ptr sw:sampleRunFor ?endpoint ;
+           sw:sampleRunMetric <urn:sparqlwatch:metric:class-profiles> ;
+           sw:sampleRunIs ?run .
     }
+    GRAPH ?run { ?endpoint sw:declaredClass ?term }
+    BIND("class" AS ?kind)
     BIND(true AS ?declared)
   }
   UNION
   {
-    # OBSERVED: what the profile pass actually found. A profile's class, and
-    # the properties its instances carried.
-    GRAPH ?run {
-      {
-        ?profile sw:profiledClass ?term ;
-                 sw:profiledFrom ?endpoint .
-        BIND("class" AS ?kind)
-      }
-      UNION
-      {
-        ?profile sw:profiledFrom ?endpoint ;
-                 sw:profileProperty ?row .
-        ?row sw:property ?term .
-        BIND("property" AS ?kind)
-      }
+    GRAPH sw:current {
+      ?ptr sw:sampleRunFor ?endpoint ;
+           sw:sampleRunMetric <urn:sparqlwatch:metric:class-profiles> ;
+           sw:sampleRunIs ?run .
     }
+    GRAPH ?run { ?endpoint sw:declaredProperty ?term }
+    BIND("property" AS ?kind)
+    BIND(true AS ?declared)
+  }
+  UNION
+  # OBSERVED: the classes the profile pass found.
+  {
+    GRAPH sw:current {
+      ?ptr sw:sampleRunFor ?endpoint ;
+           sw:sampleRunMetric <urn:sparqlwatch:metric:class-profiles> ;
+           sw:sampleRunIs ?run .
+    }
+    GRAPH ?run {
+      ?profile sw:profiledClass ?term ;
+               sw:profiledFrom ?endpoint .
+    }
+    BIND("class" AS ?kind)
+    BIND(false AS ?declared)
+  }
+  UNION
+  # OBSERVED: the properties those classes' instances carried.
+  {
+    GRAPH sw:current {
+      ?ptr sw:sampleRunFor ?endpoint ;
+           sw:sampleRunMetric <urn:sparqlwatch:metric:class-profiles> ;
+           sw:sampleRunIs ?run .
+    }
+    GRAPH ?run {
+      ?profile sw:profiledFrom ?endpoint ;
+               sw:profileProperty ?row .
+      ?row sw:property ?term .
+    }
+    BIND("property" AS ?kind)
     BIND(false AS ?declared)
   }
 }
