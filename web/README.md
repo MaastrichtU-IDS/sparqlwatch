@@ -652,7 +652,7 @@ beside it is pressed.
 ### `/about`, and how somebody asks to be left alone
 
 `GET /about` is the page the prober's `User-Agent` points at: `client.rs` sends
-`sparqlwatch/0.1.0 (+https://sparqlwatch.dev.k8s.semanticscience.org/about)` with
+`sparqlwatch/0.2.0 (+https://sparqlwatch.dev.k8s.semanticscience.org/about)` with
 every request, so this page is where a sysadmin arrives after finding an
 unfamiliar agent in their own log. It answers, in that order,
 who is querying, how often, how politely, what "dormant" means if their endpoint

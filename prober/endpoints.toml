@@ -69,4 +69,17 @@ endpoint = [
   "http://127.0.0.1:9200/sparql",
   "https://bio2rdf.org/sparql",
   "https://ontoexplorer.dev.k8s.semanticscience.org/api/v1/sparql/content",
+  # The DBpedia Knowledge Graph Catalog's nine endpoints, as they ANSWER --
+  # six of the urls it declares do not. registry/kg-catalog.toml holds the same
+  # list with the corrections named, and docs/kg-catalog-endpoints.md has the
+  # evidence for each. All nine read `verified` on 2026-09-14.
+  "https://sparql.dblp.org/sparql",
+  "https://kaiko.getalp.org/sparql",
+  "http://dskg.org/sparql",
+  "https://semrepo.org/sparql",
+  "https://sidekick.bio2vec.net/fuseki/sidekick/query",
+  "https://orkg.org/triplestore",
+  "https://query.wikidata.org/sparql",
+  "https://yago-knowledge.org/sparql/qlever",
+  "https://semopenalex.org/sparql",
 ]

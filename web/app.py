@@ -2843,7 +2843,7 @@ CONTACT_ADDRESS = "michel.dumontier@maastrichtuniversity.nl"
 # quote, so test_the_user_agent_shown_is_the_one_the_prober_sends reds on a
 # version bump and this constant has to move with it.
 PROBER_USER_AGENT = (
-    "sparqlwatch/0.1.0 (+https://sparqlwatch.dev.k8s.semanticscience.org/about)"
+    "sparqlwatch/0.2.0 (+https://sparqlwatch.dev.k8s.semanticscience.org/about)"
 )
 
 # prober/src/client.rs's MAX_REDIRECT_HOPS: how long a redirect chain the
