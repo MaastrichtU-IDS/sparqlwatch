@@ -915,15 +915,22 @@ def test_a_filtered_index_describes_exactly_the_endpoints_it_lists(
     graph = parse_graph(
         client.get("/?q=uniprot", headers={"accept": "text/turtle"}).text
     )
+    # [R3] Endpoints are the OBJECTS of dqv:computedOn / sw:notMeasuredOn.
+    # None is ever a subject -- measured: 0 of 439 constructed triples have an
+    # endpoint IRI as subject. A test that read subjects would compare an empty
+    # set and pass while measuring nothing.
     described = {
-        str(s.value) for s in {t.subject for t in graph} if str(s.value).startswith("http")
+        str(t.object.value)
+        for t in graph
+        if str(t.predicate.value)
+        in (
+            "http://www.w3.org/ns/dqv#computedOn",
+            "urn:sparqlwatch:notMeasuredOn",
+        )
     }
     assert listed, "the fixture must yield a non-empty subset"
-    assert described & listed == listed, (
-        "the RDF omits an endpoint the page lists"
-    )
-    assert not (described - listed - _service_level_subjects(graph)), (
-        "the RDF describes an endpoint the page filtered out"
+    assert described == listed, (
+        f"the page lists {sorted(listed)} and the RDF describes {sorted(described)}"
     )
 ```
 
@@ -958,37 +965,55 @@ with:
     # not at all. A substring test is not expressible that way, so filtering
     # here is the only route that does not bend that rule -- and it means the
     # page and the data share _matches_query rather than two spellings of it.
-    triples = store.query(_INDEX_DESCRIPTION_QUERY)
+    triples = list(store.query(_INDEX_DESCRIPTION_QUERY))
     if q:
-        # Statements whose subject is not an endpoint -- the service itself and
-        # the dormancy arm, which is not per-endpoint -- are service-level and
-        # are retained. The filter removes per-endpoint descriptions only.
-        triples = [
-            t
-            for t in triples
-            if not _describes_an_endpoint(t.subject)
-            or _matches_query(str(t.subject.value), q)
-        ]
+        triples = _only_matching_endpoints(triples, q, store)
     return serialize(triples, format=RdfFormat.from_media_type(media_type))
 ```
 
-and add beside `_matches_query`:
+**[R3] An endpoint is never a SUBJECT in this document.** Measured against a
+real store: of 439 constructed triples, **zero** have an endpoint IRI as their
+subject. Every subject is a `urn:sparqlwatch:measurement:...` or
+`urn:sparqlwatch:activity:...` node. Endpoints appear as the OBJECT of
+`dqv:computedOn` (63 triples) and `sw:notMeasuredOn` (9). Revision 1 of this
+plan filtered on the subject, which would have substring-matched `q` against
+measurement URNs — the wrong axis, and silently inconsistent with the HTML for
+any needle containing `/` or `:`, since the URN carries the endpoint
+percent-encoded.
+
+So the filter keys on the link, not on the subject's text:
 
 ```python
-def _describes_an_endpoint(subject) -> bool:
-    """Whether a constructed triple's subject is one of the endpoints listed.
+_COMPUTED_ON = NamedNode("http://www.w3.org/ns/dqv#computedOn")
+_NOT_MEASURED_ON = NamedNode("urn:sparqlwatch:notMeasuredOn")
 
-    An endpoint is a NamedNode whose IRI is the endpoint URL itself. Blank
-    nodes and the service's own IRI are not, which is what keeps the filter
-    from stripping statements that describe the service rather than a member
-    of the fleet.
+
+def _only_matching_endpoints(triples: list, q: str, store: Store) -> list:
+    """The constructed index, narrowed to the endpoints a query names.
+
+    An endpoint is never a subject here -- it is the object of dqv:computedOn
+    or sw:notMeasuredOn, and the subject is the measurement node that points at
+    it. So the filter runs in two passes: find every subject whose endpoint does
+    not match, then drop every triple describing one of those subjects.
+
+    Activity nodes carry no such link because a run is not per-endpoint, so they
+    survive. That is deliberate: they describe the sweep, not a member of the
+    fleet, and a filtered index that dropped its own provenance would be
+    describing less than it knows.
+
+    The membership test is _matches_query, the same predicate the HTML path
+    uses, so the two representations cannot disagree about what a query means.
     """
-    return isinstance(subject, NamedNode) and subject != _SERVICE
+    unwanted = {
+        t.subject
+        for t in triples
+        if t.predicate in (_COMPUTED_ON, _NOT_MEASURED_ON)
+        and not _matches_query(str(t.object.value), q)
+    }
+    return [t for t in triples if t.subject not in unwanted]
 ```
 
-Both names already exist in this module: `NamedNode` is imported at
-`app.py:60`, and `_SERVICE = NamedNode("urn:sparqlwatch:service")` is declared
-at `app.py:3027`. Nothing new to import.
+`NamedNode` is already imported at `app.py:60`; nothing new to import.
 
 - [ ] **Step 4: Run the tests**
 
