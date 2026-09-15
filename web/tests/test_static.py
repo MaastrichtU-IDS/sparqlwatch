@@ -52,3 +52,68 @@ def test_every_token_is_declared_for_both_surfaces(client):
     for token in ("--bg", "--text", "--accent", "--good", "--warn", "--crit", "--fill"):
         assert f"{token}:" in light, f"{token} must have a light value"
         assert f"{token}:" in dark, f"{token} must have a dark value"
+
+
+def _srgb_to_linear(c: float) -> float:
+    return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
+
+def _relative_luminance(rgb: tuple[float, float, float]) -> float:
+    r, g, b = (_srgb_to_linear(v / 255) for v in rgb)
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def _contrast(a: tuple[float, float, float], b: tuple[float, float, float]) -> float:
+    hi, lo = sorted((_relative_luminance(a), _relative_luminance(b)), reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def _hex_to_rgb(value: str) -> tuple[float, float, float]:
+    value = value.strip().lstrip("#")
+    return tuple(int(value[i : i + 2], 16) for i in (0, 2, 4))
+
+
+def _composite(fill_rgb, alpha, surface_rgb):
+    return tuple(alpha * f + (1 - alpha) * s for f, s in zip(fill_rgb, surface_rgb))
+
+
+def test_the_verdict_fill_is_visible_on_both_surfaces(client):
+    """The fill channel must survive the surface it is drawn on.
+
+    A fill that composites too close to its background turns every filled chip
+    into an empty one, and two of the seven states become one. This has already
+    happened once: verdict_encoding.py records a 5%-white fill that vanished at
+    chip size. That fill measures 1.139:1; the one that replaced it measures
+    1.623:1. The floor below sits between them.
+    """
+    body = client.get(app_module.STYLESHEET_PATH).text
+    light, dark = body.split("prefers-color-scheme: dark")
+
+    for name, block, fill_rgb in (
+        ("light", light, (0, 0, 0)),
+        ("dark", dark, (255, 255, 255)),
+    ):
+        surface = _hex_to_rgb(block.split("--bg:")[1].split(";")[0])
+        alpha = float(block.split("--fill:")[1].split(")")[0].split(",")[-1])
+        filled = _composite(fill_rgb, alpha, surface)
+        ratio = _contrast(filled, surface)
+        assert ratio >= 1.4, (
+            f"the {name} fill composites to {ratio:.3f}:1 against its surface; "
+            f"below 1.4:1 a filled chip is indistinguishable from an empty one"
+        )
+
+
+def test_the_generated_rules_read_the_fill_token(client):
+    """The fill must come from the token, not from a literal in Python.
+
+    A literal cannot follow the surface, which is the whole defect this task
+    exists to fix.
+    """
+    body = client.get(app_module.STYLESHEET_PATH).text
+    assert "var(--fill)" in body
+    assert "background: rgba(" not in body, (
+        "a hard-coded fill in the generated rules cannot follow the surface; "
+        "the fill must come from var(--fill). Note this asserts on the "
+        "generated declarations, not on the --fill token itself, which is "
+        "legitimately an rgba() literal in each of the two blocks."
+    )

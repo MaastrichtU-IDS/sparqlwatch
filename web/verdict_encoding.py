@@ -40,12 +40,18 @@ from dataclasses import dataclass
 CHIP_WIDTH_PX = 26
 CHIP_HEIGHT_PX = 22
 
-# 16% white over either background. The first attempt at this reused the theme's
-# --overlay token, 5% white, which is tuned for panels and vanishes at chip
-# size: desaturating the page showed filled and empty chips reading identically,
-# so the one channel separating "works" from "we never found out" carried
-# nothing at all. Nothing about that was visible from the code.
-CHIP_FILL = "rgba(255, 255, 255, 0.16)"
+# The fill channel, as a token rather than a literal.
+#
+# It was "rgba(255, 255, 255, 0.16)" until 2026-09-15 -- correct for the dark
+# surface it was measured on, and invisible on any light one. The first attempt
+# before that reused --overlay, 5% white, which is tuned for panels and vanishes
+# at chip size: desaturating the page showed filled and empty chips reading
+# identically, so the one channel separating "works" from "we never found out"
+# carried nothing at all. Nothing about that was visible from the code.
+#
+# The values now live in web/static/site.css, one per surface, and are pinned by
+# test_the_verdict_fill_is_visible_on_both_surfaces.
+CHIP_FILL = "var(--fill)"
 
 
 @dataclass(frozen=True)
