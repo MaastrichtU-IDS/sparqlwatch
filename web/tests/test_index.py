@@ -2537,3 +2537,68 @@ def test_matches_query_is_case_insensitive_and_permissive_when_empty():
     assert _matches_query("https://sparql.uniprot.org/sparql", None)
     assert _matches_query("https://sparql.uniprot.org/sparql", "")
     assert _matches_query("https://sparql.uniprot.org/sparql", "  uniprot  ")
+
+
+# ---------------------------------------------------------------------------
+# ?q= matching nothing: the gap the coordinator's fix-round-1 measurement
+# found. Filtering `entries` before anything else derives from them (see
+# `_index_context`) meant `endpoint_count` -- guarding both the page's own
+# one-sentence description of itself at index.html:334 and the facet-empty
+# note at index.html:549 -- followed the filter too. A ?q= that matched
+# nothing then hid the sentence explaining what this page is, on the one page
+# where a reader most needs it, and left a near-empty page with no stated
+# reason. `endpoint_count` now stays the unfiltered count (a fact about the
+# store), and a dedicated message names the query and offers a way back.
+# ---------------------------------------------------------------------------
+
+
+DESCRIPTION_SENTENCE = "measured rather than asserted"
+
+
+def test_the_sites_description_survives_a_query_that_matches_nothing(
+    client_for, store_registry_sample
+):
+    body = client_for(store_registry_sample).get(
+        "/?q=zzzznomatch", headers={"accept": "text/html"}
+    ).text
+    assert DESCRIPTION_SENTENCE in body, (
+        "a query matching no endpoint must not hide the page's own "
+        "description of itself"
+    )
+
+
+def test_a_query_matching_nothing_renders_its_own_message(
+    client_for, store_registry_sample
+):
+    body = client_for(store_registry_sample).get(
+        "/?q=zzzznomatch", headers={"accept": "text/html"}
+    ).text
+    messages = texts_with(body, "data-no-match")
+    assert len(messages) == 1, "the no-match message must render exactly once"
+    assert "zzzznomatch" in messages[0], (
+        f"the message does not name the query that matched nothing: "
+        f"{messages[0]!r}"
+    )
+
+
+def test_only_a_no_match_query_renders_the_no_match_message(
+    client_for, store_registry_sample
+):
+    client = client_for(store_registry_sample)
+    unfiltered = client.get("/", headers={"accept": "text/html"}).text
+    narrowed = client.get("/?q=uniprot", headers={"accept": "text/html"}).text
+    assert not with_attribute(unfiltered, "data-no-match")
+    assert not with_attribute(narrowed, "data-no-match")
+
+
+def test_a_no_match_page_states_its_denominator_as_zero_of_the_fleet(
+    client_for, store_registry_sample
+):
+    """Confirms the strip reads "0 of 9" and not "0 of 0": `total` is derived
+    from the count BEFORE filtering, so it must not also collapse to the
+    filtered (zero) count the way `endpoint_count` once did."""
+    body = client_for(store_registry_sample).get(
+        "/?q=zzzznomatch", headers={"accept": "text/html"}
+    ).text
+    total = texts_with(body, "data-figure")[0]
+    assert total == "0 of 9", f"the count reads {total!r}"

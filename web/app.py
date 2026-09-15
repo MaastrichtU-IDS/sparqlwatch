@@ -2273,7 +2273,16 @@ def _index_context(
         # The overview, above the listing: what has changed, before what is.
         "fleet": _fleet_view(history),
         "stats": stats,
-        "endpoint_count": len(entries),
+        # UNFILTERED, unlike every neighbour in this dict: it answers "does
+        # this store hold anything at all", a fact about the store rather
+        # than about the query. It is what guards the page's one-sentence
+        # description of itself (index.html:334) and the facet-empty note
+        # (index.html:549) -- a `?q=` that matches nothing must not also hide
+        # the sentence explaining what this page is, or make a store with 543
+        # endpoints look, on its own no-match page, like a store with none.
+        # The no-match state gets its own message instead; see `"query"` and
+        # `summary.matching` below.
+        "endpoint_count": unfiltered_total,
         "metrics": metrics,
         "metric_count": len(metrics),
         # The three facet groups, above the rows. Each filters by reading

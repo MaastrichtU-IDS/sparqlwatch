@@ -385,6 +385,21 @@
     <span class="shown" id="shown"></span>
   </form>
 
+  {# The server-side counterpart to #nothing below: that paragraph is hidden
+     by default and only JS ever unhides it, for a facet or text filter
+     narrowing the client-rendered rows to zero. A ?q= that the SERVER already
+     narrowed to zero rows never reaches that script with anything to hide,
+     since JS starts from what this page rendered -- so a no-JS visit, or one
+     where the script has not run yet, would render the search box, no rows,
+     and no explanation. This message is that explanation: distinct from
+     #nothing (a facet finding nothing) and from the endpoint_count == 0
+     branch above (a store holding nothing at all). #}
+  {% if summary.matching == 0 %}
+  <p class="note" data-no-match="true">
+    No endpoint in this registry matches &ldquo;{{ query }}&rdquo;.
+    <a href="{{ index_path }}">Show every endpoint.</a>
+  </p>
+  {% endif %}
 
   {% if metrics %}
   {# The grid. Metrics down, states across, and a count in every intersection.
