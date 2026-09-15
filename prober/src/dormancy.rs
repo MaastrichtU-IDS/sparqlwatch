@@ -143,6 +143,33 @@ pub struct EndpointState {
     pub last_probed: Option<String>,
     #[serde(default)]
     pub last_cost_ms: Option<u64>,
+    /// The triple count the last sweep that could read one observed.
+    ///
+    /// THE PROFILE GATE'S VOLUME SIGNAL. A class profile pass is up to 200
+    /// queries against one endpoint, and repeating it against a dataset that
+    /// has not moved spends all of them to re-derive what is already known.
+    /// Compared with a tolerance rather than exactly: a live dataset grows
+    /// between sweeps without its SHAPE changing, and re-profiling Wikidata
+    /// because it gained a thousand triples of existing kinds would mean the
+    /// gate never fires for the endpoints that cost the most.
+    #[serde(default)]
+    pub last_triples: Option<u64>,
+    /// The class count the last sweep that could read one observed.
+    ///
+    /// The gate's SHAPE signal, and compared exactly, because a class count
+    /// moving is a class appearing or leaving and that is precisely what makes
+    /// a stored partition stale.
+    #[serde(default)]
+    pub last_classes: Option<u64>,
+    /// When the class profile pass last actually ran.
+    ///
+    /// The backstop. An endpoint whose counts cannot be read -- semopenalex.org
+    /// answers every aggregate with HTTP 200 and no rows -- can never prove it
+    /// is unchanged, and without this it would either profile every sweep or
+    /// never profile again. It also covers the case the counts genuinely miss:
+    /// a dataset whose size holds steady while its shape drifts.
+    #[serde(default)]
+    pub last_profiled_at: Option<String>,
     /// Set means relegated, and the instant is published in run graphs, so it
     /// is never rewritten once set.
     #[serde(default)]
@@ -1114,6 +1141,19 @@ fn day_of(instant: &str, field: &str) -> anyhow::Result<i64> {
     Ok(days_from_civil(&parse_instant(instant, field)?))
 }
 
+/// Whole days from `earlier` to `later`, or `None` if either is not an instant
+/// in this project's one accepted spelling.
+///
+/// Exported so the profile gate can ask how old a profile is without reaching
+/// into this module's calendar. `None` rather than an error because the one
+/// caller treats an unreadable instant as "not evidence of freshness", which is
+/// a decision about profiling and not about this file being valid.
+pub fn days_between(earlier: &str, later: &str) -> Option<i64> {
+    let from = day_of(earlier, "earlier").ok()?;
+    let to = day_of(later, "later").ok()?;
+    Some(to - from)
+}
+
 /// An instant `days` after `instant`, with its time of day preserved and in the
 /// same one accepted spelling.
 ///
@@ -1222,6 +1262,7 @@ mod tests {
                 dormant_since: Some(ep(last_probed)),
                 hold: None,
                 lapsed_hold: None,
+                ..Default::default()
             });
             endpoints.push(url);
         }
@@ -1368,6 +1409,7 @@ mod tests {
             dormant_since: None,
             hold: None,
             lapsed_hold: None,
+            ..Default::default()
         });
         let before = state.get("http://a.example/s").unwrap().clone();
         let after = update(
@@ -1443,6 +1485,7 @@ mod tests {
                 dormant_since: Some(ep("2026-08-10T00:00:00Z")),
                 hold: None,
                 lapsed_hold: None,
+                ..Default::default()
             });
             endpoints.push(url);
         }
@@ -1457,6 +1500,7 @@ mod tests {
                 dormant_since: Some(ep("2026-08-10T00:00:00Z")),
                 hold: Some(Hold::Awake { reason: ep("operator pinned"), until: None }),
                 lapsed_hold: None,
+                ..Default::default()
             });
             endpoints.push(url);
         }
@@ -1683,6 +1727,7 @@ mod tests {
             dormant_since: None,
             hold: None,
             lapsed_hold: None,
+            ..Default::default()
         });
         let before = state.get("http://a.example/s").unwrap().clone();
         let after = update(
@@ -1884,6 +1929,7 @@ mod tests {
                 until: Some(ep("2026-08-25T00:00:00Z")),
             }),
             lapsed_hold: None,
+            ..Default::default()
         });
         let after = update(&state, &[], &[], "2026-08-26T00:00:00Z", &t).unwrap();
         let e = after.get("http://dropped.example/s").expect("no pruning");
@@ -1911,6 +1957,7 @@ mod tests {
                     dormant_since: Some(ep("2026-08-25T00:00:00Z")),
                     hold: None,
                     lapsed_hold: Some(ep("operator emailed")),
+                    ..Default::default()
                 },
                 EndpointState {
                     url: ep("http://b.example/s"),
@@ -1921,6 +1968,7 @@ mod tests {
                     dormant_since: Some(ep("2026-08-26T00:00:00Z")),
                     hold: Some(Hold::Dormant { reason: ep("operator asked") }),
                     lapsed_hold: None,
+                    ..Default::default()
                 },
                 EndpointState {
                     url: ep("http://c.example/s"),
@@ -1934,6 +1982,7 @@ mod tests {
                         until: Some(ep("2026-09-02T00:00:00Z")),
                     }),
                     lapsed_hold: None,
+                    ..Default::default()
                 },
                 EndpointState {
                     url: ep("http://d.example/s"),

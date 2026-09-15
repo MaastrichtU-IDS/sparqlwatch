@@ -96,6 +96,101 @@ impl Sampling {
     }
 }
 
+/// What the last sweep that profiled this endpoint saw of its size.
+///
+/// Read from the dormancy state file, which is the prober's only memory across
+/// sweeps. `None` throughout means an endpoint nothing has profiled yet.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LastSeen {
+    pub triples: Option<u64>,
+    pub classes: Option<u64>,
+    pub profiled_at: Option<String>,
+}
+
+/// How far a triple count may move before the profile is treated as stale.
+///
+/// One percent. A dataset that grew by a thousandth has not changed the
+/// properties its classes carry, and re-deriving 200 partitions to discover
+/// that is the cost this gate exists to avoid. Exact equality was the obvious
+/// rule and is the wrong one: a live endpoint is never exactly where it was,
+/// so the gate would never fire for Wikidata or DBLP -- the endpoints whose
+/// profile passes cost the most.
+pub const VOLUME_TOLERANCE: f64 = 0.01;
+
+/// How long a profile may stand before it is repeated whatever the counts say.
+///
+/// The backstop, and it carries two cases. An endpoint whose counts cannot be
+/// read can never prove it is unchanged: semopenalex.org answers every
+/// aggregate with HTTP 200 and no rows, so without this it would either be
+/// profiled every sweep or never again. And a dataset can hold its size while
+/// its shape drifts, which the counts cannot see at all.
+pub const MAX_PROFILE_AGE_DAYS: u64 = 30;
+
+/// Whether the class profile pass is worth repeating against this endpoint.
+///
+/// THE SECOND GATE, after reachability. The first asks whether anything is
+/// there; this asks whether what is there has moved. A pass is up to 200
+/// queries and re-deriving partitions from a dataset that has not changed is
+/// the largest avoidable thing this prober does to a stranger's server.
+///
+/// Profiles when: nothing is remembered, either count moved, a count cannot be
+/// read on either side, or the last pass is older than `MAX_PROFILE_AGE_DAYS`.
+/// Skips only when every one of those says there is nothing new to learn --
+/// the conservative direction, because a stale partition published as current
+/// is worse than a pass we did not need.
+pub fn worth_reprofiling(
+    last: &LastSeen,
+    triples_now: Option<u64>,
+    classes_now: Option<u64>,
+    at: &str,
+) -> bool {
+    // Never profiled, so there is nothing to compare and everything to learn.
+    let (Some(then_t), Some(then_c), Some(when)) =
+        (last.triples, last.classes, last.profiled_at.as_deref())
+    else {
+        return true;
+    };
+    // A count we could not read this time is not evidence of sameness. The
+    // backstop below is what stops this from meaning "profile forever".
+    let (Some(now_t), Some(now_c)) = (triples_now, classes_now) else {
+        return older_than_max_age(when, at);
+    };
+    if now_c != then_c {
+        return true;
+    }
+    if moved_beyond_tolerance(then_t, now_t) {
+        return true;
+    }
+    older_than_max_age(when, at)
+}
+
+/// Whether two triple counts differ by more than `VOLUME_TOLERANCE`.
+///
+/// Relative to the earlier count, and guarded at zero: an endpoint that held
+/// nothing and now holds something has changed by any reading, and dividing by
+/// its old size would not be one.
+fn moved_beyond_tolerance(then: u64, now: u64) -> bool {
+    if then == 0 {
+        return now != 0;
+    }
+    let delta = then.abs_diff(now) as f64;
+    delta / then as f64 > VOLUME_TOLERANCE
+}
+
+/// Whether `when` is more than `MAX_PROFILE_AGE_DAYS` before `at`.
+///
+/// Both are the project's one instant format, `YYYY-MM-DDTHH:MM:SSZ`, which
+/// sorts lexicographically. An unparseable stored instant profiles rather than
+/// skips: a state file we cannot read the clock of is not evidence of
+/// freshness.
+fn older_than_max_age(when: &str, at: &str) -> bool {
+    match crate::dormancy::days_between(when, at) {
+        Some(days) => days > MAX_PROFILE_AGE_DAYS as i64,
+        // A stored instant we cannot read is not evidence of freshness.
+        None => true,
+    }
+}
+
 /// The rungs to try for one class, from `start` down to the smallest sample.
 ///
 /// Escalation goes toward SMALLER samples, never larger: a class the endpoint
@@ -424,6 +519,88 @@ mod tests {
         // pattern that joins ?s to its properties.
         assert!(q.contains("LIMIT 200 }"), "the LIMIT closes the subject subquery: {q}");
         assert!(!q.trim_end().ends_with("LIMIT 200"), "a trailing LIMIT would bound rows, not work: {q}");
+    }
+
+    // -----------------------------------------------------------------------
+    // The profile gate
+    // -----------------------------------------------------------------------
+
+    fn seen(t: u64, c: u64, at: &str) -> LastSeen {
+        LastSeen { triples: Some(t), classes: Some(c), profiled_at: Some(at.into()) }
+    }
+    const NOW: &str = "2026-09-15T00:00:00Z";
+    const YESTERDAY: &str = "2026-09-14T00:00:00Z";
+
+    #[test]
+    fn an_endpoint_nothing_has_profiled_is_profiled() {
+        assert!(worth_reprofiling(&LastSeen::default(), Some(10), Some(2), NOW));
+    }
+
+    #[test]
+    fn a_dataset_that_has_not_moved_is_not_profiled_again() {
+        let last = seen(1_000_000, 59, YESTERDAY);
+        assert!(!worth_reprofiling(&last, Some(1_000_000), Some(59), NOW));
+    }
+
+    /// Growth inside the tolerance is not a reason to re-derive 200 partitions.
+    ///
+    /// This is the case the gate exists for: a live dataset is never exactly
+    /// where it was, and exact equality would mean the endpoints that cost the
+    /// most to profile are the ones that never benefit.
+    #[test]
+    fn growth_within_the_tolerance_does_not_reprofile() {
+        let last = seen(1_000_000, 59, YESTERDAY);
+        assert!(!worth_reprofiling(&last, Some(1_009_000), Some(59), NOW), "0.9% is inside 1%");
+        assert!(worth_reprofiling(&last, Some(1_020_000), Some(59), NOW), "2% is outside it");
+    }
+
+    /// A class appearing or leaving is the shape changing, at any size.
+    #[test]
+    fn a_class_count_that_moved_reprofiles_however_small_the_move() {
+        let last = seen(1_000_000, 59, YESTERDAY);
+        assert!(worth_reprofiling(&last, Some(1_000_000), Some(60), NOW));
+        assert!(worth_reprofiling(&last, Some(1_000_000), Some(58), NOW));
+    }
+
+    /// An endpoint that cannot be counted falls to the backstop rather than to
+    /// either extreme. semopenalex.org answers every aggregate with HTTP 200
+    /// and no rows, so it can never prove it is unchanged.
+    #[test]
+    fn an_uncountable_endpoint_is_profiled_on_the_backstop_and_not_every_sweep() {
+        let last = seen(1_000_000, 59, YESTERDAY);
+        assert!(
+            !worth_reprofiling(&last, None, None, NOW),
+            "no counts is not a reason to profile a pass we ran yesterday",
+        );
+        assert!(
+            worth_reprofiling(&last, None, None, "2026-10-20T00:00:00Z"),
+            "but it cannot go unprofiled forever",
+        );
+    }
+
+    #[test]
+    fn a_profile_older_than_the_backstop_is_repeated_whatever_the_counts_say() {
+        let last = seen(1_000_000, 59, "2026-08-01T00:00:00Z");
+        assert!(worth_reprofiling(&last, Some(1_000_000), Some(59), NOW));
+    }
+
+    /// An instant this build cannot read is not evidence of freshness.
+    #[test]
+    fn an_unreadable_stored_instant_profiles() {
+        let last = LastSeen {
+            triples: Some(10),
+            classes: Some(2),
+            profiled_at: Some("last tuesday".into()),
+        };
+        assert!(worth_reprofiling(&last, Some(10), Some(2), NOW));
+    }
+
+    /// Growing from nothing is a change, and is not a division by zero.
+    #[test]
+    fn a_dataset_that_was_empty_and_is_not_reprofiles() {
+        let last = seen(0, 0, YESTERDAY);
+        assert!(worth_reprofiling(&last, Some(5), Some(1), NOW));
+        assert!(!worth_reprofiling(&last, Some(0), Some(0), NOW));
     }
 
     /// Every rung's query is well-formed, which the bounded one nearly was not.

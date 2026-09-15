@@ -168,6 +168,16 @@ pub enum NotMeasuredReason {
     /// which is a decision made before probing began. This one is about the
     /// endpoint, and it says only what was observed: it did not answer.
     LivenessFailed,
+    /// The endpoint's content has not moved since it was last profiled, so the
+    /// pass was not repeated.
+    ///
+    /// A DECISION ABOUT COST, like `CostCeiling`, and not a finding about the
+    /// endpoint. The profile pass is up to 200 queries; re-deriving partitions
+    /// from a dataset whose triple and class counts are where they were is the
+    /// largest avoidable thing this prober does to somebody else's server.
+    /// What the store holds about that endpoint's vocabulary is the previous
+    /// pass's, which is why this is published rather than silently omitted.
+    Unchanged,
 }
 
 impl NotMeasuredReason {
@@ -178,6 +188,7 @@ impl NotMeasuredReason {
             NotMeasuredReason::ProberFailed => "prober-failed",
             NotMeasuredReason::EnumerationFailed => "enumeration-failed",
             NotMeasuredReason::LivenessFailed => "liveness-failed",
+            NotMeasuredReason::Unchanged => "unchanged",
         }
     }
 }
