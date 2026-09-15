@@ -2232,10 +2232,5 @@ def test_every_page_footer_shows_the_version_the_prober_sends(client_for, store)
         f"/endpoint?url={endpoint}",
     ):
         body = client.get(path, headers={"accept": "text/html"}).text
-        # Unclassed on a page that extends base.html (the four docs pages, as
-        # of 2026-09-15) and `.site-foot` on one that still carries its own
-        # header/footer -- Tasks 4, 5 and 8 move the rest onto the same shell.
-        # Either way there is exactly one footer element, so its opening tag
-        # is what both forms agree on.
-        assert "<footer" in body, f"{path} has no footer"
+        assert '<footer class="site-foot">' in body, f"{path} has no footer"
         assert version in body, f"{path} does not show version {version}"
