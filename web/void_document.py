@@ -255,3 +255,62 @@ def void_summary(store: Store, endpoint: str) -> dict | None:
             t.object.value for t in triples if t.predicate.value == SW + "sampling"
         }),
     }
+
+
+# ---------------------------------------------------------------------------
+# What the terms above mean, in words
+# ---------------------------------------------------------------------------
+# PUBLISHED VOCABULARY NEEDS A DEFINITION SOMEWHERE A READER CAN REACH. Every
+# term here goes into a document a machine dereferences, under a `urn:` IRI
+# that resolves to nothing, so without this a consumer meeting
+# `sw:provablyComplete` has the word and no way to learn what licenses it.
+#
+# Keyed by the local name, so `test_every_published_term_is_documented` can
+# compare this against the terms `void_triples` actually emits and fail when a
+# term is added without one. That is the same guard `_DECLINE_DETAILS` has
+# against prober/src/emit.rs, and it caught a missing sentence earlier today.
+TERM_DOCS: dict[str, str] = {
+    "provablyComplete": (
+        "Whether this document accounts for the whole endpoint. True only when "
+        "the endpoint stated how many classes it holds, this document "
+        "describes exactly that many, and every one of them was scanned "
+        "instance by instance. Any of those unmet makes it false, including "
+        "the case where the endpoint would not answer a class count: unproven "
+        "and incomplete are the same thing to act on."
+    ),
+    "classesDescribed": (
+        "How many classes this document describes. Compared against "
+        "classesReported to decide provablyComplete."
+    ),
+    "classesReported": (
+        "How many classes the endpoint itself says it holds, when it answered "
+        "that question. Absent when it did not, which is why a document "
+        "without it can never be provably complete: there is no total to check "
+        "against, and a truncated class list looks like a whole one."
+    ),
+    "sampling": (
+        "How the instances behind one class partition were chosen. `exact` "
+        "scanned every one. `sha256-prefix` kept those whose subject IRI "
+        "hashes to a prefix, which is representative: measured within 0.002 of "
+        "the true frequencies. `first-n` took the first instances the store "
+        "returned, which is NOT representative -- the same measurement put it "
+        "0.950 out -- and exists only for endpoints that refuse to aggregate "
+        "at all, where the alternative is no profile."
+    ),
+    "sampledEntities": (
+        "A count drawn from a sample rather than from every instance. It is "
+        "true of the sample and does not generalise to the class. VoID's own "
+        "void:entities is used instead wherever the scan was exact, so a "
+        "consumer can tell the two apart by which predicate carries the number."
+    ),
+    "datatypeCount": (
+        "How many distinct datatypes the objects of one property had, so a "
+        "property with mixed datatypes is visible as mixed rather than reduced "
+        "to whichever the store returned first."
+    ),
+    "namedGraphCount": (
+        "How many named graphs the endpoint holds. In our vocabulary and not "
+        "VoID's because void:Dataset has no term for it, and bending one that "
+        "means something else would be worse than coining this."
+    ),
+}

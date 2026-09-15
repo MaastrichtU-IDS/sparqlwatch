@@ -263,3 +263,52 @@ def test_an_endpoint_with_no_profile_offers_nothing(client_for, store):
     """
     body = page(client_for(store), "https://data.kkg.kadaster.nl/query")
     assert 'data-section="void"' not in body
+
+
+# ---------------------------------------------------------------------------
+# The vocabulary the document publishes
+# ---------------------------------------------------------------------------
+
+
+def test_every_published_term_is_documented():
+    """A term the document emits and the docs do not explain is unreachable.
+
+    These go into RDF under `urn:sparqlwatch:` IRIs, which resolve to nothing,
+    so the docs page is the only place a consumer meeting one can learn what it
+    licenses. Compared against the source rather than a list kept by hand,
+    because a list kept by hand is what drifts.
+    """
+    import re
+    from pathlib import Path as P
+
+    import void_document
+
+    source = P(void_document.__file__).read_text()
+    # Terms the builder actually emits, as `SW + "name"`. The docs table itself
+    # is keyed by bare name, so it cannot be mistaken for an emission.
+    emitted = set(re.findall(r'SW \+ "([a-zA-Z]+)"', source))
+    assert emitted, "no terms found: the pattern stopped matching the source"
+    assert emitted <= set(void_document.TERM_DOCS), (
+        "emitted but undocumented: "
+        f"{sorted(emitted - set(void_document.TERM_DOCS))}"
+    )
+    assert set(void_document.TERM_DOCS) <= emitted, (
+        "documented but never emitted: "
+        f"{sorted(set(void_document.TERM_DOCS) - emitted)}"
+    )
+
+
+def test_the_docs_page_lists_every_term(client_for, store_content_profiles):
+    """And the page renders them, rather than merely having them in a dict."""
+    import void_document
+
+    body = client_for(store_content_profiles).get("/docs/void").text
+    for name in void_document.TERM_DOCS:
+        assert f'data-term="{name}"' in body, f"{name} is not on the page"
+    assert "provablyComplete" in body
+
+
+def test_the_docs_index_links_the_new_page(client_for, store_content_profiles):
+    """A page nothing links to is a page nobody finds."""
+    body = client_for(store_content_profiles).get("/docs").text
+    assert "/docs/void" in body

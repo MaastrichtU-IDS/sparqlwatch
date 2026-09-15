@@ -216,17 +216,27 @@ def test_the_states_page_publishes_all_three_channels(client):
 # ---------------------------------------------------------------------------
 
 
-def test_the_index_lists_three_pages_and_monitoring_keeps_its_own_url(client):
-    """Monitoring is the third document and lives at /about.
+def test_the_index_lists_every_page_and_monitoring_keeps_its_own_url(client):
+    """Monitoring is listed with the rest and lives at /about.
 
     Not a tidiness lapse. Every request this prober makes to a stranger's server
     carries `+https://<host>/about` in its User-Agent, so that url is a promise
     printed in traffic already sent, and it is the one address on this site that
     is not ours to move. The index names it and links to it.
+
+    ASSERTED AS A RULE RATHER THAN A LIST, since 2026-09-15. This named three
+    pages by hand and went red when a fourth was added, which is a test failing
+    for the one reason it should not: the section growing is the thing
+    `_docs_context`'s table was built to make easy. What must hold is that
+    every page the table declares is listed, in its order, and that monitoring
+    is among them under its own url.
     """
+    import app
+
     page = html(client, DOCS_PATH)
     listed = [a["data-doc-page"] for a in with_attribute(page, "data-doc-page")]
-    assert listed == [DOCS_METRICS_PATH, DOCS_STATES_PATH, ABOUT_PATH]
+    assert listed == [entry["path"] for entry in app._docs_context()["pages"]]
+    assert ABOUT_PATH in listed, "monitoring is not listed"
     assert "Monitoring" in page
 
 

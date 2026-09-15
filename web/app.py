@@ -120,6 +120,9 @@ INDEX_PATH = "/"
 DOCS_PATH = "/docs"
 DOCS_METRICS_PATH = "/docs/metrics"
 DOCS_STATES_PATH = "/docs/states"
+# The derived description's own vocabulary. A `urn:` term resolves to
+# nothing, so a consumer who meets one has the word and nowhere to look.
+DOCS_VOID_PATH = "/docs/void"
 
 # This path is not a choice. Every request the prober makes carries
 # `sparqlwatch/<version> (+https://<host>/about)` in its User-Agent
@@ -2713,6 +2716,16 @@ def _docs_context() -> dict:
                 ),
             },
             {
+                "path": DOCS_VOID_PATH,
+                "title": "The derived description",
+                "blurb": (
+                    "The VoID this service derives for an endpoint that "
+                    "publishes none, the terms of our own it carries, and how "
+                    "to tell a count that is the endpoint's from one that is a "
+                    "sample's."
+                ),
+            },
+            {
                 "path": ABOUT_PATH,
                 "title": "Monitoring",
                 "blurb": (
@@ -2722,6 +2735,23 @@ def _docs_context() -> dict:
                     "makes carries it."
                 ),
             },
+        ],
+    }
+
+
+def _docs_void_context() -> dict:
+    """One entry per term the derived description publishes.
+
+    Read from `void_document.TERM_DOCS` rather than restated here, so the page
+    cannot describe a vocabulary the document does not emit, nor miss one it
+    does. Sorted so the order is stable between renders.
+    """
+    from void_document import TERM_DOCS
+
+    return {
+        "void_path": VOID_PATH,
+        "void_terms": [
+            {"name": name, "means": TERM_DOCS[name]} for name in sorted(TERM_DOCS)
         ],
     }
 
@@ -3227,6 +3257,17 @@ def docs_states_resource(request: Request) -> Response:
             **_docs_context(), **_docs_states_context()
         ),
         _docs_states_rdf,
+    )
+
+
+@app.get(DOCS_VOID_PATH)
+def docs_void_resource(request: Request) -> Response:
+    """What the derived description is, and what its own terms mean."""
+    return Response(
+        content=_TEMPLATES.get_template("docs-void.html").render(
+            **_docs_context(), **_docs_void_context()
+        ),
+        media_type="text/html; charset=utf-8",
     )
 
 
