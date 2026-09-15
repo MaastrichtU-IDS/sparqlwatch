@@ -14,7 +14,8 @@ from urllib.parse import quote, unquote
 import pytest
 from starlette.testclient import TestClient
 
-from app import EXPLORE_PATH, app, explore_endpoints, get_store
+import app as app_module
+from app import ABOUT_PATH, DOCS_PATH, EXPLORE_PATH, INDEX_PATH, app, explore_endpoints, get_store
 
 from test_page import with_attribute
 
@@ -82,11 +83,27 @@ def test_the_payload_is_what_the_store_holds(client, store_content_profiles):
 def test_it_is_part_of_this_site_and_not_a_page_beside_it(client):
     """The whole point of folding it in. Its header must lead back to the index
     and carry the same nav as every other page, or it is still a separate site
-    that happens to share a port."""
+    that happens to share a port.
+
+    Four items and not two: explore.html carried its own two-link header
+    (vocabulary, docs) until it moved onto base.html's shared shell on
+    2026-09-16, at which point its nav became the same fixed, four-item list
+    every other page renders. This stays a full equality and not a subset or
+    substring check, because its intent is that the nav is a fixed list and a
+    page never grows one nav link per row.
+    """
     body = client.get(EXPLORE_PATH).text
     assert 'class="logo" href="/"' in body, "the logo must lead home"
     nav = [a["href"] for a in with_attribute(body, "data-nav")]
-    assert nav == [EXPLORE_PATH, "/docs"], f"nav is {nav}"
+    assert nav == [INDEX_PATH, EXPLORE_PATH, DOCS_PATH, ABOUT_PATH], f"nav is {nav}"
+
+
+def test_the_page_carries_no_stylesheet_of_its_own(client):
+    body = client.get(EXPLORE_PATH, headers={"accept": "text/html"}).text
+    assert "--accent:" not in body, (
+        "design tokens belong in web/static/site.css, not in this template"
+    )
+    assert app_module.STYLESHEET_PATH in body
 
 
 def test_the_page_says_what_it_is_a_reading_of(client):

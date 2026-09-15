@@ -6,61 +6,38 @@
    integrating it (20 to 37 MB at 543 endpoints) is about a FUTURE server-rendered
    version, not about the 214 KB prototype that already existed.
 
-   The styles below are the page's own rather than shared with index.html,
-   because this is still a prototype and lifting its CSS into a common file would
-   commit the site to it. The tokens at the top are the same tokens, copied, and
-   the .enc- rules are copied from verdict_encoding.css_rules() for the reason
-   the README gives: a term's evidence state IS a verdict in this project's
-   vocabulary, and drawing it differently would teach a second language for one
-   fact. #}
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="icon" href="/icon.svg" type="image/svg+xml">
-<link rel="mask-icon" href="/icon-mono.svg" color="#81d4fa">
-<title>sparqlwatch: vocabulary</title>
-</head>
-<body>
+   Moved onto base.html's shared shell on 2026-09-16. The tokens, the body/header
+   chrome and most of the panel and typography rules were already shared with
+   /docs by then; what is left in head_extra below is genuinely this page's
+   own -- the search box, the facet grid and the term list -- because nothing
+   else on the site has anything like them. The .enc- rules stay copied from
+   verdict_encoding.css_rules() for the reason the README gives: a term's
+   evidence state IS a verdict in this project's vocabulary, and drawing it
+   differently would teach a second language for one fact. #}
+{% extends "base.html" %}
+{% block title %}sparqlwatch: vocabulary{% endblock %}
+{% block head_extra %}
 <style>
-  /* The same tokens as web/templates/index.html. The .enc- rules below are
+  /* This page's own layout and the vocabulary grid: search, facets and the
+     term list. Nothing else on the site has anything like it, which is why
+     it stays here instead of moving into site.css. The .enc- rules are
      copied from verdict_encoding.css_rules() rather than invented, because a
-     term's evidence state IS a verdict in this project's vocabulary: used and
-     declared is `verified`, used but not declared is `undeclared-but-verified`,
-     declared but not used is `declared-only`. A prototype that drew its own
-     encoding would teach the reader a second language for the same fact. */
-  :root {
-    --bg: #0a1929; --bg-secondary: #112a3f; --bg-hover: #1a3952; --bg-deep: #061320;
-    --border: #2a5580; --text: #d0e4f5; --text-bright: #ffffff; --text-muted: #7fa5c8;
-    --text-dim: #5c7c9c; --accent: #4fc3f7; --on-accent: #0a1929; --accent-blue: #81d4fa;
-    --good: #66bb6a; --warn: #ffb74d; --crit: #ef5350; --overlay: rgba(255,255,255,0.05);
-    --radius: 6px; --radius-sm: 4px;
-    --mono: ui-monospace, 'Cascadia Code', 'Source Code Pro', monospace;
-    color-scheme: dark;
-  }
-  * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text);
-         font: 14px/1.5 system-ui, -apple-system, 'Segoe UI', sans-serif; }
-  a { color: var(--accent-blue); text-decoration: none; }
-  a:hover { color: var(--accent); text-decoration: underline; }
-  header { display: flex; align-items: center; gap: 12px; padding: 14px 24px;
-           background: var(--bg-secondary); border-bottom: 1px solid var(--border); }
-  .logo { display: flex; align-items: center; gap: 9px; font-weight: 600;
-          color: var(--text-bright); text-decoration: none; }
-  .logo:hover { color: var(--accent); }
-  nav { margin-left: auto; display: flex; gap: 16px; font-size: 13px; }
-  main { padding: 22px 24px; max-width: 1120px; }
-  h1 { margin: 0 0 6px; font-size: 18px; font-weight: 600; color: var(--text-bright);
-       letter-spacing: -0.01em; }
-  h2 { font-size: 12px; font-weight: 600; color: var(--text-dim); text-transform: uppercase;
-       letter-spacing: 0.05em; margin: 0; }
-  p { margin: 0 0 11px; }
+     term's evidence state IS a verdict in this project's vocabulary: used
+     and declared is `verified`, used but not declared is
+     `undeclared-but-verified`, declared but not used is `declared-only`. A
+     prototype that drew its own encoding would teach the reader a second
+     language for the same fact. */
+  main { max-width: 1120px; }
   .lead { color: var(--text-muted); margin-bottom: 18px; max-width: 780px; }
   .proto { border: 1px dashed var(--warn); border-radius: var(--radius);
            padding: 10px 13px; margin: 0 0 20px; max-width: 780px;
            background: var(--bg-secondary); color: var(--text-muted); font-size: 13px; }
   .proto b { color: var(--warn); font-weight: 600; }
+
+  /* Sat beside the nav in the page's own header until base.html's shared
+     four-item nav replaced it; the header has no room left for page data, so
+     the freshness note moves in with the rest of the content. */
+  .run-note { font-size: 12px; color: var(--text-dim); margin: 0 0 14px; }
 
   /* SEARCH. The input is wide because the thing being typed is an IRI, and
      the suggestion list is what makes a 990-term vocabulary navigable at all:
@@ -69,7 +46,10 @@
   .search input { width: 100%; padding: 10px 12px; font: 14px var(--mono);
                   color: var(--text-bright); background: var(--bg-deep);
                   border: 1px solid var(--border); border-radius: var(--radius); }
-  .search input:focus { outline: none; border-color: var(--accent); }
+  /* No outline: none here -- site.css's :focus-visible rule is what draws the
+     ring now. This keeps only the accent border, which is decoration on top
+     of it rather than a replacement for it. */
+  .search input:focus { border-color: var(--accent); }
   .search input::placeholder { color: var(--text-dim); font-family: system-ui, sans-serif; }
   .ac { position: absolute; z-index: 20; left: 0; right: 0; top: calc(100% + 4px);
         background: var(--bg-secondary); border: 1px solid var(--accent);
@@ -96,7 +76,11 @@
             background: var(--bg-secondary); padding: 4px 0; margin: 0 0 18px; }
   .fgroup { display: flex; align-items: flex-start; gap: 14px; padding: 9px 16px; }
   .fgroup + .fgroup { border-top: 1px solid var(--border); }
-  .fgroup > h2 { flex: 0 0 92px; padding-top: 4px; }
+  /* margin: 0 because site.css's shared h2 now carries a 12px bottom margin
+     for the section headings every other page uses it for; this h2 sits
+     beside .fchips in a flex row instead, where that margin only misaligns
+     the row. */
+  .fgroup > h2 { flex: 0 0 92px; padding-top: 4px; margin: 0; }
   .fchips { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; }
   .facet { display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
            font: inherit; font-size: 12.5px; color: var(--text);
@@ -164,13 +148,6 @@
   ul.terms li .t-iri { min-width: 0; }
 
   @media (max-width: 640px) {
-    header { padding: 10px 14px; gap: 4px 10px; flex-wrap: wrap; }
-    /* Standalone nav links are tap targets, unlike links inside a
-       sentence: WCAG 2.2's 24px floor applies and they were 15px tall. */
-    header a { min-height: 24px; display: inline-flex; align-items: center; }
-    main { padding: 16px 14px; }
-    h1 { font-size: 19px; line-height: 1.25; }
-
     .fchips { width: 100%; }
     .filters, .toolbar { flex-wrap: wrap; }
 
@@ -196,41 +173,11 @@
     .t-eps { flex-wrap: wrap; width: 100%; }
     .t-ep { overflow-wrap: anywhere; }
   }
-
-  /* The footer. One line, and the version is the reason it exists: a reader
-     looking at a verdict needs to know which build produced it, and an
-     operator who found sparqlwatch in their logs needs to match the number
-     against the User-Agent that knocked. `version` is a Jinja global, so it is
-     the same string the /about page quotes.
-
-     NO LINKS HERE. The nav already carries them, and
-     test_the_index_carries_one_nav_link_and_never_one_per_row counts them: its
-     invariant is that a link must not be emitted per row, which at 543 rows is
-     1,200 bytes against 24,000. A footer link is constant rather than per-row
-     and does not break that, but loosening the count to fit decoration nobody
-     asked for is a bad trade for a guard that cheap. */
-  .site-foot { border-top: 1px solid var(--border); margin: 30px 0 0;
-               padding: 14px 24px; display: flex; flex-wrap: wrap;
-               gap: 6px 14px; align-items: baseline;
-               font-size: 12px; color: var(--text-muted); }
-  .site-foot .v { font-family: var(--mono); }
-  .site-foot a { color: var(--text-muted); }
-  @media (max-width: 640px) { .site-foot { padding: 12px 14px; } }
 </style>
-
-<header>
-    <a class="logo" href="{{ index_path }}">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)"
-           stroke-width="2" stroke-linecap="round" aria-hidden="true">
-        <circle cx="11" cy="11" r="6"/><path d="M15.5 15.5 21 21"/><path d="M8 11h6"/></svg>
-      sparqlwatch
-    </a>
-    <span class="run">{{ probe_note }}</span>
-    <a href="{{ explore_path }}" data-nav="explore">vocabulary</a>
-    <a href="{{ docs_path }}" data-nav="docs">docs</a>
-  </header>
-<main>
+{% endblock %}
+{% block content %}
   <h1>Vocabulary</h1>
+  <p class="run-note">{{ probe_note }}</p>
   <p class="lead">Every class and property observed in the endpoints monitored here,
      with what each endpoint's own answers support saying about it.</p>
 
@@ -258,12 +205,8 @@
   <ul class="terms" id="terms"></ul>
 
   <p class="legend" id="legend"></p>
-</main>
-<footer class="site-foot">
-  <span>sparqlwatch <span class="v">{{ version }}</span></span>
-</footer>
-
-
+{% endblock %}
+{% block body_end %}
 <script type="application/json" id="data">{{ payload | safe }}</script>
 <script>
 (function () {
@@ -675,5 +618,4 @@
   render();
 })();
 </script>
-</body>
-</html>
+{% endblock %}

@@ -43,6 +43,7 @@ from conftest import requires_repo_sources
 from pyoxigraph import NamedNode, RdfFormat, Store, parse
 from starlette.testclient import TestClient
 
+import app as app_module
 from app import (
     ABOUT_PATH,
     SAME_HOST_DIFFERENT_PORTS,
@@ -422,6 +423,17 @@ def test_about_refuses_a_representation_it_cannot_serve(client):
     assert response.status_code == 406
     for offered in OFFERED_MEDIA_TYPES:
         assert offered in response.text
+
+
+# ---------------------------------------------------------------------------
+# It is on the shared shell
+# ---------------------------------------------------------------------------
+def test_the_page_carries_no_stylesheet_of_its_own(client):
+    body = page(client)
+    assert "--accent:" not in body, (
+        "design tokens belong in web/static/site.css, not in this template"
+    )
+    assert app_module.STYLESHEET_PATH in body
 
 
 def test_the_rdf_and_the_html_state_the_same_numbers_and_the_same_address(client):

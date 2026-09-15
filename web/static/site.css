@@ -91,6 +91,24 @@ ul.plain li { margin: 3px 0; }
    identically with no styling at all. */
 .warn-note { color: var(--warn); }
 
+/* explore.html's search input carried its own `outline: none` on :focus,
+   which this rule replaces rather than repeats: a suppressed outline with
+   nothing standing in for it fails a keyboard user silently. One rule for
+   the whole site, so a page cannot reintroduce the outline: none without
+   reintroducing the ring beside it.
+
+   `input` and not `input[type="search"]`: the element this replaces
+   (explore.html's #q) is `type="text"` -- it does its own filtering rather
+   than using the browser's native search semantics -- so a selector scoped
+   to type="search" would silently never match the one input this rule
+   exists for. */
+input:focus-visible,
+a:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 /* ---- NARROW SCREENS ---------------------------------------------------
    These pages already fit at 375px; the padding still costs an eighth of the
    screen, and a table added later should scroll rather than push the page. */
@@ -102,6 +120,9 @@ ul.plain li { margin: 3px 0; }
   main { padding: 16px 14px; }
   h1 { font-size: 19px; line-height: 1.25; }
   table { display: block; overflow-x: auto; max-width: 100%; }
+  /* Only 2px over at 375px on /about, and it was .contact: a monospace URL
+     with no spaces is one unbreakable word. */
+  .contact, .contact a { overflow-wrap: anywhere; }
 }
 
 /* The footer. One line, and the version is the reason it exists: a reader

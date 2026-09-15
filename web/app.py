@@ -3072,8 +3072,16 @@ def _about_context() -> dict:
 
     The template writes the prose; this hands it the numbers and the strings
     that have to agree with something outside the template.
+
+    **_nav_context() is merged first, the way _docs_context merges it, so
+    base.html's header nav and footer void_path reach this page too: before
+    2026-09-16 this dict set index_path, docs_path and explore_path by hand
+    and never set nav or void_path at all, which was invisible only because
+    the page still rendered its own two-link header instead of base.html's.
     """
     return {
+        **_nav_context(),
+        "here": "about",
         "summary": SUMMARY,
         "contact": CONTACT_ADDRESS,
         "user_agent": PROBER_USER_AGENT,
@@ -3329,10 +3337,16 @@ def explore(request: Request, store: Store = Depends(get_store)) -> Response:
     payload = build_payload(store)
     return Response(
         content=_TEMPLATES.get_template("explore.html").render(
+            # **_nav_context() first, the way every other page context merges
+            # it, so base.html's header nav and footer void_path reach this
+            # page: before 2026-09-16 this call set index_path, docs_path and
+            # explore_path by hand and never set nav or void_path at all,
+            # invisible only because the page rendered its own two-link
+            # header instead of base.html's.
+            **_nav_context(),
+            here="explore",
             payload=json.dumps(payload, sort_keys=False),
             probe_note=_explore_probe_note(payload),
-            index_path=INDEX_PATH,
-            docs_path=DOCS_PATH,
             explore_path=EXPLORE_PATH,
         ),
         media_type="text/html; charset=utf-8",
