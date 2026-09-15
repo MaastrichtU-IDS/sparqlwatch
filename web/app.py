@@ -1200,6 +1200,7 @@ def _page_context(
     """
     rows = _rows(measurements)
     return {
+        **_nav_context(),
         # The timeline is its OWN section rather than a span on each row. The
         # rows answer "what is true now" and the history answers "what has
         # changed", which is the same split the index makes, and a sparkline
@@ -2237,6 +2238,7 @@ def _index_context(entries: list[EndpointMeasurements], store: Store) -> dict:
         if cell["present"]
     ]
     return {
+        **_nav_context(),
         # The overview, above the listing: what has changed, before what is.
         "fleet": _fleet_view(history),
         "stats": fleet_stats(store, history, entries),
@@ -2685,6 +2687,32 @@ METRIC_DOCS = {
 }
 
 
+def _nav_context() -> dict:
+    """The header's links, from one list.
+
+    The header carried two links and a conditional until 2026-09-15. It is a
+    list here for the reason _docs_context is a table: a page added to the site
+    should not mean editing the chrome of every page that already exists.
+
+    Also carries index_path, docs_path and void_path: base.html's footer and
+    logo need them, and void_path was set in only two of eight page contexts
+    before this function existed, which is a silent href="" everywhere else
+    Jinja's default Undefined does not raise. Every context that renders
+    base.html merges this one first, so every page has all three.
+    """
+    return {
+        "nav": [
+            {"path": INDEX_PATH, "label": "Registry", "slug": "index"},
+            {"path": EXPLORE_PATH, "label": "Explore", "slug": "explore"},
+            {"path": DOCS_PATH, "label": "Docs", "slug": "docs"},
+            {"path": ABOUT_PATH, "label": "About", "slug": "about"},
+        ],
+        "index_path": INDEX_PATH,
+        "docs_path": DOCS_PATH,
+        "void_path": VOID_PATH,
+    }
+
+
 def _docs_context() -> dict:
     """What every page in this section needs: the way home, and its siblings.
 
@@ -2694,6 +2722,10 @@ def _docs_context() -> dict:
     them lives outside /docs.
     """
     return {
+        **_nav_context(),
+        # Every docs page is "docs" for aria-current's sake: the section has
+        # one entry in the header nav and all four pages sit under it.
+        "here": "docs",
         "index_path": INDEX_PATH,
         "docs_path": DOCS_PATH,
         "explore_path": EXPLORE_PATH,
@@ -2745,12 +2777,16 @@ def _docs_void_context() -> dict:
 
     Read from `void_document.TERM_DOCS` rather than restated here, so the page
     cannot describe a vocabulary the document does not emit, nor miss one it
-    does. Sorted so the order is stable between renders.
+    does. Sorted so the order is stable between renders. void_path itself now
+    comes from _docs_context (by way of _nav_context, merged in first at the
+    call site) rather than from here: docs_void_resource renders
+    **_docs_context(), **_docs_void_context() as two separate keyword
+    expansions, and a key both dicts set is a TypeError there, not a silent
+    override.
     """
     from void_document import TERM_DOCS
 
     return {
-        "void_path": VOID_PATH,
         "void_terms": [
             {"name": name, "means": TERM_DOCS[name]} for name in sorted(TERM_DOCS)
         ],

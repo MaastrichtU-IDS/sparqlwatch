@@ -15,12 +15,14 @@ import pytest
 from conftest import requires_repo_sources
 from starlette.testclient import TestClient
 
+import app as app_module
 import verdict_encoding
 from app import (
     ABOUT_PATH,
     DOCS_METRICS_PATH,
     DOCS_PATH,
     DOCS_STATES_PATH,
+    DOCS_VOID_PATH,
     INDEX_PATH,
     METRIC_DOCS,
     OFFERED_MEDIA_TYPES,
@@ -316,3 +318,49 @@ def test_the_state_rdf_carries_the_drawing(client):
         assert state.slug in turtle
         assert state.meaning in turtle
     assert "border-weight-px" in turtle
+
+
+# ---------------------------------------------------------------------------
+# The shared shell: base.html, one stylesheet, one nav table
+# ---------------------------------------------------------------------------
+
+
+def test_the_docs_pages_carry_no_stylesheet_of_their_own(client):
+    """The tokens must live in one place.
+
+    They were copy-pasted into all eight templates until 2026-09-15, which is
+    why re-tinting the palette was eight edits that could disagree. This test is
+    the ratchet that keeps them from coming back.
+    """
+    for path in ("/docs", "/docs/metrics", "/docs/states", "/docs/void"):
+        body = client.get(path, headers={"accept": "text/html"}).text
+        assert "--accent:" not in body, (
+            f"{path} declares a design token inline; tokens belong in "
+            f"web/static/site.css. Page-specific RULES belong in head_extra."
+        )
+        assert app_module.STYLESHEET_PATH in body, (
+            f"{path} must link the one stylesheet"
+        )
+
+
+def test_every_page_offers_the_same_header_nav(client):
+    for path in ("/docs", "/docs/metrics", "/docs/states", "/docs/void"):
+        body = client.get(path, headers={"accept": "text/html"}).text
+        nav = [a["href"] for a in with_attribute(body, "data-nav")]
+        assert nav == ["/", "/explore", "/docs", "/about"], f"{path} nav is {nav}"
+
+
+def test_the_footer_void_link_has_a_real_href(client):
+    """void_path reached every docs page through _nav_context on 2026-09-15.
+
+    Before that it was set in two of eight page contexts, and Jinja's default
+    Undefined renders a missing value as an empty string rather than raising,
+    so the other six pages would have shipped href="" with nothing to catch
+    it. This checks the footer actually carries the path and not the empty
+    string a silent Undefined would produce.
+    """
+    for path in (DOCS_PATH, DOCS_METRICS_PATH, DOCS_STATES_PATH, DOCS_VOID_PATH):
+        body = client.get(path, headers={"accept": "text/html"}).text
+        hrefs = [a["href"] for a in with_attribute(body, "href")]
+        assert "" not in hrefs, f"{path} has an href Jinja could not resolve"
+        assert app_module.VOID_PATH in hrefs, f"{path}'s footer has no VoID link"

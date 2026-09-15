@@ -1,106 +1,6 @@
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="icon" href="/icon.svg" type="image/svg+xml">
-<link rel="mask-icon" href="/icon-mono.svg" color="#81d4fa">
-<title>States</title>
-<style>
-  /* The same tokens as web/templates/index.html, from design/Main.dc.html,
-     which is the authority for layout, typography, spacing and these values.
-     No verdict encoding is used on this page: nothing here is a measurement,
-     so there is no state to draw. */
-  :root {
-    --bg: #0a1929; --bg-secondary: #112a3f; --bg-hover: #1a3952; --bg-deep: #061320;
-    --border: #2a5580; --text: #d0e4f5; --text-bright: #ffffff; --text-muted: #7fa5c8;
-    --text-dim: #5c7c9c; --accent: #4fc3f7; --on-accent: #0a1929; --accent-blue: #81d4fa;
-    --good: #66bb6a; --warn: #ffb74d; --crit: #ef5350; --overlay: rgba(255,255,255,0.05);
-    --radius: 6px; --radius-sm: 4px;
-    --mono: ui-monospace, 'Cascadia Code', 'Source Code Pro', monospace;
-    color-scheme: dark;
-  }
-  * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text);
-         font: 14px/1.5 system-ui, -apple-system, 'Segoe UI', sans-serif; }
-  a { color: var(--accent-blue); text-decoration: none; }
-  a:hover { color: var(--accent); text-decoration: underline; }
-  header { display: flex; align-items: center; gap: 12px; padding: 14px 24px;
-           background: var(--bg-secondary); border-bottom: 1px solid var(--border); }
-  /* A link on every page, including the index, so the way home is always
-     in the same place. Undecorated because it is a mark rather than a
-     phrase in a sentence, and the index's copy carries aria-current so a
-     screen reader says it leads to the page already open. */
-  .logo { display: flex; align-items: center; gap: 9px; font-weight: 600;
-          color: var(--text-bright); text-decoration: none; }
-  .logo:hover { color: var(--accent); }
-  .run { margin-left: auto; font-size: 12px; color: var(--text-dim); }
-  /* Narrower than the index's 1120px, because this page is prose and the
-     index is a table: a 1120px measure is a hard line to read a paragraph
-     across. */
-  main { padding: 22px 24px; max-width: 780px; }
-  h1 { margin: 0 0 10px; font-size: 18px; font-weight: 600; color: var(--text-bright);
-       letter-spacing: -0.01em; }
-  h2 { font-size: 12px; font-weight: 600; color: var(--text-dim); text-transform: uppercase;
-       letter-spacing: 0.05em; margin: 0 0 12px; }
-  p { margin: 0 0 11px; }
-  p:last-child { margin-bottom: 0; }
-  .lead { font-size: 15px; color: var(--text-bright); }
-  section + section { margin-top: 22px; }
-  .panel { border: 1px solid var(--border); border-radius: var(--radius);
-           background: var(--bg-secondary); padding: 14px 16px; }
-  code, .ua { font-family: var(--mono); font-size: 12.5px; word-break: break-all; }
-  .ua { display: block; padding: 8px 10px; margin: 0 0 11px;
-        background: var(--bg-deep); border: 1px solid var(--border);
-        border-radius: var(--radius-sm); color: var(--text-bright); }
-  ul.facts { list-style: none; margin: 0; padding: 0; }
-  ul.facts > li { padding: 8px 0; border-bottom: 1px solid var(--border); }
-  ul.facts > li:first-child { border-top: 1px solid var(--border); }
-  ul.facts > li:last-child { border-bottom: none; }
-  ul.facts b { color: var(--text-bright); font-variant-numeric: tabular-nums; }
-  .limit { color: var(--text-muted); }
-  .limit b { color: var(--text); }
-  ul.plain { margin: 0; padding-left: 20px; color: var(--text-muted); }
-  ul.plain li { margin: 3px 0; }
-  .contact { font-family: var(--mono); font-size: 14px; }
-  /* A sentence about a bound on what this page promises, in the same token
-     the index and the endpoint page use for the same kind of claim. It reads
-     identically with no styling at all. */
-  .warn-note { color: var(--warn); }
-
-  /* ---- NARROW SCREENS ---------------------------------------------------
-     These pages already fit at 375px; the padding still costs an eighth of the
-     screen, and a table added later should scroll rather than push the page. */
-  @media (max-width: 640px) {
-    header { padding: 10px 14px; gap: 4px 10px; flex-wrap: wrap; }
-    /* Standalone nav links are tap targets, unlike links inside a
-       sentence: WCAG 2.2's 24px floor applies and they were 15px tall. */
-    header a { min-height: 24px; display: inline-flex; align-items: center; }
-    main { padding: 16px 14px; }
-    h1 { font-size: 19px; line-height: 1.25; }
-    table { display: block; overflow-x: auto; max-width: 100%; }
-  }
-
-  /* The footer. One line, and the version is the reason it exists: a reader
-     looking at a verdict needs to know which build produced it, and an
-     operator who found sparqlwatch in their logs needs to match the number
-     against the User-Agent that knocked. `version` is a Jinja global, so it is
-     the same string the /about page quotes.
-
-     NO LINKS HERE. The nav already carries them, and
-     test_the_index_carries_one_nav_link_and_never_one_per_row counts them: its
-     invariant is that a link must not be emitted per row, which at 543 rows is
-     1,200 bytes against 24,000. A footer link is constant rather than per-row
-     and does not break that, but loosening the count to fit decoration nobody
-     asked for is a bad trade for a guard that cheap. */
-  .site-foot { border-top: 1px solid var(--border); margin: 30px 0 0;
-               padding: 14px 24px; display: flex; flex-wrap: wrap;
-               gap: 6px 14px; align-items: baseline;
-               font-size: 12px; color: var(--text-muted); }
-  .site-foot .v { font-family: var(--mono); }
-  .site-foot a { color: var(--text-muted); }
-  @media (max-width: 640px) { .site-foot { padding: 12px 14px; } }
-</style>
+{% extends "base.html" %}
+{% block title %}States{% endblock %}
+{% block head_extra %}
 <style>
   /* The docs section's own rules, after about's stylesheet rather than beside
      it: one look for the site, and a page here that needs a list of documents
@@ -119,19 +19,8 @@
   .swatch-lg { display: inline-block; width: 26px; height: 18px;
                border-radius: 3px; vertical-align: -4px; margin-right: 8px; }
 </style>
-</head>
-<body>
-{% set here = "docs" %}
-<header>
-  <a class="logo" href="{{ index_path }}">
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)"
-         stroke-width="2" stroke-linecap="round" aria-hidden="true">
-      <circle cx="11" cy="11" r="6"/><path d="M15.5 15.5 21 21"/><path d="M8 11h6"/></svg>
-    sparqlwatch
-  </a>
-  <span class="run">{% if here == "index" %}<a href="{{ index_path }}">every endpoint measured</a>{% else %}<a href="{{ docs_path }}">docs</a>{% endif %}</span>
-</header>
-<main>
+{% endblock %}
+{% block content %}
   <h1>States</h1>
   <p class="sub">
     The {{ states | length }} verdicts a measurement can carry. Six are
@@ -162,11 +51,4 @@
     stylesheet. <code>docs/design/verdict-encoding.md</code> is canonical for
     this table and a test compares the two.
   </p>
-
-</main>
-<footer class="site-foot">
-  <span>sparqlwatch <span class="v">{{ version }}</span></span>
-</footer>
-
-</body>
-</html>
+{% endblock %}
