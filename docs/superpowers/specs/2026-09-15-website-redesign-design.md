@@ -10,9 +10,19 @@ identity. B is the shared layer *and* the new identity.
 stylesheet, and a visual system that works on a light surface, without changing
 what any page claims.
 
+**Revision 2** rewrites revision 1 against an adversarial review that checked
+every claim against the source. Revision 1's measurements and citations were
+exact and its stylesheet route was implementable, but it would have shipped
+three bugs: the verdict fill is a hard-coded literal in a module revision 1 did
+not touch, `?q=` had no implementation on the RDF representation and no legal
+way to get one, and folding "classes sampled" into Vocabulary would have deleted
+the sample for most endpoints. Corrections are marked **[R2]**. The review is at
+`scratchpad/fable-website-redesign-review.md`.
+
 **Scope:** presentation. Templates, one new stylesheet, one new script, one new
-query parameter on the index, one added field in `explore_payload.py` (§5), and
-the ink values in `docs/design/verdict-encoding.md`.
+query parameter on the index, the fill constant in `web/verdict_encoding.py`
+**[R2]**, one added field in `explore_payload.py` (§5), and
+`docs/design/verdict-encoding.md`.
 
 **Non-goals:** the prober, the store, the queries, `void_document.py`, the
 verdict vocabulary, the encoding's structure, and the REST/content-negotiation
@@ -63,7 +73,7 @@ own surface, not an automatic inversion.
   --ink:#1b1b1a;      --ink-2:#5d5d59;   --ink-3:#8a8a85;
   --accent:#0b5cad;
   --good:#0ca30c;     --warn:#fab219;    --crit:#d03b3b;
-  --fill:rgba(0,0,0,.07);
+  --fill:rgba(0,0,0,.20);   /* [R2] measured — see below */
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -71,7 +81,7 @@ own surface, not an automatic inversion.
     --ink:#e8e8e4;      --ink-2:#a8a8a2;   --ink-3:#7a7a75;
     --accent:#4fc3f7;
     --good:#22a532;     --warn:#ffc94d;    --crit:#ef5350;
-    --fill:rgba(255,255,255,.14);
+    --fill:rgba(255,255,255,.16);  /* [R2] unchanged from today */
   }
 }
 ```
@@ -84,11 +94,19 @@ own surface, not an automatic inversion.
 
 | set | surface | CVD (protan) | normal | contrast |
 |---|---|---|---|---|
-| today's inks | `#1a1a19` | **6.0** — floor band | 20.0 | pass |
+| today's inks | `#0a1929` | **6.0** — floor band | 20.0 | pass |
 | proposed light | `#fcfcfb` | **11.3** | 27.6 | amber 1.79 (WARN) |
 | proposed dark | `#17171a` | **16.6** | 27.2 | pass |
 
-Two notes on those results, because both look like failures and neither is one.
+**[R2]** The baseline row was first measured against the validator's default
+dark surface rather than the site's actual `--bg: #0a1929`. Re-measured against
+`#0a1929` it is unchanged — 6.0 and 20.0 to the decimal — because the CVD and
+normal-vision checks compare the inks to **each other**, not to the surface.
+Only the contrast check reads the surface, and it passes on both. The review
+was right that the wrong surface was used and wrong that it changed the number.
+
+Three notes on those results, because two look like failures and neither is
+one.
 
 The **amber contrast WARN on light is by design and is discharged
 structurally.** The validator's obligation for a sub-3:1 status colour is
@@ -102,6 +120,34 @@ flagging the amber. A status palette is not categorical; the reference
 documents the warning step as sitting outside the band deliberately. Attempting
 to snap it inside was measured earlier this session and puts it ΔE 8–14 from
 the red, against a floor of 15 — strictly worse.
+
+### The fill is not a token today **[R2]**
+
+`web/verdict_encoding.py:48` hard-codes `CHIP_FILL = "rgba(255, 255, 255,
+0.16)"`, and its comment records why: an earlier attempt reused a 5%-white
+token, and desaturating the page showed filled and empty chips reading
+identically — the channel separating "works" from "we never found out" carried
+nothing. Revision 1 declared a `--fill` token that nothing reads, and picked 7%
+black for it by eye.
+
+Measured against the surface each sits on:
+
+| fill | composite | contrast vs surface |
+|---|---|---|
+| 5% white on `#0a1929` — the value that **vanished** | `#1b2734` | 1.139:1 |
+| 16% white on `#0a1929` — the value that **works** | `#313e4b` | 1.623:1 |
+| 7% black on `#fcfcfb` — revision 1's guess | `#eaeae9` | **1.173:1** |
+| **20% black on `#fcfcfb`** — **[R2]** | `#cacac9` | **1.598:1** |
+
+Revision 1's 7% was nearer the known-invisible value than the known-working one.
+It looked correct in a mockup, which is precisely the failure the code comment
+describes.
+
+**Therefore:** `CHIP_FILL` becomes surface-dependent — `rgba(0,0,0,0.20)` under
+light, `rgba(255,255,255,0.16)` under dark — emitted by
+`verdict_encoding.css_rules()` into both the base rule and the
+`prefers-color-scheme: dark` block. `web/verdict_encoding.py` is in scope, and
+the `--fill` token exists only so `css_rules()` has one place to read.
 
 ### The accent
 
@@ -117,9 +163,11 @@ it measures 8.93:1 on `#17171a`, so the identity change is scoped to light mode.
 remains a redundant channel. Only the hex values in that document change, and
 it gains a second table for the dark steps.
 
-**Acceptance:** rendering the seven marks with all hue removed
-(`filter: grayscale(1)`) must still yield seven visually distinct marks. This is
-a test, not an assertion — see §7.
+**Acceptance:** the seven `(border-style, fill, weight)` triples stay distinct
+without reference to colour — already asserted at `tests/test_page.py:392` and
+`:520` — **and** the fill clears the visibility threshold §1 measures on both
+surfaces, which is the new test (§7.2). The first property was never at risk;
+the second is what revision 1 broke.
 
 ## 2. The shared layer
 
@@ -130,8 +178,10 @@ blocks, deliberately:
 
 - `{% block title %}` — the document title.
 - `{% block content %}` — the page.
-- `{% block head_extra %}` — page-specific CSS, used by exactly two pages:
-  `endpoint.html` (history matrix) and `explore.html` (vocabulary grid).
+- `{% block head_extra %}` — page-specific CSS, used by **six** pages **[R2]**:
+  `endpoint.html` (history matrix), `explore.html` (vocabulary grid), and each
+  of the four docs pages, which carry two `<style>` tags apiece today. Revision
+  1 said two, and was wrong by four.
 
 A block per region was considered and rejected: it converts the template layer
 into its own puzzle for no gain across eight pages.
@@ -142,6 +192,16 @@ One file, served from a route rather than a `StaticFiles` mount, following the
 precedent already set for `icon.svg` at `web/app.py:3311` — a mount would
 publish the source directory. Read once at import, served from memory, with the
 same `public, max-age=31536000, immutable` header the icons use.
+
+**The ninth style block. [R2]** `verdict_encoding.css_rules()` generates the
+verdict CSS and `app.py:1278` and `:2357` inject it as `encoding_css` into the
+`<style>` of `endpoint.html:193` and `index.html:309`. Revision 1's "one static
+stylesheet" did not account for it. Because `css_rules()` is deterministic and
+callable at import, `site.css` is assembled at import as the static file's bytes
+**plus** `css_rules()` output, and the hash is taken over the concatenation.
+`encoding_css` is then removed from both template contexts. This keeps the
+verdict CSS generated from `verdict_encoding.py` — which is what makes the
+encoding single-sourced — while still yielding one cacheable file.
 
 Immutability requires a content-addressed URL. The route is
 `/static/site.{hash}.css`, where `{hash}` is the first 12 hex characters of the
@@ -183,11 +243,39 @@ of those properties.
 **Content negotiation is unchanged in shape.** `?q=` applies to both
 representations — a filtered index must serve the same filtered set as data as
 it does as a page, or the two representations disagree, which
-`tests/test_negotiation.py` exists to prevent.
+`tests/test_negotiation.py:1146` exists to prevent.
+
+**How, given that the query may not be rewritten. [R2]** The RDF representation
+comes from `queries/index_description.rq`, an unparameterised CONSTRUCT.
+`queries/__init__.py:5-9` forbids templating query text — a `.rq` file must stay
+runnable as pasted, and parameters reach a query only through pyoxigraph's
+variable substitution, which cannot express a substring test. Revision 1
+asserted the behaviour and supplied no mechanism.
+
+The filter is therefore applied **after** the CONSTRUCT, in Python: run the
+query unchanged, then drop every triple whose subject is an endpoint the same
+predicate rejected for the HTML path. One matching function serves both
+representations, which is what makes them agree by construction rather than by
+a test noticing later. The query file is not edited, and the rule in
+`queries/__init__.py` is not bent.
+
+This also settles the dormancy arm the review flagged: that UNION is not
+per-endpoint, so triples it contributes are not attributable to a single
+subject. They are retained unfiltered — the filter removes per-endpoint
+descriptions, never service-level statements.
 
 The client-side filter stays as a progressive enhancement over the rendered
 rows, so typing still narrows without a round trip; the round trip is what the
 URL and the no-JS path use.
+
+**What the numbers mean under a filter. [R2]** `_index_context` derives the
+fleet stats, the history matrix, the legend counts and the row count from the
+same `entries` list. Revision 1 did not say which of those describe the subset.
+They all do, and each is labelled with its denominator: the strip reads
+`18 of 212 endpoints`, and the summary figures describe the matching set. An
+unfiltered page is unchanged. The `?q=` input renders pre-filled with the
+submitted value, so the client-side enhancement filters against the same needle
+the server used rather than re-filtering with an empty one.
 
 **Matching endpoint vocabulary from the index is deferred** — it needs a join
 the index query does not do, and paying for it belongs in its own decision.
@@ -206,9 +294,16 @@ Three changes of substance; everything else is restyle:
   to the marks it explains rather than below them.
 - **The identity facts leave prose** for the rail, where they can be read at a
   glance.
-- **"Classes sampled" folds into Vocabulary** rather than repeating the same
-  terms under a second heading. The sampling disclosure moves with it: the
-  counts stay labelled as sample observations, never as population claims.
+- **"Classes sampled" stays its own section. [R2]** Revision 1 folded it into
+  Vocabulary. That was wrong twice over. The two sections report different
+  metrics — `sw:metric:classes` against `sw:metric:class-profiles` — so merging
+  them merges facts that are not the same fact; and the Vocabulary section is
+  wrapped in `{% if vocabulary %}`, which is false for every endpoint without a
+  content profile, so the sample, its truncation sentence and its provenance
+  line would vanish for most of them. That is a change in what the page claims,
+  which this spec's own Non-goals forbid, and roughly ten assertions in
+  `tests/test_page.py` pin it. It keeps its heading and its disclosures; only
+  its styling changes.
 
 At 900px the rail drops below the column, legend last.
 
@@ -305,38 +400,71 @@ its vocabulary grid via `head_extra`. No copy changes.
 The existing suite (`web/tests/`) already covers negotiation, page structure and
 the encoding. What this adds:
 
-1. **Token blocks are declared once.** A test asserting that no file under
-   `templates/` contains `--accent:` — the tokens live in `static/site.css` and
-   nowhere else. This is the regression that caused the problem in the first
-   place.
-2. **Grayscale distinctness.** Render the seven marks, strip hue, assert seven
-   distinct `(border-style, border-width, background)` triples. Extends the
-   existing `test_page.py` verdict coverage, which already caught one bad
-   `absent` fix this session.
+1. **Token blocks are declared once.** No file under `templates/` contains
+   `--accent:` — the tokens live in `static/site.css` and nowhere else. This is
+   the regression that caused the problem in the first place. **[R2]** Two more
+   copies live outside that directory — `tools/render-run.mjs:232-241`, which
+   `verdict-encoding.md` names as a working implementation, and
+   `tools/explorer/template.html`. They are **out of scope** (neither is served
+   by this site), and the test's docstring says so, so a later reader does not
+   mistake its silence for their absence.
+2. **The fill survives desaturation. [R2]** Revision 1 proposed a grayscale
+   distinctness test; `tests/test_page.py:392` and `:520` already assert the
+   seven triples are distinct, so that test exists. The genuinely new property
+   is the one §1 measures: assert `CHIP_FILL`'s composite against its surface
+   clears 1.4:1 in both modes. That is computable in-process from the constant
+   and the surface token, unlike a rendered-pixel check, and it is what would
+   have caught revision 1's 7%.
 3. **`?q=` agrees across representations.** For a query returning a proper
-   subset, the HTML row set and the data representation name the same
-   endpoints. Belongs in `test_negotiation.py`.
+   subset, the HTML row set and the RDF representation name the same endpoints.
+   `run-registry-sample.nq` provides a proper-subset fixture for `?q=uniprot`.
+   Belongs beside `tests/test_negotiation.py:1146`.
 4. **`?q=` without JavaScript.** The rendered page for `?q=uniprot` contains
-   only matching rows.
-5. **The matcher's table.** Unit tests for the five scores, the two bands and
-   the ordering, including `recpetor` → `Receptor` and `drug target` →
-   `DrugTarget`, and the ≥ 4 floor rejecting a 3-letter fuzzy match.
-6. **Tokenisation is faithful.** `hasDrugTarget` → `has drug target`;
-   `nuclear_receptor-family` → `nuclear receptor family`.
-7. **Search budget.** Find the endpoint with the largest vocabulary in the
-   fixture store, and assert a keystroke stays under 16ms.
-8. **Mobile.** `web/tests/mobile/probe_mobile.py` runs against every page at
-   400px and asserts no horizontal overflow — it exists and must stay green
-   through the change.
-9. **Stylesheet caching.** The hashed URL 200s with the immutable header; a
-   wrong hash 404s.
+   only matching rows, and the input is pre-filled.
+5. **Filtered counts carry their denominator. [R2]** The strip on a filtered
+   page reads `N of M`, and `M` equals the unfiltered total.
+6. **The matcher's table.** The five scores, the two bands and the ordering,
+   including `recpetor` → `Receptor`, `drug target` → `DrugTarget`, and the ≥ 4
+   floor rejecting a three-letter fuzzy match. **[R2]** The repo has no
+   JavaScript test harness — CI is `cargo` plus `pytest`, and there is no
+   `package.json`. Rather than add a node toolchain for one file, the scoring
+   function is written in Python in `web/vocab_match.py` and tested with pytest;
+   `static/vocab-search.js` is a direct transliteration of it, and a golden test
+   asserts the two agree on a shared table of cases read from one JSON fixture.
+   The alternative — a node runner in CI — is a real option and is noted in §9.
+7. **Tokenisation is faithful.** `hasDrugTarget` → `has drug target`;
+   `nuclear_receptor-family` → `nuclear receptor family`. Same harness as 6.
+8. **Nav links. [R2]** `tests/test_explore.py:88` pins `nav == ["/explore",
+   "/docs"]` exactly, and `tests/test_index.py:1266` pins one `/docs` and one
+   `/explore` href. A four-item header and a docs sub-nav break both. Their
+   intent — never one nav link per row — is worth keeping; the assertions are
+   updated to the new set deliberately, in the task that changes the header, and
+   not loosened to a substring check.
+9. **Mobile. [R2]** `web/tests/mobile/probe_mobile.py` runs at 375, 412 and 430
+   — not 400 as revision 1 said — and covers seven of eight pages, omitting
+   `/docs/void`. It is also in no CI gate. This change adds `/docs/void` to its
+   route list and runs it as part of the work; wiring it into CI is out of
+   scope and named in §9. Before the eight style blocks are deleted, their
+   `@media (max-width: 640px)` rules, every `overflow-x: auto` container, and
+   `.visually-hidden` are inventoried into `static/site.css` — consolidation
+   that drops one of them is how this change would regress silently.
+10. **Stylesheet caching.** The hashed URL 200s with the immutable header; a
+    wrong hash 404s. **[R2]** And the hash covers `css_rules()` output, so
+    changing a verdict's presentation changes the URL.
+11. **Focus is visible. [R2]** `endpoint.html:128` and `explore.html:72` both
+    set `outline: none` on their search input. The consolidated stylesheet
+    replaces that with a visible `:focus-visible` ring; a test asserts no
+    `outline: none` survives without one.
 
 ## 8. What does not change
 
 `web/app.py`'s routes and negotiation (beyond the added `?q=`), every file in
 `web/queries/`, `void_document.py`, `endpoint_index.py`, the prober, the
 registry, the deployment manifests, and the verdict vocabulary itself.
-`explore_payload.py` gains one derived field and nothing else (§5). No page's claims change. No endpoint is contacted differently.
+`explore_payload.py` gains one derived field and nothing else (§5), and
+`verdict_encoding.py` gains a surface-dependent fill and nothing else (§1)
+**[R2]**. No page's claims change; the "classes sampled" reversal in §4 is what
+keeps that true. No page's claims change. No endpoint is contacted differently.
 
 ## 9. Deferred, and deliberately
 
@@ -344,3 +472,9 @@ registry, the deployment manifests, and the verdict vocabulary itself.
 - Label- and comment-aware similarity (needs a query per profile pass).
 - The explore page adopting the matcher (the function is written to allow it).
 - A user-facing theme toggle. `prefers-color-scheme` only, for now.
+- **[R2]** A JavaScript test harness in CI. §7.6 avoids needing one by keeping
+  the scoring rules in Python; if a node runner is wanted for its own sake, it
+  replaces that arrangement rather than adding to it.
+- **[R2]** Wiring `probe_mobile.py` into a CI gate. It runs, and it is not gated.
+- **[R2]** The token copies in `tools/render-run.mjs` and
+  `tools/explorer/template.html`, which this site does not serve.
