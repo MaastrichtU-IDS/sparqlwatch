@@ -152,3 +152,114 @@ def test_naming_no_endpoint_is_a_400(client_for, store_content_profiles):
         VOID_PATH, headers={"accept": "text/turtle"}
     )
     assert response.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Provably complete, or sampled only
+# ---------------------------------------------------------------------------
+# The one thing a consumer has to read before using this document for anything.
+
+
+def flag(ts, predicate):
+    got = objects(ts, predicate)
+    return got[0].value if got else None
+
+
+def test_a_document_says_whether_it_can_be_trusted_as_the_whole_endpoint(
+    client_for, store_content_profiles
+):
+    """The flag is always present, whichever way it falls.
+
+    A consumer must never have to infer completeness by counting partitions and
+    comparing samplings itself: two readers doing that arithmetic would be two
+    chances to get it wrong, and the one with the evidence is this one.
+    """
+    ts = triples(fetch(client_for(store_content_profiles), PROFILED))
+    assert flag(ts, SW + "provablyComplete") in {"true", "false"}
+    assert flag(ts, SW + "classesDescribed") is not None
+
+
+def test_an_exactly_scanned_endpoint_that_states_no_class_count_is_not_complete(
+    client_for, store_content_profiles
+):
+    """Exact sampling alone does not prove the CLASS LIST is whole.
+
+    This fixture scanned every instance of every class it found, and still
+    cannot be called complete: the endpoint never said how many classes it has,
+    so a truncated enumeration would look exactly like this one. Unproven and
+    incomplete have to read the same way, because acting on either is the same
+    mistake.
+    """
+    ts = triples(fetch(client_for(store_content_profiles), PROFILED))
+    assert {o.value for o in objects(ts, SW + "sampling")} == {"exact"}
+    assert flag(ts, SW + "classesReported") is None, "this fixture has no class count"
+    assert flag(ts, SW + "provablyComplete") == "false"
+
+
+def test_a_sampled_endpoint_is_never_complete(client_for, store_sampled_profile):
+    """Whatever else holds, a sampled class means the counts are not the
+    endpoint's, so the document cannot stand for the whole of it."""
+    ts = triples(fetch(client_for(store_sampled_profile), PROFILED))
+    assert flag(ts, SW + "provablyComplete") == "false"
+
+
+def test_completeness_needs_all_four_conditions():
+    """The rule itself, at its boundaries.
+
+    Asserted on the function because reaching each corner through a store means
+    a fixture per corner, and the corners are what the claim rests on.
+    """
+    from void_document import _provably_complete
+
+    assert _provably_complete(5, 5, {"exact"}), "every condition met"
+    assert not _provably_complete(5, 5, {"exact", "first-n"}), "one class sampled"
+    assert not _provably_complete(5, 5, {"first-n"}), "all classes sampled"
+    assert not _provably_complete(5, 6, {"exact"}), "a class was never described"
+    assert not _provably_complete(5, None, {"exact"}), "no total to check against"
+    assert not _provably_complete(0, 0, set()), "a document about nothing is not complete"
+
+
+# ---------------------------------------------------------------------------
+# What the endpoint page claims about the document
+# ---------------------------------------------------------------------------
+
+
+def page(client, endpoint):
+    return client.get(
+        "/endpoint", params={"url": endpoint}, headers={"accept": "text/html"}
+    ).text
+
+
+def test_the_page_offers_the_document_and_says_which_kind_it_is(
+    client_for, store_content_profiles
+):
+    """The offer and its qualifier are one block, never one without the other.
+
+    Every other section of that page grades the endpoint. This is the only one
+    that hands the reader something, and something a consumer might depend on,
+    so the sentence that says how far to trust it cannot be somewhere else on
+    the page or only inside the RDF.
+    """
+    body = page(client_for(store_content_profiles), PROFILED)
+    assert 'data-section="void"' in body
+    assert "/void?url=" in body, "the document is not linked"
+    assert ("Provably complete" in body) or ("A sample only" in body)
+
+
+def test_a_sampled_document_is_never_offered_as_complete(
+    client_for, store_sampled_profile
+):
+    """The claim follows the evidence, on the page as in the RDF."""
+    body = page(client_for(store_sampled_profile), PROFILED)
+    assert "A sample only" in body
+    assert "Provably complete" not in body
+
+
+def test_an_endpoint_with_no_profile_offers_nothing(client_for, store):
+    """No block at all, rather than a link to a 404.
+
+    An offer that leads nowhere is worse than no offer: it tells a reader we
+    have a description of this endpoint, which is the thing that is not true.
+    """
+    body = page(client_for(store), "https://data.kkg.kadaster.nl/query")
+    assert 'data-section="void"' not in body

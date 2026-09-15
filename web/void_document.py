@@ -54,6 +54,7 @@ RDFS = "http://www.w3.org/2000/01/rdf-schema#"
 SW = "urn:sparqlwatch:"
 XSD_INTEGER = NamedNode("http://www.w3.org/2001/XMLSchema#integer")
 XSD_DATETIME = NamedNode("http://www.w3.org/2001/XMLSchema#dateTime")
+XSD_BOOLEAN = NamedNode("http://www.w3.org/2001/XMLSchema#boolean")
 
 # The metric ids whose observed counts are population figures. Named here
 # because they are the prober's, and a typo would silently emit no count rather
@@ -69,6 +70,41 @@ _POPULATION_COUNTS = {
 
 # The one sampling that licenses a population claim.
 _EXACT = "exact"
+
+# The metric whose count tells us how many classes the endpoint holds, which is
+# the only way to know the class list in this document is the whole list.
+_CLASS_COUNT = "urn:sparqlwatch:metric:class-count"
+
+
+def _provably_complete(described: int, reported: int | None, samplings: set[str]) -> bool:
+    """Whether this document accounts for the whole endpoint, provably.
+
+    PROVABLY, and the word is doing work. The question a consumer has is not
+    "did we try hard" but "may I treat this as the endpoint's content". Four
+    things have to hold, and every one of them is checkable from what the store
+    already recorded rather than asserted by us:
+
+      * the endpoint told us how many classes it has, so there is a total to
+        check against. Without it the class list might be missing anything and
+        nothing here would show it.
+      * the document describes exactly that many. The profile pass enumerates
+        with a LIMIT, so a truncated list is the ordinary outcome on a large
+        endpoint and looks identical to a complete one from the inside.
+      * every class was scanned exactly. A sampled class gives a property list
+        that is sound and counts that are not the class's.
+      * at least one class is described, because a document about nothing is
+        not a complete account of something.
+
+    Any of those failing makes it sampled, and the page says which. The default
+    is therefore false: an endpoint that answers no count is not complete, it
+    is unproven, and those have to read the same way here.
+    """
+    return (
+        described > 0
+        and reported is not None
+        and described == reported
+        and samplings == {_EXACT}
+    )
 
 
 def _integer(value: str) -> Literal:
@@ -114,6 +150,7 @@ def void_triples(store: Store, endpoint: str, document_iri: str) -> list[Triple]
     # dataset, which is what makes the document a partition rather than a bag.
     partitions: dict[str, BlankNode] = {}
     sampling_of: dict[str, str] = {}
+    classes_reported: int | None = None
 
     def partition(class_iri: str, sampling: str) -> BlankNode:
         node = partitions.get(class_iri)
@@ -138,6 +175,8 @@ def void_triples(store: Store, endpoint: str, document_iri: str) -> list[Triple]
             )
             out.append(Triple(doc, NamedNode(DCT + "source"), row["run"]))
         elif kind == "count":
+            if row["class"].value == _CLASS_COUNT:
+                classes_reported = int(row["count"].value)
             predicate = _POPULATION_COUNTS.get(row["class"].value)
             if predicate is not None:
                 out.append(Triple(doc, predicate, _integer(row["count"].value)))
@@ -168,4 +207,51 @@ def void_triples(store: Store, endpoint: str, document_iri: str) -> list[Triple]
             out.append(
                 Triple(prop, NamedNode(SW + "datatypeCount"), _integer(row["datatypes"].value))
             )
+
+    # THE ONE THING A CONSUMER HAS TO READ FIRST, so it is stated rather than
+    # left to be inferred from counting partitions and comparing samplings.
+    complete = _provably_complete(
+        len(partitions), classes_reported, set(sampling_of.values())
+    )
+    out.append(
+        Triple(
+            doc,
+            NamedNode(SW + "provablyComplete"),
+            Literal("true" if complete else "false", datatype=XSD_BOOLEAN),
+        )
+    )
+    out.append(Triple(doc, NamedNode(SW + "classesDescribed"), _integer(str(len(partitions)))))
+    if classes_reported is not None:
+        out.append(Triple(doc, NamedNode(SW + "classesReported"), _integer(str(classes_reported))))
     return out
+
+
+def void_summary(store: Store, endpoint: str) -> dict | None:
+    """What the page says about the document, read out of the document.
+
+    READ BACK RATHER THAN RECOMPUTED, which costs a second pass over rows that
+    take hundredths of a second and buys the thing this codebase keeps paying
+    for elsewhere: one implementation of "is this complete". A page that worked
+    it out from the same store by its own arithmetic would be a second reader
+    of the same question, and the two would eventually disagree in front of
+    somebody deciding whether to trust the document.
+
+    `None` when there is nothing to describe, which is what the route turns
+    into a 404.
+    """
+    triples = void_triples(store, endpoint, "urn:sparqlwatch:void-summary")
+    if not triples:
+        return None
+    read = {t.predicate.value: t.object.value for t in triples}
+    described = int(read.get(SW + "classesDescribed", "0"))
+    reported = read.get(SW + "classesReported")
+    return {
+        "complete": read.get(SW + "provablyComplete") == "true",
+        "described": described,
+        "reported": int(reported) if reported is not None else None,
+        # Which sampling the profiles used, so the page can say "a sample of"
+        # rather than only "not complete". Sorted for a stable rendering.
+        "samplings": sorted({
+            t.object.value for t in triples if t.predicate.value == SW + "sampling"
+        }),
+    }

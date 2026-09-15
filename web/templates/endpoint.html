@@ -288,6 +288,20 @@
   .site-foot .v { font-family: var(--mono); }
   .site-foot a { color: var(--text-muted); }
   @media (max-width: 640px) { .site-foot { padding: 12px 14px; } }
+
+  /* THE OFFER. Everything else on this page grades the endpoint; this is the
+     one block that hands the reader something. It is styled as a statement
+     rather than a panel of readings because it makes one claim, and the claim
+     is either "this is the whole of it" or "this is a sample of it". */
+  .void { border: 1px solid var(--border); border-radius: var(--radius);
+          background: var(--bg-secondary); padding: 14px 16px; margin: 22px 0 0; }
+  .void h2 { margin: 0 0 6px; }
+  .void .claim { font-size: 13px; }
+  .void .complete { color: var(--good); }
+  .void .partial { color: var(--warn); }
+  .void .why { color: var(--text-muted); font-size: 12.5px; margin: 6px 0 0; }
+  .void .get { margin: 10px 0 0; font-family: var(--mono); font-size: 12.5px;
+               overflow-wrap: anywhere; }
 </style>
 </head>
 <body>
@@ -409,7 +423,42 @@
     {% endif %}
   </section>
 
+  {% if void %}
+  {# Placed after the conformance list and before the history, because it is
+     the thing a reader came for once they know the endpoint works, and it is
+     the only block on the page that is an offer rather than a grade. #}
+  <section class="panel void" data-section="void">
+    <h2>sparqlwatch's VoID for this endpoint</h2>
+    {% if void.complete %}
+    <p class="claim"><strong class="complete">Provably complete.</strong>
+      All {{ void.described }} classes this endpoint reports were described, and
+      every instance of each was scanned. The counts are the endpoint's, not a
+      sample's.</p>
+    {% else %}
+    <p class="claim"><strong class="partial">A sample only.</strong>
+      This describes what we saw, and is not the whole of what is there.</p>
+    <p class="why">
+      {% if void.reported is none %}
+        This endpoint would not tell us how many classes it holds, so there is
+        no total to check the {{ void.described }} described here against.
+      {% elif void.described < void.reported %}
+        {{ void.described }} of the {{ void.reported }} classes it reports are
+        described here.
+      {% endif %}
+      {% if void.samplings and void.samplings != ['exact'] %}
+        Some classes were profiled from a sample of their instances, so the
+        counts under those are the sample's rather than the class's.
+      {% endif %}
+    </p>
+    {% endif %}
+    <p class="get">GET <a href="{{ void_path }}?url={{ endpoint | urlencode }}">{{ void_path }}?url={{ endpoint | urlencode }}</a>
+      &mdash; RDF only (Turtle, N-Triples, RDF/XML, JSON-LD).</p>
+  </section>
+  {% endif %}
+
   {% if history.has_history %}
+
+
   <section class="panel" data-section="history">
     <h2>What has changed here</h2>
     <p class="note">Every sweep that said anything about this endpoint, oldest

@@ -68,7 +68,7 @@ from pyoxigraph import (
 import verdict_encoding
 from endpoint_content import CLASS_SAMPLING_METRICS, EndpointContent, endpoint_content
 from explore_payload import build_payload, endpoint_vocabulary
-from void_document import void_triples
+from void_document import void_summary, void_triples
 from endpoint_index import endpoint_index
 from endpoint_history import EndpointHistory, endpoint_history
 from fleet import FleetHistory, fleet_history, fleet_stats
@@ -1186,6 +1186,7 @@ def _page_context(
     content: EndpointContent,
     history: EndpointHistory,
     vocabulary: list[dict],
+    void: dict | None,
 ) -> dict:
     """Everything the template renders, decided here rather than in the page.
 
@@ -1204,6 +1205,13 @@ def _page_context(
         # data rather than pre-filtered markup because the search is the point:
         # a reader types a name and the list narrows without a round trip.
         "vocabulary": vocabulary,
+        # The derived description this endpoint does not publish for itself,
+        # and the one thing a reader has to know before using it. Read back out
+        # of the document rather than worked out again here: two answers to
+        # "is this complete" would eventually differ in front of somebody
+        # deciding whether to depend on it.
+        "void": void,
+        "void_path": VOID_PATH,
         "vocabulary_json": json.dumps(vocabulary, separators=(",", ":")),
         # Oldest first, and only where there is more than one: a single-cell
         # timeline implies a trend from one observation.
@@ -1274,10 +1282,11 @@ def _endpoint_html(
     content: EndpointContent,
     history: EndpointHistory,
     vocabulary: list[dict],
+    void: dict | None,
 ) -> str:
     """The page, rendered."""
     return _TEMPLATES.get_template("endpoint.html").render(
-        **_page_context(endpoint, measurements, content, history, vocabulary)
+        **_page_context(endpoint, measurements, content, history, vocabulary, void)
     )
 
 
@@ -1402,6 +1411,7 @@ def endpoint_resource(
                 content,
                 endpoint_history(store, url),
                 endpoint_vocabulary(store, url),
+                void_summary(store, url),
             ),
             media_type="text/html; charset=utf-8",
         )
