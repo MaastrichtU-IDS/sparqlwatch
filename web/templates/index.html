@@ -364,7 +364,11 @@
   {% endif %}
 
   <div class="strip">
-    <div class="stat"><span class="n" data-figure="total">{{ summary.total }}</span>
+    <div class="stat"><span class="n" data-figure="total">{%- if summary.matching is not none -%}
+        {{ summary.matching }} of {{ summary.total }}
+      {%- else -%}
+        {{ summary.total }}
+      {%- endif -%}</span>
       <span class="k">endpoints</span></div>
     <div class="stat"><span class="n" data-figure="answering">{{ summary.answering }}</span>
       <span class="k">answering</span></div>
@@ -374,11 +378,12 @@
       <span class="k">last sweep</span></div>
   </div>
 
-  <div class="tools">
-    <input id="q" type="search" autocomplete="off"
+  <form class="tools" method="get" action="{{ index_path }}">
+    <input id="q" name="q" type="search" autocomplete="off" value="{{ query or '' }}"
            placeholder="Filter by endpoint URL or host" aria-label="Filter by endpoint URL or host">
+    <noscript><button type="submit">Filter</button></noscript>
     <span class="shown" id="shown"></span>
-  </div>
+  </form>
 
 
   {% if metrics %}

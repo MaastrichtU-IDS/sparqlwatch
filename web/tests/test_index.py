@@ -59,6 +59,7 @@ from app import (
     DORMANCY,
     _index_html,
     _legend,
+    _matches_query,
     _state_facets,
     ENDPOINT_PATH,
     INDEX_PATH,
@@ -2466,3 +2467,73 @@ def test_the_index_declares_no_tokens_and_no_inline_verdict_css(client_for, stor
         "inline they would be re-sent on every page view"
     )
     assert app_module.STYLESHEET_PATH in body
+
+
+# ---------------------------------------------------------------------------
+# ?q= : a server-side filter that lives in the URL
+# ---------------------------------------------------------------------------
+
+
+def endpoints_shown(body):
+    """Each rendered row's endpoint URL, read off `data-endpoint`.
+
+    Named differently from the `rows_of` above: that helper already exists in
+    this file and builds SYNTHETIC row dicts for `_state_facets` (see
+    test_the_state_facets_count_every_chip_a_row_carries above), a completely
+    different job. Reusing its name for "rows on a rendered page" would shadow
+    it.
+    """
+    return [attrs["data-endpoint"] for attrs in with_attribute(body, "data-endpoint")]
+
+
+def test_a_query_narrows_the_rows_without_javascript(client_for, store_registry_sample):
+    client = client_for(store_registry_sample)
+    everything = endpoints_shown(client.get("/", headers={"accept": "text/html"}).text)
+    narrowed = endpoints_shown(
+        client.get("/?q=uniprot", headers={"accept": "text/html"}).text
+    )
+    assert 0 < len(narrowed) < len(everything), (
+        "?q= must be a server-side filter; a fixture yielding all or none "
+        "proves nothing"
+    )
+    assert all("uniprot" in r.lower() for r in narrowed)
+
+
+def test_a_filtered_page_states_its_denominator(client_for, store_registry_sample):
+    """"18 endpoints" on a filtered page would misreport the fleet.
+
+    The reader is looking at a subset. Every figure describes the subset, and
+    every figure says what it is a subset of.
+    """
+    body = client_for(store_registry_sample).get(
+        "/?q=uniprot", headers={"accept": "text/html"}
+    ).text
+    total = texts_with(body, "data-figure")[0]
+    assert " of " in total, f"the count reads {total!r}, with no denominator"
+
+
+def test_an_unfiltered_page_states_no_denominator(client_for, store_registry_sample):
+    """The flip side: a page nobody filtered should not read "9 of 9"."""
+    body = client_for(store_registry_sample).get(
+        "/", headers={"accept": "text/html"}
+    ).text
+    total = texts_with(body, "data-figure")[0]
+    assert " of " not in total, f"the count reads {total!r} with no filter applied"
+
+
+def test_the_query_survives_in_the_input(client_for, store_registry_sample):
+    """Otherwise the client-side enhancement re-filters with an empty needle
+    and instantly widens the list the server just narrowed."""
+    body = client_for(store_registry_sample).get(
+        "/?q=uniprot", headers={"accept": "text/html"}
+    ).text
+    assert 'value="uniprot"' in body
+
+
+def test_matches_query_is_case_insensitive_and_permissive_when_empty():
+    assert _matches_query("https://sparql.UniProt.org/sparql", "uniprot")
+    assert _matches_query("https://sparql.uniprot.org/sparql", "UNIPROT")
+    assert not _matches_query("https://sparql.uniprot.org/sparql", "wikidata")
+    assert _matches_query("https://sparql.uniprot.org/sparql", None)
+    assert _matches_query("https://sparql.uniprot.org/sparql", "")
+    assert _matches_query("https://sparql.uniprot.org/sparql", "  uniprot  ")

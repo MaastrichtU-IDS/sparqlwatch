@@ -2212,7 +2212,25 @@ def _fleet_view(history: FleetHistory) -> dict:
     }
 
 
-def _index_context(entries: list[EndpointMeasurements], store: Store) -> dict:
+def _matches_query(endpoint: str, needle: str | None) -> bool:
+    """Whether one endpoint answers to a search.
+
+    Case-insensitive substring over the endpoint URL, which is the only
+    identifying text queries/index.rq returns -- it carries ?endpoint and
+    per-metric verdicts, and no name or vocabulary column.
+
+    This is ONE function on purpose. Both representations of the index filter
+    through it, so the page and the data agree by construction rather than by a
+    test noticing later that they drifted.
+    """
+    if not needle:
+        return True
+    return needle.strip().lower() in endpoint.lower()
+
+
+def _index_context(
+    entries: list[EndpointMeasurements], store: Store, q: str | None = None
+) -> dict:
     """Everything the index template renders, decided here rather than in the
     page.
 
@@ -2220,6 +2238,14 @@ def _index_context(entries: list[EndpointMeasurements], store: Store) -> dict:
     metric means, how a state is drawn and what each cell of the grid counts are
     all decisions with a right answer, and they belong where they can be tested.
     """
+    # Filtered before anything else derives from `entries`, so the grid, the
+    # legend, the facet counts and the listing itself all describe the subset
+    # a ?q= narrowed to -- the same filter the page's own JS re-applies to the
+    # rows this already returned. `unfiltered_total` is kept aside because the
+    # strip states a denominator ("18 of 212") rather than letting the reader
+    # infer the fleet size from a number that is no longer it.
+    unfiltered_total = len(entries)
+    entries = [e for e in entries if _matches_query(e.endpoint, q)]
     metrics = _index_metrics(entries)
     # One pass over the store for every row, rather than one per row: the
     # payload is built from a single query and 543 rows asking it 543 times
@@ -2364,10 +2390,16 @@ def _index_context(entries: list[EndpointMeasurements], store: Store) -> dict:
         "chip_height": verdict_encoding.CHIP_HEIGHT_PX,
         # The fleet in four figures, above the search. New in the 2026-09-15
         # redesign: the page led with rows, which answers "what is here" only
-        # after the reader has counted. Every figure is derived from `entries`,
-        # so a filtered page reports the filtered set (see ?q= below).
+        # after the reader has counted. `answering` and `not_answering` are
+        # derived from the FILTERED `entries`, so a filtered page reports the
+        # filtered set; `total` stays the unfiltered fleet size so the strip
+        # can state a denominator instead of letting the reader guess it from
+        # a number that quietly stopped meaning the whole registry.
         "summary": {
-            "total": len(entries),
+            # None when unfiltered, so the template can tell "18 of 212" from
+            # "212" without comparing two numbers and guessing.
+            "matching": None if not q else len(entries),
+            "total": unfiltered_total,
             "answering": sum(
                 1 for e in entries
                 if not e.newest_sweep_declined_to_ask_this_endpoint
@@ -2378,10 +2410,16 @@ def _index_context(entries: list[EndpointMeasurements], store: Store) -> dict:
             ),
             "last_sweep": stats.last_sweep,
         },
+        # The submitted ?q=, echoed into the input's value so the client-side
+        # enhancement narrows the rows the server already returned instead of
+        # re-filtering from an empty box and instantly widening the list.
+        "query": q,
     }
 
 
-def _index_html(entries: list[EndpointMeasurements], store: Store) -> str:
+def _index_html(
+    entries: list[EndpointMeasurements], store: Store, q: str | None = None
+) -> str:
     """The index, rendered.
 
     Takes the store because a row's `content` link depends on whether the
@@ -2389,7 +2427,7 @@ def _index_html(entries: list[EndpointMeasurements], store: Store) -> str:
     read a static file until 2026-09-05 and needed no store at all.
     """
     return _TEMPLATES.get_template("index.html").render(
-        **_index_context(entries, store)
+        **_index_context(entries, store, q)
     )
 
 
@@ -2402,6 +2440,10 @@ def _index_rdf(store: Store, media_type: str) -> bytes:
 @app.get(INDEX_PATH)
 def index_resource(
     request: Request,
+    q: str | None = Query(
+        None,
+        description="Narrow the index to endpoints whose URL contains this text.",
+    ),
     store: Store = Depends(get_store),
 ) -> Response:
     """Every endpoint this service knows about, in one representation or the
@@ -2416,6 +2458,12 @@ def index_resource(
     index of no endpoints is an answer, and _opened_store already refuses a
     store that holds no quads or no derived graph, which is the mistake a 404
     here would be reporting as an empty registry.
+
+    `q`, when given, narrows the HTML listing through `_matches_query` -- see
+    that function for why the URL is the only text there is to match. The RDF
+    branch below does not take it: Task 7 wires ?q= into that representation
+    through a different mechanism, deliberately, because a SPARQL FILTER and a
+    Python substring test are not the same operation to apply "the same way".
     """
     media_type = choose_representation(request.headers.get("accept"))
     if media_type is None:
@@ -2430,7 +2478,7 @@ def index_resource(
 
     if media_type == HTML_MEDIA_TYPE:
         return Response(
-            content=_index_html(endpoint_index(store), store),
+            content=_index_html(endpoint_index(store), store, q),
             media_type="text/html; charset=utf-8",
         )
     return Response(
