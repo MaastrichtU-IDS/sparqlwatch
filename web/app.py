@@ -1277,7 +1277,6 @@ def _page_context(
         "sample": _sample(measurements, content),
         "chip_width": verdict_encoding.CHIP_WIDTH_PX,
         "chip_height": verdict_encoding.CHIP_HEIGHT_PX,
-        "encoding_css": verdict_encoding.css_rules(),
     }
 
 
@@ -2237,11 +2236,17 @@ def _index_context(entries: list[EndpointMeasurements], store: Store) -> dict:
         for cell in row["cells"]
         if cell["present"]
     ]
+    # Read once so the strip's freshness figure and the change grid's own
+    # sweep count agree about what "last sweep" means: two calls here have
+    # produced two FleetStats before and there is no reason a second one
+    # would answer differently, only a chance it silently could.
+    stats = fleet_stats(store, history, entries)
     return {
         **_nav_context(),
+        "here": "index",
         # The overview, above the listing: what has changed, before what is.
         "fleet": _fleet_view(history),
-        "stats": fleet_stats(store, history, entries),
+        "stats": stats,
         "endpoint_count": len(entries),
         "metrics": metrics,
         "metric_count": len(metrics),
@@ -2357,7 +2362,22 @@ def _index_context(entries: list[EndpointMeasurements], store: Store) -> dict:
         "legend": _legend(drawn),
         "chip_width": verdict_encoding.CHIP_WIDTH_PX,
         "chip_height": verdict_encoding.CHIP_HEIGHT_PX,
-        "encoding_css": verdict_encoding.css_rules(),
+        # The fleet in four figures, above the search. New in the 2026-09-15
+        # redesign: the page led with rows, which answers "what is here" only
+        # after the reader has counted. Every figure is derived from `entries`,
+        # so a filtered page reports the filtered set (see ?q= below).
+        "summary": {
+            "total": len(entries),
+            "answering": sum(
+                1 for e in entries
+                if not e.newest_sweep_declined_to_ask_this_endpoint
+            ),
+            "not_answering": sum(
+                1 for e in entries
+                if e.newest_sweep_declined_to_ask_this_endpoint
+            ),
+            "last_sweep": stats.last_sweep,
+        },
     }
 
 

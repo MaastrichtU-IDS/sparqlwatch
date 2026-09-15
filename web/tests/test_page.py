@@ -40,6 +40,7 @@ from app import (
     COMPLETE_TEXT,
     INDEX_PATH,
     LINKABLE_SCHEMES,
+    STYLESHEET_PATH,
     _outward_link,
     ENDPOINT_PATH,
     TRUNCATED_TEXT,
@@ -1204,17 +1205,30 @@ def test_a_legend_swatch_is_drawn_exactly_like_the_chip_it_explains(
 
 
 def test_the_page_carries_the_generated_rules_and_no_others(client_for, store):
-    """The stylesheet the browser sees is the generated one.
+    """The stylesheet the browser applies is the generated one, with no
+    private second copy anywhere this page could source rules from.
 
     A second, hand-written .enc- rule further down the page would win on
     cascade order and quietly redraw a state, which is precisely how two
     copies of this encoding drifted before.
+
+    The rules moved out of this page's own markup on 2026-09-16, the same day
+    the index's inline copy went, into the generated stylesheet at
+    app.STYLESHEET_PATH (see app._STYLESHEET). This page does not link that
+    stylesheet yet -- Task 8 moves it onto base.html -- so between this
+    commit and that one its own verdict chips carry no rule at all; what this
+    test still holds is that the page prints no PRIVATE second copy of them,
+    and that exactly one true copy exists, in the generated sheet.
     """
-    text = page(client_for(store), KADASTER)
+    client = client_for(store)
+    text = page(client, KADASTER)
+    css = client.get(STYLESHEET_PATH).text
     for state in (*verdict_encoding.STATES, verdict_encoding.UNRECOGNISED):
         selector = "." + verdict_encoding.css_class(state.slug)
-        assert text.count(selector + " ") == 1
-    assert verdict_encoding.css_rules() in text
+        assert selector + " " not in text, f"{selector} is a private copy on the page"
+        assert css.count(selector + " ") == 1
+    assert verdict_encoding.css_rules() not in text
+    assert verdict_encoding.css_rules() in css
 
 
 # ---------------------------------------------------------------------------

@@ -1,66 +1,35 @@
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="icon" href="/icon.svg" type="image/svg+xml">
-<link rel="mask-icon" href="/icon-mono.svg" color="#81d4fa">
-<title>sparqlwatch</title>
+{% extends "base.html" %}
+{% block head_extra %}
 <style>
-  /* Blue dark (blueprint), the default theme, from design/Main.dc.html, which
-     is the authority for layout, typography, spacing and these tokens. It is
-     NOT the authority for the verdict encoding: docs/design/verdict-encoding.md
-     is, and the .enc- rules at the bottom are generated from it. */
-  :root {
-    --bg: #0a1929; --bg-secondary: #112a3f; --bg-hover: #1a3952; --bg-deep: #061320;
-    --border: #2a5580; --text: #d0e4f5; --text-bright: #ffffff; --text-muted: #7fa5c8;
-    --text-dim: #5c7c9c; --accent: #4fc3f7; --on-accent: #0a1929; --accent-blue: #81d4fa;
-    --good: #66bb6a; --warn: #ffb74d; --crit: #ef5350; --overlay: rgba(255,255,255,0.05);
-    --radius: 6px; --radius-sm: 4px;
-    --mono: ui-monospace, 'Cascadia Code', 'Source Code Pro', monospace;
-    color-scheme: dark;
-  }
-  * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text);
-         font: 14px/1.5 system-ui, -apple-system, 'Segoe UI', sans-serif; }
-  a { color: var(--accent-blue); text-decoration: none; }
-  a:hover { color: var(--accent); text-decoration: underline; }
-  header { display: flex; align-items: center; gap: 12px; padding: 14px 24px;
-           background: var(--bg-secondary); border-bottom: 1px solid var(--border); }
-  /* A link on every page, including the index, so the way home is always
-     in the same place. Undecorated because it is a mark rather than a
-     phrase in a sentence, and the index's copy carries aria-current so a
-     screen reader says it leads to the page already open. */
-  .logo { display: flex; align-items: center; gap: 9px; font-weight: 600;
-          color: var(--text-bright); text-decoration: none; }
-  .logo:hover { color: var(--accent); }
-  .run { margin-left: auto; font-family: var(--mono); font-size: 12px; color: var(--text-dim); }
-  /* The header's link to /about, in the same token as every other link on the
-     page. One occurrence per page and not one per row: at 543 rows anything
-     per-row costs 543 times what it reads, and web/README.md's table is the
-     record of how little headroom that leaves. A link repeated 543 times is the
-     version of this fix that spends 1,227 bytes as 24,000. */
-  header a { font-family: var(--mono); font-size: 12px; }
-  main { padding: 22px 24px; max-width: 1120px; }
-  h1 { margin: 0; font-size: 18px; font-weight: 600; color: var(--text-bright);
-       letter-spacing: -0.01em; }
+  /* Index-specific layout: the strip, the tools bar, the facet matrix, the
+     fleet history grid and the row listing. Everything shared with the rest
+     of the site -- tokens, body/header/footer chrome, .panel, .warn-note,
+     `code` -- moved to site.css on 2026-09-16; the .enc- verdict rules moved
+     into the generated stylesheet the same day (see verdict_encoding.py),
+     so this page no longer prints them itself. */
+  main { max-width: 1120px; }
   .sub { margin: 6px 0 18px; font-size: 13px; color: var(--text-muted); max-width: 860px; }
-  h2 { font-size: 12px; font-weight: 600; color: var(--text-dim); text-transform: uppercase;
-       letter-spacing: 0.05em; margin: 0 0 12px; }
-  section + section { margin-top: 22px; }
-  .panel { border: 1px solid var(--border); border-radius: var(--radius);
-           background: var(--bg-secondary); padding: 14px 16px; }
+  /* Moved out of the header on 2026-09-16, the way explore.html's freshness
+     note did: base.html's header has room for the logo and the four-item
+     nav and nothing else, so a sentence about this page's own data joins
+     the rest of the content instead. */
+  .run-note { font-size: 12px; color: var(--text-dim); margin: 0 0 14px; }
   .note { margin: 11px 0 0; font-size: 12.5px; color: var(--text-muted); max-width: 860px; }
-  /* The two reason values in the marked-row panel, in the token
-     web/templates/about.html gives a literal from the store or the source: they
-     are strings a reader can look for in the n-quads, not prose. */
-  code { font-family: var(--mono); font-size: 12.5px; }
-  /* A sentence about the sweep rather than about an endpoint, drawn in the same
-     token the endpoint page uses for the same kind of claim: what you are
-     reading is bounded in a way the rows do not show. It is a colour on text
-     that is already there, and it reads identically with no styling at all. */
-  .warn-note { color: var(--warn); }
 
+  /* The strip. Four figures, above the search box, so the page states the
+     shape of the fleet before it asks a reader to scroll 543 rows to count
+     it themselves. Same shape as the change grid's .stats below (a number
+     over a label), larger because this is the first thing a reader meets
+     rather than something found on the way to a chart. The two counted
+     figures carry the verdict encoding's own colour via the generated
+     enc-text- classes, so they cannot describe the fleet in a colour the
+     legend below does not also use. */
+  .strip { display: flex; flex-wrap: wrap; gap: 8px 32px; margin: 4px 0 22px; }
+  .strip .stat { display: flex; flex-direction: column; gap: 2px; }
+  .strip .n { font-family: var(--mono); font-size: 26px; color: var(--text-bright);
+              font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .strip .k { font-size: 11.5px; color: var(--text-dim); text-transform: uppercase;
+              letter-spacing: 0.04em; }
   /* The filter. It is one input and one line of text, and the page does not
      depend on the script that drives it: with JavaScript off every row is
      still here and only the filtering is missing. */
@@ -296,18 +265,6 @@
   .legend .swatch { display: inline-block; width: 20px; height: 15px; border-radius: 3px; }
   .legend .l-label { color: var(--text); }
   .legend .l-count { text-align: right; font-variant-numeric: tabular-nums; color: var(--text-dim); }
-
-  /* Generated from docs/design/verdict-encoding.md's table by
-     verdict_encoding.css_rules(), the same call the endpoint page makes, so a
-     chip here and a chip there are the same drawing of the same state.
-
-     Marked safe because this is CSS this repository generates from a closed
-     table in verdict_encoding.py, not a value from a measured endpoint: no part
-     of it comes from the store or from the request. Autoescaping it instead
-     would turn a quote in a future token value into &#34; inside a stylesheet,
-     which is a silent drawing bug rather than an escape. */
-{{ encoding_css | safe }}
-
   /* ---- NARROW SCREENS ---------------------------------------------------
      The site is read on phones, and every rule below was written against a
      measured overflow rather than a guess: web/tests/mobile/probe_mobile.py
@@ -321,21 +278,7 @@
      page with no scroll container. max-width keeps it from scrolling when it
      does not need to. */
   table.matrix { display: block; overflow-x: auto; max-width: 100%; }
-
   @media (max-width: 640px) {
-    /* 48px of side padding is an eighth of a 375px screen. 14px still reads as
-       a margin and gives the matrix and the facets 20px each back. */
-    /* Three ragged lines at 375px, because the run stamp is 30 monospace
-       characters wedged between the logo and the nav. It takes its own line;
-       the nav links then sit together on one. */
-    header { padding: 10px 14px; gap: 4px 10px; flex-wrap: wrap; row-gap: 2px; }
-    header .run { flex-basis: 100%; order: 3; font-size: 11px; }
-    /* Standalone nav links are tap targets, unlike links inside a sentence:
-       WCAG 2.2's 24px floor applies and they were 15px tall. */
-    header a { min-height: 24px; display: inline-flex; align-items: center; }
-    main { padding: 16px 14px; }
-    h1 { font-size: 19px; line-height: 1.25; }
-
     /* The search field and its count stack: side by side they left the input
        too narrow to show a hostname. */
     .tools { flex-wrap: wrap; }
@@ -367,52 +310,15 @@
   /* Every cell is a slot. */
   .fleet td { background: var(--slot, rgba(255,255,255,0.045)); border-radius: 2px;
               background-clip: padding-box; }
-
-  /* The footer. One line, and the version is the reason it exists: a reader
-     looking at a verdict needs to know which build produced it, and an
-     operator who found sparqlwatch in their logs needs to match the number
-     against the User-Agent that knocked. `version` is a Jinja global, so it is
-     the same string the /about page quotes.
-
-     NO LINKS HERE. The nav already carries them, and
-     test_the_index_carries_one_nav_link_and_never_one_per_row counts them: its
-     invariant is that a link must not be emitted per row, which at 543 rows is
-     1,200 bytes against 24,000. A footer link is constant rather than per-row
-     and does not break that, but loosening the count to fit decoration nobody
-     asked for is a bad trade for a guard that cheap. */
-  .site-foot { border-top: 1px solid var(--border); margin: 30px 0 0;
-               padding: 14px 24px; display: flex; flex-wrap: wrap;
-               gap: 6px 14px; align-items: baseline;
-               font-size: 12px; color: var(--text-muted); }
-  .site-foot .v { font-family: var(--mono); }
-  .site-foot a { color: var(--text-muted); }
-  @media (max-width: 640px) { .site-foot { padding: 12px 14px; } }
 </style>
-</head>
-<body>
-<header>
-  <a class="logo" href="{{ index_path }}" aria-current="page">
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)"
-         stroke-width="2" stroke-linecap="round" aria-hidden="true">
-      <circle cx="11" cy="11" r="6"/><path d="M15.5 15.5 21 21"/><path d="M8 11h6"/></svg>
-    sparqlwatch
-  </a>
-  <span class="run">{% if newest_generated_at %}newest sweep {{ newest_generated_at }}{% else %}no measurement sweep{% endif %}</span>
-  {# The docs tab. It replaced a direct link to /about on 2026-08-28, which
-     costs a reader one click to reach the monitoring page and buys the other
-     two documentation pages a way in: nothing linked to either before, and
-     nothing linked to /about either until this stage. The sentence on a dormant
-     row still links straight to /about, because the reader it is written for
-     came for that page and not for a section. #}
-  <a href="{{ explore_path }}" data-nav="explore">vocabulary</a>
-    <a href="{{ docs_path }}" data-nav="docs">docs</a>
-</header>
-<main>
+{% endblock %}
+{% block content %}
   {# FIND, REACH, REUSE are Findable, Accessible and Reusable, in the words a
      reader who has never heard of FAIR still understands. The heading named the
      mechanism ("monitoring service") until 2026-09-14, which told a visitor what
      this does to endpoints rather than what it does for them. #}
   <h1>SPARQL endpoints you can find, reach, and reuse</h1>
+  <p class="run-note">{% if newest_generated_at %}newest sweep {{ newest_generated_at }}{% else %}no measurement sweep{% endif %}</p>
   <p class="sub" data-endpoint-count="{{ endpoint_count }}" data-metric-count="{{ metric_count }}">
     {% if endpoint_count %}
       {# The benefit, in one sentence, in the slot that held nothing between
@@ -445,6 +351,17 @@
   {% if newest_sweep_note %}
   <p class="note warn-note" data-newest-sweep-unfinished="true">{{ newest_sweep_note }}</p>
   {% endif %}
+
+  <div class="strip">
+    <div class="stat"><span class="n" data-figure="total">{{ summary.total }}</span>
+      <span class="k">endpoints</span></div>
+    <div class="stat"><span class="n enc-text-verified" data-figure="answering">{{ summary.answering }}</span>
+      <span class="k">answering</span></div>
+    <div class="stat"><span class="n enc-text-declared-but-wrong" data-figure="not-answering">{{ summary.not_answering }}</span>
+      <span class="k">not answering</span></div>
+    <div class="stat"><span class="n" data-figure="freshness">{% if summary.last_sweep %}{{ summary.last_sweep[:10] }}{% else %}&mdash;{% endif %}</span>
+      <span class="k">last sweep</span></div>
+  </div>
 
   <div class="tools">
     <input id="q" type="search" autocomplete="off"
@@ -726,11 +643,8 @@
     </p>
   </section>
 #}
-</main>
-<footer class="site-foot">
-  <span>sparqlwatch <span class="v">{{ version }}</span></span>
-</footer>
-
+{% endblock %}
+{% block body_end %}
 <script>
 /* The filter and the facets, and the page does not depend on either. Every row
    is in the document already: this hides the ones that do not match and keeps
@@ -966,5 +880,4 @@
   apply();
 })();
 </script>
-</body>
-</html>
+{% endblock %}

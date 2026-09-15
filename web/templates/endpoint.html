@@ -189,8 +189,14 @@
      table in verdict_encoding.py, not a value from a measured endpoint: no
      part of it comes from the store or from the request. Autoescaping it
      instead would turn a quote in a future token value into &#34; inside a
-     stylesheet, which is a silent drawing bug rather than an escape. */
-{{ encoding_css | safe }}
+     stylesheet, which is a silent drawing bug rather than an escape.
+
+     `encoding_css` left this page's context on 2026-09-16 along with the
+     index's: the rules it held are in the generated stylesheet at
+     STYLESHEET_PATH now (see app.py's _STYLESHEET). This page does not link
+     that stylesheet yet -- it still carries its own token block above and
+     Task 8 is what moves it onto base.html -- so its .enc- chips are
+     unstyled between this commit and that one. */
 
   /* ---- NARROW SCREENS ---------------------------------------------------
      Measured with web/tests/mobile/probe_mobile.py, which reported +103px at

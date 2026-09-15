@@ -47,6 +47,7 @@ from starlette.testclient import TestClient
 
 import verdict_encoding
 from endpoint_measurements import endpoint_measurements
+import app as app_module
 from app import (
     _index_metrics,
     _index_rows,
@@ -624,9 +625,17 @@ def test_the_chips_come_from_the_one_encoding_table(
     give "absent" a fill its chips never had. The index has its own chips and
     its own group headings, and both are read out of that module, so a private
     table in the template fails here rather than drifting.
+
+    The rules themselves moved out of this page's own markup and into the
+    generated stylesheet on 2026-09-16 (see app.STYLESHEET_PATH), so this
+    reads them from there instead of from the page: the page no longer prints
+    them at all, which is what test_the_index_declares_no_tokens_and_no_inline_verdict_css
+    pins.
     """
-    page = index(client_for(store_registry_sample))
-    generated = set(re.findall(r"\.(enc-[a-z-]+)\s*\{", page))
+    client = client_for(store_registry_sample)
+    page = index(client)
+    css = client.get(app_module.STYLESHEET_PATH).text
+    generated = set(re.findall(r"\.(enc-[a-z-]+)\s*\{", css))
     # Both families since 2026-09-01: the chip rule and the text colour the
     # matrix header's labels wear. Still asserted as an exact set, so a private
     # table in the template still fails here.
@@ -1257,32 +1266,36 @@ def test_the_row_markers_are_explained_in_the_docs_and_not_on_the_index(
     marked = texts_with(page, "data-newest-sweep-dormant")
     assert marked and any("did not ask" in text for text in marked)
     nav = with_attribute(page, "data-nav")
-    # The vocabulary explorer joined the nav on 2026-09-01. Still an exact list:
-    # this header is deliberately small, and a link appearing in it without a
-    # test changing is how a nav turns into a menu.
-    assert [a["href"] for a in nav] == [EXPLORE_PATH, DOCS_PATH]
+    # base.html's four-item nav replaced this page's own two-link header on
+    # 2026-09-16, the same shell /explore, /docs and /about already carry.
+    # Still an exact list: this header is deliberately small, and a link
+    # appearing in it without a test changing is how a nav turns into a menu.
+    assert [a["href"] for a in nav] == [INDEX_PATH, EXPLORE_PATH, DOCS_PATH, ABOUT_PATH]
 
 
 def test_the_index_carries_one_nav_link_and_never_one_per_row(
     client_for, store_dormant_newest
 ):
-    """One occurrence, in the page header, and never one per row.
+    """A constant handful of links, in the header and the footer, and never
+    one per row.
 
-    It pointed at /about until 2026-08-28 and points at /docs now. The
-    invariant is the one that matters at 543 rows and is unchanged: a link
-    repeated per row would spend about 1,200 bytes as 24,000, and
-    web/README.md's table is the record of how little headroom that leaves.
+    It pointed at /about until 2026-08-28 and points at /docs now. The page
+    moved onto base.html's shared shell on 2026-09-16, whose footer repeats
+    the docs link ("how we measure") beside the header nav's own copy: a
+    second CONSTANT occurrence and not a second one per row. The invariant
+    that matters at 543 rows is unchanged: a link repeated per row would
+    spend about 1,200 bytes as 24,000, and web/README.md's table is the
+    record of how little headroom that leaves.
     """
     text = index(client_for(store_dormant_newest))
-    # Both nav links, because the invariant is about repetition and not about
-    # which link: the explorer joined the header on 2026-09-01 and would cost the
-    # same 24,000 bytes if it were ever emitted per row.
     rows = len(listed(text))
-    for path in (DOCS_PATH, EXPLORE_PATH):
+    # DOCS_PATH twice -- the header nav and the shared footer both carry it --
+    # EXPLORE_PATH once, since the footer links only docs and VoID.
+    for path, expected in ((DOCS_PATH, 2), (EXPLORE_PATH, 1)):
         occurrences = text.count(f'href="{path}"')
-        assert occurrences == 1, f"{occurrences} links to {path}"
-        # The second assertion is the one that survives a redesign: whatever the
-        # header holds, it must not scale with the listing.
+        assert occurrences == expected, f"{occurrences} links to {path}"
+        # The assertion that survives a redesign: whatever the header and
+        # footer hold between them, it must not scale with the listing.
         assert occurrences < rows, f"{path} appears per row"
 
 
@@ -2401,3 +2414,22 @@ def test_a_single_sweep_store_draws_no_overview(client_for, store):
     one observation."""
     body = client_for(store).get("/").text
     assert 'data-section="overview"' not in body
+
+
+def test_the_index_leads_with_the_fleet_in_four_figures(client_for, store):
+    body = client_for(store).get("/", headers={"accept": "text/html"}).text
+    figures = texts_with(body, "data-figure")
+    assert len(figures) == 4, (
+        f"the strip states endpoints, answering, not answering and freshness; "
+        f"got {figures}"
+    )
+
+
+def test_the_index_declares_no_tokens_and_no_inline_verdict_css(client_for, store):
+    body = client_for(store).get("/", headers={"accept": "text/html"}).text
+    assert "--accent:" not in body
+    assert ".enc-verified" not in body, (
+        "the verdict rules are generated into the cached stylesheet now; "
+        "inline they would be re-sent on every page view"
+    )
+    assert app_module.STYLESHEET_PATH in body
