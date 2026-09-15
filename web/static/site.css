@@ -1,0 +1,30 @@
+/* Every token this site uses, once. Until 2026-09-15 these nineteen were
+   copy-pasted into all eight templates, which is why the palette could not be
+   retuned in one edit. See docs/superpowers/specs/2026-09-15-website-redesign-design.md.
+
+   Light is the default. Dark is selected -- its own steps, validated against
+   its own surface, not an automatic inversion. */
+:root {
+  color-scheme: light dark;
+  --bg: #fcfcfb; --bg-secondary: #ffffff; --bg-hover: #f4f3f0; --bg-deep: #f0efec;
+  --border: #e3e2de; --text: #1b1b1a; --text-bright: #000000; --text-muted: #5d5d59;
+  --text-dim: #8a8a85; --accent: #0b5cad; --on-accent: #ffffff; --accent-blue: #1a6fc4;
+  --good: #0ca30c; --warn: #fab219; --crit: #d03b3b; --overlay: rgba(0,0,0,0.04);
+  /* The verdict fill. 20% black measures 1.598:1 against --bg, matching what
+     16% white achieves on the dark surface (1.627:1). A lighter value was
+     measured at 1.173:1, against 1.139:1 for a fill already proven invisible
+     at chip size. Do not adjust this by eye. */
+  --fill: rgba(0, 0, 0, 0.20);
+  --radius: 6px; --radius-sm: 4px;
+  --mono: ui-monospace, 'Cascadia Code', 'Source Code Pro', monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #17171a; --bg-secondary: #1f1f23; --bg-hover: #26262b; --bg-deep: #101013;
+    --border: #33333a; --text: #e8e8e4; --text-bright: #ffffff; --text-muted: #a8a8a2;
+    --text-dim: #7a7a75; --accent: #4fc3f7; --on-accent: #0a1929; --accent-blue: #81d4fa;
+    --good: #22a532; --warn: #ffc94d; --crit: #ef5350; --overlay: rgba(255,255,255,0.05);
+    --fill: rgba(255, 255, 255, 0.16);
+  }
+}

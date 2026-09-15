@@ -44,6 +44,7 @@ cosmetic:
 
 from __future__ import annotations
 
+import hashlib
 import html
 import json
 import os
@@ -3334,6 +3335,45 @@ def icon_mask() -> Response:
     return Response(
         content=_ICON_MONO, media_type=_SVG, headers={"Cache-Control": _ICON_CACHE}
     )
+
+
+# The one stylesheet. Assembled at import from the static file plus the verdict
+# rules verdict_encoding generates, so a change to either moves the URL.
+#
+# Served from a route rather than a StaticFiles mount for the reason the icons
+# are (app.py:3311): a mount would publish the directory they sit in, and the
+# directory they sit in is the source tree.
+_STYLESHEET = (
+    (Path(__file__).resolve().parent / "static" / "site.css").read_text()
+    + "\n\n/* Generated from web/verdict_encoding.py. */\n"
+    + verdict_encoding.css_rules()
+    + "\n"
+).encode()
+# Content-addressed, because the header below promises a year. The bytes never
+# change under this URL; a new build gets a new URL and browsers refetch nothing.
+_STYLESHEET_HASH = hashlib.sha256(_STYLESHEET).hexdigest()[:12]
+STYLESHEET_PATH = f"/static/site.{_STYLESHEET_HASH}.css"
+_STYLESHEET_CACHE = "public, max-age=31536000, immutable"
+
+
+@app.get("/static/site.{digest}.css")
+def stylesheet(digest: str) -> Response:
+    """The site's stylesheet, at a URL that changes when its bytes do.
+
+    Any other digest 404s rather than redirecting to the current one. A stale
+    URL that answered with current bytes would be a lie about immutability, and
+    the one thing a year-long cache header may not do is lie.
+    """
+    if digest != _STYLESHEET_HASH:
+        return Response(status_code=404)
+    return Response(
+        content=_STYLESHEET,
+        media_type="text/css",
+        headers={"Cache-Control": _STYLESHEET_CACHE},
+    )
+
+
+_TEMPLATES.globals["stylesheet_path"] = STYLESHEET_PATH
 
 
 @app.get("/favicon.ico")
