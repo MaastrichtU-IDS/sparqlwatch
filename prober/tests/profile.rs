@@ -8,7 +8,7 @@
 use sparqlwatch_prober::budget::Budget;
 use sparqlwatch_prober::client::Client;
 use sparqlwatch_prober::politeness::Politeness;
-use sparqlwatch_prober::profile::{profile_classes, ProfileOutcome, Sampling};
+use sparqlwatch_prober::profile::{ladder_from, profile_classes, ProfileOutcome, Sampling};
 use std::time::Duration;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -254,9 +254,15 @@ async fn a_class_that_fails_every_rung_is_named_exactly_once() {
     assert!(out.profiles.is_empty());
     assert_eq!(
         server.received_requests().await.unwrap().len(),
-        3,
+        ladder_from(&Sampling::Exact).len(),
         "every rung was tried, because a 5xx is what a smaller sample could fix"
     );
+    // Read from the ladder rather than written as a number. It was 3 until
+    // 2026-09-15, when the bounded last rung was added for stores that refuse
+    // aggregates outright; what this test is about -- that a 5xx walks the
+    // whole ladder and names the class once at the end -- does not depend on
+    // how many rungs there are.
+    assert_eq!(ladder_from(&Sampling::Exact).len(), 4, "the ladder's length changed");
 }
 
 /// A class that answers the exact scan costs ONE request. The ladder must be

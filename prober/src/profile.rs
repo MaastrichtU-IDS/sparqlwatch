@@ -40,6 +40,32 @@ pub enum Sampling {
     /// sixth. NOT combined with a `LIMIT`, which is what reintroduced the bias:
     /// the prefix length is the only knob.
     HashPrefix(String),
+    /// The first `n` instances the store happens to return, bounded by a
+    /// `LIMIT` inside the subquery that selects them.
+    ///
+    /// THE LAST RUNG, AND THE ONLY ONE THAT IS NOT REPRESENTATIVE. The measured
+    /// bias is in this enum's own header: a `LIMIT` with no `ORDER BY` was
+    /// wrong by 0.950 against 0.002 for a hash prefix, because it returns a
+    /// contiguous block of the id space. Nothing about that has changed and it
+    /// is why every hash rung is tried first.
+    ///
+    /// It exists because the alternative on some endpoints is nothing at all.
+    /// The hash rungs do not reduce work on a store that refuses aggregates:
+    /// `SHA256(STR(?s))` has to be computed for every subject, so a sixteenth
+    /// costs what the whole costs. Measured against semopenalex.org on
+    /// 2026-09-15, which answers `?s a <C>` in 0.84 s and returns HTTP 200 with
+    /// zero rows after 10.8 s for the same query with a `GROUP BY`: exact
+    /// failed, one-sixteenth failed in the same 10.8 s, and `LIMIT 200`
+    /// answered in 0.89 s with 13 properties.
+    ///
+    /// WHAT IT IS SAFE TO READ FROM IT. That a property OCCURS on instances of
+    /// the class is sound: we saw it on instances that exist. `subjects` and
+    /// `profileDenominator` are true of the sample, as they are for every rung.
+    /// What does NOT follow is a frequency for the CLASS, because the sample is
+    /// a block rather than a draw. Anything extrapolating from a profile has to
+    /// read `profileSampling` first, and this rung's slug is deliberately not
+    /// the hash one.
+    FirstN(u32),
 }
 
 impl Sampling {
@@ -48,13 +74,23 @@ impl Sampling {
         match self {
             Sampling::Exact => "exact",
             Sampling::HashPrefix(_) => "sha256-prefix",
+            Sampling::FirstN(_) => "first-n",
+        }
+    }
+
+    /// The `LIMIT` on the subject subquery, when there is one. `None` for every
+    /// rung that samples the whole population.
+    pub fn limit(&self) -> Option<u32> {
+        match self {
+            Sampling::Exact | Sampling::HashPrefix(_) => None,
+            Sampling::FirstN(n) => Some(*n),
         }
     }
 
     /// The prefix, when there is one.
     pub fn prefix(&self) -> Option<&str> {
         match self {
-            Sampling::Exact => None,
+            Sampling::Exact | Sampling::FirstN(_) => None,
             Sampling::HashPrefix(p) => Some(p),
         }
     }
@@ -74,18 +110,35 @@ impl Sampling {
 /// this ladder that class is simply unprofiled, and it is the biggest class on
 /// the endpoint.
 ///
-/// Two extra rungs and not more. Both prefixes cost the same 1.8s in that
+/// Two hash rungs and not more. Both prefixes cost the same 1.8s in that
 /// measurement, because the work is the SHA256 scan over every subject rather
-/// than the few that survive it, so a third rung would buy a worse sample for
-/// the same price as the second.
+/// than the few that survive it, so a third would buy a worse sample for the
+/// same price as the second.
+///
+/// AND THEN ONE LAST RUNG THAT IS NOT A HASH. That same fact -- the prefixes
+/// cost what the exact scan costs -- means the hash rungs rescue nothing from a
+/// store that refuses aggregates rather than merely finding them slow. On
+/// semopenalex.org every hash rung failed in the identical 10.8 s as exact, and
+/// a `LIMIT 200` answered in 0.89 s. `Sampling::FirstN` documents what may and
+/// may not be read from it; it is last because it is the only rung whose sample
+/// does not generalise.
 pub fn ladder_from(start: &Sampling) -> Vec<Sampling> {
     const RUNGS: [&str; 2] = ["0", "00"];
+    /// The bound on the last rung. 200 because it is what answered: against
+    /// semopenalex.org's largest class, `LIMIT 200` found 13 properties in
+    /// 0.89 s and `LIMIT 1000` found the same 13 in 1.10 s, so a larger sample
+    /// bought nothing but load on somebody else's server.
+    const LAST_RESORT: u32 = 200;
     let from = match start {
         Sampling::Exact => 0,
         // A configured prefix is the floor: keep it and everything shorter-
         // sampled than it. An unrecognised prefix length is its own only rung,
         // because guessing which of these it sits between would silently widen
         // or narrow what the operator asked for.
+        // Already the last rung: it is its own only ladder. Nothing is below
+        // it, and stepping UP into a hash sample would be escalating into the
+        // scan this rung exists to avoid.
+        Sampling::FirstN(_) => return vec![start.clone()],
         Sampling::HashPrefix(p) => match RUNGS.iter().position(|r| r == p) {
             // `i` and not `i + 1`: the configured rung is the ladder's FIRST
             // attempt, not the one above it. Skipping past it returned an EMPTY
@@ -100,6 +153,7 @@ pub fn ladder_from(start: &Sampling) -> Vec<Sampling> {
         rungs.push(Sampling::Exact);
     }
     rungs.extend(RUNGS[from..].iter().map(|r| Sampling::HashPrefix(r.to_string())));
+    rungs.push(Sampling::FirstN(LAST_RESORT));
     rungs
 }
 
@@ -217,12 +271,26 @@ pub fn profile_query(class: &str, sampling: &Sampling) -> String {
         Some(p) => format!("\n      FILTER(STRSTARTS(SHA256(STR(?s)), \"{p}\"))"),
         None => String::new(),
     };
+    // INSIDE the subject subquery, which is the whole point of this rung. A
+    // `LIMIT` on the outer query would bound the ROWS returned and not the work
+    // done: the GROUP BY still has to scan every instance before it can discard
+    // any, which is exactly the query semopenalex.org answers with 200 and no
+    // rows after 10.8 s. Bounding the subjects bounds the scan.
+    let limit = match sampling.limit() {
+        Some(n) => format!("\n  }} LIMIT {n} }}"),
+        // NOT `"\n  }} }}"`. `}}` is an escape inside `format!` and a pair of
+        // literal braces everywhere else, so the plain-literal spelling emitted
+        // four braces and made every unbounded query malformed. The end-to-end
+        // vocabulary tests caught it; the unit test above did not, because it
+        // only exercised the bounded branch.
+        None => "\n  } }".to_string(),
+    };
     format!(
         "SELECT ?p (COUNT(DISTINCT ?s) AS ?subjects) \
          (COUNT(DISTINCT ?dt) AS ?datatypes) (SAMPLE(?dt) AS ?anyDatatype)\n\
          WHERE {{\n  \
          {{ SELECT ?s WHERE {{\n      \
-         {{ ?s a <{class}> }} UNION {{ GRAPH ?swg {{ ?s a <{class}> }} }}{filter}\n  }} }}\n  \
+         {{ ?s a <{class}> }} UNION {{ GRAPH ?swg {{ ?s a <{class}> }} }}{filter}{limit}\n  \
          {{ ?s ?p ?o }} UNION {{ GRAPH ?spg {{ ?s ?p ?o }} }}\n  \
          BIND(IF(isIRI(?o), \"IRI\", DATATYPE(?o)) AS ?dt)\n\
          }}\n\
@@ -275,6 +343,31 @@ pub async fn profile_classes(
                     break;
                 }
                 Ok(o) => match o.profile {
+                    // NO ROWS IS NOT A PROFILE, and this is the same rule the
+                    // counting resolver states as "no row is not zero".
+                    //
+                    // A class we are profiling came from the enumeration, so it
+                    // has instances; an instance matched `?s a <C>`, so it
+                    // carries at least that triple; so `?s ?p ?o` matches at
+                    // least once and a real profile of it can never be empty.
+                    // An empty result is therefore a refusal wearing a success
+                    // code, and recorded as a profile it would publish "this
+                    // class carries no properties" about a class that has some.
+                    //
+                    // Not hypothetical. semopenalex.org answers every aggregate
+                    // over a large set with HTTP 200 and zero rows after 10.8 s,
+                    // so before this it was published as a store whose classes
+                    // hold nothing.
+                    Some(rows) if rows.is_empty() => {
+                        // Straight to the next rung, WITHOUT consulting
+                        // `worth_a_smaller_sample`: that reads the status, and
+                        // the status here is 200. It is the emptiness rather
+                        // than the code that says the query was too big.
+                        if last {
+                            out.unreached.push(class.clone());
+                            break;
+                        }
+                    }
                     Some(rows) => {
                         out.profiles.push(ClassProfile {
                             class: class.clone(),
@@ -283,8 +376,7 @@ pub async fn profile_classes(
                         });
                         break;
                     }
-                    // A refusal, or a body we could not read. Not an empty
-                    // profile: that would say the class carries no properties.
+                    // A refusal, or a body we could not read.
                     None => {
                         if last || !worth_a_smaller_sample(o.status) {
                             out.unreached.push(class.clone());
@@ -310,6 +402,75 @@ pub async fn profile_classes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The ladder ends on a bound, and the bound is inside the subquery.
+    ///
+    /// A `LIMIT` on the outer query bounds the rows and not the work: the
+    /// GROUP BY still scans every instance first, which is the query
+    /// semopenalex.org answers with 200 and nothing after 10.8 s. The point of
+    /// this rung is that the subjects are bounded before anything groups them.
+    #[test]
+    fn the_last_rung_bounds_the_subjects_and_not_the_rows() {
+        let ladder = ladder_from(&Sampling::Exact);
+        let last = ladder.last().expect("the ladder is never empty");
+        assert!(matches!(last, Sampling::FirstN(_)), "the ladder ends on a bounded sample: {ladder:?}");
+
+        let q = profile_query("http://example.org/C", last);
+        let limit = q.find("LIMIT").expect("the last rung carries a LIMIT");
+        let group = q.find("GROUP BY").expect("the profile groups");
+        assert!(limit < group, "the LIMIT must bind the subjects before the grouping: {q}");
+        // Inside the subject subquery: the LIMIT closes it, so the brace that
+        // ends the inner SELECT comes after the LIMIT and before the outer
+        // pattern that joins ?s to its properties.
+        assert!(q.contains("LIMIT 200 }"), "the LIMIT closes the subject subquery: {q}");
+        assert!(!q.trim_end().ends_with("LIMIT 200"), "a trailing LIMIT would bound rows, not work: {q}");
+    }
+
+    /// Every rung's query is well-formed, which the bounded one nearly was not.
+    ///
+    /// The `LIMIT` is spliced into a `format!` string, and the unbounded
+    /// spelling of that splice was a plain literal where `}}` means two braces
+    /// rather than one. Every non-bounded query came out with four, and only
+    /// the end-to-end vocabulary tests noticed. Balance is a cheap thing to
+    /// assert and it fails in the unit suite instead of after a mock sweep.
+    #[test]
+    fn every_rung_produces_a_balanced_query() {
+        for rung in ladder_from(&Sampling::Exact) {
+            let q = profile_query("http://example.org/C", &rung);
+            let opens = q.matches('{').count();
+            let closes = q.matches('}').count();
+            assert_eq!(opens, closes, "{:?} produced unbalanced braces:\n{q}", rung.slug());
+            assert!(!q.contains("}}"), "{:?} produced a doubled brace:\n{q}", rung.slug());
+        }
+    }
+
+    /// Every hash rung is tried before the one that does not generalise.
+    ///
+    /// The bias is measured and recorded on `Sampling`: 0.950 against 0.002.
+    /// The bounded rung exists only for endpoints where the hash rungs rescue
+    /// nothing, so it must never displace one that would have worked.
+    #[test]
+    fn the_unrepresentative_rung_is_last_and_never_earlier() {
+        let ladder = ladder_from(&Sampling::Exact);
+        let bounded = ladder.iter().position(|r| matches!(r, Sampling::FirstN(_)));
+        assert_eq!(bounded, Some(ladder.len() - 1), "{ladder:?}");
+        assert!(
+            ladder.iter().take(ladder.len() - 1).all(|r| r.limit().is_none()),
+            "no rung above the last may be bounded: {ladder:?}",
+        );
+        // And its slug is not the hash one, so a reader cannot mistake the two.
+        assert_ne!(Sampling::FirstN(200).slug(), Sampling::HashPrefix("0".into()).slug());
+    }
+
+    /// The bounded rung is its own only ladder.
+    ///
+    /// Stepping anywhere from it means stepping UP into the scan it exists to
+    /// avoid, and an operator who configured it asked for the bound.
+    #[test]
+    fn a_bounded_start_does_not_escalate_into_a_scan() {
+        assert_eq!(ladder_from(&Sampling::FirstN(50)), vec![Sampling::FirstN(50)]);
+    }
+
 
     /// The defect the synthetic endpoint found on 2026-09-05, pinned.
     ///
@@ -371,12 +532,21 @@ mod tests {
         rungs.iter().map(|r| r.prefix()).collect()
     }
 
+    /// The hash rungs, in order, and then the bounded one.
+    ///
+    /// The trailing `None` is `Sampling::FirstN`, which carries no prefix. It
+    /// joined the ladder on 2026-09-15 for stores that refuse aggregates
+    /// outright, where every hash rung costs what the exact scan costs. The
+    /// hash order above it is unchanged and is what this test has always been
+    /// about.
     #[test]
-    fn an_exact_start_climbs_down_through_both_prefixes() {
+    fn an_exact_start_climbs_down_through_both_prefixes_then_a_bound() {
         assert_eq!(
             prefixes(&ladder_from(&Sampling::Exact)),
-            [None, Some("0"), Some("00")]
+            [None, Some("0"), Some("00"), None]
         );
+        assert_eq!(ladder_from(&Sampling::Exact)[0], Sampling::Exact);
+        assert!(matches!(ladder_from(&Sampling::Exact)[3], Sampling::FirstN(_)));
     }
 
     /// A configured prefix is a FLOOR, not a starting hint. An operator who
@@ -385,17 +555,26 @@ mod tests {
     #[test]
     fn a_configured_prefix_is_never_escalated_upward_into_an_exact_scan() {
         let rungs = ladder_from(&Sampling::HashPrefix("0".into()));
-        // The configured rung is tried FIRST, then the smaller one below it.
-        assert_eq!(prefixes(&rungs), [Some("0"), Some("00")]);
+        // The configured rung is tried FIRST, then the smaller one below it,
+        // then the bound that is below every hash.
+        assert_eq!(prefixes(&rungs), [Some("0"), Some("00"), None]);
         assert!(
             !rungs.iter().any(|r| matches!(r, Sampling::Exact)),
             "an exact scan is what the operator asked to avoid"
         );
     }
 
+    /// The smallest HASH rung still has the bound below it.
+    ///
+    /// It had nowhere left to go until 2026-09-15, and that was the whole
+    /// problem on a store where a two-character prefix costs what the exact
+    /// scan costs: the ladder ended having learned nothing.
     #[test]
-    fn the_smallest_rung_has_nowhere_left_to_go() {
-        assert_eq!(prefixes(&ladder_from(&Sampling::HashPrefix("00".into()))), [Some("00")]);
+    fn the_smallest_hash_rung_falls_through_to_the_bound() {
+        assert_eq!(
+            prefixes(&ladder_from(&Sampling::HashPrefix("00".into()))),
+            [Some("00"), None]
+        );
     }
 
     /// An unrecognised prefix is its own only rung. Guessing where "abc" sits

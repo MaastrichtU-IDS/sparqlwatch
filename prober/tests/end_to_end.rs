@@ -3449,10 +3449,30 @@ async fn an_endpoint_describing(description: &str, classes: &[&str]) -> MockServ
     // answered the QUERYLESS description fetch, with SPARQL JSON, so the
     // description never parsed as RDF and the metric under test saw no declared
     // vocabulary at all.
+    // THE PROFILE QUERY ANSWERS LIKE A PROFILE, which it did not until
+    // 2026-09-15. The SELECT mock below returns the class ENUMERATION body --
+    // rows carrying `c` and nothing else -- and it answered the per-class
+    // profile query too, because that also contains "SELECT". Those rows carry
+    // no `p`, so they parse to an EMPTY profile, and the pass used to record an
+    // empty profile as a success: the class counted as profiled and this test
+    // passed on it. Once an empty profile is correctly read as a refusal, the
+    // fixture has to answer the question it is being asked.
+    //
+    // Matched on "GROUP BY", which only the profile query carries, and given
+    // the higher priority so it wins against the generic SELECT mock.
+    let profile_rows = r#"{"head":{"vars":["p","subjects","datatypes","anyDatatype"]},"results":{"bindings":[{"p":{"type":"uri","value":"http://example.org/vocab#prop"},"subjects":{"type":"literal","value":"3"},"datatypes":{"type":"literal","value":"1"},"anyDatatype":{"type":"literal","value":"IRI"}}]}}"#;
+    Mock::given(method("GET"))
+        .and(path("/sparql"))
+        .and(wiremock::matchers::query_param_contains("query", "GROUP BY"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(profile_rows))
+        .with_priority(1)
+        .mount(&server)
+        .await;
     Mock::given(method("GET"))
         .and(path("/sparql"))
         .and(wiremock::matchers::query_param_contains("query", "SELECT"))
         .respond_with(ResponseTemplate::new(200).set_body_string(results.clone()))
+        .with_priority(5)
         .mount(&server)
         .await;
     Mock::given(method("GET"))
