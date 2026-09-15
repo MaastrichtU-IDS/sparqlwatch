@@ -40,7 +40,7 @@ async fn probes_three_real_endpoints() {
         },
     )
     .unwrap();
-    let Sweep { rows, declarations_read, .. } = run_sweep(&eps, &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap(), &mut writer).await.unwrap();
+    let Sweep { rows, declarations_read, .. } = run_sweep(&eps, &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap(), &Default::default(), &mut writer).await.unwrap();
     for r in &rows {
         println!("{} {} -> {}", r.endpoint, r.metric_id, r.verdict.slug());
     }

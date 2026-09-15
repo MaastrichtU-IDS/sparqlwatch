@@ -191,6 +191,45 @@ fn older_than_max_age(when: &str, at: &str) -> bool {
     }
 }
 
+/// What the prober remembers about every endpoint's content, and when now is.
+///
+/// Built once per sweep from the dormancy state file and handed down to each
+/// endpoint, rather than each endpoint reading the file: the file is read once,
+/// before the sweep starts, and a sweep that re-read it per endpoint would see
+/// its own writes.
+#[derive(Debug, Clone, Default)]
+pub struct ContentMemory {
+    /// The sweep's instant, for the backstop.
+    pub at: String,
+    seen: std::collections::HashMap<String, LastSeen>,
+}
+
+impl ContentMemory {
+    pub fn new(at: impl Into<String>) -> Self {
+        Self { at: at.into(), seen: std::collections::HashMap::new() }
+    }
+
+    pub fn remember(&mut self, endpoint: impl Into<String>, last: LastSeen) {
+        self.seen.insert(endpoint.into(), last);
+    }
+
+    /// Whether this endpoint's profile pass is worth repeating.
+    ///
+    /// An endpoint this memory has never heard of gets the same answer as one
+    /// it has nothing recorded about: profile. A sweep with no state file
+    /// behind it therefore profiles everything once, which is what a first
+    /// sweep should do.
+    pub fn worth_reprofiling(
+        &self,
+        endpoint: &str,
+        triples: Option<u64>,
+        classes: Option<u64>,
+    ) -> bool {
+        let last = self.seen.get(endpoint).cloned().unwrap_or_default();
+        worth_reprofiling(&last, triples, classes, &self.at)
+    }
+}
+
 /// The rungs to try for one class, from `start` down to the smallest sample.
 ///
 /// Escalation goes toward SMALLER samples, never larger: a class the endpoint

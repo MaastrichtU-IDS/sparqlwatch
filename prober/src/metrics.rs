@@ -233,6 +233,21 @@ impl Cost {
     }
 }
 
+/// The metric whose observed count is the profile gate's VOLUME signal.
+///
+/// Named here rather than spelled at the call site because `lib.rs` has to find
+/// this row among the sweep's results, and a metric id typed into the prober is
+/// a string that can stop matching `metrics.toml` without anything failing: the
+/// gate would simply never see a count and profile every sweep, which is the
+/// behaviour it exists to remove and looks exactly like working.
+/// `the_gate_metrics_exist_in_the_shipped_definitions` is what keeps them real.
+pub const TRIPLE_COUNT_METRIC: &str = "triple-count";
+/// The profile gate's SHAPE signal. See `TRIPLE_COUNT_METRIC`.
+pub const CLASS_COUNT_METRIC: &str = "class-count";
+/// The pass the gate decides about, named for the same reason the two above
+/// are: whether it RAN is what the backstop counts from.
+pub const CLASS_PROFILES_METRIC: &str = "class-profiles";
+
 /// `deny_unknown_fields`: an unrecognised key is a load error, never a key
 /// serde quietly drops. Same doctrine as an unknown `kind` and an unknown
 /// `cost`. A definition file that looks like it says something and does not is

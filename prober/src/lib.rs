@@ -155,6 +155,14 @@ pub struct Sweep {
 /// the policy in one place and the mechanism in another is deliberate: a
 /// second reason for declining a metric changes `main.rs` and the reason enum,
 /// not this loop.
+// EIGHT ARGUMENTS, one past clippy's heuristic, and the alternative was worse.
+// Bundling `budget`, `concurrency` and `memory` into a settings struct would
+// touch 57 call sites -- almost all of them tests spelling `Budget::default()`
+// and a concurrency of one -- to satisfy a threshold rather than to make
+// anything clearer. Every parameter here is a distinct thing the sweep needs
+// and each is named at every call. If a ninth ever arrives, that is the signal
+// to do the bundle properly rather than to raise the allowance again.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_sweep<W: std::io::Write>(
     endpoints: &[String],
     defs: &[MetricDef],
@@ -162,6 +170,7 @@ pub async fn run_sweep<W: std::io::Write>(
     client: &Arc<Client>,
     budget: Budget,
     concurrency: NonZeroUsize,
+    memory: &crate::profile::ContentMemory,
     writer: &mut RunWriter<W>,
 ) -> anyhow::Result<Sweep> {
     // Endpoints grouped by host, each keeping its input index as its slot, in
@@ -185,6 +194,7 @@ pub async fn run_sweep<W: std::io::Write>(
     // One shared copy of the definitions for the whole sweep. A `to_vec()` per
     // endpoint would be 548 copies of the definition list at stage 1d.
     let shared_defs = Arc::new(defs.to_vec());
+    let shared_memory = Arc::new(memory.clone());
     // Finished endpoints on their way to the writer. BOUNDED, and safe to bound
     // because the loop that drains it does no probing: a `send` that has to wait
     // holds its group's permit, which delays that host's next endpoint and can
@@ -216,6 +226,9 @@ pub async fn run_sweep<W: std::io::Write>(
         let permits = Arc::clone(&permits);
         let defs = Arc::clone(&shared_defs);
         let client = Arc::clone(client);
+        // Shared rather than cloned per group: it is one map for the whole
+        // sweep and every group reads it without writing.
+        let memory = Arc::clone(&shared_memory);
         let arrived = arrived.clone();
         let handle = tasks.spawn(async move {
             // Held for the WHOLE group, not per endpoint: a permit is the
@@ -259,7 +272,7 @@ pub async fn run_sweep<W: std::io::Write>(
                 .await
                 .expect("the sweep owns this semaphore and never closes it");
             for (slot, ep) in group {
-                let swept = probe_one_endpoint(&ep, &defs, &client, budget).await;
+                let swept = probe_one_endpoint(&ep, &defs, &client, budget, &memory).await;
                 // A send error means the receiver is gone, which means the sweep
                 // is over: it either stopped on a write failure or was cancelled.
                 // So this task returns quietly rather than reaching for
@@ -626,10 +639,11 @@ async fn probe_one_endpoint(
     defs: &[MetricDef],
     client: &Client,
     budget: Budget,
+    memory: &crate::profile::ContentMemory,
 ) -> EndpointSweep {
     let mut acc = EndpointSweep::default();
     let outcome = budget
-        .with_endpoint_budget(probe_endpoint(ep, defs, client, budget, &mut acc))
+        .with_endpoint_budget(probe_endpoint(ep, defs, client, budget, memory, &mut acc))
         .await;
     if outcome.is_err() {
         tracing::warn!(endpoint = %ep, reached = acc.rows.len(), of = defs.len(),
@@ -669,6 +683,7 @@ async fn probe_endpoint(
     defs: &[MetricDef],
     client: &Client,
     budget: Budget,
+    memory: &crate::profile::ContentMemory,
     acc: &mut EndpointSweep,
 ) {
     // THE REACHABILITY GATE, and it runs before anything else sends a byte.
@@ -1007,7 +1022,37 @@ async fn probe_endpoint(
     // verdicts. A reader loses the answer to "what is in this endpoint" and
     // keeps the answer to "does it work", which is the right way round.
     // ---------------------------------------------------------------------
+    // THE SECOND GATE. The first asked whether anything is there; this asks
+    // whether what is there has moved since the last pass. It reads counts the
+    // loop above already measured, so it costs no request of its own and only
+    // the pass it skips is saved -- up to 200 queries against one endpoint.
+    //
+    // Read from `acc.rows` rather than re-queried, for the reason every other
+    // derived fact on this page is: a second reading could differ from the one
+    // that was published, and then the gate would be deciding on a number
+    // nobody can see.
+    let observed_count = |id: &str| -> Option<u64> {
+        acc.rows.iter().find(|r| r.metric_id == id).and_then(|r| r.observed_count)
+    };
+    let reprofile = memory.worth_reprofiling(
+        ep,
+        observed_count(crate::metrics::TRIPLE_COUNT_METRIC),
+        observed_count(crate::metrics::CLASS_COUNT_METRIC),
+    );
+
     for def in defs.iter().filter(|d| d.kind == ProbeKind::ClassProfile) {
+        if !reprofile {
+            // Published rather than silently omitted. What the store holds
+            // about this endpoint's vocabulary is the previous pass's, and a
+            // reader who cannot tell "we looked and it is the same" from "we
+            // never looked" has been told the wrong thing by an absence.
+            acc.not_measured.push(NotMeasured {
+                endpoint: ep.to_string(),
+                metric_id: def.id.clone(),
+                reason: NotMeasuredReason::Unchanged,
+            });
+            continue;
+        }
         let enumeration = def.query.clone().unwrap_or_default();
         let var = def.var.clone().unwrap_or_else(|| "c".to_string());
         let observed = budget

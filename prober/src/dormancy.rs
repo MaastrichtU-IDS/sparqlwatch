@@ -447,6 +447,16 @@ pub struct Outcome {
     pub url: String,
     pub cost_ms: u64,
     pub positive: bool,
+    /// The triple count this sweep observed, when it could read one. Remembered
+    /// so the next sweep's profile gate has something to compare against.
+    pub triples: Option<u64>,
+    /// The class count this sweep observed, when it could read one.
+    pub classes: Option<u64>,
+    /// Whether the class profile pass actually RAN this sweep.
+    ///
+    /// Not whether it succeeded: a pass that ran and reached nothing still
+    /// means we asked, and the backstop measures time since we last asked.
+    pub profiled: bool,
     /// This endpoint did not answer the liveness question, so the gate in
     /// `probe_endpoint` declined the rest of the battery.
     ///
@@ -836,6 +846,21 @@ pub fn update(
         };
         entry.last_probed = Some(now.to_string());
         entry.last_cost_ms = Some(outcome.cost_ms);
+        // ONLY WHEN READ. A sweep that could not count leaves the remembered
+        // number alone rather than clearing it: forgetting would make the next
+        // sweep think it had never profiled this endpoint and send the whole
+        // pass, which is the opposite of what the gate is for.
+        if outcome.triples.is_some() {
+            entry.last_triples = outcome.triples;
+        }
+        if outcome.classes.is_some() {
+            entry.last_classes = outcome.classes;
+        }
+        // The backstop measures time since we last ASKED, so this advances
+        // when the pass ran and not when it happened to succeed.
+        if outcome.profiled {
+            entry.last_profiled_at = Some(now.to_string());
+        }
         if outcome.positive {
             // E
             entry.strikes = 0;
@@ -1200,21 +1225,21 @@ mod tests {
 
     /// The calibration's own number: 48 of the 57 spent 210,010 to 210,021 ms.
     fn expensive(u: &str) -> Outcome {
-        Outcome { url: ep(u), cost_ms: 210_000, positive: false, liveness_failed: false }
+        Outcome { url: ep(u), cost_ms: 210_000, positive: false, liveness_failed: false, triples: None, classes: None, profiled: false }
     }
 
     /// One of the 339 silent-and-free endpoints the policy keeps in every sweep.
     fn cheap(u: &str) -> Outcome {
-        Outcome { url: ep(u), cost_ms: 4_000, positive: false, liveness_failed: false }
+        Outcome { url: ep(u), cost_ms: 4_000, positive: false, liveness_failed: false, triples: None, classes: None, profiled: false }
     }
 
     fn answered(u: &str, cost_ms: u64) -> Outcome {
-        Outcome { url: ep(u), cost_ms, positive: true, liveness_failed: false }
+        Outcome { url: ep(u), cost_ms, positive: true, liveness_failed: false, triples: None, classes: None, profiled: false }
     }
 
     /// Nothing answered, and it was cheap BECAUSE nothing answered.
     fn liveness_failed(u: &str) -> Outcome {
-        Outcome { url: ep(u), cost_ms: 500, positive: false, liveness_failed: true }
+        Outcome { url: ep(u), cost_ms: 500, positive: false, liveness_failed: true, triples: None, classes: None, profiled: false }
     }
 
     /// An endpoint nothing answers is relegated, though it is now cheap.
@@ -1336,7 +1361,7 @@ mod tests {
         state = update(
             &state,
             &endpoints,
-            &[Outcome { url: ep("http://silent.example/s"), cost_ms: 60_000, positive: false, liveness_failed: false }],
+            &[Outcome { url: ep("http://silent.example/s"), cost_ms: 60_000, positive: false, liveness_failed: false, triples: None, classes: None, profiled: false }],
             "2026-08-11T00:00:00Z",
             &t,
         )

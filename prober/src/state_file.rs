@@ -465,7 +465,7 @@ mod tests {
     }
 
     fn expensive(url: &str) -> Outcome {
-        Outcome { url: url.to_string(), cost_ms: 210_000, positive: false, liveness_failed: false }
+        Outcome { url: url.to_string(), cost_ms: 210_000, positive: false, liveness_failed: false, triples: None, classes: None, profiled: false }
     }
 
     #[test]

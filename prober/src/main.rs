@@ -282,20 +282,43 @@ fn validate_thresholds(thresholds: &Thresholds) -> anyhow::Result<()> {
 fn outcomes_from(
     rows: &[MeasurementRow],
     not_measured: &[NotMeasured],
+    defs: &[sparqlwatch_prober::metrics::MetricDef],
     probed: &[String],
 ) -> Vec<Outcome> {
     let mut by_url: BTreeMap<&str, Outcome> = probed
         .iter()
         .map(|url| {
-            (url.as_str(), Outcome { url: url.clone(), cost_ms: 0, positive: false, liveness_failed: false })
+            (url.as_str(), Outcome { url: url.clone(), cost_ms: 0, positive: false, liveness_failed: false, triples: None, classes: None, profiled: false })
         })
         .collect();
+    // WHETHER THE PASS RAN, which is what the backstop counts from, and it is
+    // derived rather than assumed. A decline naming `class-profiles` says it
+    // did not: the cost ceiling excluded it, the liveness gate stopped before
+    // it, the size gate decided it was unnecessary, or the prober died first.
+    // The one exception is `EnumerationFailed`, which is the pass running and
+    // its first query not answering -- we asked, so the clock should move.
+    let asked_but_unanswered = |r: NotMeasuredReason| r == NotMeasuredReason::EnumerationFailed;
+    let declined_pass: std::collections::HashSet<&str> = not_measured
+        .iter()
+        .filter(|f| {
+            f.metric_id == sparqlwatch_prober::metrics::CLASS_PROFILES_METRIC
+                && !asked_but_unanswered(f.reason)
+        })
+        .map(|f| f.endpoint.as_str())
+        .collect();
+    // A sweep whose definition set has no profile metric at all profiles
+    // nothing, so nothing may advance the clock.
+    let pass_was_in_the_run =
+        defs.iter().any(|d| d.kind == sparqlwatch_prober::metrics::ProbeKind::ClassProfile);
+    for (url, outcome) in by_url.iter_mut() {
+        outcome.profiled = pass_was_in_the_run && !declined_pass.contains(url);
+    }
     // The gate's verdict, read from the declines rather than re-derived from
     // the rows: `LivenessFailed` is the only reason meaning "it did not
     // answer", and reading it here keeps that definition in `probe_endpoint`.
     for fact in not_measured {
-        if fact.reason == NotMeasuredReason::LivenessFailed {
-            if let Some(outcome) = by_url.get_mut(fact.endpoint.as_str()) {
+        if let Some(outcome) = by_url.get_mut(fact.endpoint.as_str()) {
+            if fact.reason == NotMeasuredReason::LivenessFailed {
                 outcome.liveness_failed = true;
             }
         }
@@ -303,6 +326,14 @@ fn outcomes_from(
     for row in rows {
         let Some(outcome) = by_url.get_mut(row.endpoint.as_str()) else { continue };
         outcome.cost_ms = outcome.cost_ms.saturating_add(row.elapsed_ms.unwrap_or(0));
+        // The gate's two signals, taken from the published rows so the number
+        // remembered is the number a reader can see.
+        if row.metric_id == sparqlwatch_prober::metrics::TRIPLE_COUNT_METRIC {
+            outcome.triples = row.observed_count;
+        }
+        if row.metric_id == sparqlwatch_prober::metrics::CLASS_COUNT_METRIC {
+            outcome.classes = row.observed_count;
+        }
         // The six-verdict vocabulary is closed and dormancy is not a member of
         // it. These two are the ones that mean "we confirmed something", which
         // is what a promotion has to rest on; the other four do not.
@@ -488,6 +519,22 @@ async fn main() -> anyhow::Result<()> {
     // sweep is found now rather than after the probing.
     check_lock(Path::new(&args.state))?;
     let plan = plan_sweep(&state, &endpoints, &args.at, &thresholds)?;
+    // What the profile gate compares against, from the same state file the
+    // dormancy plan was built from and read once for both.
+    let memory = {
+        let mut m = sparqlwatch_prober::profile::ContentMemory::new(&args.at);
+        for entry in &state.endpoint {
+            m.remember(
+                entry.url.clone(),
+                sparqlwatch_prober::profile::LastSeen {
+                    triples: entry.last_triples,
+                    classes: entry.last_classes,
+                    profiled_at: entry.last_profiled_at.clone(),
+                },
+            );
+        }
+        m
+    };
     tracing::info!(
         probing = plan.probe.len(),
         dormant = plan.skipped.len(),
@@ -559,7 +606,7 @@ async fn main() -> anyhow::Result<()> {
     // below, which has to see every entry so a hold can lapse on a date rather
     // than on being swept.
     let Sweep { rows, declarations_read, not_measured, content_samples, failed_endpoints } =
-        run_sweep(&plan.probe, &run, &declined, &client, budget, args.concurrency, &mut writer)
+        run_sweep(&plan.probe, &run, &declined, &client, budget, args.concurrency, &memory, &mut writer)
             .await?;
     // The footer, and then the rename onto `--out`. Last, because it publishes
     // `failedEndpoints`, which summarises the chunks, and because the rename is
@@ -594,7 +641,7 @@ async fn main() -> anyhow::Result<()> {
     // failing toward probing LESS in the case the spec calls immediate. The
     // recovery is a re-run of the same `--at`, which `plan_sweep` rule 2 and
     // `update` rule B make exact rather than approximate.
-    let outcomes = outcomes_from(&rows, &not_measured, &plan.probe);
+    let outcomes = outcomes_from(&rows, &not_measured, &run, &plan.probe);
     merge_state(Path::new(&args.state), |on_disk| {
         dormancy::update(on_disk, &endpoints, &outcomes, &args.at, &thresholds)
     })?;
@@ -805,10 +852,10 @@ mod tests {
             measured(ep, "cors", Verdict::Indeterminate, None),
             measured(ep, "classes", Verdict::Absent, Some(30_002)),
         ];
-        let outcomes = outcomes_from(&rows, &[], &[ep.to_string()]);
+        let outcomes = outcomes_from(&rows, &[], &[], &[ep.to_string()]);
         assert_eq!(
             outcomes,
-            vec![Outcome { url: ep.into(), cost_ms: 60_003, positive: false, liveness_failed: false }],
+            vec![Outcome { url: ep.into(), cost_ms: 60_003, positive: false, liveness_failed: false, triples: None, classes: None, profiled: false }],
             "the two measured metrics sum and the unmeasured one adds nothing"
         );
     }
@@ -825,7 +872,7 @@ mod tests {
                 measured(ep, "availability", Verdict::Absent, Some(90_000)),
                 measured(ep, "cors", positive, Some(1)),
             ];
-            let outcomes = outcomes_from(&rows, &[], &[ep.to_string()]);
+            let outcomes = outcomes_from(&rows, &[], &[], &[ep.to_string()]);
             assert!(outcomes[0].positive, "{positive:?} is a positive verdict");
         }
         for other in [
@@ -836,7 +883,7 @@ mod tests {
         ] {
             let rows = vec![measured(ep, "cors", other, Some(1))];
             assert!(
-                !outcomes_from(&rows, &[], &[ep.to_string()])[0].positive,
+                !outcomes_from(&rows, &[], &[], &[ep.to_string()])[0].positive,
                 "{other:?} is not a positive verdict"
             );
         }
@@ -856,12 +903,12 @@ mod tests {
         let failed = "https://gone.example/sparql";
         let ok = "https://a.example/sparql";
         let rows = vec![measured(ok, "availability", Verdict::Absent, Some(7))];
-        let outcomes = outcomes_from(&rows, &[], &[failed.to_string(), ok.to_string()]);
+        let outcomes = outcomes_from(&rows, &[], &[], &[failed.to_string(), ok.to_string()]);
         assert_eq!(
             outcomes,
             vec![
-                Outcome { url: ok.into(), cost_ms: 7, positive: false, liveness_failed: false },
-                Outcome { url: failed.into(), cost_ms: 0, positive: false, liveness_failed: false },
+                Outcome { url: ok.into(), cost_ms: 7, positive: false, liveness_failed: false, triples: None, classes: None, profiled: false },
+                Outcome { url: failed.into(), cost_ms: 0, positive: false, liveness_failed: false, triples: None, classes: None, profiled: false },
             ],
             "every probed endpoint gets exactly one outcome, in url order"
         );
@@ -877,7 +924,7 @@ mod tests {
         let skipped = "https://slow.example/sparql";
         let probed = "https://a.example/sparql";
         let rows = vec![measured(probed, "availability", Verdict::Absent, Some(7))];
-        let outcomes = outcomes_from(&rows, &[], &[probed.to_string()]);
+        let outcomes = outcomes_from(&rows, &[], &[], &[probed.to_string()]);
         assert_eq!(outcomes.len(), 1, "one probed endpoint, one outcome");
         assert!(
             outcomes.iter().all(|o| o.url != skipped),
@@ -894,7 +941,7 @@ mod tests {
     fn a_duplicate_in_the_probe_list_cannot_yield_two_outcomes() {
         let ep = "https://a.example/sparql";
         let rows = vec![measured(ep, "availability", Verdict::Absent, Some(5))];
-        let outcomes = outcomes_from(&rows, &[], &[ep.to_string(), ep.to_string()]);
+        let outcomes = outcomes_from(&rows, &[], &[], &[ep.to_string(), ep.to_string()]);
         assert_eq!(outcomes.len(), 1, "one url, one outcome: {outcomes:?}");
         assert_eq!(outcomes[0].cost_ms, 5, "and its cost is counted once");
     }
@@ -907,7 +954,7 @@ mod tests {
     #[test]
     fn a_row_for_an_unprobed_endpoint_does_not_invent_an_outcome() {
         let rows = vec![measured("https://stray.example/sparql", "cors", Verdict::Verified, Some(9))];
-        assert_eq!(outcomes_from(&rows, &[], &[]), Vec::new());
+        assert_eq!(outcomes_from(&rows, &[], &[], &[]), Vec::new());
     }
 
     /// The default ceiling is the whole safety property of the cost class:
