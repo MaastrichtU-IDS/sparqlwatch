@@ -296,9 +296,11 @@ def test_the_generated_rules_read_the_fill_token(client):
     """
     body = client.get(app_module.STYLESHEET_PATH).text
     assert "var(--fill)" in body
-    assert "rgba(255, 255, 255, 0.16)" not in body, (
-        "a hard-coded white fill in the generated rules would be invisible "
-        "on the light surface"
+    assert "background: rgba(" not in body, (
+        "a hard-coded fill in the generated rules cannot follow the surface; "
+        "the fill must come from var(--fill). Note this asserts on the "
+        "generated declarations, not on the --fill token itself, which is "
+        "legitimately an rgba() literal in each of the two blocks."
     )
 ```
 
@@ -612,6 +614,7 @@ git commit -m "Put about and explore on the shared shell"
 
 **Files:**
 - Modify: `web/templates/index.html` (56,314 B, 382 style lines — the largest)
+- Modify: `web/templates/endpoint.html` — Step 3 removes its `{{ encoding_css | safe }}` line only; Task 8 restructures the rest
 - Modify: `web/app.py` (`_index_context`) — drop `encoding_css`, add the strip's figures
 - Modify: `web/static/site.css`
 - Modify: `web/tests/test_index.py`
@@ -926,6 +929,11 @@ def test_a_filtered_index_describes_exactly_the_endpoints_it_lists(
 
 Use the file's existing graph-parsing helper rather than a new one — read the top of `test_negotiation.py` and match it. `_service_level_subjects` returns the subjects that are not per-endpoint (the service itself, and the dormancy arm); write it in the test file.
 
+`rows_of` is defined in `test_index.py` by Task 6. **Define a local copy here**
+rather than importing across test modules — the test files in this repo each
+carry their own fixtures and helpers, and a cross-module import would couple two
+suites that are otherwise independent.
+
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `cd web && pytest tests/test_negotiation.py -k filtered_index -v`
@@ -1200,7 +1208,9 @@ def test_tokenize_splits_the_way_names_are_written(name, expected):
         ("drug", ["drug", "target"], "drugtarget drugbank", 4),
         ("dru", ["drug", "target"], "drugtarget drugbank", 3),
         ("rugt", ["drug", "target"], "drugtarget drugbank", 2),
-        ("recpetor", ["receptor"], "receptor drugbank", 1),
+        ("recpetor", ["receptor"], "receptor drugbank", 1),  # transposition
+        ("receptr", ["receptor"], "receptor drugbank", 1),  # deletion
+        ("receptorr", ["receptor"], "receptor drugbank", 1),  # insertion
         ("zzz", ["receptor"], "receptor drugbank", 0),
     ],
 )
@@ -1218,6 +1228,21 @@ def test_a_typo_finds_the_term_substring_matching_misses():
     got = rank(terms, "recpetor")
     assert [t["local"] for t in got] == ["Receptor"]
     assert got[0]["band"] == "close"
+
+
+def test_a_namespace_match_lands_in_the_close_band():
+    """`Pathway` scores on "drug" only because its prefix is drugbank.
+
+    That is a real match -- somebody searching a drugbank endpoint for "drug"
+    means the namespace -- but it is not what they asked for, so it sits under
+    `close matches` rather than beside the terms that matched both words.
+    """
+    terms = [
+        {"local": "DrugTarget", "prefix": "drugbank", "iri": "", "tokens": "drug target"},
+        {"local": "Pathway", "prefix": "drugbank", "iri": "", "tokens": "pathway"},
+    ]
+    got = rank(terms, "drug target")
+    assert [t["band"] for t in got] == ["match", "close"]
 
 
 def test_two_words_in_the_wrong_order_still_match():
@@ -1277,7 +1302,7 @@ Create `web/tests/fixtures/vocab_match_cases.json`:
       {"local": "Target", "prefix": "drugbank", "iri": "x:Target", "tokens": "target"},
       {"local": "Pathway", "prefix": "drugbank", "iri": "x:Pathway", "tokens": "pathway"}
     ],
-    "expected": ["DrugTarget", "targetOfDrug", "Target"]
+    "expected": ["DrugTarget", "targetOfDrug", "Target", "Pathway"]
   },
   {
     "query": "",
@@ -1338,7 +1363,13 @@ def tokenize(name: str) -> list[str]:
 
 
 def _within_one_edit(a: str, b: str) -> bool:
-    """Levenshtein distance <= 1, decided without building a matrix."""
+    """Damerau-Levenshtein distance <= 1, decided without building a matrix.
+
+    Transposition counts as ONE edit, and that is not a refinement -- it is the
+    case this tier exists for. `recpetor` for `receptor` is two adjacent letters
+    swapped, which plain Levenshtein scores as 2, so a distance-1 Levenshtein
+    test rejects the very example this feature was specified around.
+    """
     if a == b:
         return True
     la, lb = len(a), len(b)
@@ -1346,20 +1377,22 @@ def _within_one_edit(a: str, b: str) -> bool:
         return False
     if la > lb:
         a, b, la, lb = b, a, lb, la
-    i = j = 0
-    edited = False
-    while i < la and j < lb:
-        if a[i] != b[j]:
-            if edited:
-                return False
-            edited = True
-            if la == lb:
-                i += 1
-            j += 1
-            continue
-        i += 1
-        j += 1
-    return True
+    # Find the first and last positions where they differ.
+    head = 0
+    while head < la and a[head] == b[head]:
+        head += 1
+    tail = 0
+    while tail < la - head and a[la - 1 - tail] == b[lb - 1 - tail]:
+        tail += 1
+
+    if la == lb:
+        middle = la - head - tail
+        if middle <= 1:
+            return True  # one substitution, or none
+        # One adjacent transposition: exactly two differing characters, swapped.
+        return middle == 2 and a[head] == b[head + 1] and a[head + 1] == b[head]
+    # One insertion or deletion: the differing run is a single character.
+    return la - head - tail == 0
 
 
 def score_word(word: str, tokens: list[str], haystack: str) -> int:

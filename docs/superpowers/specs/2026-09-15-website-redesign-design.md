@@ -347,12 +347,18 @@ no endpoint is contacted.
 | 4 | a token equals the word |
 | 3 | a token starts with the word |
 | 2 | the word occurs anywhere in `data-hay` |
-| 1 | a token is within Levenshtein distance 1 of the word, and the word is ≥ 4 characters |
+| 1 | a token is within Damerau-Levenshtein distance 1 of the word (one substitution, insertion, deletion, **or adjacent transposition**), and the word is ≥ 4 characters |
 | 0 | none of the above |
 
 The distance-1 test is a bounded early-exit check, not a full matrix. The ≥ 4
 floor exists because at three characters edit-distance-1 matches almost
 everything.
+
+**Transposition is why this is Damerau and not plain Levenshtein. [R3]**
+`recpetor` for `receptor` is two adjacent letters swapped, which plain
+Levenshtein scores as 2 -- so a distance-1 Levenshtein test rejects the headline
+example this tier was specified around. Caught in the plan's pre-flight scan,
+before any code was written.
 
 **Bands.** A term is a **match** if every word scores ≥ 2. Otherwise it is a
 **close match** if at least half its words score ≥ 1. Otherwise it is hidden.
