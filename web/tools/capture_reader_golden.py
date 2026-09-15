@@ -50,6 +50,9 @@ STORES: dict[str, tuple[Path, ...]] = {
     "store_zero_classes": (conftest.RUN_ZERO_CLASSES,),
     "store_properties_sample": (conftest.RUN_PROPERTIES_SAMPLE,),
     "store_content_profiles": (conftest.RUN_CONTENT_PROFILES,),
+    # Added 2026-09-15 with the derived VoID: the same run with every
+    # profile sampled, which is the only difference between the two.
+    "store_sampled_profile": (conftest.RUN_SAMPLED_PROFILE,),
     # Added 2026-09-03 with the per-metric sample pointer. The first two are the
     # cases the old shape could not express, so the golden should hold what the
     # readers say about them.

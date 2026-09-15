@@ -1,0 +1,87 @@
+# One endpoint's content, shaped for a derived VoID description.
+#
+# WHAT THIS IS A DESCRIPTION OF, and the distinction is the whole reason the
+# caller emits our own terms beside VoID's. The rows below are what a sampled
+# profile pass OBSERVED, in one run, of one endpoint. They are not the
+# endpoint's own account of itself: nine of the nine endpoints in
+# registry/kg-catalog.toml publish no readable service description at all,
+# which is why deriving one is worth doing and why publishing it as though
+# they had written it would be a lie.
+#
+# FOUR FLAT ARMS, EACH REPEATING THE POINTER. The same shape, and the same
+# reason, as explore_vocabulary.rq: written with the pointer once and a nested
+# UNION under it, that query took 18.63 s against an 85,810-quad store to
+# return rows every arm of it could produce in hundredths of a second, because
+# the planner does not push `?run` into the arms.
+#
+# `?endpoint` is substituted by the caller.
+
+PREFIX sw: <urn:sparqlwatch:>
+PREFIX dqv: <http://www.w3.org/ns/dqv#>
+PREFIX prov: <http://www.w3.org/ns/prov#>
+
+SELECT ?endpoint ?kind ?class ?sampling ?denominator ?property ?subjects ?datatypes ?run ?generatedAt ?count
+WHERE {
+  {
+    # The run this endpoint's profile came from, and when it was taken. Emitted
+    # as its own row so a document can be dated even when the pass found
+    # nothing: "we looked on this date and there was nothing" is a statement,
+    # and an undated one is not.
+    GRAPH sw:current {
+      ?ptr sw:sampleRunFor ?endpoint ;
+           sw:sampleRunMetric <urn:sparqlwatch:metric:class-profiles> ;
+           sw:sampleRunIs ?run .
+    }
+    GRAPH ?run { ?activity prov:generatedAtTime ?generatedAt }
+    BIND("run" AS ?kind)
+  }
+  UNION
+  {
+    # A class the pass profiled, with how many instances it drew from and how
+    # it drew them. `?sampling` is what decides whether the caller may state
+    # the count in VoID's own vocabulary or only in ours.
+    GRAPH sw:current {
+      ?ptr sw:sampleRunFor ?endpoint ;
+           sw:sampleRunMetric <urn:sparqlwatch:metric:class-profiles> ;
+           sw:sampleRunIs ?run .
+    }
+    GRAPH ?run {
+      ?profile sw:profiledFrom ?endpoint ;
+               sw:profiledClass ?class ;
+               sw:profileSampling ?sampling ;
+               sw:profileDenominator ?denominator .
+    }
+    BIND("class" AS ?kind)
+  }
+  UNION
+  {
+    # A property those instances carried, and how many of them carried it.
+    GRAPH sw:current {
+      ?ptr sw:sampleRunFor ?endpoint ;
+           sw:sampleRunMetric <urn:sparqlwatch:metric:class-profiles> ;
+           sw:sampleRunIs ?run .
+    }
+    GRAPH ?run {
+      ?profile sw:profiledFrom ?endpoint ;
+               sw:profiledClass ?class ;
+               sw:profileSampling ?sampling ;
+               sw:profileProperty ?row .
+      ?row sw:property ?property ;
+           sw:subjectCount ?subjects ;
+           sw:datatypeCount ?datatypes .
+    }
+    BIND("property" AS ?kind)
+  }
+  UNION
+  {
+    # The whole-endpoint counts, which are population figures rather than
+    # sample ones: a `Counted` metric asks the endpoint for a total.
+    GRAPH sw:current {
+      ?m dqv:computedOn ?endpoint ;
+         dqv:isMeasurementOf ?metric ;
+         sw:observedCount ?count .
+    }
+    BIND(STR(?metric) AS ?class)
+    BIND("count" AS ?kind)
+  }
+}

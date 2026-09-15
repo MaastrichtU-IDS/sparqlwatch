@@ -9247,6 +9247,181 @@
       }
     }
   },
+  "store_sampled_profile": {
+    "http://127.0.0.1:9200/sparql": {
+      "content": {
+        "classes": [
+          "https://synthetic.sparqlwatch.test/Dataset",
+          "https://synthetic.sparqlwatch.test/Measurement",
+          "https://synthetic.sparqlwatch.test/Organisation",
+          "https://synthetic.sparqlwatch.test/Person",
+          "https://synthetic.sparqlwatch.test/Record"
+        ],
+        "endpoint": "http://127.0.0.1:9200/sparql",
+        "generated_at": "2026-09-06T14:00:00Z",
+        "metric": "urn:sparqlwatch:metric:class-profiles",
+        "run": "urn:sparqlwatch:run:2026-09-06T14:00:00Z",
+        "sampled": true,
+        "size": 5,
+        "truncated": false
+      },
+      "description": [
+        "<urn:sparqlwatch:activity:2026-09-06T14:00:00Z> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/prov#Activity> .",
+        "<urn:sparqlwatch:activity:2026-09-06T14:00:00Z> <http://www.w3.org/ns/prov#generatedAtTime> \"2026-09-06T14:00:00Z\"^^<http://www.w3.org/2001/XMLSchema#dateTime> .",
+        "<urn:sparqlwatch:activity:2026-09-06T14:00:00Z> <urn:sparqlwatch:completedEndpoint> <http://127.0.0.1:9200/sparql> .",
+        "<urn:sparqlwatch:activity:2026-09-06T14:00:00Z> <urn:sparqlwatch:emission> \"incremental\" .",
+        "<urn:sparqlwatch:activity:2026-09-06T14:00:00Z> <urn:sparqlwatch:finalised> \"true\"^^<http://www.w3.org/2001/XMLSchema#boolean> .",
+        "<urn:sparqlwatch:content-sample:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:class-profiles> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-09-06T14:00:00Z> .",
+        "<urn:sparqlwatch:content-sample:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:class-profiles> <urn:sparqlwatch:sampleSize> \"5\"^^<http://www.w3.org/2001/XMLSchema#integer> .",
+        "<urn:sparqlwatch:content-sample:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:class-profiles> <urn:sparqlwatch:sampleTruncated> \"false\"^^<http://www.w3.org/2001/XMLSchema#boolean> .",
+        "<urn:sparqlwatch:content-sample:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:class-profiles> <urn:sparqlwatch:sampledBy> <urn:sparqlwatch:metric:class-profiles> .",
+        "<urn:sparqlwatch:content-sample:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:class-profiles> <urn:sparqlwatch:sampledFrom> <http://127.0.0.1:9200/sparql> .",
+        "<urn:sparqlwatch:content-sample:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:class-profiles> <urn:sparqlwatch:sampledValue> <https://synthetic.sparqlwatch.test/Dataset> .",
+        "<urn:sparqlwatch:content-sample:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:class-profiles> <urn:sparqlwatch:sampledValue> <https://synthetic.sparqlwatch.test/Measurement> .",
+        "<urn:sparqlwatch:content-sample:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:class-profiles> <urn:sparqlwatch:sampledValue> <https://synthetic.sparqlwatch.test/Organisation> .",
+        "<urn:sparqlwatch:content-sample:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:class-profiles> <urn:sparqlwatch:sampledValue> <https://synthetic.sparqlwatch.test/Person> .",
+        "<urn:sparqlwatch:content-sample:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:class-profiles> <urn:sparqlwatch:sampledValue> <https://synthetic.sparqlwatch.test/Record> .",
+        "<urn:sparqlwatch:measurement:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:availability> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .",
+        "<urn:sparqlwatch:measurement:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:availability> <http://www.w3.org/ns/dqv#computedOn> <http://127.0.0.1:9200/sparql> .",
+        "<urn:sparqlwatch:measurement:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:availability> <http://www.w3.org/ns/dqv#isMeasurementOf> <urn:sparqlwatch:metric:availability> .",
+        "<urn:sparqlwatch:measurement:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:availability> <http://www.w3.org/ns/dqv#value> \"verified\" .",
+        "<urn:sparqlwatch:measurement:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:availability> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-09-06T14:00:00Z> .",
+        "<urn:sparqlwatch:measurement:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:availability> <urn:sparqlwatch:elapsedMs> \"1\"^^<http://www.w3.org/2001/XMLSchema#integer> .",
+        "<urn:sparqlwatch:measurement:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:cors-preflight> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .",
+        "<urn:sparqlwatch:measurement:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:cors-preflight> <http://www.w3.org/ns/dqv#computedOn> <http://127.0.0.1:9200/sparql> .",
+        "<urn:sparqlwatch:measurement:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:cors-preflight> <http://www.w3.org/ns/dqv#isMeasurementOf> <urn:sparqlwatch:metric:cors-preflight> .",
+        "<urn:sparqlwatch:measurement:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:cors-preflight> <http://www.w3.org/ns/dqv#value> \"verified\" .",
+        "<urn:sparqlwatch:measurement:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:cors-preflight> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-09-06T14:00:00Z> .",
+        "<urn:sparqlwatch:measurement:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:cors-preflight> <urn:sparqlwatch:elapsedMs> \"0\"^^<http://www.w3.org/2001/XMLSchema#integer> .",
+        "<urn:sparqlwatch:measurement:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:cors> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .",
+        "<urn:sparqlwatch:measurement:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:cors> <http://www.w3.org/ns/dqv#computedOn> <http://127.0.0.1:9200/sparql> .",
+        "<urn:sparqlwatch:measurement:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:cors> <http://www.w3.org/ns/dqv#isMeasurementOf> <urn:sparqlwatch:metric:cors> .",
+        "<urn:sparqlwatch:measurement:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:cors> <http://www.w3.org/ns/dqv#value> \"verified\" .",
+        "<urn:sparqlwatch:measurement:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:cors> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-09-06T14:00:00Z> .",
+        "<urn:sparqlwatch:measurement:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:cors> <urn:sparqlwatch:elapsedMs> \"0\"^^<http://www.w3.org/2001/XMLSchema#integer> .",
+        "<urn:sparqlwatch:measurement:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:geo-data> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .",
+        "<urn:sparqlwatch:measurement:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:geo-data> <http://www.w3.org/ns/dqv#computedOn> <http://127.0.0.1:9200/sparql> .",
+        "<urn:sparqlwatch:measurement:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:geo-data> <http://www.w3.org/ns/dqv#isMeasurementOf> <urn:sparqlwatch:metric:geo-data> .",
+        "<urn:sparqlwatch:measurement:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:geo-data> <http://www.w3.org/ns/dqv#value> \"absent\" .",
+        "<urn:sparqlwatch:measurement:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:geo-data> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-09-06T14:00:00Z> .",
+        "<urn:sparqlwatch:measurement:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:geo-data> <urn:sparqlwatch:elapsedMs> \"15\"^^<http://www.w3.org/2001/XMLSchema#integer> .",
+        "<urn:sparqlwatch:measurement:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:geo-functions> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .",
+        "<urn:sparqlwatch:measurement:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:geo-functions> <http://www.w3.org/ns/dqv#computedOn> <http://127.0.0.1:9200/sparql> .",
+        "<urn:sparqlwatch:measurement:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:geo-functions> <http://www.w3.org/ns/dqv#isMeasurementOf> <urn:sparqlwatch:metric:geo-functions> .",
+        "<urn:sparqlwatch:measurement:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:geo-functions> <http://www.w3.org/ns/dqv#value> \"undeclared-but-verified\" .",
+        "<urn:sparqlwatch:measurement:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:geo-functions> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-09-06T14:00:00Z> .",
+        "<urn:sparqlwatch:measurement:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:geo-functions> <urn:sparqlwatch:elapsedMs> \"1\"^^<http://www.w3.org/2001/XMLSchema#integer> .",
+        "<urn:sparqlwatch:measurement:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:service-description> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dqv#QualityMeasurement> .",
+        "<urn:sparqlwatch:measurement:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:service-description> <http://www.w3.org/ns/dqv#computedOn> <http://127.0.0.1:9200/sparql> .",
+        "<urn:sparqlwatch:measurement:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:service-description> <http://www.w3.org/ns/dqv#isMeasurementOf> <urn:sparqlwatch:metric:service-description> .",
+        "<urn:sparqlwatch:measurement:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:service-description> <http://www.w3.org/ns/dqv#value> \"verified\" .",
+        "<urn:sparqlwatch:measurement:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:service-description> <http://www.w3.org/ns/prov#wasGeneratedBy> <urn:sparqlwatch:activity:2026-09-06T14:00:00Z> .",
+        "<urn:sparqlwatch:measurement:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:service-description> <urn:sparqlwatch:elapsedMs> \"0\"^^<http://www.w3.org/2001/XMLSchema#integer> .",
+        "<urn:sparqlwatch:measurement:2026-09-06T14:00:00Z:http%3A%2F%2F127.0.0.1%3A9200%2Fsparql:service-description> <urn:sparqlwatch:level> \"4\"^^<http://www.w3.org/2001/XMLSchema#integer> ."
+      ],
+      "measurements": {
+        "assessed": true,
+        "declined": [],
+        "emission": "incremental",
+        "endpoint": "http://127.0.0.1:9200/sparql",
+        "finalised": true,
+        "generated_at": "2026-09-06T14:00:00Z",
+        "newest_completed_this_endpoint": true,
+        "newest_declared_this_endpoint_dormant": false,
+        "newest_dormancy_reason": null,
+        "newest_emission": "incremental",
+        "newest_finalised": true,
+        "newest_generated_at": "2026-09-06T14:00:00Z",
+        "newest_run": "urn:sparqlwatch:run:2026-09-06T14:00:00Z",
+        "run": "urn:sparqlwatch:run:2026-09-06T14:00:00Z",
+        "verdicts": [
+          {
+            "declared_count": null,
+            "elapsed_ms": 1,
+            "level": null,
+            "metric": "urn:sparqlwatch:metric:availability",
+            "observed_count": null,
+            "verdict": "verified"
+          },
+          {
+            "declared_count": null,
+            "elapsed_ms": 0,
+            "level": null,
+            "metric": "urn:sparqlwatch:metric:cors",
+            "observed_count": null,
+            "verdict": "verified"
+          },
+          {
+            "declared_count": null,
+            "elapsed_ms": 0,
+            "level": null,
+            "metric": "urn:sparqlwatch:metric:cors-preflight",
+            "observed_count": null,
+            "verdict": "verified"
+          },
+          {
+            "declared_count": null,
+            "elapsed_ms": 15,
+            "level": null,
+            "metric": "urn:sparqlwatch:metric:geo-data",
+            "observed_count": null,
+            "verdict": "absent"
+          },
+          {
+            "declared_count": null,
+            "elapsed_ms": 1,
+            "level": null,
+            "metric": "urn:sparqlwatch:metric:geo-functions",
+            "observed_count": null,
+            "verdict": "undeclared-but-verified"
+          },
+          {
+            "declared_count": null,
+            "elapsed_ms": 0,
+            "level": 4,
+            "metric": "urn:sparqlwatch:metric:service-description",
+            "observed_count": null,
+            "verdict": "verified"
+          }
+        ]
+      }
+    },
+    "https://absent.example/sparql": {
+      "content": {
+        "classes": [],
+        "endpoint": "https://absent.example/sparql",
+        "generated_at": null,
+        "metric": "urn:sparqlwatch:metric:class-profiles",
+        "run": null,
+        "sampled": false,
+        "size": null,
+        "truncated": null
+      },
+      "description": [
+        "<urn:sparqlwatch:activity:2026-09-06T14:00:00Z> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/prov#Activity> .",
+        "<urn:sparqlwatch:activity:2026-09-06T14:00:00Z> <http://www.w3.org/ns/prov#generatedAtTime> \"2026-09-06T14:00:00Z\"^^<http://www.w3.org/2001/XMLSchema#dateTime> .",
+        "<urn:sparqlwatch:activity:2026-09-06T14:00:00Z> <urn:sparqlwatch:emission> \"incremental\" .",
+        "<urn:sparqlwatch:activity:2026-09-06T14:00:00Z> <urn:sparqlwatch:finalised> \"true\"^^<http://www.w3.org/2001/XMLSchema#boolean> ."
+      ],
+      "measurements": {
+        "assessed": false,
+        "declined": [],
+        "emission": null,
+        "endpoint": "https://absent.example/sparql",
+        "finalised": false,
+        "generated_at": null,
+        "newest_completed_this_endpoint": false,
+        "newest_declared_this_endpoint_dormant": false,
+        "newest_dormancy_reason": null,
+        "newest_emission": null,
+        "newest_finalised": false,
+        "newest_generated_at": null,
+        "newest_run": null,
+        "run": null,
+        "verdicts": []
+      }
+    }
+  },
   "store_stale_sample": {
     "https://absent.example/sparql": {
       "content": {

@@ -68,6 +68,7 @@ from pyoxigraph import (
 import verdict_encoding
 from endpoint_content import CLASS_SAMPLING_METRICS, EndpointContent, endpoint_content
 from explore_payload import build_payload, endpoint_vocabulary
+from void_document import void_triples
 from endpoint_index import endpoint_index
 from endpoint_history import EndpointHistory, endpoint_history
 from fleet import FleetHistory, fleet_history, fleet_stats
@@ -126,6 +127,13 @@ DOCS_STATES_PATH = "/docs/states"
 # server log, before this route exists. Renaming it would break the one
 # promise this project has made to every host it has contacted.
 EXPLORE_PATH = "/explore"
+# The derived description. Its OWN path rather than another representation of
+# /endpoint, because the two are different documents about the same thing:
+# /endpoint publishes what we MEASURED (verdicts, timings, declines) and this
+# publishes what we OBSERVED OF ITS CONTENT, shaped as VoID. A tool that wants
+# a description to autocomplete against needs a url it can point at and quote,
+# and "the RDF you get from /endpoint if you ask for turtle" is not one.
+VOID_PATH = "/void"
 
 ABOUT_PATH = "/about"
 
@@ -662,6 +670,16 @@ _DECLINE_DETAILS = {
     # covers a host that answers too slowly as well as one that does not answer
     # at all. And a host that answered with HTML or a 500 was probed in full,
     # so this never appears for an endpoint that merely refused the query.
+    # The fifth, and the only one that is about cost rather than about failure
+    # of any kind. The pass is up to 200 queries; when the endpoint's triple and
+    # class counts are where they were, repeating it re-derives what the store
+    # already holds. What is shown for that endpoint's vocabulary is the
+    # previous pass's, which is why the decline is published rather than the
+    # row silently left out.
+    "unchanged": (
+        "its content has not moved since we last looked, so we did not look "
+        "again"
+    ),
     "liveness-failed": (
         "the endpoint did not answer a trivial query, so the rest of the "
         "checks were never sent"
@@ -3277,6 +3295,64 @@ def favicon_ico() -> Response:
     """
     return Response(
         content=_ICON, media_type=_SVG, headers={"Cache-Control": _ICON_CACHE}
+    )
+
+
+@app.get(VOID_PATH)
+def void_resource(
+    request: Request,
+    url: str | None = None,
+    store: Store = Depends(get_store),
+) -> Response:
+    """A VoID description of one endpoint, derived from what we observed.
+
+    RDF ONLY, and deliberately no HTML. This resource exists for a tool: a
+    query editor that needs class and property partitions to autocomplete
+    against, or a consumer choosing an endpoint to build on. A person who wants
+    to read what is in an endpoint has the endpoint page and the explorer, both
+    of which say it in words. Offering HTML here would mean maintaining a third
+    rendering of the same facts.
+
+    404 WHEN WE HAVE NOT PROFILED IT, rather than an empty description. A
+    document that says only "this is a description of X" asserts that X was
+    profiled and found to hold nothing, which is a claim about the endpoint
+    rather than about us. The 404 says the true thing: there is no such
+    description here.
+    """
+    if not url:
+        return Response(
+            content="this resource describes one endpoint; name it with ?url=\n",
+            status_code=400,
+            media_type="text/plain; charset=utf-8",
+        )
+    media_type = choose_representation(request.headers.get("accept"))
+    if media_type is None or media_type == HTML_MEDIA_TYPE:
+        # An Accept of text/html reaches here as HTML_MEDIA_TYPE and is refused
+        # with the rest: 406 naming what is on offer, rather than a redirect to
+        # a page that answers a different question.
+        return Response(
+            content=(
+                "this resource is RDF only; it offers "
+                + ", ".join(RDF_MEDIA_TYPES)
+                + "\n"
+            ),
+            status_code=406,
+            media_type="text/plain; charset=utf-8",
+        )
+    document = str(request.url)
+    triples = void_triples(store, url, document)
+    if not triples:
+        return Response(
+            content=(
+                "no content profile for that endpoint in this store, so there "
+                "is nothing to describe\n"
+            ),
+            status_code=404,
+            media_type="text/plain; charset=utf-8",
+        )
+    return Response(
+        content=serialize(triples, format=RdfFormat.from_media_type(media_type)),
+        media_type=media_type,
     )
 
 

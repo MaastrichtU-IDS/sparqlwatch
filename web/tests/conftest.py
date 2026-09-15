@@ -49,6 +49,7 @@ RUN_TWO_SWEEPS = FIXTURES / "run-two-sweeps.nq"
 RUN_ZERO_CLASSES = FIXTURES / "run-zero-classes.nq"
 RUN_PROPERTIES_SAMPLE = FIXTURES / "run-properties-sample.nq"
 RUN_CONTENT_PROFILES = FIXTURES / "run-content-profiles.nq"
+RUN_SAMPLED_PROFILE = FIXTURES / "run-sampled-profile.nq"
 RUN_TWO_METRICS_SAMPLED = FIXTURES / "run-two-metrics-sampled.nq"
 RUN_PROPERTIES_LATER = FIXTURES / "run-properties-later.nq"
 RUN_DECLINED = FIXTURES / "run-declined.nq"
@@ -211,6 +212,17 @@ def store_content_profiles(tmp_path):
     it is shaped to show.
     """
     return _loaded_store(tmp_path, "store-content-profiles", RUN_CONTENT_PROFILES)
+
+
+@pytest.fixture
+def store_sampled_profile(tmp_path):
+    """The same sweep, with every profile drawn from a sample.
+
+    Byte-identical to `store_content_profiles`'s run but for the sampling and
+    the instant, so a test that behaves differently against the two has found
+    the sampling and nothing else.
+    """
+    return _loaded_store(tmp_path, "store-sampled-profile", RUN_SAMPLED_PROFILE)
 
 
 @pytest.fixture
