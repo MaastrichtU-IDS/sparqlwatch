@@ -2425,6 +2425,39 @@ def test_the_index_leads_with_the_fleet_in_four_figures(client_for, store):
     )
 
 
+def test_the_strips_figures_are_coloured_by_data_figure_not_by_a_borrowed_verdict_class(
+    client_for, store
+):
+    """The two counted figures must actually be coloured, and not by
+    reusing the verdict encoding's enc-text- classes.
+
+    They were coloured with `enc-text-verified` / `enc-text-declared-but-wrong`
+    until this fix: `.strip .n`'s specificity (0,2,0) beats an enc-text- class's
+    (0,1,0), so both classes were dead weight and both figures rendered in
+    --text-bright regardless of value. A CSS-string assertion would not have
+    caught that -- the bug was in the cascade, not in whether a rule existed --
+    so this reads the markup two ways: the spans must not carry an enc-text-
+    class at all (that is the regression that reintroduces the conflict, and
+    it is also the wrong axis: enc-text- names a per-metric VERDICT and this
+    strip states fleet-wide LIVENESS), and the page must declare the
+    data-figure-scoped rules that do win.
+    """
+    body = client_for(store).get("/", headers={"accept": "text/html"}).text
+    figures = {
+        attrs["data-figure"]: attrs.get("class", "")
+        for attrs in with_attribute(body, "data-figure")
+    }
+    for name in ("answering", "not-answering"):
+        classes = figures[name].split()
+        assert not any(c.startswith("enc-text-") for c in classes), (
+            f"{name} still borrows a verdict class: {classes}"
+        )
+    assert '.strip .n[data-figure="answering"] { color: var(--good); }' in body
+    assert (
+        '.strip .n[data-figure="not-answering"] { color: var(--crit); }' in body
+    )
+
+
 def test_the_index_declares_no_tokens_and_no_inline_verdict_css(client_for, store):
     body = client_for(store).get("/", headers={"accept": "text/html"}).text
     assert "--accent:" not in body

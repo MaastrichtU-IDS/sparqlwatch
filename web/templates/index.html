@@ -20,16 +20,27 @@
      shape of the fleet before it asks a reader to scroll 543 rows to count
      it themselves. Same shape as the change grid's .stats below (a number
      over a label), larger because this is the first thing a reader meets
-     rather than something found on the way to a chart. The two counted
-     figures carry the verdict encoding's own colour via the generated
-     enc-text- classes, so they cannot describe the fleet in a colour the
-     legend below does not also use. */
+     rather than something found on the way to a chart. */
   .strip { display: flex; flex-wrap: wrap; gap: 8px 32px; margin: 4px 0 22px; }
   .strip .stat { display: flex; flex-direction: column; gap: 2px; }
   .strip .n { font-family: var(--mono); font-size: 26px; color: var(--text-bright);
               font-variant-numeric: tabular-nums; line-height: 1.1; }
   .strip .k { font-size: 11.5px; color: var(--text-dim); text-transform: uppercase;
               letter-spacing: 0.04em; }
+  /* The two counted figures are coloured by hand, NOT by the verdict
+     encoding's enc-text- classes: those name a per-metric VERDICT state
+     ("confirmed and declared", "a declared claim found wrong"), and what
+     this strip reports is fleet-wide LIVENESS -- did the endpoint answer
+     this sweep at all, an entirely different axis. Borrowing enc-text-
+     also failed outright: .strip .n's (0,2,0) beat enc-text-*'s (0,1,0) in
+     the cascade, so both figures rendered as --text-bright (black) and the
+     colour was a no-op nobody's test caught. Selecting on data-figure
+     keeps the specificity unambiguous. Do not swap these back to
+     enc-text-verified / enc-text-declared-but-wrong: it looks like the
+     more "correct" encoding and is the same bug again, the second time
+     with a state that does not even mean the right thing. */
+  .strip .n[data-figure="answering"] { color: var(--good); }
+  .strip .n[data-figure="not-answering"] { color: var(--crit); }
   /* The filter. It is one input and one line of text, and the page does not
      depend on the script that drives it: with JavaScript off every row is
      still here and only the filtering is missing. */
@@ -355,9 +366,9 @@
   <div class="strip">
     <div class="stat"><span class="n" data-figure="total">{{ summary.total }}</span>
       <span class="k">endpoints</span></div>
-    <div class="stat"><span class="n enc-text-verified" data-figure="answering">{{ summary.answering }}</span>
+    <div class="stat"><span class="n" data-figure="answering">{{ summary.answering }}</span>
       <span class="k">answering</span></div>
-    <div class="stat"><span class="n enc-text-declared-but-wrong" data-figure="not-answering">{{ summary.not_answering }}</span>
+    <div class="stat"><span class="n" data-figure="not-answering">{{ summary.not_answering }}</span>
       <span class="k">not answering</span></div>
     <div class="stat"><span class="n" data-figure="freshness">{% if summary.last_sweep %}{{ summary.last_sweep[:10] }}{% else %}&mdash;{% endif %}</span>
       <span class="k">last sweep</span></div>
