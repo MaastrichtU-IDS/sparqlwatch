@@ -35,11 +35,48 @@
 //! effect at the next sweep; `without_excluded` documents that and the rest of
 //! the limits `/about` has to state, and `read_exclusions` documents the path.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+
+/// One entry as the file may spell it.
+///
+/// Untagged rather than a struct with optional fields, because the four
+/// registry files do not agree and are not written by the same hand:
+/// `endpoints.toml` and `endpoints.container.toml` are hand-kept lists of bare
+/// strings, and `seed-registry` writes tables. A struct would reject every bare
+/// string and fail the next sweep on a file nobody edited.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum Entry {
+    Url(String),
+    Described(RegistryEntry),
+}
+
+/// An entry with whatever the catalogue said about it.
+///
+/// `title` is ABSENT, not empty, for an endpoint that serves many datasets:
+/// `datasets` carries the count instead, and the site shows the host. Picking
+/// one of forty-two titles would assert something untrue about the server.
+///
+/// `Serialize` is here, not added in the task that first calls it, because a
+/// struct and the derive that writes it belong together: `seed-registry`
+/// serialises this shape with `toml::to_string_pretty`, and
+/// `skip_serializing_if` on each optional field is what keeps an endpoint with
+/// no domain from writing an empty `domain = ""` line into a file of hundreds
+/// of entries.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RegistryEntry {
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub datasets: Option<u32>,
+}
 
 #[derive(Deserialize)]
 struct EndpointFile {
-    endpoint: Vec<String>,
+    endpoint: Vec<Entry>,
 }
 
 /// Parse `endpoints.toml` and return its endpoint list, each entry once, with
@@ -59,7 +96,18 @@ struct EndpointFile {
 /// a line in `endpoints.toml` whenever a duplicate came before it.
 pub fn load_endpoints(toml_text: &str, excluded: &[Exclusion]) -> anyhow::Result<Vec<String>> {
     let file: EndpointFile = toml::from_str(toml_text)?;
-    let deduped = dedupe(&file.endpoint);
+    // The sweep path wants URLs and nothing else, so the extra fields stop
+    // here. Every rule below this line judges the string, and none of them
+    // has an opinion about a title.
+    let urls: Vec<String> = file
+        .endpoint
+        .into_iter()
+        .map(|e| match e {
+            Entry::Url(u) => u,
+            Entry::Described(d) => d.url,
+        })
+        .collect();
+    let deduped = dedupe(&urls);
     let named = without_credentials(&deduped);
     // Before the two rules that judge the string itself, so an excluded host
     // is reported as excluded rather than as a documentation name or a bad
@@ -69,6 +117,25 @@ pub fn load_endpoints(toml_text: &str, excluded: &[Exclusion]) -> anyhow::Result
     let wanted = without_excluded(&named, excluded);
     let unreserved = without_reserved_names(&wanted);
     Ok(without_unpublishable_iris(&unreserved))
+}
+
+/// Every entry with what the catalogue said about it, unfiltered.
+///
+/// Deliberately not `load_endpoints`: that function applies the sweep's
+/// policy -- dedupe, credentials, exclusions, reserved names -- and the site
+/// needs a lookup table, not a sweep list. An endpoint the sweep refuses can
+/// still appear in a stored run from before the refusal, and its row should
+/// still find a name.
+pub fn load_registry(toml_text: &str) -> anyhow::Result<Vec<RegistryEntry>> {
+    let file: EndpointFile = toml::from_str(toml_text)?;
+    Ok(file
+        .endpoint
+        .into_iter()
+        .map(|e| match e {
+            Entry::Url(url) => RegistryEntry { url, title: None, domain: None, datasets: None },
+            Entry::Described(d) => d,
+        })
+        .collect())
 }
 
 /// `endpoints` with every entry naming the local machine or a private network
@@ -1404,5 +1471,65 @@ mod tests {
                 entry.host
             );
         }
+    }
+
+    // These three tests, and only these three, use single-label hosts rather
+    // than `example.org`/`a.example`: that TLD and second-level domain are
+    // exactly what `without_reserved_names` refuses, per the placeholder-host
+    // note above, and these tests are about the shape of the file parsing,
+    // not about that filter. `load_registry_keeps_what_load_endpoints_drops`
+    // below does not go through `load_endpoints`'s filters at all, so it keeps
+    // `example.org` to look like a real catalogue entry.
+
+    #[test]
+    fn a_bare_string_list_still_loads() {
+        // endpoints.toml and endpoints.container.toml are hand-written in this
+        // shape and are not regenerated. A reader that only understood the new
+        // shape would fail the next sweep on a file nobody touched.
+        let text = r#"endpoint = ["https://b/sparql"]"#;
+        let got = load_endpoints(text, &[]).expect("the bare form must still parse");
+        assert_eq!(got, vec!["https://b/sparql".to_string()]);
+    }
+
+    #[test]
+    fn a_table_list_loads_and_yields_its_urls() {
+        let text = r#"
+[[endpoint]]
+url = "https://b/sparql"
+title = "Example"
+domain = "government"
+"#;
+        let got = load_endpoints(text, &[]).expect("the table form must parse");
+        assert_eq!(got, vec!["https://b/sparql".to_string()]);
+    }
+
+    #[test]
+    fn the_two_shapes_may_be_mixed_in_one_file() {
+        // Not a shape we write, but a shape a half-finished hand edit produces,
+        // and refusing it with a serde error names neither line.
+        let text = r#"
+endpoint = ["https://a/sparql", { url = "https://b/sparql", title = "B" }]
+"#;
+        let got = load_endpoints(text, &[]).expect("a mixed list must parse");
+        assert_eq!(got.len(), 2);
+    }
+
+    #[test]
+    fn load_registry_keeps_what_load_endpoints_drops() {
+        let text = r#"
+[[endpoint]]
+url = "https://example.org/sparql"
+title = "Example"
+domain = "government"
+
+[[endpoint]]
+url = "https://many.example/sparql"
+datasets = 42
+"#;
+        let got = load_registry(text).expect("the registry form must parse");
+        assert_eq!(got[0].title.as_deref(), Some("Example"));
+        assert_eq!(got[0].domain.as_deref(), Some("government"));
+        assert_eq!(got[1].title, None);
+        assert_eq!(got[1].datasets, Some(42));
     }
 }
