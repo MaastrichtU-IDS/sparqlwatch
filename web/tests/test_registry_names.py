@@ -78,6 +78,37 @@ def test_a_missing_registry_file_is_not_fatal(tmp_path):
     assert load_names([tmp_path / "nope.toml"]) == {}
 
 
+def test_a_file_with_invalid_utf8_contributes_nothing(tmp_path):
+    """The site must serve before anything is seeded, even with bad encoding."""
+    p = tmp_path / "broken.toml"
+    p.write_bytes(b'endpoint = ["https://example.org/sparql"]\n\xff\xfe')
+    got = load_names([p])
+    assert got == {}
+
+
+def test_a_file_with_wrong_shaped_entries_contributes_nothing(tmp_path):
+    """An endpoint array holding non-string, non-table values is skipped."""
+    p = tmp_path / "malformed.toml"
+    p.write_text('endpoint = [1, 2, 3]\n')
+    got = load_names([p])
+    assert got == {}
+
+
+def test_a_bad_first_file_does_not_prevent_loading_the_second(tmp_path):
+    """One corrupted file must not cost you the good one.
+
+    This is the property the fix is really for: a bad file must not prevent
+    remaining paths from loading.
+    """
+    bad = tmp_path / "bad.toml"
+    bad.write_bytes(b'endpoint = ["https://example.org/sparql"]\n\xff\xfe')
+    good = tmp_path / "good.toml"
+    good.write_text('endpoint = ["https://good.example/sparql"]\n')
+    got = load_names([bad, good])
+    assert "https://good.example/sparql" in got
+    assert got["https://good.example/sparql"].host == "good.example"
+
+
 def test_the_real_registries_parse():
     """Against the files actually shipped, not a fixture."""
     here = Path(__file__).resolve().parents[2] / "prober" / "registry"

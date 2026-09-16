@@ -38,9 +38,12 @@ def _host(url: str) -> str:
 def load_names(paths: list[Path]) -> dict[str, Name]:
     """Every endpoint any of these files names, keyed by its URL.
 
-    A file that does not exist contributes nothing rather than raising: the
-    site must serve before anyone has seeded a registry, and it already
-    tolerates a store with no runs in it.
+    A file that does not exist, is unreadable, has invalid encoding, is
+    malformed TOML, or contains wrong-shaped entries contributes nothing
+    rather than raising. The site must serve before anyone has seeded a
+    registry, and a corrupted file must not prevent loading the remaining
+    paths. One malformed file erasing good data would be precisely the
+    failure that this tolerance exists to prevent.
 
     Where two files name one endpoint, the entry carrying a title wins,
     whichever order they were read in. The dev registries are bare strings and
@@ -51,22 +54,24 @@ def load_names(paths: list[Path]) -> dict[str, Name]:
     for path in paths:
         try:
             raw = tomllib.loads(Path(path).read_text())
-        except (OSError, tomllib.TOMLDecodeError):
+            for entry in raw.get("endpoint", []):
+                if isinstance(entry, str):
+                    url, title, domain, datasets = entry, None, None, None
+                elif isinstance(entry, dict):
+                    url = entry.get("url", "")
+                    title = entry.get("title")
+                    domain = entry.get("domain")
+                    datasets = entry.get("datasets")
+                else:
+                    continue
+                if not url:
+                    continue
+                candidate = Name(title, domain, datasets, _host(url))
+                existing = out.get(url)
+                if existing is None or (existing.title is None and candidate.title):
+                    out[url] = candidate
+        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
             continue
-        for entry in raw.get("endpoint", []):
-            if isinstance(entry, str):
-                url, title, domain, datasets = entry, None, None, None
-            else:
-                url = entry.get("url", "")
-                title = entry.get("title")
-                domain = entry.get("domain")
-                datasets = entry.get("datasets")
-            if not url:
-                continue
-            candidate = Name(title, domain, datasets, _host(url))
-            existing = out.get(url)
-            if existing is None or (existing.title is None and candidate.title):
-                out[url] = candidate
     return out
 
 
