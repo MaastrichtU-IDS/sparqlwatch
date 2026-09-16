@@ -273,15 +273,39 @@ def provenance() -> dict[str, str]:
 
 
 def registry_size() -> int:
-    """How many endpoints `registry/lod-cloud.toml` actually lists."""
+    """How many endpoints `registry/lod-cloud.toml` actually lists.
+
+    Parses TOML natively to handle both bare-string and table formats.
+    This is an independent cross-check of the hand-maintained constant in
+    app.py:3212, so it does not import from registry_names even though both
+    parse the same file — sharing would make the test circular.
+    """
+    import tomllib
     text = (PROBER / "registry" / "lod-cloud.toml").read_text()
-    return len(re.findall(r'^\s*"', text, re.M))
+    raw = tomllib.loads(text)
+    return len(raw.get("endpoint", []))
 
 
 def registry_endpoints() -> list[str]:
-    """Every endpoint `registry/lod-cloud.toml` lists, as written."""
+    """Every endpoint `registry/lod-cloud.toml` lists, as written.
+
+    Parses TOML natively to handle both bare-string and table formats.
+    This is an independent cross-check of the hand-maintained constant in
+    app.py:3212, so it does not import from registry_names even though both
+    parse the same file — sharing would make the test circular.
+    """
+    import tomllib
     text = (PROBER / "registry" / "lod-cloud.toml").read_text()
-    return re.findall(r'^\s*"([^"]+)",?\s*$', text, re.M)
+    raw = tomllib.loads(text)
+    endpoints = []
+    for entry in raw.get("endpoint", []):
+        if isinstance(entry, str):
+            endpoints.append(entry)
+        else:
+            url = entry.get("url", "")
+            if url:
+                endpoints.append(url)
+    return endpoints
 
 
 def _bare_host(url: str) -> str:
