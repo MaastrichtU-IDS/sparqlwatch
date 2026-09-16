@@ -6,11 +6,14 @@ test_the_javascript_agrees_with_python.
 """
 
 import json
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from vocab_match import rank, score_word, tokenize
+from test_page import CONTENT_ENDPOINT as ENDPOINT_WITH_VOCABULARY
 
 CASES = json.loads(
     (Path(__file__).parent / "fixtures" / "vocab_match_cases.json").read_text()
@@ -111,3 +114,47 @@ def test_the_shared_case_table_holds():
     for case in CASES:
         got = [t["local"] for t in rank(case["terms"], case["query"])]
         assert got == case["expected"], f"{case['query']!r}: {got} != {case['expected']}"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_javascript_agrees_with_python():
+    """The browser and the server must score identically.
+
+    There is no JavaScript harness in this repo's CI -- it is cargo plus pytest
+    -- so this test runs only where node happens to exist, and the Python rules
+    above are the ones that gate. That is the trade this arrangement makes: the
+    rules are always tested, and the transliteration is checked wherever it can
+    be. If the two ever drift, it will be here that it shows.
+    """
+    script = Path(__file__).resolve().parents[1] / "static" / "vocab-search.js"
+    cases = Path(__file__).parent / "fixtures" / "vocab_match_cases.json"
+    harness = f"""
+      import {{ rank }} from {str(script)!r};
+      import {{ readFileSync }} from 'node:fs';
+      const cases = JSON.parse(readFileSync({str(cases)!r}, 'utf8'));
+      const out = cases.map(c => rank(c.terms, c.query).map(t => t.local));
+      console.log(JSON.stringify(out));
+    """
+    result = subprocess.run(
+        # --experimental-detect-module: there is no package.json anywhere in
+        # this repo (by design -- see the module docstring above), so nothing
+        # tells node vocab-search.js is an ES module rather than CommonJS.
+        # This flag makes node look at the file's own syntax instead.
+        ["node", "--experimental-detect-module", "--input-type=module", "-e", harness],
+        capture_output=True, text=True, check=True,
+    )
+    got = json.loads(result.stdout)
+    assert got == [c["expected"] for c in CASES], (
+        "vocab-search.js and vocab_match.py disagree; they are the same rules "
+        "written twice and must stay that way"
+    )
+
+
+def test_every_term_carries_its_tokens(store_content_profiles):
+    """The browser must not re-tokenise every row on every keystroke."""
+    from explore_payload import endpoint_vocabulary
+
+    terms = endpoint_vocabulary(store_content_profiles, ENDPOINT_WITH_VOCABULARY)
+    assert terms, "the fixture must have vocabulary"
+    for term in terms:
+        assert term["tokens"] == " ".join(tokenize(term["local"]) + tokenize(term["prefix"]))

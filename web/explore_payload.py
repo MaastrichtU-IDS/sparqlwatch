@@ -35,6 +35,8 @@ from urllib.parse import urlparse
 
 from pyoxigraph import Store
 
+from vocab_match import tokenize
+
 _QUERY = (Path(__file__).resolve().parent / "queries" / "explore_vocabulary.rq").read_text()
 
 # Namespaces belonging to a SPARQL engine rather than to the data its operator
@@ -253,6 +255,11 @@ def endpoint_vocabulary(store: Store, endpoint: str) -> list[dict]:
             "namespace": t["n"],
             "engine": t["e"],
             "state": t["at"][endpoint],
+            # The term's name as the words it is written from, so the page's
+            # search can match "drug target" against hasDrugTarget without
+            # splitting every name in the browser on every keystroke. The
+            # prefix joins it because people search by namespace too.
+            "tokens": " ".join(tokenize(t["l"]) + tokenize(t["p"])),
         }
         for t in build_payload(store)["terms"]
         if endpoint in t["at"]

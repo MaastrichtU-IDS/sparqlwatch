@@ -3596,6 +3596,36 @@ def stylesheet(digest: str) -> Response:
 _TEMPLATES.globals["stylesheet_path"] = STYLESHEET_PATH
 
 
+# The vocabulary search script, served the same way the stylesheet is: read at
+# import, hashed, published at a content-addressed URL that a year-long cache
+# header can promise never changes. web/vocab_match.py is the specification
+# this is a transliteration of; see that module's header comment.
+_SCRIPT = (Path(__file__).resolve().parent / "static" / "vocab-search.js").read_bytes()
+_SCRIPT_HASH = hashlib.sha256(_SCRIPT).hexdigest()[:12]
+SCRIPT_PATH = f"/static/vocab-search.{_SCRIPT_HASH}.js"
+_SCRIPT_CACHE = "public, max-age=31536000, immutable"
+
+
+@app.get("/static/vocab-search.{digest}.js")
+def vocab_search_script(digest: str) -> Response:
+    """The vocabulary search script, at a URL that changes when its bytes do.
+
+    Any other digest 404s rather than redirecting to the current one, for the
+    same reason the stylesheet route does (app.py:3587): the one thing a
+    year-long cache header may not do is lie about the bytes at a URL.
+    """
+    if digest != _SCRIPT_HASH:
+        return Response(status_code=404)
+    return Response(
+        content=_SCRIPT,
+        media_type="application/javascript",
+        headers={"Cache-Control": _SCRIPT_CACHE},
+    )
+
+
+_TEMPLATES.globals["script_path"] = SCRIPT_PATH
+
+
 @app.get("/favicon.ico")
 def favicon_ico() -> Response:
     """The path browsers ask for without being told to.

@@ -145,12 +145,24 @@
               gap: 10px; align-items: center; padding: 4px 10px;
               border-bottom: 1px solid var(--border); }
   .vocab li:last-child { border-bottom: 0; }
+  /* `display: grid` above has higher specificity than the UA stylesheet's
+     `[hidden] { display: none }`, so a row the script hides would otherwise
+     stay on screen at full size, just no longer counted -- the search would
+     look like it does nothing. This is the rule that actually removes it. */
+  .vocab li[hidden] { display: none; }
   .v-chip { width: 10px; height: 12px; border-radius: 2px; }
   .v-local { font-family: var(--mono); font-size: 12px; color: var(--text-bright);
              overflow-wrap: anywhere; }
   .v-prefix, .v-kind { font-size: 11px; color: var(--text-muted); }
   .v-iri { font-family: var(--mono); font-size: 10.5px; color: var(--text-dim);
            white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* The two band headings vocab-search.js moves into place while narrowing.
+     Direct children of the list, not wrapped in <li>, so they are unambiguous
+     to skip when data-hay is read row by row. */
+  .vocab h3.band { margin: 0; padding: 5px 10px; font-size: 10.5px;
+                    font-weight: 600; color: var(--text-dim); text-transform: uppercase;
+                    letter-spacing: 0.05em; background: var(--bg-deep);
+                    border-bottom: 1px solid var(--border); }
 
   /* -- Classes sampled ------------------------------------------------------ */
   .sample-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
@@ -405,7 +417,7 @@
           <label class="visually-hidden" for="vocab-q">Search this endpoint's vocabulary</label>
           <input id="vocab-q" type="search" autocomplete="off" spellcheck="false"
                  placeholder="name, prefix or IRI">
-          <span class="vocab-count" id="vocab-count"
+          <span class="vocab-count" id="vocab-count" aria-live="polite"
                 data-total="{{ vocabulary | length }}">{{ vocabulary | length }} terms</span>
         </div>
 
@@ -414,9 +426,12 @@
              move as they type, and this page is read by people deciding whether to
              write a query against an endpoint they have not used. -->
         <ul class="vocab" id="vocab">
+          <h3 class="band" data-band="match" hidden>matches</h3>
+          <h3 class="band" data-band="close" hidden>close matches</h3>
           {% for t in vocabulary %}
           <li data-kind="{{ t.kind }}" data-state="{{ t.state }}"
               data-hay="{{ (t.local ~ ' ' ~ t.prefix ~ ' ' ~ t.iri) | lower }}"
+              data-tok="{{ t.tokens }}"
               {%- if t.engine %} data-engine="true"{% endif %}>
             <span class="v-chip {{ t.state | enc_class }}" title="{{ t.state }}"></span>
             <span class="v-local">{{ t.local }}</span>
@@ -617,43 +632,8 @@
   });
 })();
 </script>
-<script>
-// Vocabulary search. Narrows what is already on the page; nothing is fetched.
-//
-// LEFT ALONE ON PURPOSE: Task 10 replaces this script, and data-hay per term
-// is its contract to read. Pre-empting either here would be redone there.
-(function () {
-  var q = document.getElementById("vocab-q");
-  var list = document.getElementById("vocab");
-  var count = document.getElementById("vocab-count");
-  var none = document.getElementById("vocab-none");
-  if (!q || !list || !count) return;
-
-  // Read once. A term's haystack is built server-side into data-hay, so
-  // typing does not read the DOM's text for every row on every keystroke.
-  var items = [].slice.call(list.children).map(function (li) {
-    return { el: li, hay: li.getAttribute("data-hay") || "" };
-  });
-  var total = parseInt(count.getAttribute("data-total"), 10) || items.length;
-
-  function apply() {
-    var needle = q.value.trim().toLowerCase();
-    var shown = 0;
-    items.forEach(function (it) {
-      var hit = !needle || it.hay.indexOf(needle) !== -1;
-      it.el.hidden = !hit;
-      if (hit) shown++;
-    });
-    // The denominator stays visible while filtering. "12 terms" alone would
-    // read as the endpoint holding twelve.
-    count.textContent = needle
-      ? shown + " of " + total + " terms"
-      : total + " terms";
-    if (none) none.hidden = shown !== 0;
-  }
-
-  q.addEventListener("input", apply);
-  apply();
-})();
-</script>
+<!-- Vocabulary search. Narrows what is already on the page; nothing is
+     fetched. The rules live in web/vocab_match.py, tested under pytest, and
+     this module is a transliteration of that file -- see its header comment. -->
+<script type="module" src="{{ script_path }}"></script>
 {% endblock %}
