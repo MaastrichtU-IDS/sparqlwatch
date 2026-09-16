@@ -12,19 +12,47 @@
 #
 # NOT A DEVELOPMENT LIST. The default --endpoints is prober/endpoints.toml.
 # These are nine strangers' servers; sweeping them is an explicit act.
-endpoint = [
-    # Correct as the catalog declares them.
-    "https://kaiko.getalp.org/sparql",
-    "http://dskg.org/sparql",
-    "https://semrepo.org/sparql",
-    # Corrected. The catalog's url answers with an HTML console in every case
-    # below, so the endpoint reads as unreachable without the correction.
-    "https://sparql.dblp.org/sparql",
-    "https://query.wikidata.org/sparql",
-    "https://sidekick.bio2vec.net/fuseki/sidekick/query",
-    "https://orkg.org/triplestore",
-    "https://yago-knowledge.org/sparql/qlever",
-    # MAKG's successor. makg.org refuses the TLS handshake and the project it
-    # served was superseded; this is the service, under its current name.
-    "https://semopenalex.org/sparql",
-]
+#
+# `title` on each entry below is the "Knowledge graph" name
+# docs/kg-catalog-endpoints.md gives it, not something this file infers.
+
+# Correct as the catalog declares them.
+[[endpoint]]
+url = "https://kaiko.getalp.org/sparql"
+title = "DBnary"
+
+[[endpoint]]
+url = "http://dskg.org/sparql"
+title = "DSKG"
+
+[[endpoint]]
+url = "https://semrepo.org/sparql"
+title = "SemRepo"
+
+# Corrected. The catalog's url answers with an HTML console in every case
+# below, so the endpoint reads as unreachable without the correction.
+[[endpoint]]
+url = "https://sparql.dblp.org/sparql"
+title = "DBLP"
+
+[[endpoint]]
+url = "https://query.wikidata.org/sparql"
+title = "Wikidata"
+
+[[endpoint]]
+url = "https://sidekick.bio2vec.net/fuseki/sidekick/query"
+title = "SIDEKICK"
+
+[[endpoint]]
+url = "https://orkg.org/triplestore"
+title = "ORKG"
+
+[[endpoint]]
+url = "https://yago-knowledge.org/sparql/qlever"
+title = "YAGO"
+
+# MAKG's successor. makg.org refuses the TLS handshake and the project it
+# served was superseded; this is the service, under its current name.
+[[endpoint]]
+url = "https://semopenalex.org/sparql"
+title = "SemOpenAlex"

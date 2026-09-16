@@ -161,3 +161,14 @@ def test_the_real_registries_parse():
     assert len(got) > 500, f"expected the seeded registry, got {len(got)}"
     titled = [n for n in got.values() if n.title]
     assert titled, "no registry entry carries a title"
+
+
+def test_every_seeded_endpoint_shows_something_other_than_a_bare_url():
+    """Not a style rule: a row showing a URL where every other row shows a name
+    reads as a failure, and there should be none by accident."""
+    here = Path(__file__).resolve().parents[2] / "prober" / "registry"
+    if not here.is_dir():
+        pytest.skip("registry sources are not in a runtime image")
+    names = load_names(sorted(here.glob("*.toml")))
+    bare = [u for u, n in names.items() if display(n, u) == u]
+    assert not bare, f"{len(bare)} endpoints would show a bare URL: {bare[:3]}"
