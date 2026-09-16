@@ -2737,9 +2737,73 @@ def test_a_row_for_a_multi_dataset_endpoint_shows_a_count(client_for, store_many
     """The rule: the host, and how many things it serves, never one of their names."""
     body = client_for(store_many_datasets).get("/", headers={"accept": "text/html"}).text
     assert "42 datasets" in body
+    # The count alone does not pin the rule this test exists to enforce: a row
+    # naming any of the 42 datasets beside "42 datasets" would also make this
+    # string true. The name itself must be the host.
+    names = texts_with(body, "data-row-name")
+    assert "www.foodie-cloud.org" in names, (
+        f"the row must lead with the host, not one of the 42 dataset titles: {names}"
+    )
 
 
 def test_the_page_says_where_names_come_from(client_for, store_registry_sample):
     """A borrowed title is attributed, or the registry is asserting it."""
     body = client_for(store_registry_sample).get("/", headers={"accept": "text/html"}).text
     assert "data-name-provenance" in body
+
+
+# ---------------------------------------------------------------------------
+# Task 6: facet pills, and the matrix moves down.
+# ---------------------------------------------------------------------------
+
+
+def test_the_pills_carry_their_counts(client_for, store_registry_sample):
+    body = client_for(store_registry_sample).get("/", headers={"accept": "text/html"}).text
+    pills = with_attribute(body, "data-pill")
+    assert pills, "the registry offers no facets"
+    for p in pills:
+        assert p["data-pill-count"].isdigit(), f"{p['data-pill']} has no count"
+
+
+def test_a_pill_is_a_link_that_works_without_javascript(client_for, store_registry_sample):
+    """A faceted view must be shareable, like ?q=."""
+    body = client_for(store_registry_sample).get("/", headers={"accept": "text/html"}).text
+    hrefs = [a["href"] for a in with_attribute(body, "data-pill")]
+    assert all(h.startswith("/?") for h in hrefs), f"pills are not links: {hrefs}"
+
+
+def test_a_domain_pill_narrows_the_rows(client_for, store_registry_sample):
+    """life_sciences, not government: of this fixture's nine endpoints, only
+    sparql.uniprot.org carries a domain of "government" in the real seeded
+    registry as loaded -- registry_names.load_names keeps the FIRST entry it
+    reads for a URL unless a LATER one carries a title the first lacked, and
+    calibration-sample.toml (read before lod-cloud.toml, alphabetically) lists
+    data.epo.org and visualdataweb.infor.uva.es as bare, title-less, domain-
+    less strings, so lod-cloud.toml's richer "government" entries for those
+    two never win the merge. life_sciences (sparql.uniprot.org) is the one
+    domain this fixture's nine actually expose after that merge."""
+    client = client_for(store_registry_sample)
+    everything = endpoints_shown(client.get("/", headers={"accept": "text/html"}).text)
+    narrowed = endpoints_shown(
+        client.get("/?domain=life_sciences", headers={"accept": "text/html"}).text
+    )
+    assert 0 < len(narrowed) < len(everything)
+
+
+def test_the_matrix_sits_below_the_rows(client_for, store_registry_sample):
+    """Demoted, not removed: it is the only way to ask a precise question."""
+    body = client_for(store_registry_sample).get("/", headers={"accept": "text/html"}).text
+    assert body.index('data-facet-group="matrix"') > body.index("data-endpoint=")
+
+
+def test_a_facet_pill_narrows_the_rows(client_for, store_registry_sample):
+    """The non-domain pills are real filters too, not decoration: see
+    _matches_facet. `federates` (the cors verdict) is the one of the three
+    that is neither all-nine nor zero on this fixture, so it is the one that
+    proves the link does something rather than nothing."""
+    client = client_for(store_registry_sample)
+    everything = endpoints_shown(client.get("/", headers={"accept": "text/html"}).text)
+    narrowed = endpoints_shown(
+        client.get("/?facet=federates", headers={"accept": "text/html"}).text
+    )
+    assert 0 < len(narrowed) < len(everything)

@@ -1371,3 +1371,42 @@ def test_a_query_matching_a_title_narrows_both_representations(
     assert listed, "the fixture must yield a title-only match, or this test proves nothing"
     assert url in listed
     assert described == listed
+
+
+def test_a_domain_narrows_both_representations(client_for, store_registry_sample):
+    """The invariant again, under `?domain=`, task 6's own new filter.
+
+    A domain lives in the registry files, the same place a title does, and
+    not in the run graph -- so this is exactly the hazard
+    test_a_query_matching_a_title_narrows_both_representations guards
+    against, one query parameter over. `?domain=` reaches the RDF branch
+    through `_matches_domain`, tested the same way `_matches_query` is in
+    `_only_matching_endpoints`, so the two branches cannot disagree about
+    what a domain means -- but that structural guarantee alone would pass
+    even if `_matches_domain` matched nothing at all: two empty sets are
+    still equal. `sparql.uniprot.org` is this fixture's one endpoint of
+    domain "life_sciences" (see test_a_domain_pill_narrows_the_rows in
+    test_index.py for why "government", the domain a naive read of the
+    seeded registry files suggests, narrows this particular nine-endpoint
+    fixture to nothing), so the membership assertion below is what actually
+    catches a `?domain=` that reached only one representation.
+    """
+    client = client_for(store_registry_sample)
+    listed = set(
+        rows_of(client.get("/?domain=life_sciences", headers={"accept": "text/html"}).text)
+    )
+    graph = graph_of(
+        client.get("/?domain=life_sciences", headers={"accept": "text/turtle"})
+    )
+    described = {
+        str(t.object.value)
+        for t in graph
+        if str(t.predicate.value)
+        in (
+            "http://www.w3.org/ns/dqv#computedOn",
+            "urn:sparqlwatch:notMeasuredOn",
+        )
+    }
+    assert listed, "the fixture must yield a domain match, or this test proves nothing"
+    assert "https://sparql.uniprot.org/sparql" in listed
+    assert described == listed

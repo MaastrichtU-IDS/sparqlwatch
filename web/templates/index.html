@@ -50,6 +50,24 @@
     background: var(--bg-secondary); color: var(--text); font: inherit; outline: none; }
   .shown { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 
+  /* The pills. LINKS, not the buttons the grid below uses: each one names a
+     URL (this page with one query parameter set) rather than a script-only
+     state, so it can be pasted, bookmarked or crawled, and it does something
+     with no script at all. wrap rather than scroll at phone width, the same
+     choice ul.facets already made below, for the same reason: a row of six
+     that scrolled sideways would hide the ones past the fold instead of
+     just taking a second line. */
+  .pills { display: flex; flex-wrap: wrap; gap: 6px 8px; margin: 0 0 18px; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; height: 26px;
+    padding: 0 10px; border: 1px solid var(--border); border-radius: 13px;
+    font-size: 12.5px; color: var(--text); text-decoration: none; }
+  .pill:hover { border-color: var(--text-muted); }
+  .pill.on { border-color: var(--text-bright); color: var(--text-bright);
+    box-shadow: inset 0 0 0 1px var(--text-bright); }
+  .pill i { font-style: normal; font-family: var(--mono); font-size: 11px;
+    color: var(--text-dim); font-variant-numeric: tabular-nums; }
+  .pill.on i { color: var(--text-bright); }
+
   /* The abbreviation, drawn the size of a chip. Every cell on a row carries one
      instead of the metric's name, so the metric chips are where each one is
      written out in full. The ul.mkey rules that used to lay that list out went
@@ -403,6 +421,22 @@
     <span class="shown" id="shown"></span>
   </form>
 
+  {# The registry's most common questions, above the rows and as LINKS rather
+     than the buttons the grid below uses: a link names a URL a reader can
+     share or reload, and works with no script at all, exactly like ?q= does.
+     Built in _index_pills from the same filtered entries the rows below are
+     built from, so a count here states what is on THIS page, never a fact
+     about the whole registry a search already cut away from. #}
+  {% if pills %}
+  <div class="pills">
+    {% for p in pills %}
+    <a class="pill{% if p.on %} on{% endif %}" data-pill="{{ p.value }}"
+       data-pill-count="{{ p.count }}" href="/?{{ p.param }}={{ p.value | urlencode }}">
+      {{ p.label }} <i>{{ p.count }}</i></a>
+    {% endfor %}
+  </div>
+  {% endif %}
+
   {# The server-side counterpart to #nothing below: that paragraph is hidden
      by default and only JS ever unhides it, for a facet or text filter
      narrowing the client-rendered rows to zero. A ?q= that the SERVER already
@@ -502,6 +536,83 @@
   </section>
   {% endif %}
 
+  {% endif %}
+
+
+  {% if endpoint_count %}
+  <p class="facet-empty" id="nothing" data-facet-empty="true" hidden>
+    No endpoint in this store matches every filter selected above. That is a
+    fact about the filters and not about any endpoint: clear one to widen it.
+  </p>
+  {% endif %}
+
+  {% if rows %}
+  <p class="note" data-name-provenance>
+    Names come from the catalogues these endpoints were registered in, not from
+    anything this service measured. The URL beneath each one is what was probed.
+  </p>
+  {% endif %}
+
+  {# ONE LISTING, alphabetical by endpoint. Three sections headed "availability
+     verified: 57 of 543 endpoints" and so on stood here until 2026-08-28, and
+     the grid's availability row states those same three counts, keeping 482
+     that answered nothing apart from 4 that answered absent where the headings'
+     own two-way reading did not.
+
+     No heading means no grouping element, so the script that filters rows no
+     longer has per-group counts to keep honest: one number, in the header, over
+     one list. #}
+  <ul class="rows" data-listing="all" data-fleet-total="{{ summary.total }}">
+      {% for row in rows %}
+{# ONE LINE PER ROW, AND EVERY BYTE OF IT IS COUNTED. 543 rows times eight
+   cells is where this page's size lives: it is 90 percent of the document, so
+   the row is not indented, it carries no class attribute that a descendant
+   selector can replace, and a chip states each thing about itself exactly once.
+
+   In particular a chip does NOT carry its metric in an attribute. Its text IS
+   the metric's abbreviation, the abbreviation is unique, and the metric key
+   above writes each one out in full, so the row is still self-describing rather
+   than positional: nothing here depends on which column a chip is in. Carrying
+   the same two letters again as data-abbr, and the metric's name a third time as
+   data-metric, cost 165 KB of the 610 KB this page measured before they came
+   out, and bought a second and third spelling of one fact. A machine that wants
+   the metric IRI itself asks this resource for RDF, which is what the
+   negotiation is for.
+
+   WHAT THESE MARKERS COST. In UTF-8 bytes of the served page over the
+   543-endpoint sweep: 438,652 with no row marked, 501,609 with all 543 naming
+   their own sweep (a two-endpoint newer run on top), 510,188 with 57 of those
+   also dormant, which is the realistic near-term shape, and 580,357 with all
+   543 dormant, which is the worst case for these markers. 808, 924, 940 and
+   1,069 bytes a row. The render cost of the whole change was 10.50 ms against
+   11.08 ms, HEAD and this tree back to back in one process over one store.
+
+   ALL FOUR ARE INSIDE THE BUDGET, WHICH IS 750,000 BYTES AND WAS 500,000 UNTIL
+   2026-08-27. Three of the four were outside the old number, and the plan owner
+   raised it rather than take markup out of these rows, because measuring the
+   overrun showed what it really was: at 808 bytes a row with nothing marked,
+   500,000 runs out at 619 endpoints, and the registry is 543 with two more
+   sources still to ingest. The limit was sized for the markup and not for a
+   list that only grows. NOTHING TESTS IT, which is how a 0.5% overrun survived
+   a commit; the form to pin is bytes per row, not a total. Deleting the markers
+   was never the alternative: that is 543 rows of one sweep's verdicts under a
+   header naming another sweep, which is one wrong answer 543 times. Roughly 11
+   KB of the marked figure is the instant's second spelling in
+   data-measured-by-sweep, kept for now because a script filtering these rows
+   needs the instant as a value and the RDF representation is a second request,
+   and it is the cheapest thing to give up if something has to go. #}
+      <li data-endpoint="{{ row.endpoint }}"{% if row.run_unfinished %} data-run-unfinished="true"{% endif %}{% if row.never_reached %} data-newer-run-unfinished="true"{% endif %}{% if row.dormant %} data-newest-sweep-dormant="true"{% if row.dormancy_reason %} data-dormancy-reason="{{ row.dormancy_reason }}"{% endif %}{% endif %}{% if row.measured_by %} data-measured-by-sweep="{{ row.measured_by }}"{% endif %}><span class="row-id"><a data-row-name href="{{ row.href }}">{{ row.name }}</a>{% if row.datasets %} <span class="datasets">{{ row.datasets }} datasets</span>{% endif %}<span class="url" data-row-url>{{ row.endpoint }}</span></span>{% if row.content_href %}<a class="content" href="{{ row.content_href }}" title="Explore the classes and properties observed in this endpoint">content</a>{% endif %}{% if row.run_unfinished %}<span class="qual">{{ row_unfinished_text }}</span>{% endif %}{% if row.never_reached %}<span class="qual">{{ row_never_reached_text }}</span>{% endif %}{% if row.dormant %}<span class="qual">{{ row.dormant_text }}</span>{% endif %}{% if row.measured_by %}<span class="when">{{ row_measured_by_text }} {{ row.measured_by }}</span>{% endif %}{% if row.size %}<span class="size">{% for s in row.size %}{% if not loop.first %} &#183; {% endif %}<span data-size="{{ s.unit }}" data-count="{{ s.n }}">{{ "{:,}".format(s.n) }} {{ s.unit }}</span>{% endfor %}</span>{% endif %}<span class="cells">{% for cell in row.cells %}{% if cell.present %}<span class="{{ cell.css_class }}"{% if cell.verdict is not none %} data-verdict="{{ cell.verdict }}"{% else %} data-declined="{{ cell.reason }}"{% endif %}>{{ cell.abbr }}</span>{% else %}<span class="gap" data-gap="true">&#183;</span>{% endif %}{% endfor %}</span></li>
+      {% endfor %}
+  </ul>
+
+  {# The grid, demoted below the listing it used to sit above. Moved whole and
+     unedited on 2026-09-17: it is still the only way on this page to ask a
+     precise question (which metric, in which state), it is just no longer
+     the first thing a reader meets -- the pills above and the rows this now
+     follows answer the more common questions faster. Guarded by the same
+     `{% if metrics %}` it was guarded by at the top of the page, moved down
+     with it rather than left behind. #}
+  {% if metrics %}
   <section class="panel" data-facet-group="matrix">
     <h2>Metrics and states</h2>
     <table class="matrix">
@@ -579,73 +690,6 @@
     </table>
   </section>
   {% endif %}
-
-
-  {% if endpoint_count %}
-  <p class="facet-empty" id="nothing" data-facet-empty="true" hidden>
-    No endpoint in this store matches every filter selected above. That is a
-    fact about the filters and not about any endpoint: clear one to widen it.
-  </p>
-  {% endif %}
-
-  {% if rows %}
-  <p class="note" data-name-provenance>
-    Names come from the catalogues these endpoints were registered in, not from
-    anything this service measured. The URL beneath each one is what was probed.
-  </p>
-  {% endif %}
-
-  {# ONE LISTING, alphabetical by endpoint. Three sections headed "availability
-     verified: 57 of 543 endpoints" and so on stood here until 2026-08-28, and
-     the grid's availability row states those same three counts, keeping 482
-     that answered nothing apart from 4 that answered absent where the headings'
-     own two-way reading did not.
-
-     No heading means no grouping element, so the script that filters rows no
-     longer has per-group counts to keep honest: one number, in the header, over
-     one list. #}
-  <ul class="rows" data-listing="all" data-fleet-total="{{ summary.total }}">
-      {% for row in rows %}
-{# ONE LINE PER ROW, AND EVERY BYTE OF IT IS COUNTED. 543 rows times eight
-   cells is where this page's size lives: it is 90 percent of the document, so
-   the row is not indented, it carries no class attribute that a descendant
-   selector can replace, and a chip states each thing about itself exactly once.
-
-   In particular a chip does NOT carry its metric in an attribute. Its text IS
-   the metric's abbreviation, the abbreviation is unique, and the metric key
-   above writes each one out in full, so the row is still self-describing rather
-   than positional: nothing here depends on which column a chip is in. Carrying
-   the same two letters again as data-abbr, and the metric's name a third time as
-   data-metric, cost 165 KB of the 610 KB this page measured before they came
-   out, and bought a second and third spelling of one fact. A machine that wants
-   the metric IRI itself asks this resource for RDF, which is what the
-   negotiation is for.
-
-   WHAT THESE MARKERS COST. In UTF-8 bytes of the served page over the
-   543-endpoint sweep: 438,652 with no row marked, 501,609 with all 543 naming
-   their own sweep (a two-endpoint newer run on top), 510,188 with 57 of those
-   also dormant, which is the realistic near-term shape, and 580,357 with all
-   543 dormant, which is the worst case for these markers. 808, 924, 940 and
-   1,069 bytes a row. The render cost of the whole change was 10.50 ms against
-   11.08 ms, HEAD and this tree back to back in one process over one store.
-
-   ALL FOUR ARE INSIDE THE BUDGET, WHICH IS 750,000 BYTES AND WAS 500,000 UNTIL
-   2026-08-27. Three of the four were outside the old number, and the plan owner
-   raised it rather than take markup out of these rows, because measuring the
-   overrun showed what it really was: at 808 bytes a row with nothing marked,
-   500,000 runs out at 619 endpoints, and the registry is 543 with two more
-   sources still to ingest. The limit was sized for the markup and not for a
-   list that only grows. NOTHING TESTS IT, which is how a 0.5% overrun survived
-   a commit; the form to pin is bytes per row, not a total. Deleting the markers
-   was never the alternative: that is 543 rows of one sweep's verdicts under a
-   header naming another sweep, which is one wrong answer 543 times. Roughly 11
-   KB of the marked figure is the instant's second spelling in
-   data-measured-by-sweep, kept for now because a script filtering these rows
-   needs the instant as a value and the RDF representation is a second request,
-   and it is the cheapest thing to give up if something has to go. #}
-      <li data-endpoint="{{ row.endpoint }}"{% if row.run_unfinished %} data-run-unfinished="true"{% endif %}{% if row.never_reached %} data-newer-run-unfinished="true"{% endif %}{% if row.dormant %} data-newest-sweep-dormant="true"{% if row.dormancy_reason %} data-dormancy-reason="{{ row.dormancy_reason }}"{% endif %}{% endif %}{% if row.measured_by %} data-measured-by-sweep="{{ row.measured_by }}"{% endif %}><span class="row-id"><a data-row-name href="{{ row.href }}">{{ row.name }}</a>{% if row.datasets %} <span class="datasets">{{ row.datasets }} datasets</span>{% endif %}<span class="url" data-row-url>{{ row.endpoint }}</span></span>{% if row.content_href %}<a class="content" href="{{ row.content_href }}" title="Explore the classes and properties observed in this endpoint">content</a>{% endif %}{% if row.run_unfinished %}<span class="qual">{{ row_unfinished_text }}</span>{% endif %}{% if row.never_reached %}<span class="qual">{{ row_never_reached_text }}</span>{% endif %}{% if row.dormant %}<span class="qual">{{ row.dormant_text }}</span>{% endif %}{% if row.measured_by %}<span class="when">{{ row_measured_by_text }} {{ row.measured_by }}</span>{% endif %}{% if row.size %}<span class="size">{% for s in row.size %}{% if not loop.first %} &#183; {% endif %}<span data-size="{{ s.unit }}" data-count="{{ s.n }}">{{ "{:,}".format(s.n) }} {{ s.unit }}</span>{% endfor %}</span>{% endif %}<span class="cells">{% for cell in row.cells %}{% if cell.present %}<span class="{{ cell.css_class }}"{% if cell.verdict is not none %} data-verdict="{{ cell.verdict }}"{% else %} data-declined="{{ cell.reason }}"{% endif %}>{{ cell.abbr }}</span>{% else %}<span class="gap" data-gap="true">&#183;</span>{% endif %}{% endfor %}</span></li>
-      {% endfor %}
-  </ul>
 
 {# Commented out by the plan owner on 2026-08-28. A JINJA comment and not an
    HTML one: `<!-- -->` leaves all 3,393 bytes of this panel in every response,

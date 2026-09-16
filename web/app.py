@@ -2247,8 +2247,143 @@ def _matches_query(endpoint: str, needle: str | None) -> bool:
     )
 
 
+# Stands in for an endpoint no registry names at all, so _matches_domain never
+# branches on whether _NAMES holds an entry: an undomained endpoint's .domain
+# reads None either way, exactly like the 118 of the real registry's 552 that
+# no catalogue placed in a domain. A domain pill can therefore never be the
+# only way to narrow the list -- those 118 would vanish from every domain at
+# once -- which is a fact about the data, not a rule this function enforces.
+_NO_NAME = Name(None, None, None, "")
+
+
+def _matches_domain(endpoint: str, domain: str | None) -> bool:
+    """Whether one endpoint carries a given registry domain.
+
+    Reads _NAMES for the reason _matches_query does: this is the ONE place
+    that decides what `?domain=` means, so the RDF branch (_only_matching_
+    endpoints) and the HTML branch (_index_context) share it and cannot
+    disagree about which endpoints a domain names.
+    """
+    if not domain:
+        return True
+    return (_NAMES.get(endpoint) or _NO_NAME).domain == domain
+
+
+# The metric each named, non-domain facet grades, and the label its pill
+# shows. Kept as two small tables rather than four separate booleans, so a
+# reader sees at a glance that "void" and "federates" are the same shape of
+# question (one metric, read positive-or-not) while "answering" is not (it
+# reads a fact this page already names in the strip above, not a metric at
+# all).
+_FACET_METRICS = {
+    "void": _METRIC_PREFIX + "vocabulary-described",
+    "federates": _METRIC_PREFIX + "cors",
+}
+_FACET_LABELS = {
+    "answering": "answering",
+    "void": "declares VoID",
+    "federates": "federates",
+}
+
+
+def _matches_facet(entry: EndpointMeasurements, facet: str | None) -> bool:
+    """Whether one endpoint answers a fixed, named question, from the
+    verdicts its newest run already recorded -- no query the prober has not
+    already run.
+
+    Three questions:
+
+      "answering"  the newest sweep did not decline to ask this endpoint at
+                    all. The same fact the strip above this listing already
+                    labels "answering" (see `summary`); this reuses it rather
+                    than naming the same thing twice.
+
+      "void"       its `vocabulary-described` verdict is positive: the
+                    endpoint's own description is confirmed to name the
+                    classes its data actually holds.
+
+      "federates"  its `cors` verdict is positive: it sends access-control-
+                    allow-origin, the one precondition a browser-based
+                    client -- a federator among them -- needs before it can
+                    query this endpoint from another origin at all. Not a
+                    claim that the endpoint federates queries itself; nothing
+                    this prober measures could tell that. cors-preflight asks
+                    the stricter, browser-shaped version of the same
+                    question and was left out here on purpose: this pill
+                    names the precondition every cross-origin client shares,
+                    not the one only a browser sending a preflight needs.
+
+    `_POSITIVE_VERDICTS` is the same table the availability facet above was
+    built from: "verified" and "undeclared-but-verified" both mean the fact
+    holds, declared or not, and only the declared HALF of that -- verified
+    alone -- would undercount an endpoint this project's own philosophy says
+    to credit: see prober/metrics.toml's note on geo-functions, "the rare
+    honest endpoint is credited".
+    """
+    if not facet:
+        return True
+    if facet == "answering":
+        return not entry.newest_sweep_declined_to_ask_this_endpoint
+    metric = _FACET_METRICS.get(facet)
+    if metric is None:
+        return False
+    return any(
+        v.metric == metric and v.verdict in _POSITIVE_VERDICTS
+        for v in entry.verdicts
+    )
+
+
+def _index_pills(
+    entries: list[EndpointMeasurements], domain: str | None, facet: str | None
+) -> list[dict]:
+    """The registry's most common questions, as links above the rows.
+
+    Built from `entries` AFTER `?q=`, `?domain=` and `?facet=` have already
+    narrowed it, so a pill's count states what is on the page in front of the
+    reader right now, not a fact about the whole registry a search has
+    already cut away from. See the "Global constraints" note this task was
+    written against: two chip strips on this page have printed a count that
+    outlived the page it described before, and this is the fix repeated
+    rather than a fresh idea.
+
+    Six pills: the three commonest registry domains this filtered set holds
+    (fewer than three where fewer than three are present -- store_registry_
+    sample's nine endpoints, for instance, split across five), plus the three
+    fixed questions _matches_facet answers. Both groups share one shape,
+    {label, param, value, count, on}, so the template loops over them once.
+    """
+    domains = Counter(
+        d for e in entries if (d := (_NAMES.get(e.endpoint) or _NO_NAME).domain)
+    )
+    pills = [
+        {
+            "label": value,
+            "param": "domain",
+            "value": value,
+            "count": count,
+            "on": domain == value,
+        }
+        for value, count in domains.most_common(3)
+    ]
+    pills += [
+        {
+            "label": label,
+            "param": "facet",
+            "value": value,
+            "count": sum(1 for e in entries if _matches_facet(e, value)),
+            "on": facet == value,
+        }
+        for value, label in _FACET_LABELS.items()
+    ]
+    return pills
+
+
 def _index_context(
-    entries: list[EndpointMeasurements], store: Store, q: str | None = None
+    entries: list[EndpointMeasurements],
+    store: Store,
+    q: str | None = None,
+    domain: str | None = None,
+    facet: str | None = None,
 ) -> dict:
     """Everything the index template renders, decided here rather than in the
     page.
@@ -2265,23 +2400,47 @@ def _index_context(
     # infer the fleet size from a number that is no longer it.
     unfiltered_total = len(entries)
     entries = [e for e in entries if _matches_query(e.endpoint, q)]
+    if domain:
+        entries = [
+            e for e in entries if (_NAMES.get(e.endpoint) or _NO_NAME).domain == domain
+        ]
+    if facet:
+        entries = [e for e in entries if _matches_facet(e, facet)]
     metrics = _index_metrics(entries)
     # One pass over the store for every row, rather than one per row: the
     # payload is built from a single query and 543 rows asking it 543 times
     # would be the same answer 543 times.
     rows = _index_rows(entries, metrics, explore_endpoints(store))
     history = fleet_history(store)
-    # Filtered the same way `entries` above was: `history.rows` is keyed by
-    # endpoint, just like `entries`, so a `?q=` that narrows one narrows the
-    # other through the same predicate. `history.runs` is NOT filtered -- a
-    # sweep is service-level, not per-endpoint, exactly as the RDF
-    # representation leaves its activity nodes alone. Without this, the
-    # grid, its "moved"/"read the same way" sentence and its
-    # data-fleet-endpoint links named and linked endpoints the filtered rows
-    # above had already dropped.
+    # `matching` is exactly the endpoint set `entries` above narrowed to,
+    # after all three filters -- q, domain and facet -- so history.rows is
+    # filtered by testing membership in it rather than by re-running each
+    # predicate a second time. That matters for `facet`: it reads a
+    # verdict, which a FleetHistoryRow does not carry, so a predicate
+    # re-run here could not ask it the same question `entries` already did.
+    # `not facet` guards the case that matters most: with no facet active,
+    # membership in `matching` must reduce to exactly the q/domain answer
+    # below and never quietly drop a history row `entries` itself does not
+    # happen to list (fleet_history and endpoint_index are two separate
+    # reads of the store and this task does not audit that they always
+    # agree on every endpoint).
+    #
+    # `history.runs` is NOT filtered -- a sweep is service-level, not
+    # per-endpoint, exactly as the RDF representation leaves its activity
+    # nodes alone. Without the row filter below, the grid, its
+    # "moved"/"read the same way" sentence and its data-fleet-endpoint links
+    # named and linked endpoints the filtered rows above had already
+    # dropped.
+    matching = {e.endpoint for e in entries}
     history = FleetHistory(
         runs=history.runs,
-        rows=[r for r in history.rows if _matches_query(r.endpoint, q)],
+        rows=[
+            r
+            for r in history.rows
+            if _matches_query(r.endpoint, q)
+            and _matches_domain(r.endpoint, domain)
+            and (not facet or r.endpoint in matching)
+        ],
     )
     # The legend counts the chips on this page, and it is built by the same
     # function as the endpoint page's legend from the same table, so the two
@@ -2314,6 +2473,10 @@ def _index_context(
         # The no-match state gets its own message instead; see `"query"` and
         # `summary.matching` below.
         "endpoint_count": unfiltered_total,
+        # The facet pills, above the rows -- domain and metric questions
+        # both, one list so the template loops over it once. See
+        # _index_pills for what each one counts and why.
+        "pills": _index_pills(entries, domain, facet),
         "metrics": metrics,
         "metric_count": len(metrics),
         # The three facet groups, above the rows. Each filters by reading
@@ -2458,7 +2621,11 @@ def _index_context(
 
 
 def _index_html(
-    entries: list[EndpointMeasurements], store: Store, q: str | None = None
+    entries: list[EndpointMeasurements],
+    store: Store,
+    q: str | None = None,
+    domain: str | None = None,
+    facet: str | None = None,
 ) -> str:
     """The index, rendered.
 
@@ -2467,7 +2634,7 @@ def _index_html(
     read a static file until 2026-09-05 and needed no store at all.
     """
     return _TEMPLATES.get_template("index.html").render(
-        **_index_context(entries, store, q)
+        **_index_context(entries, store, q, domain, facet)
     )
 
 
@@ -2476,7 +2643,7 @@ _NOT_MEASURED_ON = NamedNode("urn:sparqlwatch:notMeasuredOn")
 
 
 def _only_matching_endpoints(
-    triples: list, q: str, known_endpoints: set[str]
+    triples: list, known_endpoints: set[str], matching_endpoints: set[str]
 ) -> list:
     """The constructed index, narrowed to the endpoints a query names.
 
@@ -2520,14 +2687,18 @@ def _only_matching_endpoints(
     in that set is ever tested, never a substring match against arbitrary
     graph content.
 
-    The membership test itself is _matches_query, the same predicate the
-    HTML path uses, so the two representations cannot disagree about what a
-    query means.
+    `matching_endpoints` is `known_endpoints` already narrowed by whichever of
+    `_matches_query`, `_matches_domain` and `_matches_facet` the caller applied
+    -- computed there and not here, because `_matches_facet` reads a verdict
+    and this function only ever sees an endpoint's URL. Passing the already-
+    decided set rather than a needle and re-deciding it here is what keeps
+    `?q=`, `?domain=` and `?facet=` a single predicate each representation
+    reads once, instead of three predicates spelled twice.
     """
     non_matching = {
         NamedNode(endpoint)
         for endpoint in known_endpoints
-        if not _matches_query(endpoint, q)
+        if endpoint not in matching_endpoints
     }
     unwanted_subjects = {
         t.subject
@@ -2544,27 +2715,48 @@ def _only_matching_endpoints(
     ]
 
 
-def _index_rdf(store: Store, media_type: str, q: str | None = None) -> bytes:
+def _index_rdf(
+    store: Store,
+    media_type: str,
+    entries: list[EndpointMeasurements],
+    q: str | None = None,
+    domain: str | None = None,
+    facet: str | None = None,
+) -> bytes:
     """Serialise every endpoint's facts, straight from the store.
 
-    `q`, when given, narrows this the same way it narrows the HTML: through
-    _matches_query, tested against the same endpoint set endpoint_index(store)
-    gives the HTML (see _only_matching_endpoints for why that set, rather
-    than a fixed predicate list, is what the filter closes over). The query
-    runs unchanged and the filter is applied to what it returns; the triples
-    are only materialised into a list when there is filtering to do, so an
-    unfiltered request still streams straight into serialize() as before.
+    `q`, `domain` and `facet`, when given, narrow this the same way they
+    narrow the HTML: through `_matches_query`, `_matches_domain` and
+    `_matches_facet`, tested against `entries` -- the SAME endpoint_index(store)
+    call `index_resource` already made for the HTML branch, passed in rather
+    than repeated here, so the two branches read one call to the store and
+    cannot drift by reading two. See _only_matching_endpoints for why the
+    matching SET, rather than a fixed predicate list, is what the filter
+    closes over. The query runs unchanged and the filter is applied to what
+    it returns; the triples are only materialised into a list when there is
+    filtering to do, so an unfiltered request still streams straight into
+    serialize() as before.
 
     queries/__init__.py:5-9 is binding: a .rq file stays runnable as pasted,
     and parameters reach a query through pyoxigraph variable substitution or
     not at all. A substring test is not expressible that way, so filtering
     here is the only route that does not bend that rule -- and it means the
-    page and the data share _matches_query rather than two spellings of it.
+    page and the data share `_matches_query`, `_matches_domain` and
+    `_matches_facet` rather than a second spelling of any of them.
     """
     triples = store.query(_INDEX_DESCRIPTION_QUERY)
-    if q:
-        known_endpoints = {entry.endpoint for entry in endpoint_index(store)}
-        triples = _only_matching_endpoints(list(triples), q, known_endpoints)
+    if q or domain or facet:
+        known_endpoints = {entry.endpoint for entry in entries}
+        matching_endpoints = {
+            entry.endpoint
+            for entry in entries
+            if _matches_query(entry.endpoint, q)
+            and _matches_domain(entry.endpoint, domain)
+            and _matches_facet(entry, facet)
+        }
+        triples = _only_matching_endpoints(
+            list(triples), known_endpoints, matching_endpoints
+        )
     return serialize(triples, format=RdfFormat.from_media_type(media_type))
 
 
@@ -2576,6 +2768,17 @@ def index_resource(
         description=(
             "Narrow the index to endpoints whose URL, host, or registry "
             "title contains this text."
+        ),
+    ),
+    domain: str | None = Query(
+        None,
+        description="Narrow the index to endpoints the registry files as this domain.",
+    ),
+    facet: str | None = Query(
+        None,
+        description=(
+            "Narrow the index to endpoints answering one fixed question: "
+            "answering, void, or federates."
         ),
     ),
     store: Store = Depends(get_store),
@@ -2593,14 +2796,18 @@ def index_resource(
     store that holds no quads or no derived graph, which is the mistake a 404
     here would be reporting as an empty registry.
 
-    `q`, when given, narrows both representations through the same predicate,
-    `_matches_query` -- see that function for what it matches: an endpoint's
-    URL, host, or the name the registry carries for it. The HTML branch
-    filters the SELECT bindings before the template ever sees them; the RDF
-    branch filters the CONSTRUCT's triples after the fact, in
+    `q`, `domain` and `facet`, each when given, narrow both representations
+    through the same predicate -- `_matches_query`, `_matches_domain` and
+    `_matches_facet` respectively; see each for what it matches. The HTML
+    branch filters the SELECT bindings before the template ever sees them;
+    the RDF branch filters the CONSTRUCT's triples after the fact, in
     `_only_matching_endpoints`, because `index_description.rq` stays an
     unparameterised query and a SPARQL FILTER is not the same operation as a
-    Python substring test to apply "the same way".
+    Python predicate to apply "the same way". Both branches read ONE call to
+    `endpoint_index(store)`, made here and passed to each, so there is only
+    one place a filter could ever narrow the two representations to
+    different endpoint sets: inside the predicates themselves, which both
+    branches already share.
     """
     media_type = choose_representation(request.headers.get("accept"))
     if media_type is None:
@@ -2613,13 +2820,14 @@ def index_resource(
             media_type="text/plain; charset=utf-8",
         )
 
+    entries = endpoint_index(store)
     if media_type == HTML_MEDIA_TYPE:
         return Response(
-            content=_index_html(endpoint_index(store), store, q),
+            content=_index_html(entries, store, q, domain, facet),
             media_type="text/html; charset=utf-8",
         )
     return Response(
-        content=_index_rdf(store, media_type, q),
+        content=_index_rdf(store, media_type, entries, q, domain, facet),
         media_type=media_type,
     )
 
