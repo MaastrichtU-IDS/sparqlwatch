@@ -101,9 +101,21 @@ def display(name: Name | None, url: str) -> str:
     their names is the server's name, and picking one asserts something untrue.
     The URL itself when no registry names it at all, which is what a row for an
     endpoint dropped from the registry since its last run shows.
+
+    `datasets` is checked BEFORE `title`, fix-round-2, and the order is
+    load-bearing now that load_names (fix-round-1) merges each field
+    independently: a row can carry a `title` from one registry file and a
+    `datasets` count from another, and checking `title` first would show that
+    borrowed title over an endpoint this function's own docstring says must
+    show its host instead. No registry shipped today produces that
+    combination (every title-carrying entry is single-dataset), so this was
+    dormant rather than live, and checking `datasets` first closes it rather
+    than leaving it to the data staying clean.
     """
     if name is None:
         return url
+    if name.datasets:
+        return name.host
     if name.title:
         return name.title
     return name.host

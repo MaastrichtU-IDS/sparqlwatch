@@ -51,6 +51,23 @@ def test_a_multi_dataset_endpoint_shows_its_host_not_a_title(tmp_path):
     assert display(name, "https://many.example/sparql") == "many.example"
 
 
+def test_a_multi_dataset_endpoint_shows_its_host_even_with_a_borrowed_title():
+    """Fix-round-2: a name carrying BOTH a title and a datasets count still
+    shows the host, not the title.
+
+    Unreachable through a single registry file today (nothing shipped pairs
+    the two), but load_names (fix-round-1) merges title, domain and datasets
+    independently, so a title from one file and a datasets count from
+    another land on the same Name -- and display() checking `title` before
+    `datasets` would show the borrowed title over an endpoint serving many
+    datasets, exactly the misrepresentation this function's own docstring
+    says it prevents. Built directly rather than through two registry files,
+    so this pins display()'s own rule rather than load_names' merge order.
+    """
+    name = Name(title="One Of Forty-Two", domain=None, datasets=42, host="many.example")
+    assert display(name, "https://many.example/sparql") == "many.example"
+
+
 def test_an_endpoint_in_no_registry_displays_its_url(tmp_path):
     """A store can hold runs for an endpoint since dropped from the registry."""
     assert display(None, "https://gone.example/sparql") == "https://gone.example/sparql"

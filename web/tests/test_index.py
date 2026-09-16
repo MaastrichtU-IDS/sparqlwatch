@@ -2832,15 +2832,21 @@ def test_a_pill_is_a_link_that_works_without_javascript(client_for, store_regist
 
 
 def test_a_domain_pill_narrows_the_rows(client_for, store_registry_sample):
-    """life_sciences, not government: of this fixture's nine endpoints, only
-    sparql.uniprot.org carries a domain of "government" in the real seeded
-    registry as loaded -- registry_names.load_names keeps the FIRST entry it
-    reads for a URL unless a LATER one carries a title the first lacked, and
-    calibration-sample.toml (read before lod-cloud.toml, alphabetically) lists
-    data.epo.org and visualdataweb.infor.uva.es as bare, title-less, domain-
-    less strings, so lod-cloud.toml's richer "government" entries for those
-    two never win the merge. life_sciences (sparql.uniprot.org) is the one
-    domain this fixture's nine actually expose after that merge."""
+    """life_sciences: two of this fixture's nine endpoints
+    (sparql.uniprot.org and www.foodie-cloud.org) carry it, which is enough
+    on its own to prove `?domain=` narrows without pinning this test to a
+    domain that used to be this fixture's only option.
+
+    It once was: registry_names.load_names merged on title alone, so
+    calibration-sample.toml's bare, title-less listings of data.epo.org and
+    visualdataweb.infor.uva.es (read before lod-cloud.toml, alphabetically)
+    silently won over lod-cloud.toml's richer "government" entries for the
+    same two URLs, and "government" matched nothing on this fixture.
+    Fix-round-1 corrected the merge to keep title, domain and datasets
+    independently, and "government" now matches those same two endpoints
+    (see test_a_domain_that_matches_something_renders_no_message below).
+    life_sciences is kept here regardless, since this test only needs SOME
+    domain that narrows, not a specific one."""
     client = client_for(store_registry_sample)
     everything = endpoints_shown(client.get("/", headers={"accept": "text/html"}).text)
     narrowed = endpoints_shown(

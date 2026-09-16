@@ -2431,9 +2431,15 @@ def _index_context(
     unfiltered_total = len(entries)
     entries = [e for e in entries if _matches_query(e.endpoint, q)]
     if domain:
-        entries = [
-            e for e in entries if (_NAMES.get(e.endpoint) or _NO_NAME).domain == domain
-        ]
+        # Fix-round-2: this used to re-inline _matches_domain's own
+        # comparison ((_NAMES.get(...) or _NO_NAME).domain == domain)
+        # instead of calling it. The two spellings agreed today, which is
+        # exactly why a reviewer had to monkeypatch _matches_domain to prove
+        # they were two spellings at all: only the RDF branch moved. "One
+        # predicate, both branches" is an architecture, not a fact that
+        # happens to hold, and a second spelling of it defeats that whether
+        # or not the two currently compute the same thing.
+        entries = [e for e in entries if _matches_domain(e.endpoint, domain)]
     if facet:
         entries = [e for e in entries if _matches_facet(e, facet)]
     metrics = _index_metrics(entries)

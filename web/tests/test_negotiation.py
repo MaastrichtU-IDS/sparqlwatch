@@ -1380,16 +1380,21 @@ def test_a_domain_narrows_both_representations(client_for, store_registry_sample
     not in the run graph -- so this is exactly the hazard
     test_a_query_matching_a_title_narrows_both_representations guards
     against, one query parameter over. `?domain=` reaches the RDF branch
-    through `_matches_domain`, tested the same way `_matches_query` is in
-    `_only_matching_endpoints`, so the two branches cannot disagree about
-    what a domain means -- but that structural guarantee alone would pass
-    even if `_matches_domain` matched nothing at all: two empty sets are
-    still equal. `sparql.uniprot.org` is this fixture's one endpoint of
-    domain "life_sciences" (see test_a_domain_pill_narrows_the_rows in
-    test_index.py for why "government", the domain a naive read of the
-    seeded registry files suggests, narrows this particular nine-endpoint
-    fixture to nothing), so the membership assertion below is what actually
-    catches a `?domain=` that reached only one representation.
+    through `_matches_domain`, and both branches now call that one function
+    rather than each spelling its own comparison (fix-round-2 closed the gap
+    where the HTML branch re-inlined it) -- but that structural guarantee
+    alone would pass even if `_matches_domain` matched nothing at all: two
+    empty sets are still equal. `sparql.uniprot.org` is one of this
+    fixture's two endpoints of domain "life_sciences" (the other is
+    www.foodie-cloud.org; registry_names.load_names merging each of title,
+    domain and datasets independently, fix-round-1, is why both carry it).
+    "government" -- the domain named in the original brief -- now matches 2
+    of this fixture's nine too, once that same fix stopped a bare, title-less
+    listing in one registry file from silently erasing a domain a richer
+    entry gave the same URL in another; life_sciences is kept here because
+    it was never affected by that bug, not because government still fails.
+    The membership assertion below is what actually catches a `?domain=`
+    that reached only one representation.
     """
     client = client_for(store_registry_sample)
     listed = set(
