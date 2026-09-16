@@ -2452,6 +2452,48 @@ def test_a_filtered_grid_names_no_endpoint_the_filtered_rows_do_not(
     assert grid2 == {"https://ontop.certain.ai.ustp.at/sparql"}, grid2
 
 
+def test_a_domain_only_filter_states_the_fleet_ledes_denominator(
+    client_for, store_dormant_newest, monkeypatch
+):
+    """Blocker-4 of the whole-branch review: the fleet lede's two "of N"
+    clauses guarded on `{% if query %}` alone, so `?domain=` or `?facet=`
+    narrowing the fleet left "All 2 read the same way every time." on the
+    page -- correct English for the whole, unfiltered fleet, and printed on
+    a page that was not it. `summary.matching` and `_no_match_description`
+    were both already widened to `q or domain or facet`; this pins the same
+    rule in the template.
+
+    qlever and kadaster (this fixture's two STEADY endpoints -- ontop is the
+    one that changed, per test_a_filtered_grid_names_no_endpoint_the_
+    filtered_rows_do_not above) are given a shared domain here so `?domain=`
+    narrows the fleet to them alone, dropping ontop and, with it, every
+    "changed" row -- exactly the shape that renders the "All N read the same
+    way" branch this bug was found in.
+    """
+    from registry_names import Name
+
+    monkeypatch.setattr(
+        app_module,
+        "_NAMES",
+        {
+            "https://qlever.dev/api/osm-planet": Name(
+                title=None, domain="test_domain", datasets=None,
+                host="qlever.dev",
+            ),
+            "https://data.kkg.kadaster.nl/query": Name(
+                title=None, domain="test_domain", datasets=None,
+                host="data.kkg.kadaster.nl",
+            ),
+        },
+    )
+    body = client_for(store_dormant_newest).get(
+        "/?domain=test_domain", headers={"accept": "text/html"}
+    ).text
+    lede = re.search(r'<p class="lede">(.*?)</p>', body, re.DOTALL).group(1)
+    normalized = " ".join(lede.split())
+    assert "All 2 of 3 read the same way every time." in normalized, normalized
+
+
 def test_a_single_sweep_store_draws_no_overview(client_for, store):
     """One sweep is not a history, and a one-column grid implies a trend from
     one observation."""
@@ -2604,13 +2646,6 @@ def test_matches_facet_reads_the_vocabulary_described_verdict():
     assert _matches_facet(silent, None)
     assert _matches_facet(verified, "")
     assert not _matches_facet(verified, "not-a-real-facet")
-
-
-def test_a_query_matches_a_host(client_for, store_registry_sample):
-    body = client_for(store_registry_sample).get(
-        "/?q=uniprot", headers={"accept": "text/html"}
-    ).text
-    assert endpoints_shown(body), "a host match must still work"
 
 
 def test_no_title_is_published_as_rdf(client_for, store_registry_sample):
@@ -2853,6 +2888,36 @@ def test_a_domain_pill_narrows_the_rows(client_for, store_registry_sample):
         client.get("/?domain=life_sciences", headers={"accept": "text/html"}).text
     )
     assert 0 < len(narrowed) < len(everything)
+
+
+def test_a_pills_href_carries_the_active_query(client_for, store_registry_sample):
+    """Blocker-5 of the whole-branch review: a pill's href used to be built
+    from only its own `{param}={value}`, so on `/?q=uniprot` the
+    life_sciences pill's COUNT was computed over the query-narrowed page (1
+    endpoint) but its LINK, `/?domain=life_sciences`, dropped `q` and landed
+    on a page of 2. A pill's link must carry every sibling filter its count
+    was computed under.
+    """
+    body = client_for(store_registry_sample).get(
+        "/?q=uniprot", headers={"accept": "text/html"}
+    ).text
+    pills = with_attribute(body, "data-pill")
+    life_sciences = next(p for p in pills if p["data-pill"] == "life_sciences")
+    assert life_sciences["data-pill-count"] == "1", life_sciences
+    href = life_sciences["href"]
+    assert "q=uniprot" in href and "domain=life_sciences" in href, href
+
+
+def test_an_active_pills_href_clears_only_itself(client_for, store_registry_sample):
+    """Pressing an already-active pill narrows nothing further -- it clears
+    that one filter and keeps any other active one, per the same fix."""
+    body = client_for(store_registry_sample).get(
+        "/?domain=life_sciences", headers={"accept": "text/html"}
+    ).text
+    pills = with_attribute(body, "data-pill")
+    life_sciences = next(p for p in pills if p["data-pill"] == "life_sciences")
+    assert "on" in life_sciences.get("class", "")
+    assert "domain=life_sciences" not in life_sciences["href"]
 
 
 def test_the_matrix_sits_below_the_rows(client_for, store_registry_sample):

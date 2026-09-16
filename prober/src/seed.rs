@@ -137,6 +137,18 @@ pub fn candidates(dump: &[u8], excluded: &[registry::Exclusion]) -> anyhow::Resu
         std::collections::HashMap::new();
     for dataset in datasets.values() {
         let before = found.len();
+        // The URLs THIS dataset has already contributed a title for, reset
+        // per dataset: `ordnance-survey-linked-data` in the real dump lists
+        // `http://api.talis.com/stores/ordnance-survey/services/sparql`
+        // TWICE inside its own `sparql` array, and without this a URL's
+        // `datasets` count below counts that occurrence twice -- one dataset
+        // read as two, with no title, suppressing the perfectly unambiguous
+        // "Ordnance Survey Linked Data" the single-title branch would have
+        // used. `datasets` must count distinct DATASETS per URL, not
+        // `access_url` occurrences; registry.rs's own module comment calls a
+        // duplicate URL "the expected case, not the exotic one" and this was
+        // the one place in the pipeline that did not dedupe it.
+        let mut titled_here: std::collections::HashSet<&str> = std::collections::HashSet::new();
         // A missing `sparql` key and an empty array mean the same thing here:
         // this dataset names no endpoint. 970 of 1683 carry an empty array and
         // none lacks the key, but reading both the same way costs nothing and
@@ -158,7 +170,11 @@ pub fn candidates(dump: &[u8], excluded: &[registry::Exclusion]) -> anyhow::Resu
                         .filter(|d| !d.is_empty())
                         .map(str::to_string);
                     let slot = seen.entry(url.to_string()).or_insert((Vec::new(), None));
-                    if !title.is_empty() {
+                    // Only the first `access_url` occurrence of THIS dataset
+                    // for THIS url adds to its title list: a second occurrence
+                    // in the same dataset's array is the same dataset again,
+                    // not a second one.
+                    if titled_here.insert(url) && !title.is_empty() {
                         slot.0.push(title.to_string());
                     }
                     if slot.1.is_none() {
@@ -432,6 +448,53 @@ mod tests {
         assert_eq!(got.endpoints.len(), 1, "one endpoint, however many datasets");
         assert_eq!(got.endpoints[0].title, None, "no title may be chosen from two");
         assert_eq!(got.endpoints[0].datasets, Some(2));
+    }
+
+    /// Blocker-6 of the whole-branch review, against the real dump's
+    /// `ordnance-survey-linked-data`, which lists
+    /// `http://api.talis.com/stores/ordnance-survey/services/sparql` TWICE
+    /// inside its own `sparql` array. Before the fix, each occurrence pushed
+    /// the title again, so this ONE dataset's within-array duplicate read
+    /// exactly like TWO datasets naming the URL: `datasets = 2` and no
+    /// title, suppressing "Ordnance Survey Linked Data" -- an unambiguous
+    /// name -- for a reason that has nothing to do with how many datasets
+    /// actually claim the endpoint.
+    #[test]
+    fn a_duplicate_access_url_within_one_dataset_counts_as_one_dataset() {
+        let dump = br#"{
+          "a": {"title": "Alpha",
+                "sparql": [{"access_url": "https://a/sparql"},
+                           {"access_url": "https://a/sparql"}]}
+        }"#;
+        let got = candidates(dump, &[]).expect("the dump parses");
+        assert_eq!(got.endpoints.len(), 1);
+        assert_eq!(
+            got.endpoints[0].title.as_deref(),
+            Some("Alpha"),
+            "one dataset naming its own URL twice is still one dataset"
+        );
+        assert_eq!(
+            got.endpoints[0].datasets, None,
+            "a within-dataset duplicate must not be read as a second dataset"
+        );
+    }
+
+    /// The genuine multi-dataset case still counts correctly when one of the
+    /// TWO real datasets also repeats its own URL: three occurrences, two
+    /// datasets.
+    #[test]
+    fn a_within_dataset_duplicate_does_not_inflate_a_real_multi_dataset_count() {
+        let dump = br#"{
+          "a": {"title": "Alpha",
+                "sparql": [{"access_url": "https://many/sparql"},
+                           {"access_url": "https://many/sparql"}]},
+          "b": {"title": "Beta",
+                "sparql": [{"access_url": "https://many/sparql"}]}
+        }"#;
+        let got = candidates(dump, &[]).expect("the dump parses");
+        assert_eq!(got.endpoints.len(), 1);
+        assert_eq!(got.endpoints[0].title, None, "no title may be chosen from two");
+        assert_eq!(got.endpoints[0].datasets, Some(2), "two datasets, not three occurrences");
     }
 
     #[test]

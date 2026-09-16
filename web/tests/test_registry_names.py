@@ -152,6 +152,45 @@ def test_a_bad_first_file_does_not_prevent_loading_the_second(tmp_path):
     assert got["https://good.example/sparql"].host == "good.example"
 
 
+def test_a_supplement_title_clears_an_inherited_dataset_count(tmp_path):
+    """The Wikidata bug, fix (a) of the whole-branch review: a bulk import
+    sets `datasets` for a URL it has no title for, and a supplement later
+    names that same URL. Because fields merge independently (fix-round-1),
+    the merged Name used to keep BOTH, and display()'s datasets-before-title
+    rule (fix-round-2, pinned above) then showed the host -- hiding the one
+    deliberate name. The file order shipped is bulk-then-supplement
+    (`_registry_load_order`), but this holds in both orders: whichever file
+    provides the title also decides `datasets`.
+    """
+    bulk = tmp_path / "bulk.toml"
+    bulk.write_text(
+        '[[endpoint]]\nurl = "https://query.wikidata.org/sparql"\n'
+        'domain = "cross_domain"\ndatasets = 2\n'
+    )
+    supplement = tmp_path / "supplement.toml"
+    supplement.write_text(
+        '[[endpoint]]\nurl = "https://query.wikidata.org/sparql"\ntitle = "Wikidata"\n'
+    )
+
+    bulk_then_supplement = load_names([bulk, supplement])["https://query.wikidata.org/sparql"]
+    assert bulk_then_supplement.title == "Wikidata"
+    assert bulk_then_supplement.datasets is None
+    assert display(bulk_then_supplement, "https://query.wikidata.org/sparql") == "Wikidata"
+
+
+def test_wikidata_displays_its_name_not_its_host(tmp_path):
+    """Pins the real registries' outcome directly: probably the most
+    recognisable endpoint in the registry must not render as a bare host."""
+    import app as app_module
+
+    here = Path(__file__).resolve().parents[2] / "prober" / "registry"
+    if not here.is_dir():
+        pytest.skip("registry sources are not in a runtime image")
+    name = app_module._NAMES.get("https://query.wikidata.org/sparql")
+    assert name is not None, "query.wikidata.org must still be a named endpoint"
+    assert display(name, "https://query.wikidata.org/sparql") == "Wikidata"
+
+
 def test_the_real_registries_parse():
     """Against the files actually shipped, not a fixture."""
     here = Path(__file__).resolve().parents[2] / "prober" / "registry"

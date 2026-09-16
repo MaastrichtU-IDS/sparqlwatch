@@ -1846,8 +1846,8 @@ domain = "geography"
 
 [[endpoint]]
 url = "http://api.talis.com/stores/ordnance-survey/services/sparql"
+title = "Ordnance Survey Linked Data"
 domain = "geography"
-datasets = 2
 
 [[endpoint]]
 url = "http://data.organic-edunet.eu/sparql"

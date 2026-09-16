@@ -415,8 +415,16 @@
   </div>
 
   <form class="tools" method="get" action="{{ index_path }}">
+    {# The other two filters a pill or a prior submit may already have set,
+       carried as hidden inputs so submitting this box does not drop them --
+       the search form's own copy of blocker-5's fix: a pill's href now
+       carries every sibling parameter (see _pill_href), and a plain HTML
+       form needs the equivalent, since the browser only sends the fields
+       it holds. #}
+    {% if domain %}<input type="hidden" name="domain" value="{{ domain }}">{% endif %}
+    {% if facet %}<input type="hidden" name="facet" value="{{ facet }}">{% endif %}
     <input id="q" name="q" type="search" autocomplete="off" value="{{ query or '' }}"
-           placeholder="Filter by endpoint URL or host" aria-label="Filter by endpoint URL or host">
+           placeholder="Filter by endpoint name or URL" aria-label="Filter by endpoint name or URL">
     <noscript><button type="submit">Filter</button></noscript>
     <span class="shown" id="shown"></span>
   </form>
@@ -431,7 +439,7 @@
   <div class="pills">
     {% for p in pills %}
     <a class="pill{% if p.on %} on{% endif %}" data-pill="{{ p.value }}"
-       data-pill-count="{{ p.count }}" href="/?{{ p.param }}={{ p.value | urlencode }}">
+       data-pill-count="{{ p.count }}" href="{{ p.href }}">
       {{ p.label }} <i>{{ p.count }}</i></a>
     {% endfor %}
   </div>
@@ -483,11 +491,11 @@
       <em>absent</em>, a verdict: the sweep looked and found nothing there. A
       dot on the baseline is a sweep that did not cover that endpoint, which is
       not a verdict about it.
-      {% if fleet.steady %}The other {{ fleet.steady }}{% if query %} of
+      {% if fleet.steady %}The other {{ fleet.steady }}{% if filtered %} of
       {{ summary.total }}{% endif %} read the same way in
       every sweep that saw them.{% endif %}
       {% else %}No endpoint's availability has moved across these
-      {{ fleet.runs | length }} sweeps. All {{ fleet.steady }}{% if query %} of
+      {{ fleet.runs | length }} sweeps. All {{ fleet.steady }}{% if filtered %} of
       {{ summary.total }}{% endif %} read the same way
       every time.{% endif %}</p>
 
@@ -553,8 +561,12 @@
 
   {% if rows %}
   <p class="note" data-name-provenance>
-    Names come from the catalogues these endpoints were registered in, not from
-    anything this service measured. The URL beneath each one is what was probed.
+    Names, domains and dataset counts come from the catalogues these endpoints
+    were registered in, not from anything this service measured: a row's name,
+    the "N datasets" beside it, and the domain pills above the rows are all the
+    registry's own words. The URL beneath each name is what was probed, and the
+    triple, graph and class counts beside a row are this service's own
+    measurement of it.
   </p>
   {% endif %}
 
@@ -858,8 +870,15 @@
          row grew to support the grid. */
       pairs[cell.textContent.trim() + "|" + cls] = 1;
     });
+    /* The name a reader searches by, not just the URL a reader probed: a
+       `<a data-row-name>` carries the catalogue's title (index.html's
+       row markup), and the server's own `q` match (app.py's
+       `_matches_query`) already tests both, so this must too or the two
+       paths answer the same query differently. */
+    var nameEl = row.querySelector("[data-row-name]");
     return {
       url: row.getAttribute("data-endpoint").toLowerCase(),
+      name: nameEl ? nameEl.textContent.toLowerCase() : "",
       drawn: drawn,
       pairs: pairs
     };
@@ -952,7 +971,7 @@
      would add, not how many are showing. Shared by both counters so they can
      never condition on different rows. */
   function survives(r, q, picked, skip) {
-    if (q && r.f.url.indexOf(q) < 0) { return false; }
+    if (q && r.f.url.indexOf(q) < 0 && r.f.name.indexOf(q) < 0) { return false; }
     for (var i = 0; i < NAMES.length; i += 1) {
       var other = NAMES[i];
       if (other !== skip && picked[other].length &&
@@ -979,7 +998,7 @@
     });
     var matched = 0;
     rows.forEach(function (r) {
-      var hit = !q || r.f.url.indexOf(q) >= 0;
+      var hit = !q || r.f.url.indexOf(q) >= 0 || r.f.name.indexOf(q) >= 0;
       for (var i = 0; hit && i < NAMES.length; i += 1) {
         if (picked[NAMES[i]].length &&
             !inGroup(r.f, NAMES[i], picked[NAMES[i]])) { hit = false; }

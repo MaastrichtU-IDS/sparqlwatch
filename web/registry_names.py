@@ -82,6 +82,29 @@ def load_names(paths: list[Path]) -> dict[str, Name]:
                 existing = out.get(url)
                 if existing is None:
                     out[url] = candidate
+                elif existing.title is None and candidate.title is not None:
+                    # THIS file is the one giving the endpoint an explicit
+                    # name where none existed before, so it also decides
+                    # `datasets` -- its own value (often None), not one
+                    # inherited from an earlier file that had no title for
+                    # this URL at all. Fix (a) of the whole-branch review:
+                    # `query.wikidata.org` gets `datasets = 2` from
+                    # lod-cloud.toml's bulk import (which names no title for
+                    # it) and then "Wikidata" from kg-catalog.toml. The
+                    # ordinary per-field merge below kept BOTH, and
+                    # `display`'s datasets-before-title rule then showed the
+                    # host, hiding the one deliberate name on arguably the
+                    # registry's most recognisable endpoint. A `datasets`
+                    # count set on the SAME entry as a title (a genuinely
+                    # ambiguous multi-dataset endpoint) still survives: that
+                    # shape is decided in the `existing is None` branch above,
+                    # untouched by this one.
+                    out[url] = Name(
+                        title=candidate.title,
+                        domain=existing.domain if existing.domain is not None else candidate.domain,
+                        datasets=candidate.datasets,
+                        host=existing.host,
+                    )
                 else:
                     out[url] = Name(
                         title=existing.title if existing.title is not None else candidate.title,

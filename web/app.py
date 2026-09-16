@@ -2225,8 +2225,15 @@ def _fleet_view(history: FleetHistory) -> dict:
 def _matches_query(endpoint: str, needle: str | None) -> bool:
     """Whether one endpoint answers to a search.
 
-    Case-insensitive substring over the endpoint URL, its host, and the title
-    the registry carries for it.
+    Case-insensitive substring over the endpoint URL and the title the
+    registry carries for it. NOT the host separately: `_host` is
+    `urlparse(url).netloc`, always a substring of `endpoint` itself, so a
+    needle that failed the URL test could never pass a host test either --
+    the clause was dead across all 549 registry entries (whole-branch
+    review, fix (c)) and the one test written against it used a needle
+    ("uniprot") that is also in the URL, so it could not have failed even
+    if the clause were removed. Advertising a match that can never happen
+    is the same defect this review's other findings fix.
 
     This is ONE function on purpose, and it now reads _NAMES for the same
     reason: both representations of the index filter through it, so the page
@@ -2241,10 +2248,7 @@ def _matches_query(endpoint: str, needle: str | None) -> bool:
     name = _NAMES.get(endpoint)
     if name is None:
         return False
-    return bool(
-        (name.title and needle in name.title.lower())
-        or needle in name.host.lower()
-    )
+    return bool(name.title and needle in name.title.lower())
 
 
 # Stands in for an endpoint no registry names at all, so _matches_domain never
@@ -2292,7 +2296,15 @@ _FACET_METRICS = {
 }
 _FACET_LABELS = {
     "answering": "answering",
-    "void": "declares VoID",
+    # Not "declares VoID": `_POSITIVE_VERDICTS` below counts
+    # `undeclared-but-verified` alongside `verified`, and prober/README.md
+    # defines that verdict as the endpoint NOT having declared anything --
+    # "works, and the endpoint could have declared it but did not". A pill
+    # reading "declares VoID" would assert a declaration this facet does not
+    # require. The metric's own canonical label, from
+    # prober/metrics.toml's `vocabulary-described`, says only what was
+    # measured either way.
+    "void": "Describes its own vocabulary",
 }
 
 
@@ -2310,10 +2322,14 @@ def _matches_facet(entry: EndpointMeasurements, facet: str | None) -> bool:
 
       "void"       its `vocabulary-described` verdict is positive: the
                     endpoint's own description is confirmed to name the
-                    classes its data actually holds -- which is exactly what
-                    the metric measures, so "declares VoID" is not a claim
-                    beyond it (see `_FACET_METRICS`'s comment on why
-                    "federates" failed this same check and was removed).
+                    classes its data actually holds. `_POSITIVE_VERDICTS`
+                    below counts `undeclared-but-verified` here too, which
+                    prober/README.md defines as the endpoint NOT having
+                    declared anything -- so this facet does not establish a
+                    declaration, only that the fact holds. The pill's label
+                    is the metric's own canonical name, not a claim of
+                    "declares", for the same reason "federates" failed this
+                    check and was removed (see `_FACET_METRICS`'s comment).
 
     `_POSITIVE_VERDICTS` is the same table the availability facet above was
     built from: "verified" and "undeclared-but-verified" both mean the fact
@@ -2335,8 +2351,38 @@ def _matches_facet(entry: EndpointMeasurements, facet: str | None) -> bool:
     )
 
 
+def _pill_href(
+    q: str | None, domain: str | None, facet: str | None, param: str, value: str, on: bool
+) -> str:
+    """The URL one pill links to: every OTHER active filter carried along,
+    and the pill's own parameter set to its value -- or dropped, when the
+    pill is already the one selected, so pressing an active pill clears
+    just itself.
+
+    Blocker-5 of the whole-branch review: a pill built its href from only
+    its own `{param}={value}`, so `/?q=uniprot`'s "life_sciences 1" pill
+    linked to `/?domain=life_sciences` alone, silently discarding the `q`
+    the pill's own count was computed under -- a count for one page on a
+    link to another. `_index_pills`' docstring already promises a pill's
+    COUNT states the page in front of the reader; this is the same promise
+    kept for the pill's LINK.
+    """
+    params = {"q": q, "domain": domain, "facet": facet}
+    if on:
+        params[param] = None
+    else:
+        params[param] = value
+    pairs = [(k, v) for k, v in params.items() if v]
+    if not pairs:
+        return "/"
+    return "/?" + "&".join(f"{k}={quote(v, safe='')}" for k, v in pairs)
+
+
 def _index_pills(
-    entries: list[EndpointMeasurements], domain: str | None, facet: str | None
+    entries: list[EndpointMeasurements],
+    q: str | None,
+    domain: str | None,
+    facet: str | None,
 ) -> list[dict]:
     """The registry's most common questions, as links above the rows.
 
@@ -2352,7 +2398,10 @@ def _index_pills(
     (fewer than three where fewer than three are present -- store_registry_
     sample's nine endpoints, for instance, split across five), plus the two
     fixed questions _matches_facet answers. Both groups share one shape,
-    {label, param, value, count, on}, so the template loops over them once.
+    {label, param, value, count, on, href}, so the template loops over them
+    once. `href` carries every OTHER active filter alongside this pill's own
+    parameter -- see `_pill_href` -- so a pill's link never drops a filter
+    its own count was computed under.
     """
     domains = Counter(
         d for e in entries if (d := (_NAMES.get(e.endpoint) or _NO_NAME).domain)
@@ -2364,6 +2413,7 @@ def _index_pills(
             "value": value,
             "count": count,
             "on": domain == value,
+            "href": _pill_href(q, domain, facet, "domain", value, domain == value),
         }
         for value, count in domains.most_common(3)
     ]
@@ -2374,6 +2424,7 @@ def _index_pills(
             "value": value,
             "count": sum(1 for e in entries if _matches_facet(e, value)),
             "on": facet == value,
+            "href": _pill_href(q, domain, facet, "facet", value, facet == value),
         }
         for value, label in _FACET_LABELS.items()
     ]
@@ -2429,6 +2480,17 @@ def _index_context(
     # strip states a denominator ("18 of 212") rather than letting the reader
     # infer the fleet size from a number that is no longer it.
     unfiltered_total = len(entries)
+    # ONE flag for "is any filter active", read by `summary.matching` below
+    # and passed to the template as `filtered` for the fleet lede's
+    # denominator. Blocker-4 of the whole-branch review: the lede's own
+    # `{% if query %}` guards named only `q`, so `?domain=` or `?facet=`
+    # alone left "All 2 read the same way every time." with no "of 12" --
+    # correct English for the unfiltered fleet, printed on a page that was
+    # not it. `summary.matching` and `_no_match_description` were both
+    # already widened to `q or domain or facet` in an earlier fix round;
+    # this is that same rule, computed once so a filter added later cannot
+    # be widened into two of the three places and missed in the third.
+    filtered = bool(q or domain or facet)
     entries = [e for e in entries if _matches_query(e.endpoint, q)]
     if domain:
         # Fix-round-2: this used to re-inline _matches_domain's own
@@ -2512,7 +2574,7 @@ def _index_context(
         # The facet pills, above the rows -- domain and metric questions
         # both, one list so the template loops over it once. See
         # _index_pills for what each one counts and why.
-        "pills": _index_pills(entries, domain, facet),
+        "pills": _index_pills(entries, q, domain, facet),
         "metrics": metrics,
         "metric_count": len(metrics),
         # The three facet groups, above the rows. Each filters by reading
@@ -2640,7 +2702,7 @@ def _index_context(
             # fix-round-1 to any of the three filters: `?domain=` and
             # `?facet=` can narrow a page exactly as `?q=` can, and a page
             # narrowed by either must state its denominator too.
-            "matching": None if not (q or domain or facet) else len(entries),
+            "matching": None if not filtered else len(entries),
             "total": unfiltered_total,
             "answering": sum(
                 1 for e in entries
@@ -2656,6 +2718,21 @@ def _index_context(
         # enhancement narrows the rows the server already returned instead of
         # re-filtering from an empty box and instantly widening the list.
         "query": q,
+        # Whether ANY filter narrowed this page -- q, domain or facet -- for
+        # the fleet lede's denominator (index.html's "of {{ summary.total }}"
+        # clauses) and any other spot that must say "of N" exactly when
+        # `summary.matching` is not None. One flag rather than the template
+        # re-deriving it from `query` alone, which is what let ?domain= and
+        # ?facet= slip past it before.
+        "filtered": filtered,
+        # The submitted ?domain= and ?facet=, for the search form's hidden
+        # inputs (index.html's `.tools` form) so that submitting the text
+        # box from a pill-narrowed page -- `/?domain=government`, say --
+        # does not silently drop the domain the reader already chose.
+        # Blocker-5's second half: the same defect as a pill's href, one
+        # hop over, in the one other form on this page that names `q`.
+        "domain": domain,
+        "facet": facet,
         # What the no-match message (below `summary.matching == 0`) names.
         # Built here rather than in the template so the sentence is one
         # decision with a right answer, not three conditionals threaded
@@ -2810,13 +2887,13 @@ def index_resource(
     q: str | None = Query(
         None,
         description=(
-            "Narrow the index to endpoints whose URL, host, or registry "
-            "title contains this text."
+            "Narrow the index to endpoints whose URL or registry title "
+            "contains this text."
         ),
     ),
     domain: str | None = Query(
         None,
-        description="Narrow the index to endpoints the registry files as this domain.",
+        description="Narrow the index to endpoints the registry files under this domain.",
     ),
     facet: str | None = Query(
         None,
