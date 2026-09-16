@@ -319,8 +319,13 @@ In `candidates`, collect titles per URL before building the list. Replace the `f
     // A URL may appear under several datasets: 40 do in the 2026-06-15 dump,
     // one under 42. So this accumulates per URL rather than per dataset, and
     // the count is what decides whether a title is usable at all.
-    let mut seen: indexmap::IndexMap<String, (Vec<String>, Option<String>)> =
-        indexmap::IndexMap::new();
+    //
+    // A HashMap and not an ordered map: `found` already carries first-seen
+    // order and the refusal pipeline preserves it, so this only has to
+    // answer "what did the dump say about this URL" and never decides
+    // sequence.
+    let mut seen: std::collections::HashMap<String, (Vec<String>, Option<String>)> =
+        std::collections::HashMap::new();
 ```
 
 and, where a URL is found, push the dataset's title and record its domain:
@@ -369,7 +374,7 @@ Then build the entries after the refusal pipeline has produced the final URL lis
 
 Read the existing function before editing: `final_urls` above is a placeholder for whatever the last refusal stage binds. Use the real name; do not introduce a new binding.
 
-`indexmap` preserves insertion order, which is what keeps two seeds diffing readably. If it is not already a dependency, use `BTreeMap` plus the existing order-preserving `found` vector rather than adding a crate — **check `prober/Cargo.toml` first and say in your report which you used.**
+**No new crate.** `prober/Cargo.toml` has no `indexmap` and does not need one: the order that makes two seeds diff readably comes from `found`, which the refusal pipeline preserves, so the map above is only a lookup. Do not add a dependency for this.
 
 - [ ] **Step 4: Implement the writer**
 
