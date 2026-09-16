@@ -1305,3 +1305,46 @@ def test_a_filtered_index_names_no_non_matching_endpoint_anywhere(
     assert has_triple(
         graph, declining, GENERATED_AT, Literal(DORMANT_SWEEP, datatype=DATE_TIME)
     ), "the activity's own facts must survive filtering the endpoints it links to"
+
+
+def test_a_query_matching_a_title_narrows_both_representations(
+    client_for, store_registry_sample
+):
+    """The invariant, under the case this feature introduces.
+
+    Before names, ?q= could only match a URL, and both representations
+    filtered on the same string. A title lives in the registry files and not
+    in the run graph, so the RDF branch cannot see it unless the predicate
+    they share does -- and if only the HTML saw it, the two would describe
+    different endpoint sets under the same URL.
+
+    Reuses this file's own `rows_of` and `graph_of` rather than defining
+    "endpoints_shown"/"parse_graph" of the same shape a second time: `rows_of`
+    already reads every rendered row's `data-endpoint`, and `graph_of` already
+    parses a response body as RDF.
+    """
+    import app as app_module
+
+    titled = [u for u, n in app_module._NAMES.items() if n.title]
+    if not titled:
+        pytest.skip("no registry entry carries a title in this checkout")
+    url = titled[0]
+    needle = app_module._NAMES[url].title.split()[0].lower()
+
+    client = client_for(store_registry_sample)
+    listed = set(
+        rows_of(client.get(f"/?q={needle}", headers={"accept": "text/html"}).text)
+    )
+    graph = graph_of(
+        client.get(f"/?q={needle}", headers={"accept": "text/turtle"})
+    )
+    described = {
+        str(t.object.value)
+        for t in graph
+        if str(t.predicate.value)
+        in (
+            "http://www.w3.org/ns/dqv#computedOn",
+            "urn:sparqlwatch:notMeasuredOn",
+        )
+    }
+    assert described == listed

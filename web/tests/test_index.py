@@ -2580,6 +2580,22 @@ def test_matches_query_is_case_insensitive_and_permissive_when_empty():
     assert _matches_query("https://sparql.uniprot.org/sparql", "  uniprot  ")
 
 
+def test_a_query_matches_a_host(client_for, store_registry_sample):
+    body = client_for(store_registry_sample).get(
+        "/?q=uniprot", headers={"accept": "text/html"}
+    ).text
+    assert endpoints_shown(body), "a host match must still work"
+
+
+def test_no_title_is_published_as_rdf(client_for, store_registry_sample):
+    """A catalogue's title is not a measurement and does not enter the graph."""
+    rdf = client_for(store_registry_sample).get(
+        "/", headers={"accept": "text/turtle"}
+    ).text
+    assert "dcterms:title" not in rdf
+    assert "http://purl.org/dc/terms/title" not in rdf
+
+
 # ---------------------------------------------------------------------------
 # ?q= matching nothing: the gap the coordinator's fix-round-1 measurement
 # found. Filtering `entries` before anything else derives from them (see

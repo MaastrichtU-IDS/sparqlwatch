@@ -76,6 +76,7 @@ from fleet import FleetHistory, fleet_history, fleet_stats
 from endpoint_measurements import EndpointMeasurements, endpoint_measurements
 from load_run import CURRENT_GRAPH, pointers_to_missing_runs
 from queries import read_query
+from registry_names import Name, load_names
 
 # ---------------------------------------------------------------------------
 # The URL shape
@@ -2215,17 +2216,26 @@ def _fleet_view(history: FleetHistory) -> dict:
 def _matches_query(endpoint: str, needle: str | None) -> bool:
     """Whether one endpoint answers to a search.
 
-    Case-insensitive substring over the endpoint URL, which is the only
-    identifying text queries/index.rq returns -- it carries ?endpoint and
-    per-metric verdicts, and no name or vocabulary column.
+    Case-insensitive substring over the endpoint URL, its host, and the title
+    the registry carries for it.
 
-    This is ONE function on purpose. Both representations of the index filter
-    through it, so the page and the data agree by construction rather than by a
-    test noticing later that they drifted.
+    This is ONE function on purpose, and it now reads _NAMES for the same
+    reason: both representations of the index filter through it, so the page
+    and the data agree by construction. A title that only the HTML could match
+    would make ?q= mean two different things at one URL.
     """
     if not needle:
         return True
-    return needle.strip().lower() in endpoint.lower()
+    needle = needle.strip().lower()
+    if needle in endpoint.lower():
+        return True
+    name = _NAMES.get(endpoint)
+    if name is None:
+        return False
+    return bool(
+        (name.title and needle in name.title.lower())
+        or needle in name.host.lower()
+    )
 
 
 def _index_context(
@@ -3567,6 +3577,16 @@ def icon_mask() -> Response:
     return Response(
         content=_ICON_MONO, media_type=_SVG, headers={"Cache-Control": _ICON_CACHE}
     )
+
+
+# The registry files, read once. The Dockerfile copies prober/registry/ into
+# the image, so these are present at runtime; in a checkout they are the same
+# files seed-registry writes.
+#
+# A missing directory yields an empty map rather than an error: the site serves
+# before anything is seeded, and every row falls back to its URL.
+_REGISTRY_DIR = Path(__file__).resolve().parents[1] / "prober" / "registry"
+_NAMES: dict[str, Name] = load_names(sorted(_REGISTRY_DIR.glob("*.toml")))
 
 
 # The one stylesheet. Assembled at import from the static file plus the verdict
