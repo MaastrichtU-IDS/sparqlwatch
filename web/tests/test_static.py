@@ -145,3 +145,64 @@ def test_the_generated_rules_read_the_fill_token(client):
         "generated declarations, not on the --fill token itself, which is "
         "legitimately an rgba() literal in each of the two blocks."
     )
+
+
+def test_no_route_serves_a_private_copy_of_the_verdict_encoding(store):
+    """Every HTML route this site serves, not just the two that already had a
+    page-specific version of this check (test_page.py's endpoint page,
+    test_index.py's index).
+
+    A private `.enc-` rule anywhere in a page's own markup loads after the
+    hashed stylesheet (`head_extra` renders after the `<link>` in base.html)
+    and wins on cascade order, so a fix to the generated table -- such as the
+    fill token's rgba() value -- would silently fail to reach that one page.
+    explore.html carried exactly this: nine rules copied from
+    verdict_encoding.css_rules(), with the pre-fix literal hard-coded, which
+    is what this test is written to catch.
+    """
+    import urllib.parse
+
+    import verdict_encoding
+    from app import (
+        ABOUT_PATH,
+        DOCS_METRICS_PATH,
+        DOCS_PATH,
+        DOCS_STATES_PATH,
+        DOCS_VOID_PATH,
+        ENDPOINT_PATH,
+        EXPLORE_PATH,
+        INDEX_PATH,
+        get_store,
+    )
+
+    # The store fixture's one endpoint (run-with-samples.nq), which is what
+    # every other suite calls KADASTER.
+    kadaster = "https://data.kkg.kadaster.nl/query"
+
+    app_module.app.dependency_overrides[get_store] = lambda: store
+    try:
+        client = TestClient(app_module.app)
+        routes = [
+            INDEX_PATH,
+            ENDPOINT_PATH + "?url=" + urllib.parse.quote(kadaster, safe=""),
+            DOCS_PATH,
+            DOCS_METRICS_PATH,
+            DOCS_STATES_PATH,
+            DOCS_VOID_PATH,
+            EXPLORE_PATH,
+            ABOUT_PATH,
+        ]
+        assert len(routes) == 8, "this is meant to cover all eight HTML routes"
+        for route in routes:
+            response = client.get(route, headers={"accept": "text/html"})
+            assert response.status_code == 200, f"{route} did not render"
+            body = response.text
+            for state in (*verdict_encoding.STATES, verdict_encoding.UNRECOGNISED):
+                selector = "." + verdict_encoding.css_class(state.slug)
+                assert selector + " " not in body, (
+                    f"{route} serves a private copy of {selector}; the "
+                    f"encoding must come from the hashed stylesheet or "
+                    f"nowhere"
+                )
+    finally:
+        app_module.app.dependency_overrides.clear()

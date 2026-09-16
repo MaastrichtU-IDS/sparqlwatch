@@ -426,10 +426,12 @@
       <em>absent</em>, a verdict: the sweep looked and found nothing there. A
       dot on the baseline is a sweep that did not cover that endpoint, which is
       not a verdict about it.
-      {% if fleet.steady %}The other {{ fleet.steady }} read the same way in
+      {% if fleet.steady %}The other {{ fleet.steady }}{% if query %} of
+      {{ summary.total }}{% endif %} read the same way in
       every sweep that saw them.{% endif %}
       {% else %}No endpoint's availability has moved across these
-      {{ fleet.runs | length }} sweeps. All {{ fleet.steady }} read the same way
+      {{ fleet.runs | length }} sweeps. All {{ fleet.steady }}{% if query %} of
+      {{ summary.total }}{% endif %} read the same way
       every time.{% endif %}</p>
 
     <ul class="stats">

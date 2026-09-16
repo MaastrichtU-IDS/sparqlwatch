@@ -2410,6 +2410,47 @@ def test_the_overview_draws_in_the_sites_own_encoding(client_for, store_two_swee
     assert drawn <= known, f"{drawn - known} is not a state this site defines"
 
 
+def test_a_filtered_grid_names_no_endpoint_the_filtered_rows_do_not(
+    client_for, store_dormant_newest
+):
+    """The regression this test is written against: the grid was built from
+    `history.changed`, read straight from the store and never passed through
+    `_matches_query`, so a `?q=` that narrowed the listing left the grid
+    showing -- and linking, via `row.href` -- an endpoint the same page's
+    other representation (and its own rows) had just dropped.
+
+    store_dormant_newest is the closest committed fixture to what this
+    wants. Checked directly (by loading every multi-run fixture combination
+    this suite has against `fleet_history`): none of them has more than ONE
+    endpoint that ever reads differently between sweeps. This store's one is
+    https://ontop.certain.ai.ustp.at/sparql. A single changed endpoint cannot
+    show a query narrowing the grid from two rows to one, so this asks the
+    two queries that together still pin the bug down: one that excludes the
+    endpoint that changed (the grid must come up EMPTY, not still name it --
+    this is the exact shape of the bug this was measured against, `?q=
+    kadaster` naming ontop) and one that matches it (the grid must still draw
+    it, ruling out the wrong fix of always emptying the grid under a
+    filter).
+    """
+    client = client_for(store_dormant_newest)
+
+    excluding = client.get("/?q=kadaster", headers={"accept": "text/html"}).text
+    rows = set(re.findall(r'data-endpoint="([^"]+)"', excluding))
+    grid = set(re.findall(r'data-fleet-endpoint="([^"]+)"', excluding))
+    assert rows == {"https://data.kkg.kadaster.nl/query"}, rows
+    assert grid <= rows, f"the grid names {grid - rows}, which the rows do not"
+    assert grid == set(), (
+        "the one endpoint that ever changed was filtered out of the rows; "
+        "the grid must not still draw it"
+    )
+
+    matching = client.get("/?q=ontop", headers={"accept": "text/html"}).text
+    rows2 = set(re.findall(r'data-endpoint="([^"]+)"', matching))
+    grid2 = set(re.findall(r'data-fleet-endpoint="([^"]+)"', matching))
+    assert grid2 <= rows2, f"the grid names {grid2 - rows2}, which the rows do not"
+    assert grid2 == {"https://ontop.certain.ai.ustp.at/sparql"}, grid2
+
+
 def test_a_single_sweep_store_draws_no_overview(client_for, store):
     """One sweep is not a history, and a one-column grid implies a trend from
     one observation."""

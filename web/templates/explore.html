@@ -10,23 +10,29 @@
    chrome and most of the panel and typography rules were already shared with
    /docs by then; what is left in head_extra below is genuinely this page's
    own -- the search box, the facet grid and the term list -- because nothing
-   else on the site has anything like them. The .enc- rules stay copied from
-   verdict_encoding.css_rules() for the reason the README gives: a term's
-   evidence state IS a verdict in this project's vocabulary, and drawing it
-   differently would teach a second language for one fact. #}
+   else on the site has anything like them.
+
+   The .enc- rules themselves do NOT belong here, and a hand-copied set of
+   nine used to sit below (removed 2026-09-16): head_extra renders after the
+   hashed stylesheet's own <link>, so a private copy here always won on
+   cascade order and could silently drift from verdict_encoding.css_rules(),
+   which is exactly what happened -- it still hard-coded the pre-fix fill
+   literal after the token was corrected. The chips below get their
+   presentation from the class name alone (`enc-` + a state's slug, built at
+   render time by the inline script), which the generated stylesheet already
+   defines for every page. #}
 {% extends "base.html" %}
 {% block title %}sparqlwatch: vocabulary{% endblock %}
 {% block head_extra %}
 <style>
   /* This page's own layout and the vocabulary grid: search, facets and the
      term list. Nothing else on the site has anything like it, which is why
-     it stays here instead of moving into site.css. The .enc- rules are
-     copied from verdict_encoding.css_rules() rather than invented, because a
-     term's evidence state IS a verdict in this project's vocabulary: used
-     and declared is `verified`, used but not declared is
-     `undeclared-but-verified`, declared but not used is `declared-only`. A
-     prototype that drew its own encoding would teach the reader a second
-     language for the same fact. */
+     it stays here instead of moving into site.css. The .enc- classes the
+     chips below carry (a term's evidence state IS a verdict in this
+     project's vocabulary: used and declared is `verified`, used but not
+     declared is `undeclared-but-verified`, declared but not used is
+     `declared-only`) are drawn by the generated stylesheet's rules, not by
+     anything in this block -- see the file header comment above. */
   main { max-width: 1120px; }
   .lead { color: var(--text-muted); margin-bottom: 18px; max-width: 780px; }
   .proto { border: 1px dashed var(--warn); border-radius: var(--radius);
@@ -124,16 +130,6 @@
                border-top: 1px solid var(--border); }
   .legend { margin: 16px 0 0; font-size: 12.5px; color: var(--text-muted);
             max-width: 780px; }
-
-  /* Copied verbatim from verdict_encoding.css_rules(). */
-  .enc-verified { border: 1px solid var(--good); background: rgba(255, 255, 255, 0.16); }
-  .enc-undeclared-but-verified { border: 1px dashed var(--good); background: rgba(255, 255, 255, 0.16); }
-  .enc-declared-only { border: 1px solid var(--text-muted); background: transparent; }
-  .enc-declared-but-wrong { border: 2px solid var(--crit); background: rgba(255, 255, 255, 0.16); }
-  .enc-indeterminate { border: 1px dashed var(--warn); background: transparent; }
-  .enc-absent { border: 1px solid transparent; background: transparent; }
-  .enc-not-measured { border: 1px dotted var(--text-dim); background: transparent; }
-  .enc-unrecognised { border: 3px double var(--accent); background: transparent; }
 
   /* ---- NARROW SCREENS ---------------------------------------------------
      The worst page of the seven: +534px at 375px, measured by

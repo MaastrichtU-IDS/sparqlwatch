@@ -110,10 +110,21 @@ def test_an_empty_query_returns_everything_in_order():
 
 
 def test_the_shared_case_table_holds():
-    """The same table web/static/vocab-search.js is checked against."""
+    """The same table web/static/vocab-search.js is checked against.
+
+    Bands, not just names. A name-only check cannot tell `close` from
+    `match`, which is exactly the axis a mutation of vocab-search.js
+    collapsed once (see test_the_javascript_agrees_with_python's docstring)
+    while every name in this table still matched and the suite stayed green.
+    """
     for case in CASES:
-        got = [t["local"] for t in rank(case["terms"], case["query"])]
+        ranked = rank(case["terms"], case["query"])
+        got = [t["local"] for t in ranked]
         assert got == case["expected"], f"{case['query']!r}: {got} != {case['expected']}"
+        got_bands = [t.get("band") for t in ranked]
+        assert got_bands == case["expected_bands"], (
+            f"{case['query']!r}: bands {got_bands} != {case['expected_bands']}"
+        )
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
@@ -125,6 +136,13 @@ def test_the_javascript_agrees_with_python(tmp_path):
     above are the ones that gate. That is the trade this arrangement makes: the
     rules are always tested, and the transliteration is checked wherever it can
     be. If the two ever drift, it will be here that it shows.
+
+    Checks bands as well as names, which it did not always do. A JS mutation
+    that labels every surviving term "match" -- collapsing "close matches"
+    into "matches", i.e. presenting a typo hit as an exact one -- passed this
+    suite 21/21 while the shared fixture carried only `expected` names, none
+    of which that mutation changes. `expected_bands` is the fixture column
+    added to close that gap; see below for the mutation demonstrated live.
     """
     script = Path(__file__).resolve().parents[1] / "static" / "vocab-search.js"
     cases = Path(__file__).parent / "fixtures" / "vocab_match_cases.json"
@@ -145,17 +163,23 @@ def test_the_javascript_agrees_with_python(tmp_path):
       import {{ rank }} from {str(mjs_copy)!r};
       import {{ readFileSync }} from 'node:fs';
       const cases = JSON.parse(readFileSync({str(cases)!r}, 'utf8'));
-      const out = cases.map(c => rank(c.terms, c.query).map(t => t.local));
-      console.log(JSON.stringify(out));
+      const names = cases.map(c => rank(c.terms, c.query).map(t => t.local));
+      const bands = cases.map(c => rank(c.terms, c.query).map(t => t.band ?? null));
+      console.log(JSON.stringify({{names, bands}}));
     """
     result = subprocess.run(
         ["node", "--input-type=module", "-e", harness],
         capture_output=True, text=True, check=True,
     )
     got = json.loads(result.stdout)
-    assert got == [c["expected"] for c in CASES], (
-        "vocab-search.js and vocab_match.py disagree; they are the same rules "
-        "written twice and must stay that way"
+    assert got["names"] == [c["expected"] for c in CASES], (
+        "vocab-search.js and vocab_match.py disagree on WHICH terms match; "
+        "they are the same rules written twice and must stay that way"
+    )
+    assert got["bands"] == [c["expected_bands"] for c in CASES], (
+        "vocab-search.js and vocab_match.py disagree on the BAND a term "
+        "lands in -- a typo hit labelled the same as an exact one is exactly "
+        "the defect this comparison exists to catch"
     )
 
 

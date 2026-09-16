@@ -5,7 +5,8 @@
       {"local": "Receptor", "prefix": "drugbank", "iri": "http://bio2rdf.org/drugbank_vocabulary:Receptor", "tokens": "receptor"},
       {"local": "Drug", "prefix": "drugbank", "iri": "http://bio2rdf.org/drugbank_vocabulary:Drug", "tokens": "drug"}
     ],
-    "expected": ["Receptor"]
+    "expected": ["Receptor"],
+    "expected_bands": ["close"]
   },
   {
     "query": "drug target",
@@ -15,7 +16,8 @@
       {"local": "Target", "prefix": "drugbank", "iri": "x:Target", "tokens": "target"},
       {"local": "Pathway", "prefix": "drugbank", "iri": "x:Pathway", "tokens": "pathway"}
     ],
-    "expected": ["DrugTarget", "targetOfDrug", "Target", "Pathway"]
+    "expected": ["DrugTarget", "targetOfDrug", "Target", "Pathway"],
+    "expected_bands": ["match", "match", "match", "close"]
   },
   {
     "query": "",
@@ -23,14 +25,16 @@
       {"local": "B", "prefix": "db", "iri": "x:B", "tokens": "b"},
       {"local": "A", "prefix": "db", "iri": "x:A", "tokens": "a"}
     ],
-    "expected": ["B", "A"]
+    "expected": ["B", "A"],
+    "expected_bands": [null, null]
   },
   {
     "query": "zzzz",
     "terms": [
       {"local": "Drug", "prefix": "db", "iri": "x:Drug", "tokens": "drug"}
     ],
-    "expected": []
+    "expected": [],
+    "expected_bands": []
   },
   {
     "query": "alpha beta gamma",
@@ -38,6 +42,7 @@
       {"local": "AlphaBeta", "prefix": "ns", "iri": "x:AlphaBeta", "tokens": "alpha beta"},
       {"local": "AlphaOnly", "prefix": "ns", "iri": "x:AlphaOnly", "tokens": "alpha"}
     ],
-    "expected": ["AlphaBeta"]
+    "expected": ["AlphaBeta"],
+    "expected_bands": ["close"]
   }
 ]

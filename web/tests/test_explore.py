@@ -124,13 +124,42 @@ def test_the_states_it_draws_are_the_sites_own_vocabulary(client):
     """A term's evidence state IS a verdict here: used and declared is
     `verified`, used but not declared is `undeclared-but-verified`. If this page
     invented its own classes it would be teaching a second language for one
-    fact, and /docs/states would stop describing it."""
+    fact, and /docs/states would stop describing it.
+
+    This used to assert `f"enc-{state}" in body`, which passed for the wrong
+    reason: the only place those literal class names appeared in the served
+    HTML was the nine hand-copied `.enc-` rules this page's own <style> block
+    carried, not the chips themselves -- those build their class at runtime
+    in the inline script (`"enc-" + s.slug`). Removing that private copy (see
+    test_static.py's all-routes check) would have silently emptied this
+    assertion's premise while it kept passing, because `body` still
+    contained the string `"enc-verified"` for a completely different reason:
+    JavaScript source text, not a drawn state.
+
+    So this reads the two things that actually decide what gets drawn: the
+    JS array the filter chips are generated from (`the script's slug list`),
+    and the served stylesheet, which is now the ONLY place a rule for any of
+    these classes exists at all.
+    """
+    import re
+
     import verdict_encoding
 
     body = client.get(EXPLORE_PATH).text
-    for state in ("verified", "undeclared-but-verified", "declared-only", "indeterminate"):
-        assert f"enc-{state}" in body, f"missing enc-{state}"
-        assert state in {s.slug for s in verdict_encoding.STATES}, f"{state} is not a real verdict"
+    script = body.split("var STATES = [", 1)[1].split("];", 1)[0]
+    js_states = re.findall(r'slug:\s*"([a-z-]+)"', script)
+
+    expected = ("verified", "undeclared-but-verified", "declared-only", "indeterminate")
+    assert js_states == list(expected), f"the page's own filter chips are {js_states}"
+
+    real_slugs = {s.slug for s in verdict_encoding.STATES}
+    css = client.get(app_module.STYLESHEET_PATH).text
+    for state in js_states:
+        assert state in real_slugs, f"{state} is not a real verdict"
+        # Not "somewhere in body": the generated stylesheet is where a rule
+        # for this class must live now that explore.html carries no private
+        # copy of its own.
+        assert f".enc-{state} " in css, f"the stylesheet defines no rule for enc-{state}"
 
 
 def test_the_generator_can_still_rebuild_the_payload():

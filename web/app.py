@@ -2252,6 +2252,18 @@ def _index_context(
     # would be the same answer 543 times.
     rows = _index_rows(entries, metrics, explore_endpoints(store))
     history = fleet_history(store)
+    # Filtered the same way `entries` above was: `history.rows` is keyed by
+    # endpoint, just like `entries`, so a `?q=` that narrows one narrows the
+    # other through the same predicate. `history.runs` is NOT filtered -- a
+    # sweep is service-level, not per-endpoint, exactly as the RDF
+    # representation leaves its activity nodes alone. Without this, the
+    # grid, its "moved"/"read the same way" sentence and its
+    # data-fleet-endpoint links named and linked endpoints the filtered rows
+    # above had already dropped.
+    history = FleetHistory(
+        runs=history.runs,
+        rows=[r for r in history.rows if _matches_query(r.endpoint, q)],
+    )
     # The legend counts the chips on this page, and it is built by the same
     # function as the endpoint page's legend from the same table, so the two
     # pages cannot explain the encoding differently. A cell that is a gap
