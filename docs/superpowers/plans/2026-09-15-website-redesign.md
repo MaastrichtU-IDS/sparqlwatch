@@ -971,9 +971,37 @@ with:
     return serialize(triples, format=RdfFormat.from_media_type(media_type))
 ```
 
-**[R3] An endpoint is never a SUBJECT in this document.** Measured against a
-real store: of 439 constructed triples, **zero** have an endpoint IRI as their
-subject. Every subject is a `urn:sparqlwatch:measurement:...` or
+**[R4] CORRECTION.** [R3] claimed "an endpoint is never a SUBJECT in this
+document", measured against `run-registry-sample.nq`. That fixture carries no
+dormancy. With `run-with-dormancy.nq` loaded, an endpoint IS a subject —
+`<endpoint> sw:dormancyReason`, `<endpoint> sw:dormantSince` — and activity
+nodes carry per-endpoint links after all, via `sw:completedEndpoint` and
+`sw:dormantEndpoint`. Measured: filtering a two-fixture store with `q=ontop`
+left 2 non-matching endpoint IRIs in the "filtered" graph. One fixture was
+measured and the result generalised; that was wrong.
+
+**The filter is therefore closed over the ENDPOINT SET, not over a predicate
+list**, so a predicate added to the CONSTRUCT later cannot silently reopen the
+leak. Two rules together:
+  * Rule A — drop any triple that mentions a known, non-matching endpoint in
+    subject or object position. This erases the dormancy facts and the
+    `completedEndpoint`/`dormantEndpoint` links without touching the activity's
+    other triples, so provenance survives.
+  * Rule B — drop every triple whose subject is a measurement or decline node
+    linked by `dqv:computedOn` / `sw:notMeasuredOn` to a non-matching endpoint.
+    These describe an endpoint without naming it, so Rule A cannot see them.
+    Rule B's subject set is derived ONLY from those two predicates: deriving it
+    from any object match would drop the activity node and with it the sweep's
+    provenance.
+
+"Known endpoint" is the set from `entries`, so a vocabulary or ontology IRI is
+never mistaken for an endpoint.
+
+**The test asserts the closed invariant**, not a predicate list: no known
+endpoint outside the listed set appears anywhere in the filtered graph.
+
+Superseded, for the record: of 439 constructed triples in a dormancy-free store,
+zero have an endpoint IRI as their subject. Every subject is a `urn:sparqlwatch:measurement:...` or
 `urn:sparqlwatch:activity:...` node. Endpoints appear as the OBJECT of
 `dqv:computedOn` (63 triples) and `sw:notMeasuredOn` (9). Revision 1 of this
 plan filtered on the subject, which would have substring-matched `q` against
