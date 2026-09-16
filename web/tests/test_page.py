@@ -2293,15 +2293,28 @@ def test_the_page_keeps_all_six_sections(client_for, store_content_profiles):
     )
 
 
-def test_the_sample_survives_an_endpoint_with_no_vocabulary(client_for, store_sampled_profile):
+def test_the_sample_survives_an_endpoint_with_no_vocabulary(client_for, store):
     """The regression this task exists to avoid.
 
     Folding the sample into a section wrapped in {% if vocabulary %} would make
     it vanish for every endpoint without a content profile.
+
+    NOT store_sampled_profile: that fixture's endpoint carries a class-profiles
+    pass, so its page DOES render a vocabulary section (data-section =
+    conformance, sample, vocabulary, void) -- against it, folding the sample
+    into {% if vocabulary %} would still show a sample, and this test would
+    keep passing while missing the exact regression it is written to catch.
+    `store`'s kadaster has no content profile at all (data-section =
+    conformance, sample only), which is the shape this guard needs, so the
+    premise -- no vocabulary section here -- is asserted as well: a fixture
+    swap that quietly grew a vocabulary section would disarm the guard again
+    without anything here going red.
     """
-    body = client_for(store_sampled_profile).get(
-        ENDPOINT_URL, headers={"accept": "text/html"}
-    ).text
+    body = page(client_for(store), KADASTER)
+    assert 'data-section="vocabulary"' not in body, (
+        "this test's premise: the endpoint must have no vocabulary section, "
+        "or it cannot tell folding-into-vocabulary apart from working code"
+    )
     assert 'data-sample="present"' in body or 'data-sample="absent"' in body
 
 

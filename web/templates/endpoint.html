@@ -169,7 +169,11 @@
   .fact { display: flex; justify-content: space-between; gap: 10px;
           padding: 5px 0; border-bottom: 1px solid var(--border);
           font-size: 12.5px; }
-  .fact:last-of-type { border-bottom: none; }
+  /* NOT :last-of-type: that groups by tag, and the unconditional .legend div
+     right after .facts is also a div, so it is always the last div child of
+     .rail and no .fact is ever "last of its type" there. :last-child scoped
+     to .facts works because every child of .facts is a .fact. */
+  .facts .fact:last-child { border-bottom: none; }
   .fact .k { color: var(--text-muted); }
   .fact .v { font-family: var(--mono); color: var(--text-bright); text-align: right; }
   .railbtn { display: block; margin: 12px 0 20px; padding: 7px 10px;
@@ -475,6 +479,15 @@
          derived description, so every fact below that reads it sits inside
          {% if void %}. #}
       <h3>This endpoint</h3>
+      {# Wrapped so the last fact's hairline can be found reliably: :last-of-type
+         groups by TAG, not by class, and the unconditional .legend div right
+         after this block is also a div, so a bare ".fact:last-of-type" is
+         never true in any rendering (every rendering path's last div child of
+         .rail is .legend, never a .fact) -- found in review, since it looks
+         right in source and draws nothing wrong, it just never fires. Scoping
+         the rule to ".facts > .fact:last-child" needs only child position
+         within THIS container, where every child is a .fact. #}
+      <div class="facts">
       {% if void %}
       <div class="fact" data-rail-fact="classes-described">
         <span class="k">classes described</span><span class="v">{{ void.described }}</span>
@@ -504,6 +517,7 @@
         <span class="k">last checked</span><span class="v">{{ generated_at }}</span>
       </div>
       {% endif %}
+      </div>
       {% if void %}
       <a class="railbtn" href="{{ void_path }}?url={{ endpoint | urlencode }}">sparqlwatch's VoID</a>
       {% endif %}
