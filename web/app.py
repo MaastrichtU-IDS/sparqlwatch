@@ -2444,37 +2444,85 @@ _COMPUTED_ON = NamedNode("http://www.w3.org/ns/dqv#computedOn")
 _NOT_MEASURED_ON = NamedNode("urn:sparqlwatch:notMeasuredOn")
 
 
-def _only_matching_endpoints(triples: list, q: str) -> list:
+def _only_matching_endpoints(
+    triples: list, q: str, known_endpoints: set[str]
+) -> list:
     """The constructed index, narrowed to the endpoints a query names.
 
-    An endpoint is never a subject here -- it is the object of dqv:computedOn
-    or sw:notMeasuredOn, and the subject is the measurement node that points at
-    it. So the filter runs in two passes: find every subject whose endpoint does
-    not match, then drop every triple describing one of those subjects.
+    Closes over the ENDPOINT SET rather than over a fixed predicate list.
+    An earlier version of this filter watched only dqv:computedOn and
+    sw:notMeasuredOn, on the measured fact that neither of 439 triples from a
+    dormancy-free store had an endpoint IRI as subject. That fact does not
+    hold once a store carries a dormancy: a dormant endpoint is the SUBJECT
+    of its own sw:dormancyReason / sw:dormantSince, and the activity that
+    declined it names an endpoint it DID complete as the OBJECT of
+    sw:completedEndpoint (and the one it declined as the object of
+    sw:dormantEndpoint). None of those four runs through the two predicates
+    the old filter read, so a query that dropped an endpoint everywhere the
+    HTML looks could still leave the RDF naming it through one of these.
 
-    Activity nodes carry no such link because a run is not per-endpoint, so they
-    survive. That is deliberate: they describe the sweep, not a member of the
-    fleet, and a filtered index that dropped its own provenance would be
-    describing less than it knows.
+    So two rules, applied together:
 
-    The membership test is _matches_query, the same predicate the HTML path
-    uses, so the two representations cannot disagree about what a query means.
+    Rule A drops any triple that mentions a non-matching endpoint directly,
+    in EITHER position. This erases the dormancy facts (endpoint as
+    subject) and the completedEndpoint/dormantEndpoint links (endpoint as
+    object) without touching the activity node's OTHER triples -- its own
+    dating, its sw:finalised, its links to endpoints that DO match -- so a
+    sweep's provenance survives even when one endpoint it swept does not
+    match the query.
+
+    Rule B drops every triple whose subject is a measurement or decline node
+    linked, by dqv:computedOn / sw:notMeasuredOn, to a non-matching
+    endpoint. Those triples (dqv:value, rdf:type, ...) describe an endpoint
+    WITHOUT ever naming it in the triple itself, so Rule A cannot see them.
+
+    Rule B's subject set is derived from ONLY those two predicates,
+    deliberately: deriving it from "any triple whose object is a
+    non-matching endpoint" would also catch the activity node -- it links to
+    a non-matching endpoint through sw:completedEndpoint -- and dropping
+    every triple with that subject would take the whole sweep's provenance
+    with it.
+
+    `known_endpoints` is the set the HTML lists from (`entries`, i.e.
+    endpoint_index(store)), so an arbitrary object IRI -- a vocabulary term,
+    an ontology -- is never mistaken for an endpoint: only exact membership
+    in that set is ever tested, never a substring match against arbitrary
+    graph content.
+
+    The membership test itself is _matches_query, the same predicate the
+    HTML path uses, so the two representations cannot disagree about what a
+    query means.
     """
-    unwanted = {
+    non_matching = {
+        NamedNode(endpoint)
+        for endpoint in known_endpoints
+        if not _matches_query(endpoint, q)
+    }
+    unwanted_subjects = {
         t.subject
         for t in triples
         if t.predicate in (_COMPUTED_ON, _NOT_MEASURED_ON)
-        and not _matches_query(str(t.object.value), q)
+        and t.object in non_matching
     }
-    return [t for t in triples if t.subject not in unwanted]
+    return [
+        t
+        for t in triples
+        if t.subject not in unwanted_subjects
+        and t.subject not in non_matching
+        and t.object not in non_matching
+    ]
 
 
 def _index_rdf(store: Store, media_type: str, q: str | None = None) -> bytes:
     """Serialise every endpoint's facts, straight from the store.
 
     `q`, when given, narrows this the same way it narrows the HTML: through
-    _matches_query. The query runs unchanged and the filter is applied to
-    what it returns.
+    _matches_query, tested against the same endpoint set endpoint_index(store)
+    gives the HTML (see _only_matching_endpoints for why that set, rather
+    than a fixed predicate list, is what the filter closes over). The query
+    runs unchanged and the filter is applied to what it returns; the triples
+    are only materialised into a list when there is filtering to do, so an
+    unfiltered request still streams straight into serialize() as before.
 
     queries/__init__.py:5-9 is binding: a .rq file stays runnable as pasted,
     and parameters reach a query through pyoxigraph variable substitution or
@@ -2482,9 +2530,10 @@ def _index_rdf(store: Store, media_type: str, q: str | None = None) -> bytes:
     here is the only route that does not bend that rule -- and it means the
     page and the data share _matches_query rather than two spellings of it.
     """
-    triples = list(store.query(_INDEX_DESCRIPTION_QUERY))
+    triples = store.query(_INDEX_DESCRIPTION_QUERY)
     if q:
-        triples = _only_matching_endpoints(triples, q)
+        known_endpoints = {entry.endpoint for entry in endpoint_index(store)}
+        triples = _only_matching_endpoints(list(triples), q, known_endpoints)
     return serialize(triples, format=RdfFormat.from_media_type(media_type))
 
 

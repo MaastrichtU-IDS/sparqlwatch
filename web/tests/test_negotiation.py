@@ -1238,9 +1238,13 @@ def test_a_filtered_index_describes_exactly_the_endpoints_it_lists(
         client.get("/?q=uniprot", headers={"accept": "text/turtle"})
     )
     # [R3] Endpoints are the OBJECTS of dqv:computedOn / sw:notMeasuredOn.
-    # None is ever a subject -- measured: 0 of 439 constructed triples have an
-    # endpoint IRI as subject. A test that read subjects would compare an empty
-    # set and pass while measuring nothing.
+    # None is ever a subject in THIS fixture -- measured: 0 of 439 constructed
+    # triples have an endpoint IRI as subject. That is a fact of
+    # store_registry_sample, which carries no dormancy; it is not general
+    # (see test_a_filtered_index_names_no_non_matching_endpoint_anywhere
+    # below, which uses a fixture where it fails). This assertion stays
+    # because it is still true and useful for this fixture, not because it
+    # is the whole invariant.
     described = {
         str(t.object.value)
         for t in graph
@@ -1254,3 +1258,50 @@ def test_a_filtered_index_describes_exactly_the_endpoints_it_lists(
     assert described == listed, (
         f"the page lists {sorted(listed)} and the RDF describes {sorted(described)}"
     )
+
+
+ONTOP = "https://ontop.certain.ai.ustp.at/sparql"
+
+
+def test_a_filtered_index_names_no_non_matching_endpoint_anywhere(
+    client_for, store_dormant_newest
+):
+    """The closed form of the invariant above: not just the two predicates
+    the HTML draws its rows from, but every position in the graph.
+
+    store_dormant_newest is the fixture that breaks a filter keyed only on
+    dqv:computedOn / sw:notMeasuredOn: it measured ontop and qlever, and its
+    newest sweep declared kadaster dormant. That makes kadaster the SUBJECT
+    of its own sw:dormancyReason / sw:dormantSince, and makes qlever the
+    OBJECT of the declining activity's sw:completedEndpoint. A filter that
+    only reads computedOn/notMeasuredOn objects cannot see either channel,
+    so narrowing to "ontop" must still make both kadaster and qlever vanish
+    from EVERY position, or the RDF still names an endpoint the HTML
+    dropped.
+    """
+    client = client_for(store_dormant_newest)
+    listed = set(
+        rows_of(client.get("/?q=ontop", headers={"accept": "text/html"}).text)
+    )
+    assert listed == {ONTOP}, "the fixture must narrow to exactly one endpoint"
+
+    graph = graph_of(client.get("/?q=ontop", headers={"accept": "text/turtle"}))
+    non_matching = {KADASTER, "https://qlever.dev/api/osm-planet"}
+    mentioned = {
+        str(node.value)
+        for quad in graph
+        for node in (quad.subject, quad.object)
+        if isinstance(node, NamedNode) and str(node.value) in non_matching
+    }
+    assert not mentioned, (
+        f"the filtered RDF still names {mentioned} in some position, "
+        "although the HTML dropped it"
+    )
+    # And the sweep's own provenance survives losing those links: an empty
+    # activity node would be describing less than the store knows, not
+    # narrowing to a query. The declining activity's own dating fact -- not
+    # one of the links just erased -- is what proves this.
+    declining = activity_at(DORMANT_SWEEP)
+    assert has_triple(
+        graph, declining, GENERATED_AT, Literal(DORMANT_SWEEP, datatype=DATE_TIME)
+    ), "the activity's own facts must survive filtering the endpoints it links to"
