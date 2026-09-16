@@ -1322,16 +1322,37 @@ def test_a_query_matching_a_title_narrows_both_representations(
     "endpoints_shown"/"parse_graph" of the same shape a second time: `rows_of`
     already reads every rendered row's `data-endpoint`, and `graph_of` already
     parses a response body as RDF.
+
+    _NAMES holds ~552 registry entries, almost all of endpoints this
+    fixture's store never heard of; picking the first titled entry in _NAMES
+    without checking it is one of the nine this fixture actually stores would
+    pick an endpoint no query -- correct or broken -- could ever surface here,
+    making `listed` and `described` both trivially empty. So the candidate is
+    restricted to a title carried by an endpoint this fixture stores.
+
+    Equality of the two representations' sets is necessary but not
+    sufficient: both branches share one `_matches_query`, so they cannot
+    disagree with each other even with title matching entirely disabled --
+    that failure mode is structurally already ruled out. What can fail is
+    title matching not happening at all, which set equality alone does not
+    catch (two empty sets are still equal). The membership assertion below is
+    what catches that.
     """
     import app as app_module
 
-    titled = [u for u, n in app_module._NAMES.items() if n.title]
-    if not titled:
-        pytest.skip("no registry entry carries a title in this checkout")
-    url = titled[0]
-    needle = app_module._NAMES[url].title.split()[0].lower()
-
     client = client_for(store_registry_sample)
+    known = set(rows_of(client.get("/", headers={"accept": "text/html"}).text))
+    titled = [u for u, n in app_module._NAMES.items() if n.title and u in known]
+    if not titled:
+        pytest.skip("no endpoint in this fixture carries a registry title")
+    url = titled[0]
+    name = app_module._NAMES[url]
+    needle = name.title.split()[0].lower()
+    assert needle not in url.lower() and needle not in name.host.lower(), (
+        "the chosen needle must be unreachable except through the title, or "
+        "this test cannot tell a title match from a URL match"
+    )
+
     listed = set(
         rows_of(client.get(f"/?q={needle}", headers={"accept": "text/html"}).text)
     )
@@ -1347,4 +1368,6 @@ def test_a_query_matching_a_title_narrows_both_representations(
             "urn:sparqlwatch:notMeasuredOn",
         )
     }
+    assert listed, "the fixture must yield a title-only match, or this test proves nothing"
+    assert url in listed
     assert described == listed

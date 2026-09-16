@@ -2564,7 +2564,10 @@ def index_resource(
     request: Request,
     q: str | None = Query(
         None,
-        description="Narrow the index to endpoints whose URL contains this text.",
+        description=(
+            "Narrow the index to endpoints whose URL, host, or registry "
+            "title contains this text."
+        ),
     ),
     store: Store = Depends(get_store),
 ) -> Response:
@@ -2582,12 +2585,13 @@ def index_resource(
     here would be reporting as an empty registry.
 
     `q`, when given, narrows both representations through the same predicate,
-    `_matches_query` -- see that function for why the URL is the only text
-    there is to match. The HTML branch filters the SELECT bindings before the
-    template ever sees them; the RDF branch filters the CONSTRUCT's triples
-    after the fact, in `_only_matching_endpoints`, because `index_description.rq`
-    stays an unparameterised query and a SPARQL FILTER is not the same
-    operation as a Python substring test to apply "the same way".
+    `_matches_query` -- see that function for what it matches: an endpoint's
+    URL, host, or the name the registry carries for it. The HTML branch
+    filters the SELECT bindings before the template ever sees them; the RDF
+    branch filters the CONSTRUCT's triples after the fact, in
+    `_only_matching_endpoints`, because `index_description.rq` stays an
+    unparameterised query and a SPARQL FILTER is not the same operation as a
+    Python substring test to apply "the same way".
     """
     media_type = choose_representation(request.headers.get("accept"))
     if media_type is None:
