@@ -22,6 +22,7 @@
 
 use clap::Parser;
 use serde::{Deserialize, Serialize};
+use sparqlwatch_prober::registry;
 use sparqlwatch_prober::seed;
 
 #[derive(Parser)]
@@ -138,26 +139,27 @@ const PROVENANCE_HEADER: &str = "\
 ";
 
 /// The registry file's text: an `endpoint` array, in the order given, in the
-/// shape `registry::load_endpoints` reads.
+/// shape `registry::load_endpoints` and `registry::load_registry` read.
 ///
 /// The array is serialised by the `toml` crate rather than assembled from
 /// `format!`, so quoting and escaping are the same code that parses it back.
 /// That matters for a file of hundreds of URLs, some of them carrying a query
 /// string or a percent escape, where a hand-rolled quote would be one `&` or `%`
 /// away from a value the loader reads differently from the one seeded.
-/// `to_string_pretty` is what puts one URL per line, which is what makes two
+/// `to_string_pretty` is what puts one entry per table, which is what makes two
 /// seeds diff readably.
-fn registry_toml(endpoints: &[String]) -> String {
+fn registry_toml(endpoints: &[registry::RegistryEntry]) -> String {
     #[derive(Serialize)]
     struct EndpointFile<'a> {
-        endpoint: &'a [String],
+        endpoint: &'a [registry::RegistryEntry],
     }
-    // Infallible in practice: the value is one array of strings, and `toml`
-    // fails on shapes TOML cannot hold, such as a map keyed by something other
-    // than a string. Reported rather than unwrapped so a future field cannot
-    // turn a serialisation problem into a panic in a generator.
+    // Infallible in practice: the value is an array of tables of strings and
+    // integers, and `toml` fails on shapes TOML cannot hold, such as a map
+    // keyed by something other than a string. Reported rather than unwrapped
+    // so a future field cannot turn a serialisation problem into a panic in a
+    // generator.
     let body = toml::to_string_pretty(&EndpointFile { endpoint: endpoints })
-        .expect("an array of strings is representable in TOML");
+        .expect("an array of tables of strings is representable in TOML");
     format!("{GENERATED}{REGISTRY_HEADER}{body}")
 }
 
@@ -479,11 +481,16 @@ mod tests {
     /// nothing.
     #[test]
     fn the_shipped_registry_is_a_fixed_point_of_write_then_read() {
-        let loaded = registry::load_endpoints(SHIPPED_REGISTRY, &shipped_exclusions()).unwrap();
+        // `load_registry`, not `load_endpoints`: this binary now writes title,
+        // domain and dataset count alongside the URL, and `load_endpoints`
+        // throws those away. Loading through it here would make this a fixed
+        // point of a lossy round trip, not of what `registry_toml` actually
+        // renders.
+        let loaded = registry::load_registry(SHIPPED_REGISTRY).unwrap();
         assert!(!loaded.is_empty(), "an empty list round trips trivially");
         let rendered = registry_toml(&loaded);
         assert_eq!(
-            registry::load_endpoints(&rendered, &shipped_exclusions()).unwrap(),
+            registry::load_registry(&rendered).unwrap(),
             loaded,
             "the loader must read back exactly what this binary writes"
         );
@@ -501,17 +508,53 @@ mod tests {
     /// re-spelled would be a fact about something else.
     #[test]
     fn a_url_carrying_a_query_string_round_trips_unchanged() {
-        let tricky: Vec<String> = [
+        let urls = [
             "https://a.host.test/sparql?default-graph-uri=&query=SELECT+%2A",
             "https://b.host.test/sparql?a=1&b=2#frag",
             "https://c.host.test/api/sparql-endpoint-foodista",
             "https://d.host.test/sparql/",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
+        ];
+        let tricky: Vec<registry::RegistryEntry> = urls
+            .iter()
+            .map(|s| registry::RegistryEntry {
+                url: s.to_string(),
+                title: None,
+                domain: None,
+                datasets: None,
+            })
+            .collect();
         let rendered = registry_toml(&tricky);
-        assert_eq!(registry::load_endpoints(&rendered, &shipped_exclusions()).unwrap(), tricky);
+        let expected: Vec<String> = urls.iter().map(|s| s.to_string()).collect();
+        assert_eq!(
+            registry::load_endpoints(&rendered, &shipped_exclusions()).unwrap(),
+            expected
+        );
+    }
+
+    /// The reader gets back exactly what the writer wrote: a title and domain
+    /// on a single-dataset endpoint, and a dataset count with no title on one
+    /// that serves many. `registry::load_registry` applies no filters, which is
+    /// what makes this a test of the shape rather than of the refusal
+    /// pipeline.
+    #[test]
+    fn the_registry_file_round_trips_through_the_reader() {
+        let entries = vec![
+            registry::RegistryEntry {
+                url: "https://a/sparql".into(),
+                title: Some("Alpha".into()),
+                domain: Some("government".into()),
+                datasets: None,
+            },
+            registry::RegistryEntry {
+                url: "https://many/sparql".into(),
+                title: None,
+                domain: None,
+                datasets: Some(42),
+            },
+        ];
+        let text = registry_toml(&entries);
+        let back = registry::load_registry(&text).expect("what we write, we read");
+        assert_eq!(back, entries);
     }
 
     /// The provenance parses, and it agrees with the list beside it: its
@@ -673,14 +716,20 @@ mod tests {
     /// agrees.
     #[test]
     fn counts_that_do_not_add_up_to_the_list_are_refused() {
+        let entry = |url: &str| registry::RegistryEntry {
+            url: url.to_string(),
+            title: None,
+            domain: None,
+            datasets: None,
+        };
         let honest = seed::Seeded {
-            endpoints: vec!["https://a/sparql".to_string()],
+            endpoints: vec![entry("https://a/sparql")],
             counts: seed::Counts { distinct: 1, ..seed::Counts::default() },
         };
         check_counts(&honest).expect("one distinct and one kept is one seeded");
 
         let uncounted = seed::Seeded {
-            endpoints: vec!["https://a/sparql".to_string()],
+            endpoints: vec![entry("https://a/sparql")],
             // Two distinct, one refused, and the refusal not counted: the
             // arithmetic says 2 while the list holds 1.
             counts: seed::Counts { distinct: 2, ..seed::Counts::default() },

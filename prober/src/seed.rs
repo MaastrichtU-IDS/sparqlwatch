@@ -39,8 +39,9 @@ use crate::registry;
 /// is not a question anyone can answer.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Seeded {
-    /// The candidates, in dataset-key order, after every refusal.
-    pub endpoints: Vec<String>,
+    /// The candidates, in dataset-key order, after every refusal, each with
+    /// whatever the dump said about it.
+    pub endpoints: Vec<registry::RegistryEntry>,
     pub counts: Counts,
 }
 
@@ -124,6 +125,16 @@ pub fn candidates(dump: &[u8], excluded: &[registry::Exclusion]) -> anyhow::Resu
 
     let mut counts = Counts { datasets: datasets.len(), ..Counts::default() };
     let mut found: Vec<String> = Vec::new();
+    // A URL may appear under several datasets: 40 do in the 2026-06-15 dump,
+    // one under 42. So this accumulates per URL rather than per dataset, and
+    // the count is what decides whether a title is usable at all.
+    //
+    // A HashMap and not an ordered map: `found` already carries first-seen
+    // order and the refusal pipeline preserves it, so this only has to
+    // answer "what did the dump say about this URL" and never decides
+    // sequence.
+    let mut seen: std::collections::HashMap<String, (Vec<String>, Option<String>)> =
+        std::collections::HashMap::new();
     for dataset in datasets.values() {
         let before = found.len();
         // A missing `sparql` key and an empty array mean the same thing here:
@@ -137,6 +148,22 @@ pub fn candidates(dump: &[u8], excluded: &[registry::Exclusion]) -> anyhow::Resu
                 // not contain. A value carrying whitespace is refused later, by
                 // the IRI rule, under its own reason.
                 if !url.is_empty() {
+                    let title = dataset.get("title").and_then(|t| t.as_str()).unwrap_or("");
+                    // An empty string is a missing value spelled differently:
+                    // 118 registry endpoints carry "" for a domain, and an
+                    // empty domain reaching the site is a pill with no name.
+                    let domain = dataset
+                        .get("domain")
+                        .and_then(|d| d.as_str())
+                        .filter(|d| !d.is_empty())
+                        .map(str::to_string);
+                    let slot = seen.entry(url.to_string()).or_insert((Vec::new(), None));
+                    if !title.is_empty() {
+                        slot.0.push(title.to_string());
+                    }
+                    if slot.1.is_none() {
+                        slot.1 = domain;
+                    }
                     found.push(url.to_string());
                 }
             }
@@ -174,7 +201,24 @@ pub fn candidates(dump: &[u8], excluded: &[registry::Exclusion]) -> anyhow::Resu
     counts.refused_unpublishable = unreserved.len() - publishable.len();
 
     debug_assert_eq!(counts.seeded(), publishable.len(), "a refusal went uncounted");
-    Ok(Seeded { endpoints: publishable, counts })
+
+    let endpoints = publishable
+        .into_iter()
+        .map(|url| {
+            let (titles, domain) = seen.remove(&url).unwrap_or_default();
+            // One title names the endpoint. Two or more mean the URL is a
+            // server hosting several datasets, and none of their names is its
+            // name, so the count goes instead and the site shows the host.
+            let (title, datasets) = match titles.len() {
+                0 => (None, None),
+                1 => (Some(titles.into_iter().next().unwrap()), None),
+                n => (None, Some(n as u32)),
+            };
+            registry::RegistryEntry { url, title, domain, datasets }
+        })
+        .collect();
+
+    Ok(Seeded { endpoints, counts })
 }
 
 #[cfg(test)]
@@ -191,8 +235,9 @@ mod tests {
     #[test]
     fn the_sample_dump_yields_the_candidates_it_names() {
         let seeded = candidates(SAMPLE, &[]).unwrap();
+        let urls: Vec<String> = seeded.endpoints.iter().map(|e| e.url.clone()).collect();
         assert_eq!(
-            seeded.endpoints,
+            urls,
             vec![
                 // Dataset-key order: cz-ctia-bans, dbpedia-ja, then foodista's
                 // two entries in array order. Asserting the order and not just
@@ -238,7 +283,7 @@ mod tests {
             "only the {{SPARQL}} placeholder, so the empty string never reached the IRI rule"
         );
         assert!(
-            !seeded.endpoints.iter().any(|e| e.is_empty()),
+            !seeded.endpoints.iter().any(|e| e.url.is_empty()),
             "an empty candidate cannot be probed or published: {:?}",
             seeded.endpoints
         );
@@ -252,7 +297,7 @@ mod tests {
         assert_eq!(seeded.counts.entries, 9);
         assert_eq!(seeded.counts.distinct, 8);
         assert_eq!(
-            seeded.endpoints.iter().filter(|e| *e == "http://linked.opendata.cz/sparql").count(),
+            seeded.endpoints.iter().filter(|e| e.url == "http://linked.opendata.cz/sparql").count(),
             1
         );
     }
@@ -265,7 +310,7 @@ mod tests {
         let seeded = candidates(SAMPLE, &[]).unwrap();
         let failed = "http://ja.dbpedia.org/sparql";
         assert!(
-            seeded.endpoints.iter().any(|e| e == failed),
+            seeded.endpoints.iter().any(|e| e.url == failed),
             "a FAIL status must not refuse a candidate: {:?}",
             seeded.endpoints
         );
@@ -336,7 +381,12 @@ mod tests {
         let seeded = candidates(dump, &excluded).unwrap();
         assert_eq!(
             seeded.endpoints,
-            vec!["https://kept.test-host/sparql".to_string()],
+            vec![registry::RegistryEntry {
+                url: "https://kept.test-host/sparql".to_string(),
+                title: None,
+                domain: None,
+                datasets: None,
+            }],
             "an excluded host may not be written into the registry"
         );
         assert_eq!(seeded.counts.distinct, 2, "both were candidates before the refusals");
@@ -346,5 +396,53 @@ mod tests {
              change between two seeds of the SAME dump"
         );
         assert_eq!(seeded.counts.seeded(), seeded.endpoints.len());
+    }
+
+    /// A note on the placeholder hosts below. The brief for this task used
+    /// `.example` hosts, but `without_reserved_names` refuses RFC 2606 names
+    /// (`example.org`, `example.com`, `example.net`, and the bare `.example`
+    /// TLD), and `candidates` runs every dump through that filter. Single-label
+    /// hosts are used instead, matching the convention `registry.rs` documents
+    /// at its own placeholder-host note.
+    #[test]
+    fn a_dataset_title_travels_with_its_endpoint() {
+        let dump = br#"{
+          "a": {"title": "Alpha", "domain": "government",
+                "sparql": [{"access_url": "https://a/sparql"}]}
+        }"#;
+        let got = candidates(dump, &[]).expect("the dump parses");
+        assert_eq!(got.endpoints[0].url, "https://a/sparql");
+        assert_eq!(got.endpoints[0].title.as_deref(), Some("Alpha"));
+        assert_eq!(got.endpoints[0].domain.as_deref(), Some("government"));
+        assert_eq!(got.endpoints[0].datasets, None);
+    }
+
+    #[test]
+    fn an_endpoint_serving_many_datasets_gets_a_count_and_no_title() {
+        // Measured on the 2026-06-15 dump: 40 registry endpoints carry more than
+        // one title and one carries 42. "Results of R&D" is not the name of a
+        // server hosting forty-two things, so the site shows the host instead.
+        let dump = br#"{
+          "a": {"title": "Alpha", "domain": "government",
+                "sparql": [{"access_url": "https://many/sparql"}]},
+          "b": {"title": "Beta", "domain": "government",
+                "sparql": [{"access_url": "https://many/sparql"}]}
+        }"#;
+        let got = candidates(dump, &[]).expect("the dump parses");
+        assert_eq!(got.endpoints.len(), 1, "one endpoint, however many datasets");
+        assert_eq!(got.endpoints[0].title, None, "no title may be chosen from two");
+        assert_eq!(got.endpoints[0].datasets, Some(2));
+    }
+
+    #[test]
+    fn an_empty_domain_is_absent_rather_than_empty() {
+        // 118 registry endpoints have "" for a domain in the dump. An empty string
+        // reaching the site becomes a facet pill with no name.
+        let dump = br#"{
+          "a": {"title": "Alpha", "domain": "",
+                "sparql": [{"access_url": "https://a/sparql"}]}
+        }"#;
+        let got = candidates(dump, &[]).expect("the dump parses");
+        assert_eq!(got.endpoints[0].domain, None);
     }
 }

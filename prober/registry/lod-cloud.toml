@@ -4,548 +4,2624 @@
 # Which dump this came from, and every count behind it, are in
 # lod-cloud.provenance.toml beside this file. This is NOT the development list:
 # that is prober/endpoints.toml, and it is the default --endpoints.
-endpoint = [
-    "http://www.rdfabout.com/sparql",
-    "http://visualdataweb.infor.uva.es/sparql",
-    "https://analyticsindiamag.com/wp-json/wp/v2/",
-    "https://data.ascdc.tw/en/sparql.php",
-    "https://linkedart.ascdc.tw/live_sparql.php",
-    "https://lila-erc.eu/sparql/lila_knowledge_base/sparql",
-    "http://data.cervantesvirtual.com/sparql",
-    "https://github.com/ArchanaPatel92/IBO-Covid19/blob/main/1.5%20Covid19-IBO.owl",
-    "https://data.epo.org/linked-data/query",
-    "http://caligraph.org/sparql",
-    "https://www.foodie-cloud.org/sparql",
-    "http://47.97.223.173:3030",
-    "https://api.cooperationdatabank.org/datasets/coda/databank/services/databank/sparql",
-    "http://ioz.semweb.csdb.cn/CoLChina_sp2000/sparql",
-    "https://covidontheweb.inria.fr/sparql",
-    "https://prod.virtuoso.ecdp.tech.ec.europa.eu/sparql",
-    "http://192.248.64.53:8080/vivo/admin/sparqlquery",
-    "https://www.orpha.net/sparql",
-    "http://vocabs.ardc.edu.au/repository/api/sparql/csiro_international-chronostratigraphic-chart_geologic-time-scale-2020",
-    "https://hoathinhphatgroup.com/lien-he/",
-    "https://www.3lgm2.de/sparql",
-    "http://ws.nju.edu.cn/lark/sparql",
-    "http://ncmi.semweb.csdb.cn/covid19/sparql",
-    "https://sparql-noipa.mef.gov.it/sparql",
-    "https://bittich.be/sparql",
-    "http://organchem.semweb.csdb.cn/MedNPs/sparql",
-    "https://disk.yandex.ru/client/disk/Pear%20film%20videos",
-    "https://disk.yandex.ru/d/oa34Ke5p1p14PA",
-    "https://pgxlod.loria.fr/sparql",
-    "https://github.com/khaoulafatima/PJ4W/blob/PREJUST%2B%2B%2B%2B%2B.py/PJ4W_SPARQL_endpoint./PREJUS4W.py",
-    "http://depressionData.org#",
-    "http://reld.cs.upb.de:8890/sparql",
-    "http://185.94.71.25:62020/snorql/",
-    "https://semweb.scbg.ac.cn/sparql",
-    "http://sociallink.futuro.media/sparql",
-    "https://mmisw.org/sparql",
-    "https://alma.uni.lu/sparql",
-    "http://tpdc.semweb.csdb.cn/forestObserv/sparql",
-    "https://data.gov.uz/uz/docs/do/view/usage",
-    "https://data.gov.uz/en/docs/do",
-    "https://sparql.uniprot.org/sparql",
-    "https://purl.org/whonto/onto",
-    "http://data.odw.tw/sparql",
-    "http://sparql.odw.tw/",
-    "https://dbpedia.org/page/Summer_Olympic_Games",
-    "http://abs.270a.info/sparql",
-    "http://lab.environment.data.gov.au/sparql",
-    "http://aemet.linkeddata.es/sparql",
-    "http://agrinepaldata.com/sparql",
-    "http://202.45.139.84:10035/catalogs/fao/repositories/agris",
-    "https://agrovoc.fao.org/sparql",
-    "http://aliada.scanbit.net:8891/sparql",
-    "http://data.allie.dbcls.jp/sparql",
-    "http://lexinfo.net/corpora/alpino/query.php",
-    "http://data.dive.beeldengeluid.nl/sparql/",
-    "http://opendata.aragon.es/sparql",
-    "http://data.archiveshub.ac.uk/sparql",
-    "http://purl.org/twc/arrayexpress/virtuoso/sparql",
-    "https://query.wikidata.org/sparql",
-    "http://sparql.jesandco.org:8890/sparql",
-    "http://vocabulary.semantic-web.at/PoolParty/sparql/AustrianSkiTeam",
-    "http://lod.b3kat.de/sparql",
-    "http://babelnet.org/sparql/",
-    "https://data.pdok.nl/sparql",
-    "http://baixue.com",
-    "http://api.talis.com/stores/bbc-backstage/services/sparql",
-    "http://api.talis.com/stores/bbc-wildlife/services/sparql",
-    "http://www.open-biomed.org.uk/sparql/endpoint/bdgp_20081030",
-    "http://fintrans.publicdata.eu/sparql",
-    "http://bfs.270a.info/sparql",
-    "http://data.bibbase.org:2020/sparql",
-    "http://affymetrix.bio2rdf.org/sparql",
-    "http://biomodels.bio2rdf.org/sparql",
-    "http://bioportal.bio2rdf.org/sparql",
-    "http://chembl.bio2rdf.org/sparql",
-    "http://clinicaltrials.bio2rdf.org/sparql",
-    "http://ctd.bio2rdf.org/sparql",
-    "http://dbsnp.bio2rdf.org/sparql",
-    "http://drugbank.bio2rdf.org/sparql",
-    "http://genage.bio2rdf.org/sparql",
-    "http://gendr.bio2rdf.org/sparql",
-    "http://goa.bio2rdf.org/sparql",
-    "http://hgnc.bio2rdf.org/sparql",
-    "http://homologene.bio2rdf.org/sparql",
-    "http://interpro.bio2rdf.org/sparql",
-    "http://iproclass.bio2rdf.org/sparql",
-    "http://irefindex.bio2rdf.org/sparql",
-    "http://linkedspl.bio2rdf.org/sparql",
-    "http://lsr.bio2rdf.org/sparql",
-    "http://mesh.bio2rdf.org/sparql",
-    "http://mgi.bio2rdf.org/sparql",
-    "http://ncbigene.bio2rdf.org/sparql",
-    "http://ndc.bio2rdf.org/sparql",
-    "http://nextprot.bio2rdf.org/sparql",
-    "http://omim.bio2rdf.org/sparql",
-    "http://orphanet.bio2rdf.org/sparql",
-    "http://pathwaycommons.bio2rdf.org/sparql",
-    "http://pharmgkb.bio2rdf.org/sparql",
-    "http://pubmed.bio2rdf.org/sparql",
-    "http://sabiork.bio2rdf.org/sparql",
-    "http://sgd.bio2rdf.org/sparql",
-    "http://sider.bio2rdf.org/sparql",
-    "http://taxonomy.bio2rdf.org/sparql",
-    "http://wikipathways.bio2rdf.org/sparql",
-    "http://wormbase.bio2rdf.org/sparql",
-    "http://logd.tw.rpi.edu/sparql",
-    "https://www.ebi.ac.uk/rdf/services/biomodels/sparql",
-    "https://www.ebi.ac.uk/rdf/services/biosamples/sparql",
-    "http://bis.270a.info/sparql",
-    "http://bnb.data.bl.uk/sparql",
-    "https://digitale.bncf.firenze.sbn.it/openrdf-workbench/repositories/NS/query",
-    "http://dati.camera.it/sparql",
-    "http://api.kasabi.com/dataset/bricklink/apis/sparql",
-    "http://collection.britishmuseum.org/Sparql",
-    "http://ct-e-justice.aegean.gr:3030/bg-admissions-to-correctional-facilities/sparql",
-    "http://services.data.gov.uk/business/sparql",
-    "http://river.styx.org/sparql",
-    "http://sparql.linkedopendata.it/cap",
-    "https://api.linkeddata.cultureelerfgoed.nl/datasets/rce/cho/services/cho/sparql",
-    "https://www.ebi.ac.uk/rdf/services/chembl/sparql",
-    "http://chemdb.semweb.csdb.cn/sparql",
-    "https://digitaalerfgoed.poolparty.biz/PoolParty/sparql/term/id/cht",
-    "https://data.cinematheque.qc.ca/sparql",
-    "http://semantic.ckan.net/sparql/",
-    "http://sparql.reegle.info/",
-    "http://gov.tso.co.uk/coins/sparql",
-    "http://colinda.org/endpoint.php",
-    "http://data.colinda.org/endpoint.php",
-    "http://purl.org/weso/sparql",
-    "http://linked.opendata.cz/sparql",
-    "http://core.kmi.open.ac.uk/squery",
-    "http://publications.europa.eu/webapi/rdf/sparql",
-    "http://vocabulary.wolterskluwer.de/PoolParty/sparql/court",
-    "http://156.35.31.156/sparql",
-    "http://140.109.28.64:2020/sparql",
-    "http://data.fundacionctic.org/sparql",
-    "http://cultura.linkeddata.es/sparql",
-    "https://nkod.opendata.cz/sparql",
-    "https://linked.opendata.cz/sparql",
-    "https://data.gov.cz/sparql",
-    "https://ruian.linked.opendata.cz/sparql",
-    "http://data.bnf.fr/sparql",
-    "http://data.cnr.it/sparql-proxy/",
-    "http://services.data.gov/sparql",
-    "http://data-gov.ie/sparql",
-    "http://data.hnm.hu/sparql",
-    "http://api.talis.com/stores/climb/services/sparql",
-    "http://api.talis.com/stores/metoffice/services/sparql",
-    "http://api.talis.com/stores/moseley/services/sparql",
-    "http://api.talis.com/stores/musicbrainz/services/sparql",
-    "http://api.kasabi.com/dataset/nasa/apis/sparql",
-    "http://api.talis.com/stores/airports/services/sparql",
-    "http://api.talis.com/stores/pokedex/services/sparql",
-    "http://api.talis.com/stores/smcjournals/services/sparql",
-    "http://data.open.ac.uk/query",
-    "http://data.persee.fr/sparql",
-    "http://data.szepmuveszeti.hu/sparql",
-    "https://data.datahub.kr/virtuoso/sparql",
-    "http://datos.artium.org/sparql",
-    "http://datos.bcn.cl/sparql",
-    "http://datos.bne.es/sparql",
-    "http://sparql.dbacademic.tech/ds/sparql",
-    "http://dbkwik.webdatacommons.org/sparql",
-    "https://sparql.dblp.org/sparql",
-    "http://kaiko.getalp.org/sparql",
-    "http://dbpedia.org/sparql",
-    "http://commons.dbpedia.org/sparql",
-    "http://el.dbpedia.org/sparql",
-    "http://es.dbpedia.org/sparql",
-    "http://eu.dbpedia.org/sparql",
-    "http://fr.dbpedia.org/sparql",
-    "http://ja.dbpedia.org/sparql",
-    "http://nl.dbpedia.org/sparql",
-    "http://pt.dbpedia.org/sparql",
-    "http://dbtune.org/classical/sparql/",
-    "http://dbtune.org/bbc/peel/sparql/",
-    "http://dbtune.org/magnatune/sparql/",
-    "http://dbtune.org/musicbrainz/sparql",
-    "http://dbtune.org/myspace/sparql/",
-    "http://ndb.publink.lod2.eu/sparql",
-    "http://dewey.info/sparql.php",
-    "http://rdf.disgenet.org/sparql/",
-    "http://linkeddata.finki.ukim.mk/sparql",
-    "http://doc.metalex.eu:8000/sparql/",
-    "http://semanticweb.cs.vu.nl/dss/sparql/",
-    "http://dutchshipsandsailors.nl/data/sparql/",
-    "http://alaska.eagle-i.net/sparqler/sparql",
-    "http://cau.eagle-i.net/sparqler/sparql",
-    "http://ccny-cuny.eagle-i.net/sparqler/sparql",
-    "http://cdrewu.eagle-i.net/sparqler/sparql",
-    "http://dartmouth.eagle-i.net/sparqler/sparql",
-    "http://famu.eagle-i.net/sparqler/sparql",
-    "http://harvard.eagle-i.net/sparqler/sparql",
-    "http://hawaii.eagle-i.net/sparqler/sparql",
-    "http://howard.eagle-i.net/sparqler/sparql",
-    "http://hunter-cuny.eagle-i.net/sparqler/sparql",
-    "http://jsu.eagle-i.net/sparqler/sparql",
-    "http://meharry.eagle-i.net/sparqler/sparql",
-    "http://montana.eagle-i.net/sparqler/sparql",
-    "http://msm.eagle-i.net/sparqler/sparql",
-    "http://ohsu.eagle-i.net/sparqler/sparql",
-    "http://psm.eagle-i.net/sparqler/sparql",
-    "http://tsu.eagle-i.net/sparqler/sparql",
-    "http://tuskegee.eagle-i.net/sparqler/sparql",
-    "http://uccaribe.eagle-i.net/sparqler/sparql",
-    "http://upr.eagle-i.net/sparqler/sparql",
-    "http://utep.eagle-i.net/sparqler/sparql",
-    "http://utsa.eagle-i.net/sparqler/sparql",
-    "https://eagle-i.ea.vanderbilt.edu/sparqler/sparql",
-    "http://xula.eagle-i.net/sparqler/sparql",
-    "http://ecb.270a.info/sparql",
-    "http://ecb.publicdata.eu/sparql",
-    "http://api.kasabi.com/dataset/ecco-tcp-eighteenth-century-collections-online-texts/apis/sparql",
-    "http://www.eclap.eu/sparql",
-    "http://services.data.gov.uk/education/sparql",
-    "http://kent.zpr.fer.hr:8080/educationalProgram/sparql",
-    "http://semantic.eea.europa.eu/sparql",
-    "http://cr.eionet.europa.eu/sparql",
-    "https://opendata.aragon.es/sparql",
-    "http://webenemasuno.linkeddata.es/sparql",
-    "http://heritagedata.org/live/sparql",
-    "http://opendatacommunities.org/sparql",
-    "http://enipedia.tudelft.nl/sparql",
-    "https://data.entice.eu/sparql",
-    "http://environment.data.gov.uk/sparql/bwq/query",
-    "http://services.data.gov.uk/environment/sparql",
-    "http://linkeddata.ge.imati.cnr.it:8890/sparql",
-    "http://foreign.rkbexplorer.com/sparql/",
-    "http://agencies.publicdata.eu/sparql",
-    "http://api.talis.com/stores/eupmedia/services/sparql",
-    "http://api.talis.com/stores/whoiswho/services/sparql",
-    "http://api.talis.com/stores/eumida/services/sparql",
-    "http://eur-lex.publicdata.eu/sparql",
-    "http://api.talis.com/stores/eurobarometer/services/sparql",
-    "http://api.talis.com/stores/elections/services/sparql",
-    "http://europeana.ontotext.com/sparql",
-    "http://virtuoso-eurosentiment.paradigmatecnologico.com/sparql",
-    "http://api.talis.com/stores/eutc-productions/services/sparql",
-    "http://eventmedia.eurecom.fr/sparql",
-    "http://eculture2.cs.vu.nl:8890/sparql",
-    "http://fao.270a.info/sparql",
-    "http://rdf.farmbio.uu.se/chembl/sparql",
-    "http://www.open-biomed.org.uk/sparql/endpoint/flybase",
-    "http://www.open-biomed.org.uk/sparql/endpoint/flyted",
-    "http://kasabi.com/api/sparql-endpoint-foodista",
-    "http://api.kasabi.com/dataset/foodista/apis/sparql",
-    "http://foodpedia.tk/sparql",
-    "http://frb.270a.info/sparql",
-    "http://www4.wiwiss.fu-berlin.de/cordis/sparql",
-    "http://www4.wiwiss.fu-berlin.de/dailymed/sparql",
-    "http://www4.wiwiss.fu-berlin.de/dblp/sparql",
-    "http://www4.wiwiss.fu-berlin.de/diseasome/sparql",
-    "http://www4.wiwiss.fu-berlin.de/drugbank/sparql",
-    "http://www4.wiwiss.fu-berlin.de/eccompetition/sparql",
-    "http://www4.wiwiss.fu-berlin.de/euraxess/sparql",
-    "http://www4.wiwiss.fu-berlin.de/eures/sparql",
-    "http://www4.wiwiss.fu-berlin.de/eurostat/sparql",
-    "http://www4.wiwiss.fu-berlin.de/medicare/sparql",
-    "http://www4.wiwiss.fu-berlin.de/gutendata/sparql",
-    "http://www4.wiwiss.fu-berlin.de/sider/sparql",
-    "http://www4.wiwiss.fu-berlin.de/stitch/sparql",
-    "http://cr3.eionet.europa.eu/sparql",
-    "http://www.ebi.ac.uk/rdf/services/atlas/sparql",
-    "http://usgs-stko.geog.ucsb.edu:8080/sparql/select",
-    "http://geo.linkeddata.es/sparql",
-    "http://resource.geolba.ac.at/PoolParty/sparql/GeologicUnit",
-    "http://resource.geolba.ac.at/PoolParty/sparql/GeologicTimeScale",
-    "http://resource.geolba.ac.at/PoolParty/sparql/lithology",
-    "http://resource.geolba.ac.at/PoolParty/sparql/tectonicunit",
-    "http://lsd.taxonconcept.org/sparql",
-    "http://vocabulary.wolterskluwer.de/PoolParty/sparql/arbeitsrecht",
-    "http://lod.gesis.org/thesoz/sparql",
-    "http://vocab.getty.edu/sparql",
-    "http://ckan.eurohelp.es:8890/sparql",
-    "http://extbi.lab.aau.dk/sparql/",
-    "http://govwild.org/sparql",
-    "http://wordnet.okfn.gr:8890/sparql/",
-    "http://ct-e-justice.aegean.gr:3030/gr-prison-releases/sparql",
-    "http://ct-linkdata.aegean.gr/gcam/sparql",
-    "http://sparql.linkedopendata.it/grrp",
-    "http://sparql.linkedopendata.it/grrt",
-    "http://lod.hebis.de/sparql",
-    "http://helheim.deusto.es/hedatuz/sparql",
-    "http://greek-lod.auth.gr/fire-brigade/sparql",
-    "http://greek-lod.auth.gr/police/sparql",
-    "https://hitontology.eu/sparql",
-    "http://courage.btk.mta.hu:3030/",
-    "http://sensormeasurement.appspot.com/dataset/naturopathy-dataset",
-    "https://raw.githubusercontent.com/GVogeler/bookkeeping/master/bookkeeping.ttl",
-    "https://dbpedia.org/sparql",
-    "http://semanticweb.cs.vu.nl/iati/sparql/",
-    "http://www.icane.es/opendata/sparql",
-    "http://ichoose.tw.rpi.edu/sparql",
-    "https://projects.dharc.unibo.it/icondataset/sparql",
-    "http://mlode.nlp2rdf.org/sparql",
-    "http://sparql.odw.tw",
-    "https://sparql.crssnky.xyz/spql/imas/query?query=",
-    "http://www.imagesnippets.com/sparql/images",
-    "http://imf.270a.info/sparql",
-    "http://www.influencetracker.com:8890/sparql",
-    "http://greek-lod.math.auth.gr/intervalue/sparql",
-    "http://iserve.kmi.open.ac.uk/iserve/sparql",
-    "http://156.35.82.103/sparql",
-    "http://dati.isprambiente.it/sparql",
-    "http://issa.i3s.unice.fr/sparql",
-    "http://sparql.linkedopendata.it/istat",
-    "http://sparql.linkedopendata.it/scuole",
-    "http://dbtune.org/jamendo/sparql/",
-    "http://202.73.13.50:55824/catalogs/performance/repositories/jita",
-    "http://api.talis.com/stores/jgoodwin-genealogy/services/sparql",
-    "http://greek-lod.math.auth.gr/kalikratis/sparql",
-    "http://sonicbanana.cs.wright.edu:8890/sparql",
-    "http://sparql.kupkb.org/sparql",
-    "http://dblp.l3s.de/d2r/sparql",
-    "http://data.linkededucation.org/request/lak-conference/sparql",
-    "https://ld.ncl.edu.tw/graph.jsp",
-    "http://demo.spraakdata.gu.se/ltlod/test/",
-    "http://libris.kb.se/sparql",
-    "http://libver.math.auth.gr/sparql",
-    "http://spending.lichfielddc.gov.uk/sparql",
-    "http://linkedlifedata.com/sparql",
-    "http://data.logainm.ie/sparql",
-    "http://sparql.linkedopendata.it/loc",
-    "http://linkedopencommerce.com/sparql",
-    "http://ecowlim.tfri.gov.tw/sparql/query",
-    "http://lov.okfn.org/endpoint/lov",
-    "https://dbmi-icode-01.dbmi.pitt.edu/sparql",
-    "http://geoname.linkedopendata.tw/sparql",
-    "http://tcga.deri.ie",
-    "http://soa4all.isoco.net/luf/sparql",
-    "http://sparql.contextdatacloud.org",
-    "http://data.linkedct.org/sparql",
-    "http://linkedgeodata.org/sparql/",
-    "http://api.talis.com/stores/rsinger-dev4/services/sparql",
-    "http://data.linkedmdb.org/sparql",
-    "http://linkedspending.aksw.org/sparql",
-    "http://www.linklion.org:8890/sparql",
-    "http://id.sgcb.mcu.es/sparql",
-    "http://lobid.org/sparql/",
-    "https://hdt.lod.labs.vu.nl/?g=LOD-a-lot",
-    "http://lod.ac/bdls/sparql",
-    "http://lofd.tw.rpi.edu/sparql",
-    "http://sw.unime.it:8890/sparql",
-    "http://api.talis.com/stores/datagovuk/services/sparql",
-    "http://www.lotico.com:3030/lotico/sparql",
-    "http://ma-graph.org/sparql",
-    "http://api.talis.com/stores/massobservation/services/sparql",
-    "http://meducator.open.ac.uk/resourcesrestapi/rest/meducator/sparql",
-    "http://micro.semweb.csdb.cn/sparql",
-    "http://apps.morelab.deusto.es/labman/sparql",
-    "http://sparql.msc2010.org",
-    "http://rdf.muninn-project.org/sparql",
-    "http://sparql.linkedopendata.it/musei",
-    "https://data.muziekweb.nl/MuziekwebOrganization/Muziekweb/sparql/Muziekweb",
-    "https://api.data.muziekweb.nl/datasets/muziekweborganization/Muziekweb/services/Muziekweb/sparql",
-    "http://rdf.myexperiment.org/sparql/",
-    "http://futurewavehosting.com:3030/my-family-lineage/sparql",
-    "http://n-lex.publicdata.eu/sparql",
-    "http://id.ndl.go.jp/auth/ndla/",
-    "http://id.ndl.go.jp/auth/ndlsh/",
-    "http://nlg.okfn.gr/sparql",
-    "https://sparql.nextprot.org/",
-    "http://data.nobelprize.org/sparql",
-    "https://nomenclature.info/sparql",
-    "http://nomisma.org/sparql",
-    "http://query.norpark.ml",
-    "http://data.lenka.no/sparql",
-    "http://api.talis.com/stores/gunnbib-digitalmanuskripter/sparql",
-    "http://api.talis.com/stores/nvd/services/sparql",
-    "http://vocab.nerc.ac.uk/sparql/",
-    "http://data.oceandrilling.org/sparql",
-    "http://oecd.270a.info/sparql",
-    "http://miuras.inf.um.es/sparql",
-    "http://omwn.linguistic-lod.org/sparql/",
-    "http://onto.beef.org.pl/sparql",
-    "http://vocabulary.semantic-web.at/PoolParty/sparql/OpenData",
-    "http://en.openei.org/sparql",
-    "http://www.open-biomed.org.uk/sparql/endpoint/flyatlas",
-    "http://data.utpl.edu.ec/ecuadorresearch/lod/sparql",
-    "http://lod.openlinksw.com/sparql",
-    "http://sparql.openmobilenetwork.org",
-    "http://api.talis.com/stores/ordnance-survey/services/sparql",
-    "http://data.organic-edunet.eu/sparql",
-    "http://data.organic-edunet.eu/snorql/",
-    "https://orkg.org/triplestore",
-    "http://sparql.cwrc.ca/sparql",
-    "http://spatial.ucd.ie/lod/sparql",
-    "http://api.kasabi.com/dataset/pali-english-lexicon/apis/sparql",
-    "http://ld.panlex.org/sparql",
-    "http://services.data.gov.uk/patents/sparql",
-    "http://linked-data.org/sparql",
-    "http://plant.semweb.csdb.cn/sparql",
-    "http://ct-e-justice.aegean.gr:3030/pt-prison-releases/sparql",
-    "http://prelex.publicdata.eu/sparql",
-    "http://api.kasabi.com/dataset/prelinger-archives/apis/sparql",
-    "http://premon.fbk.eu/sparql",
-    "http://api.talis.com/stores/pbac/services/sparql",
-    "http://api.talis.com/stores/productdb/services/sparql",
-    "http://provenanceweb.org/sparql",
-    "http://publicspending.medialab.ntua.gr/sparql",
-    "https://relate.racai.ro/datasets/legalnero/query",
-    "https://relate.racai.ro/datasets/parseme/query",
-    "https://relate.racai.ro/datasets/rolex/query",
-    "https://relate.racai.ro/datasets/rtasc/sparql",
-    "https://relate.racai.ro/datasets/simonero/query",
-    "http://data.bibsys.no/data/query_authority.html",
-    "http://linkeddata4.dia.fi.upm.es:8907/sparql",
-    "https://www.ebi.ac.uk/rdf/services/reactome/sparql",
-    "http://eculture2.cs.vu.nl:5020/sparql/",
-    "http://services.data.gov.uk/reference/sparql",
-    "http://lod.xdams.org/sparql",
-    "http://api.kasabi.com/dataset/renewable-energy-generators/apis/sparql",
-    "http://services.data.gov.uk/research/sparql",
-    "https://tematres.seriadas.com/vocab/sparql.php",
-    "http://revyu.com/sparql",
-    "http://mtimo.de/234",
-    "http://data.rism.info/sparql",
-    "http://acm.rkbexplorer.com/sparql/",
-    "http://budapest.rkbexplorer.com/sparql/",
-    "http://citeseer.rkbexplorer.com/sparql/",
-    "http://cordis.rkbexplorer.com/sparql/",
-    "http://courseware.rkbexplorer.com/sparql/",
-    "http://crime.rkbexplorer.com/sparql/",
-    "http://curriculum.rkbexplorer.com/sparql/",
-    "http://darmstadt.rkbexplorer.com/sparql/",
-    "http://dblp.rkbexplorer.com/sparql/",
-    "http://deepblue.rkbexplorer.com/sparql/",
-    "http://deploy.rkbexplorer.com/sparql/",
-    "http://digitaleconomy.rkbexplorer.com/sparql",
-    "http://dotac.rkbexplorer.com/sparql/",
-    "http://ecs.rkbexplorer.com/sparql",
-    "http://eprints.rkbexplorer.com/sparql/",
-    "http://epsrc.rkbexplorer.com/sparql",
-    "http://era.rkbexplorer.com/sparql/",
-    "http://eurecom.rkbexplorer.com/sparql/",
-    "http://ft.rkbexplorer.com/sparql/",
-    "http://fun.rkbexplorer.com/sparql",
-    "http://gdlc.rkbexplorer.com/sparql",
-    "http://ibm.rkbexplorer.com/sparql/",
-    "http://ieee.rkbexplorer.com/sparql/",
-    "http://irit.rkbexplorer.com/sparql/",
-    "http://italy.rkbexplorer.com/sparql",
-    "http://jisc.rkbexplorer.com/sparql/",
-    "http://kaunas.rkbexplorer.com/sparql",
-    "http://kisti.rkbexplorer.com/sparql/",
-    "http://laas.rkbexplorer.com/sparql/",
-    "http://lisbon.rkbexplorer.com/sparql",
-    "http://newcastle.rkbexplorer.com/sparql/",
-    "http://notube.rkbexplorer.com/sparql",
-    "http://nsf.rkbexplorer.com/sparql/",
-    "http://oai.rkbexplorer.com/sparql/",
-    "http://os.rkbexplorer.com/sparql/",
-    "http://photos.rkbexplorer.com/sparql",
-    "http://pisa.rkbexplorer.com/sparql/",
-    "http://rae2001.rkbexplorer.com/sparql/",
-    "http://resex.rkbexplorer.com/sparql/",
-    "http://risks.rkbexplorer.com/sparql/",
-    "http://roma.rkbexplorer.com/sparql/",
-    "http://roni.rkbexplorer.com/sparql",
-    "http://southampton.rkbexplorer.com/sparql/",
-    "http://ulm.rkbexplorer.com/sparql/",
-    "http://unlocode.rkbexplorer.com/sparql/",
-    "http://webconf.rkbexplorer.com/sparql",
-    "http://webscience.rkbexplorer.com/sparql",
-    "http://wiki.rkbexplorer.com/sparql/",
-    "http://wordnet.rkbexplorer.com/sparql/",
-    "http://www.roceeh.uni-tuebingen.de:3030/road/sparql",
-    "http://sparql.sstu.ru:3030/speciality-vocabulary/query",
-    "http://biordf.net/sparql",
-    "http://id.eaufrance.fr/sparql",
-    "http://api.kasabi.com/dataset/sanskrit-english-lexicon/apis/sparql",
-    "http://212.81.220.68:2020/elviajero",
-    "http://api.talis.com/stores/schemapedia/services/sparql",
-    "http://rdfabout.com/sparql",
-    "http://aseg.cs.concordia.ca/secold/sparqlendpoint",
-    "http://data.semanticuniverse.com/sparql",
-    "http://data.semanticweb.org/sparql",
-    "http://semanticquran.aksw.org/sparql",
-    "http://cb.semsol.org/sparql",
-    "http://13.125.246.132/sparql",
-    "http://serendipity.utpl.edu.ec/lod/sparql",
-    "http://slod.fiz-karlsruhe.de/sparql",
-    "http://smartlink.open.ac.uk/smartlink/sparql",
-    "https://www.snik.eu/sparql",
-    "http://vocabulary.semantic-web.at/PoolParty/sparql/semweb",
-    "http://sparql.data.southampton.ac.uk/",
-    "http://linguistic.linkeddata.es/sparql",
-    "http://labs.mondeca.com/endpoint/ends",
-    "http://www.ss-framework.com/sparql",
-    "http://services.data.gov.uk/statistics/sparql",
-    "https://data.stonetechsquare.com/query/",
-    "http://zbw.eu/beta/sparql/stw/query",
-    "http://sparql.sindice.com/sparql",
-    "http://lod.sztaki.hu/sparql",
-    "http://pomelo.iis.sinica.edu.tw:2020/sparql",
-    "https://taxref.mnhn.fr/sparql",
-    "http://hcls.deri.org:8080/openrdf-sesame/repositories/tcga",
-    "http://agalpha.mathbiol.org/repositories/tcga",
-    "http://www.open-biomed.org.uk/sparql/endpoint/tcm",
-    "http://telegraphis.net/data/countries/sparql",
-    "https://test-svu/sparql",
-    "http://diwis.imis.athena-innovation.gr:8181/sparql",
-    "https://dbmi-icode-01.dbmi.pitt.edu/dikb/sparql",
-    "http://eurostat.linked-statistics.org/sparql",
-    "http://api.talis.com/stores/theviewfrom/services/sparql",
-    "http://www.archivesdefrance.culture.gouv.fr/thesaurus/sparql",
-    "http://lod.apc.gov.tw/sparql",
-    "https://trackloaded.com/sparql-endpoint.php",
-    "http://tkm.kiom.re.kr/ontology/sparql",
-    "http://api.talis.com/stores/trafficscotland/services/sparql",
-    "http://transparency.270a.info/sparql",
-    "http://services.data.gov.uk/transport/sparql",
-    "http://twarql.org:8890/sparql",
-    "http://healthdata.tw.rpi.edu/sparql",
-    "http://purl.org/twc/hub/sparql",
-    "http://ieeevis.tw.rpi.edu/nosparql",
-    "http://opendap.tw.rpi.edu/sparql",
-    "http://data.bib.uni-mannheim.de/sparql",
-    "http://platform.uberblic.org/api/v1/sparql",
-    "http://onto.fel.cvut.cz/rdf4j-server/repositories/ufo-current",
-    "http://uis.270a.info/sparql",
-    "http://api.kasabi.com/dataset/un-hazardous-material-numbers/apis/sparql",
-    "http://sparql.uniprot.org",
-    "http://unodc.publicdata.eu/sparql",
-    "http://linkeddata.uriburner.com/sparql",
-    "http://data.lider-project.eu/usage/sparql",
-    "http://data.utpl.edu.ec/utpl/lod/sparql",
-    "http://semanticweb.cs.vu.nl/verrijktkoninkrijk/sparql/",
-    "http://minsky.gsi.dit.upm.es/semanticwiki/index.php/Special:SPARQLEndpoint",
-    "http://ldf.fi/warsa/sparql",
-    "http://wasabi.inria.fr/sparql",
-    "http://webisa.webdatacommons.org/sparql",
-    "http://wiktionary.dbpedia.org/sparql",
-    "https://kgccc.di.unito.it/sparql/",
-    "http://worldbank.270a.info/sparql",
-    "http://www4.wiwiss.fu-berlin.de/factbook/sparql",
-    "http://ldf.fi/ww1lod/sparql",
-    "http://km.aifb.kit.edu/services/xlike-lexicon/",
-    "http://api.kasabi.com/dataset/yahoo-geoplanet/apis/sparql",
-    "http://neuroweb.med.yale.edu:8890/sparql",
-    "http://sparql.yovisto.com/",
-    "https://api.finto.fi/rest/v1/yso-places/data",
-    "http://zhishi.me/sparql",
-]
+[[endpoint]]
+url = "http://www.rdfabout.com/sparql"
+domain = "government"
+datasets = 2
+
+[[endpoint]]
+url = "http://visualdataweb.infor.uva.es/sparql"
+domain = "government"
+datasets = 2
+
+[[endpoint]]
+url = "https://analyticsindiamag.com/wp-json/wp/v2/"
+title = "Analytics India Magazine"
+domain = "media"
+
+[[endpoint]]
+url = "https://data.ascdc.tw/en/sparql.php"
+domain = "user_generated"
+datasets = 12
+
+[[endpoint]]
+url = "https://linkedart.ascdc.tw/live_sparql.php"
+title = "Linked Taiwan Artists (LTA)"
+domain = "user_generated"
+
+[[endpoint]]
+url = "https://lila-erc.eu/sparql/lila_knowledge_base/sparql"
+domain = "linguistics"
+datasets = 21
+
+[[endpoint]]
+url = "http://data.cervantesvirtual.com/sparql"
+title = "Biblioteca Virtual Miguel de Cervantes"
+domain = "publications"
+
+[[endpoint]]
+url = "https://github.com/ArchanaPatel92/IBO-Covid19/blob/main/1.5%20Covid19-IBO.owl"
+title = "Covid19 Impact on Banking ontology (Covid19-IBO 1.5)"
+domain = "publications"
+
+[[endpoint]]
+url = "https://data.epo.org/linked-data/query"
+domain = "government"
+datasets = 2
+
+[[endpoint]]
+url = "http://caligraph.org/sparql"
+domain = "cross_domain"
+datasets = 2
+
+[[endpoint]]
+url = "https://www.foodie-cloud.org/sparql"
+domain = "life_sciences"
+datasets = 16
+
+[[endpoint]]
+url = "http://47.97.223.173:3030"
+title = "Chinese Red Song Linked Data Dataset"
+domain = "media"
+
+[[endpoint]]
+url = "https://api.cooperationdatabank.org/datasets/coda/databank/services/databank/sparql"
+title = "Cooperation Databank"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://ioz.semweb.csdb.cn/CoLChina_sp2000/sparql"
+title = "Catalogue of Life in China 2003 Edition"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "https://covidontheweb.inria.fr/sparql"
+title = "Covid-on-the-Web Dataset"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "https://prod.virtuoso.ecdp.tech.ec.europa.eu/sparql"
+title = "Railway Infrastructure KG"
+domain = "government"
+
+[[endpoint]]
+url = "http://192.248.64.53:8080/vivo/admin/sparqlquery"
+title = "Research outputs of Eastern University Sri Lanka"
+domain = "publications"
+
+[[endpoint]]
+url = "https://www.orpha.net/sparql"
+domain = "geography"
+datasets = 3
+
+[[endpoint]]
+url = "http://vocabs.ardc.edu.au/repository/api/sparql/csiro_international-chronostratigraphic-chart_geologic-time-scale-2020"
+title = "Geological Timescale"
+domain = "geography"
+
+[[endpoint]]
+url = "https://hoathinhphatgroup.com/lien-he/"
+title = "Hoa Thịnh Phát"
+domain = "social_networking"
+
+[[endpoint]]
+url = "https://www.3lgm2.de/sparql"
+title = "3LGM² IHE Ontology"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://ws.nju.edu.cn/lark/sparql"
+title = "Lark"
+domain = "linguistics"
+
+[[endpoint]]
+url = "http://ncmi.semweb.csdb.cn/covid19/sparql"
+domain = "life_sciences"
+datasets = 2
+
+[[endpoint]]
+url = "https://sparql-noipa.mef.gov.it/sparql"
+title = "NoiPA"
+domain = "government"
+
+[[endpoint]]
+url = "https://bittich.be/sparql"
+title = "Curriculum Vitae"
+domain = "social_networking"
+
+[[endpoint]]
+url = "http://organchem.semweb.csdb.cn/MedNPs/sparql"
+title = "Medicine and Natural Product Data"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "https://disk.yandex.ru/client/disk/Pear%20film%20videos"
+title = 'The retellings of "The Pear Film" by preschoolers, primary school students, and high school students'
+domain = "linguistics"
+
+[[endpoint]]
+url = "https://disk.yandex.ru/d/oa34Ke5p1p14PA"
+title = 'The retellings of "The Pear Film" by preschoolers, primary school students, and high school students'
+domain = "linguistics"
+
+[[endpoint]]
+url = "https://pgxlod.loria.fr/sparql"
+title = "PGxLOD"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "https://github.com/khaoulafatima/PJ4W/blob/PREJUST%2B%2B%2B%2B%2B.py/PJ4W_SPARQL_endpoint./PREJUS4W.py"
+title = "PREJUST4WOMEN Knowledge Graph"
+domain = "user_generated"
+
+[[endpoint]]
+url = "http://depressionData.org#"
+title = "Depression"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://reld.cs.upb.de:8890/sparql"
+title = "RELD"
+domain = "linguistics"
+
+[[endpoint]]
+url = "http://185.94.71.25:62020/snorql/"
+title = "Polish LGU financial statements"
+domain = "user_generated"
+
+[[endpoint]]
+url = "https://semweb.scbg.ac.cn/sparql"
+title = "SCBG Data"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://sociallink.futuro.media/sparql"
+title = "SocialLink"
+domain = "social_networking"
+
+[[endpoint]]
+url = "https://mmisw.org/sparql"
+title = "Suface Forestière Mondiale 1990-2016"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "https://alma.uni.lu/sparql"
+title = "Swift Vocabulary"
+domain = "user_generated"
+
+[[endpoint]]
+url = "http://tpdc.semweb.csdb.cn/forestObserv/sparql"
+title = "Observation dataset of forest ecosystems "
+domain = "cross_domain"
+
+[[endpoint]]
+url = "https://data.gov.uz/uz/docs/do/view/usage"
+title = "Open data of Uzbekistan"
+domain = "government"
+
+[[endpoint]]
+url = "https://data.gov.uz/en/docs/do"
+title = "Open data of Uzbekistan"
+domain = "government"
+
+[[endpoint]]
+url = "https://sparql.uniprot.org/sparql"
+domain = "life_sciences"
+datasets = 2
+
+[[endpoint]]
+url = "https://purl.org/whonto/onto"
+title = "Corona Virus Infected Cases Ontology"
+domain = "publications"
+
+[[endpoint]]
+url = "http://data.odw.tw/sparql"
+domain = "social_networking"
+datasets = 2
+
+[[endpoint]]
+url = "http://sparql.odw.tw/"
+domain = "social_networking"
+datasets = 2
+
+[[endpoint]]
+url = "https://dbpedia.org/page/Summer_Olympic_Games"
+title = "SummerOlympics"
+domain = "user_generated"
+
+[[endpoint]]
+url = "http://abs.270a.info/sparql"
+title = "Australian Bureau of Statistics (ABS) Linked Data"
+domain = "government"
+
+[[endpoint]]
+url = "http://lab.environment.data.gov.au/sparql"
+title = "Australian Climate Observations Reference Network - Surface Air Temperature Dataset"
+domain = "government"
+
+[[endpoint]]
+url = "http://aemet.linkeddata.es/sparql"
+title = "AEMET metereological dataset"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "http://agrinepaldata.com/sparql"
+title = "AgriNepalData"
+domain = "government"
+
+[[endpoint]]
+url = "http://202.45.139.84:10035/catalogs/fao/repositories/agris"
+title = "AGRIS"
+domain = "publications"
+
+[[endpoint]]
+url = "https://agrovoc.fao.org/sparql"
+title = "AGROVOC"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://aliada.scanbit.net:8891/sparql"
+title = "aliada-scanbit-net"
+domain = "publications"
+
+[[endpoint]]
+url = "http://data.allie.dbcls.jp/sparql"
+title = "Allie Abbreviation And Long Form Database in Life Science"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://lexinfo.net/corpora/alpino/query.php"
+title = "ALPINO RDF Treebank"
+
+[[endpoint]]
+url = "http://data.dive.beeldengeluid.nl/sparql/"
+title = "Amsterdam Museum as Linked Open Data in the Europeana Data Model"
+domain = "publications"
+
+[[endpoint]]
+url = "http://opendata.aragon.es/sparql"
+title = "AragoDBpedia - aragon open data"
+domain = "government"
+
+[[endpoint]]
+url = "http://data.archiveshub.ac.uk/sparql"
+title = "Archives Hub Linked Data"
+domain = "publications"
+
+[[endpoint]]
+url = "http://purl.org/twc/arrayexpress/virtuoso/sparql"
+domain = "life_sciences"
+datasets = 2
+
+[[endpoint]]
+url = "https://query.wikidata.org/sparql"
+domain = "cross_domain"
+datasets = 2
+
+[[endpoint]]
+url = "http://sparql.jesandco.org:8890/sparql"
+title = "ASN:US"
+domain = "government"
+
+[[endpoint]]
+url = "http://vocabulary.semantic-web.at/PoolParty/sparql/AustrianSkiTeam"
+title = "Alpine Ski Racers of Austria"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "http://lod.b3kat.de/sparql"
+title = "B3Kat - Library Union Catalogues of Bavaria, Berlin and Brandenburg"
+domain = "publications"
+
+[[endpoint]]
+url = "http://babelnet.org/sparql/"
+title = "BabelNet"
+domain = "linguistics"
+
+[[endpoint]]
+url = "https://data.pdok.nl/sparql"
+title = "Basisregistratie Adressen en Gebouwen"
+domain = "geography"
+
+[[endpoint]]
+url = "http://baixue.com"
+title = "红色经典歌曲"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "http://api.talis.com/stores/bbc-backstage/services/sparql"
+domain = "media"
+datasets = 2
+
+[[endpoint]]
+url = "http://api.talis.com/stores/bbc-wildlife/services/sparql"
+title = "BBC Wildlife Finder"
+domain = "media"
+
+[[endpoint]]
+url = "http://www.open-biomed.org.uk/sparql/endpoint/bdgp_20081030"
+title = "Bdgp"
+
+[[endpoint]]
+url = "http://fintrans.publicdata.eu/sparql"
+title = "EU: fintrans.publicdata.eu"
+
+[[endpoint]]
+url = "http://bfs.270a.info/sparql"
+title = "Bundesamt für Statistik (BFS) - Swiss Federal Statistical Office (FSO) Linked Data"
+domain = "government"
+
+[[endpoint]]
+url = "http://data.bibbase.org:2020/sparql"
+title = "BibBase"
+domain = "publications"
+
+[[endpoint]]
+url = "http://affymetrix.bio2rdf.org/sparql"
+title = "Bio2RDF::Affymetrix"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://biomodels.bio2rdf.org/sparql"
+title = "Bio2RDF::Biomodels"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://bioportal.bio2rdf.org/sparql"
+title = "Bio2RDF::Bioportal"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://chembl.bio2rdf.org/sparql"
+title = "Bio2RDF::Chembl"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://clinicaltrials.bio2rdf.org/sparql"
+title = "Bio2RDF::Clinicaltrials"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://ctd.bio2rdf.org/sparql"
+title = "Bio2RDF::Ctd"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://dbsnp.bio2rdf.org/sparql"
+title = "Bio2RDF::Dbsnp"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://drugbank.bio2rdf.org/sparql"
+title = "Bio2RDF::Drugbank"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://genage.bio2rdf.org/sparql"
+title = "Bio2RDF::Genage"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://gendr.bio2rdf.org/sparql"
+title = "Bio2RDF::Gendr"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://goa.bio2rdf.org/sparql"
+title = "Bio2RDF::Goa"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://hgnc.bio2rdf.org/sparql"
+title = "Bio2RDF::Hgnc"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://homologene.bio2rdf.org/sparql"
+title = "Bio2RDF::Homologene"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://interpro.bio2rdf.org/sparql"
+title = "Bio2RDF::Interpro"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://iproclass.bio2rdf.org/sparql"
+title = "Bio2RDF::Iproclass"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://irefindex.bio2rdf.org/sparql"
+title = "Bio2RDF::Irefindex"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://linkedspl.bio2rdf.org/sparql"
+title = "Bio2RDF::Linkedspl"
+
+[[endpoint]]
+url = "http://lsr.bio2rdf.org/sparql"
+title = "Bio2RDF::Lsr"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://mesh.bio2rdf.org/sparql"
+title = "Bio2RDF::Mesh"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://mgi.bio2rdf.org/sparql"
+title = "Bio2RDF::Mgi"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://ncbigene.bio2rdf.org/sparql"
+title = "Bio2RDF::Ncbigene"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://ndc.bio2rdf.org/sparql"
+title = "Bio2RDF::Ndc"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://nextprot.bio2rdf.org/sparql"
+title = "Bio2RDF::neXtProt"
+
+[[endpoint]]
+url = "http://omim.bio2rdf.org/sparql"
+title = "Bio2RDF::Omim"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://orphanet.bio2rdf.org/sparql"
+title = "Bio2RDF::Orphanet"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://pathwaycommons.bio2rdf.org/sparql"
+title = "Bio2RDF::Pathwaycommons"
+
+[[endpoint]]
+url = "http://pharmgkb.bio2rdf.org/sparql"
+title = "Bio2RDF::Pharmgkb"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://pubmed.bio2rdf.org/sparql"
+title = "Bio2RDF::Pubmed"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://sabiork.bio2rdf.org/sparql"
+title = "Bio2RDF::Sabiork"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://sgd.bio2rdf.org/sparql"
+title = "Bio2RDF::Sgd"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://sider.bio2rdf.org/sparql"
+title = "Bio2RDF::Sider"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://taxonomy.bio2rdf.org/sparql"
+title = "Bio2RDF::Taxonomy"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://wikipathways.bio2rdf.org/sparql"
+title = "Bio2RDF::Wikipathways"
+
+[[endpoint]]
+url = "http://wormbase.bio2rdf.org/sparql"
+title = "Bio2RDF::Wormbase"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://logd.tw.rpi.edu/sparql"
+title = "Biographical Directory of the United States Congress"
+domain = "government"
+
+[[endpoint]]
+url = "https://www.ebi.ac.uk/rdf/services/biomodels/sparql"
+title = "BioModels RDF"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "https://www.ebi.ac.uk/rdf/services/biosamples/sparql"
+title = "BioSamples RDF"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://bis.270a.info/sparql"
+title = "Bank for International Settlements (BIS) Linked Data"
+domain = "government"
+
+[[endpoint]]
+url = "http://bnb.data.bl.uk/sparql"
+domain = "publications"
+datasets = 2
+
+[[endpoint]]
+url = "https://digitale.bncf.firenze.sbn.it/openrdf-workbench/repositories/NS/query"
+title = "Thesaurus BNCF"
+domain = "publications"
+
+[[endpoint]]
+url = "http://dati.camera.it/sparql"
+domain = "publications"
+datasets = 2
+
+[[endpoint]]
+url = "http://api.kasabi.com/dataset/bricklink/apis/sparql"
+title = "Bricklink"
+domain = "media"
+
+[[endpoint]]
+url = "http://collection.britishmuseum.org/Sparql"
+title = "British Museum Collection"
+
+[[endpoint]]
+url = "http://ct-e-justice.aegean.gr:3030/bg-admissions-to-correctional-facilities/sparql"
+title = "Bulgarian admissions to correctional facilities Jan 2018 - Nov 2024"
+domain = "government"
+
+[[endpoint]]
+url = "http://services.data.gov.uk/business/sparql"
+title = "business.data.gov.uk"
+domain = "government"
+
+[[endpoint]]
+url = "http://river.styx.org/sparql"
+title = "cablegate"
+domain = "government"
+
+[[endpoint]]
+url = "http://sparql.linkedopendata.it/cap"
+title = "Postal codes Italy (LinkedOpenData.it)"
+
+[[endpoint]]
+url = "https://api.linkeddata.cultureelerfgoed.nl/datasets/rce/cho/services/cho/sparql"
+title = "Linked Data Cultural Heritage Agency of the Netherlands"
+domain = "government"
+
+[[endpoint]]
+url = "https://www.ebi.ac.uk/rdf/services/chembl/sparql"
+title = "ChEMBL RDF"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://chemdb.semweb.csdb.cn/sparql"
+domain = "life_sciences"
+datasets = 4
+
+[[endpoint]]
+url = "https://digitaalerfgoed.poolparty.biz/PoolParty/sparql/term/id/cht"
+title = "Cultural Heritage Thesaurus"
+domain = "government"
+
+[[endpoint]]
+url = "https://data.cinematheque.qc.ca/sparql"
+title = "Cinémathèque québécoise Linked Open Data"
+domain = "media"
+
+[[endpoint]]
+url = "http://semantic.ckan.net/sparql/"
+title = "Comprehensive Knowledge Archive Network"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://sparql.reegle.info/"
+title = "Linked Clean Energy Data (reegle.info)"
+domain = "government"
+
+[[endpoint]]
+url = "http://gov.tso.co.uk/coins/sparql"
+title = "OpenUpLabs COINS"
+
+[[endpoint]]
+url = "http://colinda.org/endpoint.php"
+title = "COLINDA - Conference Linked Data"
+domain = "publications"
+
+[[endpoint]]
+url = "http://data.colinda.org/endpoint.php"
+title = "COLINDA - Conference Linked Data"
+domain = "publications"
+
+[[endpoint]]
+url = "http://purl.org/weso/sparql"
+domain = "government"
+datasets = 9
+
+[[endpoint]]
+url = "http://linked.opendata.cz/sparql"
+domain = "publications"
+datasets = 42
+
+[[endpoint]]
+url = "http://core.kmi.open.ac.uk/squery"
+title = "CORE - Semantic Similarity of Open Access publications"
+domain = "media"
+
+[[endpoint]]
+url = "http://publications.europa.eu/webapi/rdf/sparql"
+domain = "government"
+datasets = 5
+
+[[endpoint]]
+url = "http://vocabulary.wolterskluwer.de/PoolParty/sparql/court"
+title = "Courts thesaurus"
+domain = "government"
+
+[[endpoint]]
+url = "http://156.35.31.156/sparql"
+title = "CPV  2003"
+
+[[endpoint]]
+url = "http://140.109.28.64:2020/sparql"
+title = "crowdsourcing-fb"
+
+[[endpoint]]
+url = "http://data.fundacionctic.org/sparql"
+title = "CTIC Public Dataset Catalogs"
+domain = "government"
+
+[[endpoint]]
+url = "http://cultura.linkeddata.es/sparql"
+title = "CulturaLinkedData"
+
+[[endpoint]]
+url = "https://nkod.opendata.cz/sparql"
+title = "Czech Business Entity identification numbers and names"
+domain = "government"
+
+[[endpoint]]
+url = "https://linked.opendata.cz/sparql"
+domain = "government"
+datasets = 4
+
+[[endpoint]]
+url = "https://data.gov.cz/sparql"
+title = "Czech National Open Data Catalog in DCAT-AP v1.1"
+
+[[endpoint]]
+url = "https://ruian.linked.opendata.cz/sparql"
+title = "Registry of territorial identification, addresses and real estate of the Czech Republic"
+domain = "government"
+
+[[endpoint]]
+url = "http://data.bnf.fr/sparql"
+title = "data.bnf.fr - Bibliothèque nationale de France"
+domain = "publications"
+
+[[endpoint]]
+url = "http://data.cnr.it/sparql-proxy/"
+title = "Open Data from the Italian National Research Council"
+domain = "government"
+
+[[endpoint]]
+url = "http://services.data.gov/sparql"
+title = "Data.gov"
+
+[[endpoint]]
+url = "http://data-gov.ie/sparql"
+title = "DataGovIE - Irish Government Data"
+
+[[endpoint]]
+url = "http://data.hnm.hu/sparql"
+title = "data-hnm-hu - Hungarian National Museum Datasets"
+
+[[endpoint]]
+url = "http://api.talis.com/stores/climb/services/sparql"
+title = "Climb Dataincubator"
+
+[[endpoint]]
+url = "http://api.talis.com/stores/metoffice/services/sparql"
+title = "Metoffice Weather Forecasts"
+domain = "government"
+
+[[endpoint]]
+url = "http://api.talis.com/stores/moseley/services/sparql"
+title = "Moseley Folk Festival Data"
+domain = "media"
+
+[[endpoint]]
+url = "http://api.talis.com/stores/musicbrainz/services/sparql"
+title = "Data Incubator: MusicBrainz"
+domain = "social_networking"
+
+[[endpoint]]
+url = "http://api.kasabi.com/dataset/nasa/apis/sparql"
+title = "NASA Space Flight & Astronaut data in RDF"
+domain = "government"
+
+[[endpoint]]
+url = "http://api.talis.com/stores/airports/services/sparql"
+title = "Airport data from Our Airports published as RDF"
+
+[[endpoint]]
+url = "http://api.talis.com/stores/pokedex/services/sparql"
+title = "Pokedex data in RDF"
+domain = "media"
+
+[[endpoint]]
+url = "http://api.talis.com/stores/smcjournals/services/sparql"
+title = "Scottish Mountaineering Council Journals Issues 1-36"
+
+[[endpoint]]
+url = "http://data.open.ac.uk/query"
+title = "data.open.ac.uk, Linked Data from the Open University"
+domain = "publications"
+
+[[endpoint]]
+url = "http://data.persee.fr/sparql"
+title = "Persée in RDF"
+domain = "publications"
+
+[[endpoint]]
+url = "http://data.szepmuveszeti.hu/sparql"
+title = "data-szepmuveszeti-hu"
+domain = "publications"
+
+[[endpoint]]
+url = "https://data.datahub.kr/virtuoso/sparql"
+title = "Open Datasets in South Korea"
+domain = "government"
+
+[[endpoint]]
+url = "http://datos.artium.org/sparql"
+title = "datos-artium-org"
+domain = "publications"
+
+[[endpoint]]
+url = "http://datos.bcn.cl/sparql"
+title = "Datos.bcn.cl"
+domain = "government"
+
+[[endpoint]]
+url = "http://datos.bne.es/sparql"
+title = "datos.bne.es"
+domain = "publications"
+
+[[endpoint]]
+url = "http://sparql.dbacademic.tech/ds/sparql"
+title = "dbacademic"
+domain = "user_generated"
+
+[[endpoint]]
+url = "http://dbkwik.webdatacommons.org/sparql"
+title = "DBkWik"
+
+[[endpoint]]
+url = "https://sparql.dblp.org/sparql"
+title = "dblp Knowledge Graph"
+domain = "publications"
+
+[[endpoint]]
+url = "http://kaiko.getalp.org/sparql"
+title = "DBnary"
+domain = "linguistics"
+
+[[endpoint]]
+url = "http://dbpedia.org/sparql"
+title = "DBpedia"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "http://commons.dbpedia.org/sparql"
+title = "DBpedia Commons"
+
+[[endpoint]]
+url = "http://el.dbpedia.org/sparql"
+title = "DBpedia in Greek"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "http://es.dbpedia.org/sparql"
+title = "DBpedia in Spanish"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "http://eu.dbpedia.org/sparql"
+title = "DBpedia in Basque"
+
+[[endpoint]]
+url = "http://fr.dbpedia.org/sparql"
+title = "DBpedia in French"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "http://ja.dbpedia.org/sparql"
+title = "DBpedia in Japanese"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "http://nl.dbpedia.org/sparql"
+title = "DBpedia in Dutch"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "http://pt.dbpedia.org/sparql"
+title = "DBpedia in Portuguese"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "http://dbtune.org/classical/sparql/"
+title = "DBTune.org/classical"
+domain = "media"
+
+[[endpoint]]
+url = "http://dbtune.org/bbc/peel/sparql/"
+title = "DBTune.org John Peel sessions RDF server"
+domain = "media"
+
+[[endpoint]]
+url = "http://dbtune.org/magnatune/sparql/"
+title = "DBTune.org Magnatune RDF server"
+domain = "media"
+
+[[endpoint]]
+url = "http://dbtune.org/musicbrainz/sparql"
+title = "DBTune.org Musicbrainz D2R Server"
+
+[[endpoint]]
+url = "http://dbtune.org/myspace/sparql/"
+title = "DBTune.org MySpace RDF Service"
+domain = "social_networking"
+
+[[endpoint]]
+url = "http://ndb.publink.lod2.eu/sparql"
+title = "Deutsche Biographie"
+domain = "publications"
+
+[[endpoint]]
+url = "http://dewey.info/sparql.php"
+title = "Dewey Decimal Classification (DDC)"
+
+[[endpoint]]
+url = "http://rdf.disgenet.org/sparql/"
+title = "DisGeNET"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://linkeddata.finki.ukim.mk/sparql"
+domain = "government"
+datasets = 2
+
+[[endpoint]]
+url = "http://doc.metalex.eu:8000/sparql/"
+title = "MetaLex Document Server"
+
+[[endpoint]]
+url = "http://semanticweb.cs.vu.nl/dss/sparql/"
+title = "Dutch Ships and Sailors"
+domain = "publications"
+
+[[endpoint]]
+url = "http://dutchshipsandsailors.nl/data/sparql/"
+title = "Dutch Ships and Sailors"
+domain = "publications"
+
+[[endpoint]]
+url = "http://alaska.eagle-i.net/sparqler/sparql"
+title = "eagle-i @ University of Alaska Fairbanks"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://cau.eagle-i.net/sparqler/sparql"
+title = "eagle-i @ Clark Atlanta University"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://ccny-cuny.eagle-i.net/sparqler/sparql"
+title = "eagle-i @ The City College of New York"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://cdrewu.eagle-i.net/sparqler/sparql"
+title = "eagle-i @ Charles R. Drew University"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://dartmouth.eagle-i.net/sparqler/sparql"
+title = "eagle-i @ Dartmouth College"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://famu.eagle-i.net/sparqler/sparql"
+title = "eagle-i @ Florida Agricultural and Mechanical University"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://harvard.eagle-i.net/sparqler/sparql"
+title = "eagle-i @ Harvard University"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://hawaii.eagle-i.net/sparqler/sparql"
+title = "eagle-i @ University of Hawai’i at Mānoa"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://howard.eagle-i.net/sparqler/sparql"
+title = "eagle-i @ Howard University"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://hunter-cuny.eagle-i.net/sparqler/sparql"
+title = "eagle-i @ Hunter College"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://jsu.eagle-i.net/sparqler/sparql"
+title = "eagle-i @ Jackson State University"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://meharry.eagle-i.net/sparqler/sparql"
+title = "eagle-i @ Meharry Medical College"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://montana.eagle-i.net/sparqler/sparql"
+title = "eagle-i @ Montana State University"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://msm.eagle-i.net/sparqler/sparql"
+title = "eagle-i @ Morehouse School of Medicine"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://ohsu.eagle-i.net/sparqler/sparql"
+title = "eagle-i @ Oregon Health and Science University"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://psm.eagle-i.net/sparqler/sparql"
+title = "eagle-i @ Ponce School of Medicine"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://tsu.eagle-i.net/sparqler/sparql"
+title = "eagle-i @ Texas Southern University"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://tuskegee.eagle-i.net/sparqler/sparql"
+title = "eagle-i @ Tuskegee University"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://uccaribe.eagle-i.net/sparqler/sparql"
+title = "eagle-i @ Universidad Central del Caribe"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://upr.eagle-i.net/sparqler/sparql"
+title = "eagle-i@ University of Puerto Rico - Medical Sciences Campus"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://utep.eagle-i.net/sparqler/sparql"
+title = "eagle-i @ University of Texas at El Paso"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://utsa.eagle-i.net/sparqler/sparql"
+title = "eagle-i @ University of Texas at San Antonio"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "https://eagle-i.ea.vanderbilt.edu/sparqler/sparql"
+title = "eagle-i @ Vanderbilt University"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://xula.eagle-i.net/sparqler/sparql"
+title = "eagle-i @ Xavier University of Louisiana"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://ecb.270a.info/sparql"
+title = "European Central Bank (ECB) Linked Data"
+domain = "government"
+
+[[endpoint]]
+url = "http://ecb.publicdata.eu/sparql"
+title = "European Central Bank Statistics (PublicData.eu)"
+
+[[endpoint]]
+url = "http://api.kasabi.com/dataset/ecco-tcp-eighteenth-century-collections-online-texts/apis/sparql"
+title = "ECCO-TCP Eighteenth Century Texts Linked Data"
+
+[[endpoint]]
+url = "http://www.eclap.eu/sparql"
+title = "ECLAP"
+
+[[endpoint]]
+url = "http://services.data.gov.uk/education/sparql"
+title = "education.data.gov.uk"
+domain = "government"
+
+[[endpoint]]
+url = "http://kent.zpr.fer.hr:8080/educationalProgram/sparql"
+title = "Educational programs - SISVU"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "http://semantic.eea.europa.eu/sparql"
+domain = "government"
+datasets = 2
+
+[[endpoint]]
+url = "http://cr.eionet.europa.eu/sparql"
+domain = "government"
+datasets = 3
+
+[[endpoint]]
+url = "https://opendata.aragon.es/sparql"
+title = "Aragon Interoperable Information Structure EI2A - aragon open data"
+domain = "government"
+
+[[endpoint]]
+url = "http://webenemasuno.linkeddata.es/sparql"
+title = "El Viajero's tourism dataset"
+domain = "user_generated"
+
+[[endpoint]]
+url = "http://heritagedata.org/live/sparql"
+title = "English Heritage Periods List"
+domain = "user_generated"
+
+[[endpoint]]
+url = "http://opendatacommunities.org/sparql"
+domain = "government"
+datasets = 4
+
+[[endpoint]]
+url = "http://enipedia.tudelft.nl/sparql"
+title = "Enipedia - Energy Industry Data"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "https://data.entice.eu/sparql"
+title = "ENTICE Educational Episodes Knowledge Graph"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://environment.data.gov.uk/sparql/bwq/query"
+title = "Environment Agency Bathing Water Quality"
+domain = "government"
+
+[[endpoint]]
+url = "http://services.data.gov.uk/environment/sparql"
+title = "environment.data.gov.uk"
+domain = "government"
+
+[[endpoint]]
+url = "http://linkeddata.ge.imati.cnr.it:8890/sparql"
+domain = "geography"
+datasets = 2
+
+[[endpoint]]
+url = "http://foreign.rkbexplorer.com/sparql/"
+title = "ePrints Harvest (RKBExplorer)"
+domain = "publications"
+
+[[endpoint]]
+url = "http://agencies.publicdata.eu/sparql"
+title = "EU Agencies and decentralized bodies (Agencies)"
+domain = "government"
+
+[[endpoint]]
+url = "http://api.talis.com/stores/eupmedia/services/sparql"
+title = "EU Parliament Media Library"
+
+[[endpoint]]
+url = "http://api.talis.com/stores/whoiswho/services/sparql"
+title = "EU Who Is Who"
+
+[[endpoint]]
+url = "http://api.talis.com/stores/eumida/services/sparql"
+title = "EUMIDA as Linked Data"
+
+[[endpoint]]
+url = "http://eur-lex.publicdata.eu/sparql"
+title = "EUR-Lex as Linked Data"
+domain = "publications"
+
+[[endpoint]]
+url = "http://api.talis.com/stores/eurobarometer/services/sparql"
+title = "Standard Eurobarometer"
+
+[[endpoint]]
+url = "http://api.talis.com/stores/elections/services/sparql"
+title = "European Election Results"
+
+[[endpoint]]
+url = "http://europeana.ontotext.com/sparql"
+title = "Europeana SPARQL"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "http://virtuoso-eurosentiment.paradigmatecnologico.com/sparql"
+title = "EuroSentiment"
+
+[[endpoint]]
+url = "http://api.talis.com/stores/eutc-productions/services/sparql"
+title = "Edinburgh University Theatre Company Productions"
+domain = "media"
+
+[[endpoint]]
+url = "http://eventmedia.eurecom.fr/sparql"
+title = "EventMedia"
+domain = "media"
+
+[[endpoint]]
+url = "http://eculture2.cs.vu.nl:8890/sparql"
+title = "Eventseer"
+
+[[endpoint]]
+url = "http://fao.270a.info/sparql"
+title = "Food and Agriculture Organization of the United Nations (FAO) Linked Data"
+domain = "government"
+
+[[endpoint]]
+url = "http://rdf.farmbio.uu.se/chembl/sparql"
+title = "ChEMBL-RDF (@ Uppsala University)"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://www.open-biomed.org.uk/sparql/endpoint/flybase"
+title = "Flybase"
+
+[[endpoint]]
+url = "http://www.open-biomed.org.uk/sparql/endpoint/flyted"
+title = "Flyted"
+
+[[endpoint]]
+url = "http://kasabi.com/api/sparql-endpoint-foodista"
+title = "Foodista"
+
+[[endpoint]]
+url = "http://api.kasabi.com/dataset/foodista/apis/sparql"
+title = "Foodista"
+
+[[endpoint]]
+url = "http://foodpedia.tk/sparql"
+title = "FOODpedia - Linked Data Dataset about Food Products and Ingredients"
+
+[[endpoint]]
+url = "http://frb.270a.info/sparql"
+title = "Federal Reserve Board (FRB) Linked Data"
+domain = "government"
+
+[[endpoint]]
+url = "http://www4.wiwiss.fu-berlin.de/cordis/sparql"
+title = "Community Research and Development Information Service (CORDIS)"
+domain = "government"
+
+[[endpoint]]
+url = "http://www4.wiwiss.fu-berlin.de/dailymed/sparql"
+title = "DailyMed"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://www4.wiwiss.fu-berlin.de/dblp/sparql"
+title = "DBLP Bibliography Database in RDF (FU Berlin)"
+
+[[endpoint]]
+url = "http://www4.wiwiss.fu-berlin.de/diseasome/sparql"
+title = "Diseasome"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://www4.wiwiss.fu-berlin.de/drugbank/sparql"
+title = "DrugBank"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://www4.wiwiss.fu-berlin.de/eccompetition/sparql"
+title = "European Commission Competition data set (FU Berlin)"
+
+[[endpoint]]
+url = "http://www4.wiwiss.fu-berlin.de/euraxess/sparql"
+title = "EURAXESS - Researchers in Motion"
+
+[[endpoint]]
+url = "http://www4.wiwiss.fu-berlin.de/eures/sparql"
+title = "European Employment Services (EURES)"
+
+[[endpoint]]
+url = "http://www4.wiwiss.fu-berlin.de/eurostat/sparql"
+title = "Eurostat in RDF (FU Berlin)"
+domain = "government"
+
+[[endpoint]]
+url = "http://www4.wiwiss.fu-berlin.de/medicare/sparql"
+title = "MediCare"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://www4.wiwiss.fu-berlin.de/gutendata/sparql"
+title = "Project Gutenberg in RDF (FU Berlin)"
+domain = "publications"
+
+[[endpoint]]
+url = "http://www4.wiwiss.fu-berlin.de/sider/sparql"
+title = "SIDER: Side Effect Resource"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://www4.wiwiss.fu-berlin.de/stitch/sparql"
+title = "STITCH: Chemical-Protein Interactions"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://cr3.eionet.europa.eu/sparql"
+title = "GEneral Multilingual Environmental Thesaurus"
+domain = "government"
+
+[[endpoint]]
+url = "http://www.ebi.ac.uk/rdf/services/atlas/sparql"
+title = "Gene Expression Atlas RDF"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://usgs-stko.geog.ucsb.edu:8080/sparql/select"
+title = "Geographic Names Information System (GNIS)"
+
+[[endpoint]]
+url = "http://geo.linkeddata.es/sparql"
+title = "GeoLinkedData"
+domain = "geography"
+
+[[endpoint]]
+url = "http://resource.geolba.ac.at/PoolParty/sparql/GeologicUnit"
+title = "Geological Survey of Austria (GBA) - Thesaurus"
+domain = "geography"
+
+[[endpoint]]
+url = "http://resource.geolba.ac.at/PoolParty/sparql/GeologicTimeScale"
+title = "Geological Survey of Austria (GBA) - Thesaurus"
+domain = "geography"
+
+[[endpoint]]
+url = "http://resource.geolba.ac.at/PoolParty/sparql/lithology"
+title = "Geological Survey of Austria (GBA) - Thesaurus"
+domain = "geography"
+
+[[endpoint]]
+url = "http://resource.geolba.ac.at/PoolParty/sparql/tectonicunit"
+title = "Geological Survey of Austria (GBA) - Thesaurus"
+domain = "geography"
+
+[[endpoint]]
+url = "http://lsd.taxonconcept.org/sparql"
+domain = "life_sciences"
+datasets = 2
+
+[[endpoint]]
+url = "http://vocabulary.wolterskluwer.de/PoolParty/sparql/arbeitsrecht"
+title = "German labor law thesaurus"
+domain = "publications"
+
+[[endpoint]]
+url = "http://lod.gesis.org/thesoz/sparql"
+title = "TheSoz Thesaurus for the Social Sciences (GESIS)"
+domain = "publications"
+
+[[endpoint]]
+url = "http://vocab.getty.edu/sparql"
+domain = "linguistics"
+datasets = 2
+
+[[endpoint]]
+url = "http://ckan.eurohelp.es:8890/sparql"
+title = "Gipuzkoa Demografia"
+
+[[endpoint]]
+url = "http://extbi.lab.aau.dk/sparql/"
+title = "GovAgriBus Denmark"
+
+[[endpoint]]
+url = "http://govwild.org/sparql"
+title = "GovWILD - Government Web Integration for Linked Data"
+domain = "government"
+
+[[endpoint]]
+url = "http://wordnet.okfn.gr:8890/sparql/"
+title = "Greek Wordnet"
+domain = "linguistics"
+
+[[endpoint]]
+url = "http://ct-e-justice.aegean.gr:3030/gr-prison-releases/sparql"
+title = "Greek prisons releases Jan 2018 - Dec 2023"
+domain = "government"
+
+[[endpoint]]
+url = "http://ct-linkdata.aegean.gr/gcam/sparql"
+title = "Greek Children Art  Museum dataset"
+domain = "user_generated"
+
+[[endpoint]]
+url = "http://sparql.linkedopendata.it/grrp"
+title = "Accommodations in Piedmont (LinkedOpenData.it)"
+domain = "geography"
+
+[[endpoint]]
+url = "http://sparql.linkedopendata.it/grrt"
+title = "Accommodations in Tuscany (LinkedOpenData.it)"
+domain = "geography"
+
+[[endpoint]]
+url = "http://lod.hebis.de/sparql"
+title = "HeBIS - Bibliographic Resources of the Library Union Catalogues of Hessen and parts of the Rhineland Palatinate"
+domain = "publications"
+
+[[endpoint]]
+url = "http://helheim.deusto.es/hedatuz/sparql"
+title = "Hedatuz"
+
+[[endpoint]]
+url = "http://greek-lod.auth.gr/fire-brigade/sparql"
+title = "Hellenic Fire Brigade"
+domain = "government"
+
+[[endpoint]]
+url = "http://greek-lod.auth.gr/police/sparql"
+title = "Hellenic Police"
+domain = "government"
+
+[[endpoint]]
+url = "https://hitontology.eu/sparql"
+title = "HITO"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://courage.btk.mta.hu:3030/"
+title = "COURAGE Dataset"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "http://sensormeasurement.appspot.com/dataset/naturopathy-dataset"
+title = "Naturopathy knowledge Graph (Ontology and Dataset) - RDF distribution of the naturopathy dataset."
+domain = "life_sciences"
+
+[[endpoint]]
+url = "https://raw.githubusercontent.com/GVogeler/bookkeeping/master/bookkeeping.ttl"
+title = "Bookkeeping"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "https://dbpedia.org/sparql"
+title = "Legal Ontology"
+domain = "government"
+
+[[endpoint]]
+url = "http://semanticweb.cs.vu.nl/iati/sparql/"
+title = "IATI as Linked Data"
+domain = "government"
+
+[[endpoint]]
+url = "http://www.icane.es/opendata/sparql"
+title = "ICANE"
+
+[[endpoint]]
+url = "http://ichoose.tw.rpi.edu/sparql"
+title = "ichoose"
+domain = "user_generated"
+
+[[endpoint]]
+url = "https://projects.dharc.unibo.it/icondataset/sparql"
+title = "The Iconology Dataset"
+domain = "user_generated"
+
+[[endpoint]]
+url = "http://mlode.nlp2rdf.org/sparql"
+domain = "linguistics"
+datasets = 5
+
+[[endpoint]]
+url = "http://sparql.odw.tw"
+title = "Test Site, LOD Lab 317"
+
+[[endpoint]]
+url = "https://sparql.crssnky.xyz/spql/imas/query?query="
+title = "im@sparql"
+domain = "media"
+
+[[endpoint]]
+url = "http://www.imagesnippets.com/sparql/images"
+title = "Imagesnippets Image Descriptions"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "http://imf.270a.info/sparql"
+title = "International Monetary Fund (IMF) Linked Data"
+domain = "government"
+
+[[endpoint]]
+url = "http://www.influencetracker.com:8890/sparql"
+title = "Influence Tracker Dataset"
+
+[[endpoint]]
+url = "http://greek-lod.math.auth.gr/intervalue/sparql"
+title = "intervalue"
+
+[[endpoint]]
+url = "http://iserve.kmi.open.ac.uk/iserve/sparql"
+title = "iServe: Linked Services Registry"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "http://156.35.82.103/sparql"
+title = "ISIC V4"
+
+[[endpoint]]
+url = "http://dati.isprambiente.it/sparql"
+datasets = 2
+
+[[endpoint]]
+url = "http://issa.i3s.unice.fr/sparql"
+title = "ISSA Agritrop Dataset"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://sparql.linkedopendata.it/istat"
+title = "ISTAT Immigration (LinkedOpenData.it)"
+domain = "government"
+
+[[endpoint]]
+url = "http://sparql.linkedopendata.it/scuole"
+title = "Italian public schools (LinkedOpenData.it)"
+domain = "publications"
+
+[[endpoint]]
+url = "http://dbtune.org/jamendo/sparql/"
+title = "DBTune.org Jamendo RDF Server"
+domain = "media"
+
+[[endpoint]]
+url = "http://202.73.13.50:55824/catalogs/performance/repositories/jita"
+title = "JITA Classification System of Library and Information Science"
+domain = "publications"
+
+[[endpoint]]
+url = "http://api.talis.com/stores/jgoodwin-genealogy/services/sparql"
+title = "John Goodwin's Family Tree"
+domain = "user_generated"
+
+[[endpoint]]
+url = "http://greek-lod.math.auth.gr/kalikratis/sparql"
+title = "Kallikratis municipalities"
+domain = "government"
+
+[[endpoint]]
+url = "http://sonicbanana.cs.wright.edu:8890/sparql"
+title = "Linked Sensor Data (Kno.e.sis)"
+domain = "geography"
+
+[[endpoint]]
+url = "http://sparql.kupkb.org/sparql"
+title = "Kidney and Urinary Pathway Knowledge Base"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://dblp.l3s.de/d2r/sparql"
+title = "DBLP in RDF (L3S)"
+domain = "publications"
+
+[[endpoint]]
+url = "http://data.linkededucation.org/request/lak-conference/sparql"
+title = "Learning Analytics and Knowledge (LAK) Dataset"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "https://ld.ncl.edu.tw/graph.jsp"
+title = "Linked Open Data Taiwan @ Library"
+domain = "publications"
+
+[[endpoint]]
+url = "http://demo.spraakdata.gu.se/ltlod/test/"
+domain = "linguistics"
+datasets = 4
+
+[[endpoint]]
+url = "http://libris.kb.se/sparql"
+title = "LIBRIS"
+domain = "publications"
+
+[[endpoint]]
+url = "http://libver.math.auth.gr/sparql"
+title = "Public Library of Veroia"
+domain = "publications"
+
+[[endpoint]]
+url = "http://spending.lichfielddc.gov.uk/sparql"
+title = "Lichfield District Council - Spending"
+domain = "government"
+
+[[endpoint]]
+url = "http://linkedlifedata.com/sparql"
+title = "Linked Life Data"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://data.logainm.ie/sparql"
+title = "Linked Logainm"
+domain = "geography"
+
+[[endpoint]]
+url = "http://sparql.linkedopendata.it/loc"
+title = "Linked Open Camera (LinkedOpenData.it)"
+domain = "government"
+
+[[endpoint]]
+url = "http://linkedopencommerce.com/sparql"
+datasets = 2
+
+[[endpoint]]
+url = "http://ecowlim.tfri.gov.tw/sparql/query"
+title = "Linked Open Data of Ecology"
+
+[[endpoint]]
+url = "http://lov.okfn.org/endpoint/lov"
+title = "Linked Open Vocabularies (LOV)"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "https://dbmi-icode-01.dbmi.pitt.edu/sparql"
+title = "Linked Structured Product Labels"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://geoname.linkedopendata.tw/sparql"
+title = "Linked Taiwan Geo-Names"
+
+[[endpoint]]
+url = "http://tcga.deri.ie"
+title = "Linked TCGA"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://soa4all.isoco.net/luf/sparql"
+title = "Linked User Feedback"
+
+[[endpoint]]
+url = "http://sparql.contextdatacloud.org"
+title = "Linked Crowdsourced Data"
+domain = "geography"
+
+[[endpoint]]
+url = "http://data.linkedct.org/sparql"
+title = "LinkedCT"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://linkedgeodata.org/sparql/"
+title = "LinkedGeoData"
+domain = "geography"
+
+[[endpoint]]
+url = "http://api.talis.com/stores/rsinger-dev4/services/sparql"
+title = "LinkedLCCN"
+domain = "publications"
+
+[[endpoint]]
+url = "http://data.linkedmdb.org/sparql"
+title = "Linked Movie DataBase"
+domain = "media"
+
+[[endpoint]]
+url = "http://linkedspending.aksw.org/sparql"
+title = "LinkedSpending"
+domain = "government"
+
+[[endpoint]]
+url = "http://www.linklion.org:8890/sparql"
+title = "LinkLion - A Link Repository for the Web of Data"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "http://id.sgcb.mcu.es/sparql"
+title = "Lista de  Encabezamientos de Materia as Linked Open Data"
+domain = "publications"
+
+[[endpoint]]
+url = "http://lobid.org/sparql/"
+domain = "geography"
+datasets = 2
+
+[[endpoint]]
+url = "https://hdt.lod.labs.vu.nl/?g=LOD-a-lot"
+title = "LOD-a-lot"
+
+[[endpoint]]
+url = "http://lod.ac/bdls/sparql"
+title = "LODAC BDLS"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://lofd.tw.rpi.edu/sparql"
+title = "lofd"
+
+[[endpoint]]
+url = "http://sw.unime.it:8890/sparql"
+title = "Linking Italian University Statistics Project"
+domain = "government"
+
+[[endpoint]]
+url = "http://api.talis.com/stores/datagovuk/services/sparql"
+title = "The London Gazette - Gazettes Data"
+domain = "government"
+
+[[endpoint]]
+url = "http://www.lotico.com:3030/lotico/sparql"
+title = "Lotico"
+domain = "user_generated"
+
+[[endpoint]]
+url = "http://ma-graph.org/sparql"
+title = "Microsoft Academic Knowledge Graph"
+domain = "publications"
+
+[[endpoint]]
+url = "http://api.talis.com/stores/massobservation/services/sparql"
+title = "Mass Observation Archive catalogue"
+
+[[endpoint]]
+url = "http://meducator.open.ac.uk/resourcesrestapi/rest/meducator/sparql"
+title = "mEducator: Linked Educational Resources"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "http://micro.semweb.csdb.cn/sparql"
+title = "Coronavirus dataset"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://apps.morelab.deusto.es/labman/sparql"
+title = "MORElab"
+domain = "publications"
+
+[[endpoint]]
+url = "http://sparql.msc2010.org"
+title = "Mathematics Subject Classification"
+domain = "publications"
+
+[[endpoint]]
+url = "http://rdf.muninn-project.org/sparql"
+title = "Muninn World War I"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "http://sparql.linkedopendata.it/musei"
+title = "Italian Museums"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "https://data.muziekweb.nl/MuziekwebOrganization/Muziekweb/sparql/Muziekweb"
+title = "Muziekweb"
+domain = "media"
+
+[[endpoint]]
+url = "https://api.data.muziekweb.nl/datasets/muziekweborganization/Muziekweb/services/Muziekweb/sparql"
+title = "Muziekweb"
+domain = "media"
+
+[[endpoint]]
+url = "http://rdf.myexperiment.org/sparql/"
+title = "myExperiment"
+domain = "user_generated"
+
+[[endpoint]]
+url = "http://futurewavehosting.com:3030/my-family-lineage/sparql"
+title = "My Family Lineage"
+domain = "user_generated"
+
+[[endpoint]]
+url = "http://n-lex.publicdata.eu/sparql"
+title = "N-Lex as Linked Data"
+domain = "government"
+
+[[endpoint]]
+url = "http://id.ndl.go.jp/auth/ndla/"
+title = "Web NDL Authorities - National Diet Library of Japan"
+domain = "government"
+
+[[endpoint]]
+url = "http://id.ndl.go.jp/auth/ndlsh/"
+title = "National Diet Library of Japan subject headings"
+domain = "government"
+
+[[endpoint]]
+url = "http://nlg.okfn.gr/sparql"
+title = "National Library of Greece Authority Records"
+
+[[endpoint]]
+url = "https://sparql.nextprot.org/"
+title = "neXtProt"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://data.nobelprize.org/sparql"
+title = "Nobel Prizes"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "https://nomenclature.info/sparql"
+title = "Nomenclature for Museum Cataloging"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "http://nomisma.org/sparql"
+title = "Nomisma.org "
+domain = "cross_domain"
+
+[[endpoint]]
+url = "http://query.norpark.ml"
+domain = "geography"
+datasets = 2
+
+[[endpoint]]
+url = "http://data.lenka.no/sparql"
+title = "Norwegian geo-divisions"
+domain = "geography"
+
+[[endpoint]]
+url = "http://api.talis.com/stores/gunnbib-digitalmanuskripter/sparql"
+title = "NTNU special collections"
+domain = "publications"
+
+[[endpoint]]
+url = "http://api.talis.com/stores/nvd/services/sparql"
+title = "Norsk inndeling av vitenskapsdisipliner"
+domain = "publications"
+
+[[endpoint]]
+url = "http://vocab.nerc.ac.uk/sparql/"
+title = "NERC Vocabulary Server 2.0"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://data.oceandrilling.org/sparql"
+domain = "geography"
+datasets = 6
+
+[[endpoint]]
+url = "http://oecd.270a.info/sparql"
+title = "Organisation for Economic Co-operation and Development (OECD) Linked Data"
+domain = "government"
+
+[[endpoint]]
+url = "http://miuras.inf.um.es/sparql"
+title = "Orthology and Diseases Information - OGO"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://omwn.linguistic-lod.org/sparql/"
+domain = "linguistics"
+datasets = 28
+
+[[endpoint]]
+url = "http://onto.beef.org.pl/sparql"
+title = "OntoBeef Domain"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://vocabulary.semantic-web.at/PoolParty/sparql/OpenData"
+title = "Open Data Thesaurus"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "http://en.openei.org/sparql"
+title = "OpenEI - Open Energy Info"
+domain = "government"
+
+[[endpoint]]
+url = "http://www.open-biomed.org.uk/sparql/endpoint/flyatlas"
+title = "flyatlas"
+
+[[endpoint]]
+url = "http://data.utpl.edu.ec/ecuadorresearch/lod/sparql"
+title = "Open Data of Ecuador"
+domain = "publications"
+
+[[endpoint]]
+url = "http://lod.openlinksw.com/sparql"
+title = "OpenLink Software LOD Cache"
+
+[[endpoint]]
+url = "http://sparql.openmobilenetwork.org"
+title = "OpenMobileNetwork"
+domain = "geography"
+
+[[endpoint]]
+url = "http://api.talis.com/stores/ordnance-survey/services/sparql"
+domain = "geography"
+datasets = 2
+
+[[endpoint]]
+url = "http://data.organic-edunet.eu/sparql"
+title = "Organic Edunet Linked Open Data"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://data.organic-edunet.eu/snorql/"
+title = "Organic Edunet Linked Open Data"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "https://orkg.org/triplestore"
+title = "Open Research Knowledge Graph (ORKG)"
+domain = "publications"
+
+[[endpoint]]
+url = "http://sparql.cwrc.ca/sparql"
+title = "The Orlando Women's Writing Linked Open Data Set"
+
+[[endpoint]]
+url = "http://spatial.ucd.ie/lod/sparql"
+title = "OSM Semantic Network"
+domain = "geography"
+
+[[endpoint]]
+url = "http://api.kasabi.com/dataset/pali-english-lexicon/apis/sparql"
+title = "Pali English Lexicon"
+
+[[endpoint]]
+url = "http://ld.panlex.org/sparql"
+title = "PanLex"
+domain = "linguistics"
+
+[[endpoint]]
+url = "http://services.data.gov.uk/patents/sparql"
+title = "patents.data.gov.uk"
+domain = "government"
+
+[[endpoint]]
+url = "http://linked-data.org/sparql"
+title = "Phonetics Information Base and Lexicon (PHOIBLE)"
+domain = "linguistics"
+
+[[endpoint]]
+url = "http://plant.semweb.csdb.cn/sparql"
+title = "digitized plant specimen"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://ct-e-justice.aegean.gr:3030/pt-prison-releases/sparql"
+title = "Synthetic Portuguese prisons releases Jan 2018 - Dec 2023"
+domain = "government"
+
+[[endpoint]]
+url = "http://prelex.publicdata.eu/sparql"
+title = "PreLex"
+domain = "government"
+
+[[endpoint]]
+url = "http://api.kasabi.com/dataset/prelinger-archives/apis/sparql"
+title = "Prelinger Archives"
+
+[[endpoint]]
+url = "http://premon.fbk.eu/sparql"
+title = "PreMOn"
+domain = "linguistics"
+
+[[endpoint]]
+url = "http://api.talis.com/stores/pbac/services/sparql"
+title = "English Language Books listed in Printed Book Auction Catalogues from 17th Century Holland"
+domain = "publications"
+
+[[endpoint]]
+url = "http://api.talis.com/stores/productdb/services/sparql"
+title = "ProductDB"
+
+[[endpoint]]
+url = "http://provenanceweb.org/sparql"
+title = "provenanceweb"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "http://publicspending.medialab.ntua.gr/sparql"
+title = "Public Spending in Greece"
+domain = "government"
+
+[[endpoint]]
+url = "https://relate.racai.ro/datasets/legalnero/query"
+title = "Romanian Named Entity Recognition in the Legal domain (LegalNERo)"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "https://relate.racai.ro/datasets/parseme/query"
+title = "PARSEME-Ro corpus"
+domain = "media"
+
+[[endpoint]]
+url = "https://relate.racai.ro/datasets/rolex/query"
+title = "RoLEX"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "https://relate.racai.ro/datasets/rtasc/sparql"
+title = "ROBIN Technical Acquisition Speech Corpus"
+domain = "user_generated"
+
+[[endpoint]]
+url = "https://relate.racai.ro/datasets/simonero/query"
+title = "SiMoNERo - the Romanian medical treebank"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://data.bibsys.no/data/query_authority.html"
+title = "Rådata nå!"
+domain = "publications"
+
+[[endpoint]]
+url = "http://linkeddata4.dia.fi.upm.es:8907/sparql"
+title = "RDFLicense"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "https://www.ebi.ac.uk/rdf/services/reactome/sparql"
+title = "Reactome RDF"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://eculture2.cs.vu.nl:5020/sparql/"
+title = "Rechtspraak.nl"
+domain = "government"
+
+[[endpoint]]
+url = "http://services.data.gov.uk/reference/sparql"
+title = "reference.data.gov.uk"
+domain = "government"
+
+[[endpoint]]
+url = "http://lod.xdams.org/sparql"
+domain = "publications"
+datasets = 2
+
+[[endpoint]]
+url = "http://api.kasabi.com/dataset/renewable-energy-generators/apis/sparql"
+title = "Renewable Energy Generators"
+domain = "government"
+
+[[endpoint]]
+url = "http://services.data.gov.uk/research/sparql"
+title = "research.data.gov.uk"
+domain = "government"
+
+[[endpoint]]
+url = "https://tematres.seriadas.com/vocab/sparql.php"
+title = "Revista Excelencias Turísticas"
+domain = "media"
+
+[[endpoint]]
+url = "http://revyu.com/sparql"
+title = "Revyu.com - Review Anything"
+domain = "user_generated"
+
+[[endpoint]]
+url = "http://mtimo.de/234"
+title = "sdafsadf"
+domain = "user_generated"
+
+[[endpoint]]
+url = "http://data.rism.info/sparql"
+domain = "publications"
+datasets = 2
+
+[[endpoint]]
+url = "http://acm.rkbexplorer.com/sparql/"
+title = "Association for Computing Machinery (ACM) (RKBExplorer)"
+domain = "publications"
+
+[[endpoint]]
+url = "http://budapest.rkbexplorer.com/sparql/"
+title = "Budapest University of Technology and Economics (RKBExplorer)"
+domain = "publications"
+
+[[endpoint]]
+url = "http://citeseer.rkbexplorer.com/sparql/"
+title = "CiteSeer (Research Index) (RKBExplorer)"
+domain = "publications"
+
+[[endpoint]]
+url = "http://cordis.rkbexplorer.com/sparql/"
+title = "Community R&D Information Service (CORDIS) (RKBExplorer)"
+domain = "government"
+
+[[endpoint]]
+url = "http://courseware.rkbexplorer.com/sparql/"
+title = "Resilient Computing Courseware (RKBExplorer)"
+domain = "publications"
+
+[[endpoint]]
+url = "http://crime.rkbexplorer.com/sparql/"
+title = "Street level crime reports for England and Wales"
+domain = "government"
+
+[[endpoint]]
+url = "http://curriculum.rkbexplorer.com/sparql/"
+title = "ReSIST MSc in Resilient Computing Curriculum (RKBExplorer)"
+domain = "publications"
+
+[[endpoint]]
+url = "http://darmstadt.rkbexplorer.com/sparql/"
+title = "Technische Universität Darmstadt (RKBExplorer)"
+domain = "publications"
+
+[[endpoint]]
+url = "http://dblp.rkbexplorer.com/sparql/"
+title = "DBLP Computer Science Bibliography (RKBExplorer)"
+domain = "publications"
+
+[[endpoint]]
+url = "http://deepblue.rkbexplorer.com/sparql/"
+title = "Deep Blue (RKBExplorer)"
+domain = "publications"
+
+[[endpoint]]
+url = "http://deploy.rkbexplorer.com/sparql/"
+title = "DEPLOY (RKBExplorer)"
+domain = "publications"
+
+[[endpoint]]
+url = "http://digitaleconomy.rkbexplorer.com/sparql"
+title = "digitaleconomy"
+
+[[endpoint]]
+url = "http://dotac.rkbexplorer.com/sparql/"
+title = "dotAC (RKBExplorer)"
+domain = "publications"
+
+[[endpoint]]
+url = "http://ecs.rkbexplorer.com/sparql"
+title = "School of Electronics and Computer Science, University of Southampton"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "http://eprints.rkbexplorer.com/sparql/"
+title = "ePrints3 Institutional Archive Collection (RKBExplorer)"
+domain = "publications"
+
+[[endpoint]]
+url = "http://epsrc.rkbexplorer.com/sparql"
+title = "epsrc"
+domain = "publications"
+
+[[endpoint]]
+url = "http://era.rkbexplorer.com/sparql/"
+title = "ERA - Australian Research Council publication ratings (RKBExplorer)"
+domain = "publications"
+
+[[endpoint]]
+url = "http://eurecom.rkbexplorer.com/sparql/"
+title = "Institut Eurécom (RKBExplorer)"
+domain = "publications"
+
+[[endpoint]]
+url = "http://ft.rkbexplorer.com/sparql/"
+title = "France Telecom Recherche et Développement (RKBExplorer)"
+domain = "publications"
+
+[[endpoint]]
+url = "http://fun.rkbexplorer.com/sparql"
+title = "fun"
+domain = "publications"
+
+[[endpoint]]
+url = "http://gdlc.rkbexplorer.com/sparql"
+title = "gdlc"
+domain = "publications"
+
+[[endpoint]]
+url = "http://ibm.rkbexplorer.com/sparql/"
+title = "IBM Research GmbH (RKBExplorer)"
+domain = "publications"
+
+[[endpoint]]
+url = "http://ieee.rkbexplorer.com/sparql/"
+title = "IEEE Papers (RKBExplorer)"
+domain = "publications"
+
+[[endpoint]]
+url = "http://irit.rkbexplorer.com/sparql/"
+title = "Université Paul Sabatier - Toulouse 3 (RKB Explorer)"
+domain = "publications"
+
+[[endpoint]]
+url = "http://italy.rkbexplorer.com/sparql"
+title = "Diverse Italian ReSIST Partner Institutions (RKBExplorer)"
+domain = "publications"
+
+[[endpoint]]
+url = "http://jisc.rkbexplorer.com/sparql/"
+title = "UK JISC (RKBExplorer)"
+domain = "publications"
+
+[[endpoint]]
+url = "http://kaunas.rkbexplorer.com/sparql"
+title = "Vytautas Magnus University, Kaunas (RKBExplorer)"
+domain = "publications"
+
+[[endpoint]]
+url = "http://kisti.rkbexplorer.com/sparql/"
+title = "Korean Institute of Science Technology and Information (RKBExplorer)"
+domain = "publications"
+
+[[endpoint]]
+url = "http://laas.rkbexplorer.com/sparql/"
+title = "LAAS-CNRS (RKBExplorer)"
+domain = "publications"
+
+[[endpoint]]
+url = "http://lisbon.rkbexplorer.com/sparql"
+title = "Fundação da Faculdade de Ciencas da Universidade de Lisboa (RKBExplorer)"
+domain = "publications"
+
+[[endpoint]]
+url = "http://newcastle.rkbexplorer.com/sparql/"
+title = "University of Newcastle upon Tyne (RKBExplorer)"
+domain = "publications"
+
+[[endpoint]]
+url = "http://notube.rkbexplorer.com/sparql"
+title = "notube"
+domain = "publications"
+
+[[endpoint]]
+url = "http://nsf.rkbexplorer.com/sparql/"
+title = "National Science Foundation (RKBExplorer)"
+domain = "publications"
+
+[[endpoint]]
+url = "http://oai.rkbexplorer.com/sparql/"
+title = "Open Archive Initiative Harvest over OAI-PMH (RKBExplorer)"
+domain = "publications"
+
+[[endpoint]]
+url = "http://os.rkbexplorer.com/sparql/"
+title = "Ordnance Survey (RKBExplorer)"
+domain = "publications"
+
+[[endpoint]]
+url = "http://photos.rkbexplorer.com/sparql"
+title = "photos"
+domain = "publications"
+
+[[endpoint]]
+url = "http://pisa.rkbexplorer.com/sparql/"
+title = "Università di Pisa (RKBExplorer)"
+domain = "publications"
+
+[[endpoint]]
+url = "http://rae2001.rkbexplorer.com/sparql/"
+title = "Research Assessment Exercise 2001 (RKBExplorer)"
+domain = "publications"
+
+[[endpoint]]
+url = "http://resex.rkbexplorer.com/sparql/"
+title = "ReSIST Resilience Mechanisms (RKBExplorer.com)"
+domain = "publications"
+
+[[endpoint]]
+url = "http://risks.rkbexplorer.com/sparql/"
+title = "RISKS Digest (RKBExplorer)"
+domain = "publications"
+
+[[endpoint]]
+url = "http://roma.rkbexplorer.com/sparql/"
+title = 'Università degli studi di Roma "La Sapienza" (RKBExplorer)'
+domain = "publications"
+
+[[endpoint]]
+url = "http://roni.rkbexplorer.com/sparql"
+title = "roni"
+
+[[endpoint]]
+url = "http://southampton.rkbexplorer.com/sparql/"
+title = "School of Electronics and Computer Science, University of Southampton (RKBExplorer)"
+domain = "publications"
+
+[[endpoint]]
+url = "http://ulm.rkbexplorer.com/sparql/"
+title = "Universität Ulm (RKBExplorer)"
+domain = "publications"
+
+[[endpoint]]
+url = "http://unlocode.rkbexplorer.com/sparql/"
+title = "UN/LOCODE (RKBExplorer)"
+domain = "publications"
+
+[[endpoint]]
+url = "http://webconf.rkbexplorer.com/sparql"
+title = "webconf"
+domain = "publications"
+
+[[endpoint]]
+url = "http://webscience.rkbexplorer.com/sparql"
+title = "Web Science Conference (RKBExplorer)"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "http://wiki.rkbexplorer.com/sparql/"
+title = "ReSIST Project Wiki (RKBExplorer)"
+domain = "publications"
+
+[[endpoint]]
+url = "http://wordnet.rkbexplorer.com/sparql/"
+title = "WordNet (RKBExplorer)"
+domain = "linguistics"
+
+[[endpoint]]
+url = "http://www.roceeh.uni-tuebingen.de:3030/road/sparql"
+title = "ROCEEH Out of Africa Database (ROAD)"
+domain = "user_generated"
+
+[[endpoint]]
+url = "http://sparql.sstu.ru:3030/speciality-vocabulary/query"
+title = "Russian Universities Specialities"
+
+[[endpoint]]
+url = "http://biordf.net/sparql"
+title = "SADI Semantic Web Services framework registry"
+
+[[endpoint]]
+url = "http://id.eaufrance.fr/sparql"
+title = "Taxons "
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://api.kasabi.com/dataset/sanskrit-english-lexicon/apis/sparql"
+title = "Sanskrit English Lexicon"
+
+[[endpoint]]
+url = "http://212.81.220.68:2020/elviajero"
+title = "Santillana Guide Dataset"
+
+[[endpoint]]
+url = "http://api.talis.com/stores/schemapedia/services/sparql"
+title = "Schemapedia: RDF schema compendium"
+
+[[endpoint]]
+url = "http://rdfabout.com/sparql"
+title = "U.S. Securities and Exchange Commission Corporate Ownership RDF Data (rdfabout)"
+domain = "government"
+
+[[endpoint]]
+url = "http://aseg.cs.concordia.ca/secold/sparqlendpoint"
+title = "Source Code Ecosystem Linked Data"
+
+[[endpoint]]
+url = "http://data.semanticuniverse.com/sparql"
+title = "Semantic Universe Data"
+
+[[endpoint]]
+url = "http://data.semanticweb.org/sparql"
+title = "Semantic Web Dog Food Corpus"
+domain = "publications"
+
+[[endpoint]]
+url = "http://semanticquran.aksw.org/sparql"
+title = "Semantic Quran"
+domain = "linguistics"
+
+[[endpoint]]
+url = "http://cb.semsol.org/sparql"
+title = "Semantic CrunchBase"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "http://13.125.246.132/sparql"
+title = "seoul-bike-data"
+domain = "user_generated"
+
+[[endpoint]]
+url = "http://serendipity.utpl.edu.ec/lod/sparql"
+title = "Serendipity"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "http://slod.fiz-karlsruhe.de/sparql"
+title = "Linked Stage Graph"
+domain = "media"
+
+[[endpoint]]
+url = "http://smartlink.open.ac.uk/smartlink/sparql"
+title = "SmartLink: Linked Services Non-Functional Properties"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "https://www.snik.eu/sparql"
+title = "SNIK"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://vocabulary.semantic-web.at/PoolParty/sparql/semweb"
+title = "Social Semantic Web Thesaurus"
+domain = "social_networking"
+
+[[endpoint]]
+url = "http://sparql.data.southampton.ac.uk/"
+title = "Apps using our data (University of Southampton)"
+
+[[endpoint]]
+url = "http://linguistic.linkeddata.es/sparql"
+title = "Spanish Linguistic Datasets"
+
+[[endpoint]]
+url = "http://labs.mondeca.com/endpoint/ends"
+title = "SPARQL Endpoint Status"
+
+[[endpoint]]
+url = "http://www.ss-framework.com/sparql"
+title = "Lexicon of Syntactic and Semantic Framework"
+domain = "linguistics"
+
+[[endpoint]]
+url = "http://services.data.gov.uk/statistics/sparql"
+title = "statistics.data.gov.uk"
+domain = "government"
+
+[[endpoint]]
+url = "https://data.stonetechsquare.com/query/"
+title = "Stone Tech Square"
+domain = "user_generated"
+
+[[endpoint]]
+url = "http://zbw.eu/beta/sparql/stw/query"
+title = "STW Thesaurus for Economics"
+domain = "publications"
+
+[[endpoint]]
+url = "http://sparql.sindice.com/sparql"
+title = "Sudoc bibliographic data"
+domain = "publications"
+
+[[endpoint]]
+url = "http://lod.sztaki.hu/sparql"
+title = "National Digital Data Archive of Hungary (partial)"
+domain = "publications"
+
+[[endpoint]]
+url = "http://pomelo.iis.sinica.edu.tw:2020/sparql"
+title = "Taiwan geographic names"
+
+[[endpoint]]
+url = "https://taxref.mnhn.fr/sparql"
+title = "TAXREF-LD: Knowledge Graph of the French taxonomic registery"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://hcls.deri.org:8080/openrdf-sesame/repositories/tcga"
+title = "The Cancer Genome Atlas"
+
+[[endpoint]]
+url = "http://agalpha.mathbiol.org/repositories/tcga"
+title = "TCGA Roadmap"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://www.open-biomed.org.uk/sparql/endpoint/tcm"
+title = "TCMGeneDIT Dataset"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://telegraphis.net/data/countries/sparql"
+title = "Telegraphis Linked Data"
+domain = "geography"
+
+[[endpoint]]
+url = "https://test-svu/sparql"
+title = "test-svu"
+domain = "user_generated"
+
+[[endpoint]]
+url = "http://diwis.imis.athena-innovation.gr:8181/sparql"
+title = "xxxxx"
+
+[[endpoint]]
+url = "https://dbmi-icode-01.dbmi.pitt.edu/dikb/sparql"
+title = "The Drug Interaction Knowledge Base"
+
+[[endpoint]]
+url = "http://eurostat.linked-statistics.org/sparql"
+title = "The Eurostat Linked Data"
+domain = "government"
+
+[[endpoint]]
+url = "http://api.talis.com/stores/theviewfrom/services/sparql"
+title = "The View From"
+domain = "geography"
+
+[[endpoint]]
+url = "http://www.archivesdefrance.culture.gouv.fr/thesaurus/sparql"
+title = "Thesaurus W for Local Archives"
+
+[[endpoint]]
+url = "http://lod.apc.gov.tw/sparql"
+title = "TIP"
+domain = "government"
+
+[[endpoint]]
+url = "https://trackloaded.com/sparql-endpoint.php"
+title = "Trackloaded Linked Open Data"
+domain = "media"
+
+[[endpoint]]
+url = "http://tkm.kiom.re.kr/ontology/sparql"
+title = "Traditional Korean Medicine Ontology"
+
+[[endpoint]]
+url = "http://api.talis.com/stores/trafficscotland/services/sparql"
+title = "Traffic Scotland"
+
+[[endpoint]]
+url = "http://transparency.270a.info/sparql"
+title = "Transparency International Linked Data"
+domain = "government"
+
+[[endpoint]]
+url = "http://services.data.gov.uk/transport/sparql"
+title = "transport.data.gov.uk"
+domain = "government"
+
+[[endpoint]]
+url = "http://twarql.org:8890/sparql"
+title = "Twarql"
+domain = "user_generated"
+
+[[endpoint]]
+url = "http://healthdata.tw.rpi.edu/sparql"
+title = "HealthData.gov Platform (HDP) on the Semantic Web"
+
+[[endpoint]]
+url = "http://purl.org/twc/hub/sparql"
+title = "Instance Hub (all)"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "http://ieeevis.tw.rpi.edu/nosparql"
+title = "IEEE VIS Source Data"
+domain = "publications"
+
+[[endpoint]]
+url = "http://opendap.tw.rpi.edu/sparql"
+title = "twc-opendap"
+domain = "publications"
+
+[[endpoint]]
+url = "http://data.bib.uni-mannheim.de/sparql"
+title = "Linked Data Service der Universitätsbibliothek Mannheim"
+domain = "publications"
+
+[[endpoint]]
+url = "http://platform.uberblic.org/api/v1/sparql"
+title = "Uberblic.org"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "http://onto.fel.cvut.cz/rdf4j-server/repositories/ufo-current"
+title = "Unified Foundational Ontology"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "http://uis.270a.info/sparql"
+title = "UNESCO Institute for Statistics (UIS) Linked Data"
+domain = "government"
+
+[[endpoint]]
+url = "http://api.kasabi.com/dataset/un-hazardous-material-numbers/apis/sparql"
+title = "UN Hazardous Materials Numbers"
+
+[[endpoint]]
+url = "http://sparql.uniprot.org"
+title = "UniProt"
+domain = "life_sciences"
+
+[[endpoint]]
+url = "http://unodc.publicdata.eu/sparql"
+title = "UNODC - Statistics on criminal justice"
+domain = "government"
+
+[[endpoint]]
+url = "http://linkeddata.uriburner.com/sparql"
+title = "URIBurner"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "http://data.lider-project.eu/usage/sparql"
+title = "USAGE review corpus"
+
+[[endpoint]]
+url = "http://data.utpl.edu.ec/utpl/lod/sparql"
+title = "Universidad Técnica Particular de Loja - Linked Open Data"
+domain = "user_generated"
+
+[[endpoint]]
+url = "http://semanticweb.cs.vu.nl/verrijktkoninkrijk/sparql/"
+title = "Verrijkt Koninkrijk"
+domain = "publications"
+
+[[endpoint]]
+url = "http://minsky.gsi.dit.upm.es/semanticwiki/index.php/Special:SPARQLEndpoint"
+title = "vulnerapedia"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "http://ldf.fi/warsa/sparql"
+title = "WarSampo"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "http://wasabi.inria.fr/sparql"
+title = "WASABI RDF Knowledge Graph"
+domain = "media"
+
+[[endpoint]]
+url = "http://webisa.webdatacommons.org/sparql"
+title = "WebIsALOD"
+
+[[endpoint]]
+url = "http://wiktionary.dbpedia.org/sparql"
+title = "wiktionary.dbpedia.org"
+domain = "linguistics"
+
+[[endpoint]]
+url = "https://kgccc.di.unito.it/sparql/"
+title = "The World Literature Knowledge Graph"
+domain = "cross_domain"
+
+[[endpoint]]
+url = "http://worldbank.270a.info/sparql"
+title = "World Bank Linked Data"
+domain = "government"
+
+[[endpoint]]
+url = "http://www4.wiwiss.fu-berlin.de/factbook/sparql"
+title = "World Factbook (FU Berlin)"
+domain = "government"
+
+[[endpoint]]
+url = "http://ldf.fi/ww1lod/sparql"
+title = "World War 1 as Linked Open Data"
+domain = "publications"
+
+[[endpoint]]
+url = "http://km.aifb.kit.edu/services/xlike-lexicon/"
+title = "xLiD-Lexica"
+domain = "linguistics"
+
+[[endpoint]]
+url = "http://api.kasabi.com/dataset/yahoo-geoplanet/apis/sparql"
+title = "Yahoo Geoplanet RDF"
+domain = "geography"
+
+[[endpoint]]
+url = "http://neuroweb.med.yale.edu:8890/sparql"
+title = "Yale Senselab"
+
+[[endpoint]]
+url = "http://sparql.yovisto.com/"
+title = "Yovisto - academic video search"
+domain = "user_generated"
+
+[[endpoint]]
+url = "https://api.finto.fi/rest/v1/yso-places/data"
+title = "YSO places"
+domain = "geography"
+
+[[endpoint]]
+url = "http://zhishi.me/sparql"
+title = "Zhishi.me"
+domain = "linguistics"

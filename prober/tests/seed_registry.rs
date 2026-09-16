@@ -186,9 +186,10 @@ fn the_right_claim_seeds_two_files_that_describe_the_dump_read() {
     assert!(!expected.endpoints.is_empty(), "an empty list would agree with anything");
 
     let written = std::fs::read_to_string(&out).expect("the registry must be written");
+    let expected_urls: Vec<String> = expected.endpoints.iter().map(|e| e.url.clone()).collect();
     assert_eq!(
         sparqlwatch_prober::registry::load_endpoints(&written, &shipped_exclusions()).unwrap(),
-        expected.endpoints,
+        expected_urls,
         "the registry has to be the candidates the extractor found, in that order"
     );
     assert!(
@@ -266,7 +267,7 @@ fn a_re_seed_applies_the_exclusion_list_and_leaves_it_byte_for_byte() {
     let excluded = "http://linked.opendata.cz/sparql";
     let unrestricted = sparqlwatch_prober::seed::candidates(SAMPLE, &[]).unwrap();
     assert!(
-        unrestricted.endpoints.iter().any(|e| e == excluded),
+        unrestricted.endpoints.iter().any(|e| e.url == excluded),
         "the fixture has to name {excluded} for this test to be about anything"
     );
 

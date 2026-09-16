@@ -12,7 +12,7 @@ sha256 = "d94fdb394ed423e305f8dc51040ff01a155023f60dbfcc4b62ff87f9b6a2cc35"
 
 [extraction]
 rule = "sparqlwatch_prober::seed::candidates"
-crate_version = "0.1.0"
+crate_version = "0.2.0"
 
 [counts]
 datasets = 1683
