@@ -1,0 +1,35 @@
+[
+  {
+    "query": "recpetor",
+    "terms": [
+      {"local": "Receptor", "prefix": "drugbank", "iri": "http://bio2rdf.org/drugbank_vocabulary:Receptor", "tokens": "receptor"},
+      {"local": "Drug", "prefix": "drugbank", "iri": "http://bio2rdf.org/drugbank_vocabulary:Drug", "tokens": "drug"}
+    ],
+    "expected": ["Receptor"]
+  },
+  {
+    "query": "drug target",
+    "terms": [
+      {"local": "DrugTarget", "prefix": "drugbank", "iri": "x:DrugTarget", "tokens": "drug target"},
+      {"local": "targetOfDrug", "prefix": "drugbank", "iri": "x:targetOfDrug", "tokens": "target of drug"},
+      {"local": "Target", "prefix": "drugbank", "iri": "x:Target", "tokens": "target"},
+      {"local": "Pathway", "prefix": "drugbank", "iri": "x:Pathway", "tokens": "pathway"}
+    ],
+    "expected": ["DrugTarget", "targetOfDrug", "Target", "Pathway"]
+  },
+  {
+    "query": "",
+    "terms": [
+      {"local": "B", "prefix": "db", "iri": "x:B", "tokens": "b"},
+      {"local": "A", "prefix": "db", "iri": "x:A", "tokens": "a"}
+    ],
+    "expected": ["B", "A"]
+  },
+  {
+    "query": "zzzz",
+    "terms": [
+      {"local": "Drug", "prefix": "db", "iri": "x:Drug", "tokens": "drug"}
+    ],
+    "expected": []
+  }
+]
