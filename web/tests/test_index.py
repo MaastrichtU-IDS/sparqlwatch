@@ -2602,3 +2602,63 @@ def test_a_no_match_page_states_its_denominator_as_zero_of_the_fleet(
     ).text
     total = texts_with(body, "data-figure")[0]
     assert total == "0 of 9", f"the count reads {total!r}"
+
+
+# ---------------------------------------------------------------------------
+# ?q= and the inline client-side script: fix round 2 (coordinator finding).
+#
+# The script at index.html's body_end block was written under the invariant
+# stated in its own former comment -- "every row is in the document already"
+# -- which ?q= broke without anyone updating the script. Three symptoms:
+# `total` counted rendered (server-filtered) rows instead of the fleet; a page
+# that loaded with the box pre-filled ran apply() on load and reported a
+# client-side filter result nobody asked for ("showing 1 of 1" beside a strip
+# reading "1 of 9"); and a no-match `?q=` unhid #nothing, showing two
+# differently-worded "nothing found" notices at once.
+#
+# This suite has no JavaScript harness, so it asserts what markup can carry:
+# the fleet total travels to the script as a `data-fleet-total` attribute
+# rather than being countable from rendered rows, and it differs from the
+# rendered row count exactly when a filter narrowed the page. The
+# interaction-gating and #nothing-suppression behaviour is JS and was
+# measured by hand against a running server (see the task-6 report).
+# ---------------------------------------------------------------------------
+
+
+def test_the_fleet_total_travels_to_the_script_as_an_attribute(
+    client_for, store_registry_sample
+):
+    body = client_for(store_registry_sample).get(
+        "/", headers={"accept": "text/html"}
+    ).text
+    attributes = with_attribute(body, "data-fleet-total")
+    assert len(attributes) == 1, "the fleet total must be carried exactly once"
+    assert attributes[0]["data-fleet-total"] == "9"
+
+
+def test_a_filtered_pages_fleet_total_still_names_the_whole_fleet(
+    client_for, store_registry_sample
+):
+    """The bug this guards against: `total` computed by counting
+    `[data-endpoint]` rows in the document reads 1 on a page ?q= narrowed to
+    one row, not 9. The attribute must stay the unfiltered count regardless,
+    so a filtered page's fleet total DIFFERS from its rendered row count."""
+    body = client_for(store_registry_sample).get(
+        "/?q=uniprot", headers={"accept": "text/html"}
+    ).text
+    fleet_total = int(with_attribute(body, "data-fleet-total")[0]["data-fleet-total"])
+    rendered_rows = len(endpoints_shown(body))
+    assert rendered_rows == 1
+    assert fleet_total == 9
+    assert fleet_total != rendered_rows
+
+
+def test_a_no_match_pages_fleet_total_is_still_the_fleet(
+    client_for, store_registry_sample
+):
+    body = client_for(store_registry_sample).get(
+        "/?q=zzzznomatch", headers={"accept": "text/html"}
+    ).text
+    fleet_total = int(with_attribute(body, "data-fleet-total")[0]["data-fleet-total"])
+    assert fleet_total == 9
+    assert endpoints_shown(body) == []

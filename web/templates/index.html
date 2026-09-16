@@ -577,7 +577,7 @@
      No heading means no grouping element, so the script that filters rows no
      longer has per-group counts to keep honest: one number, in the header, over
      one list. #}
-  <ul class="rows" data-listing="all">
+  <ul class="rows" data-listing="all" data-fleet-total="{{ summary.total }}">
       {% for row in rows %}
 {# ONE LINE PER ROW, AND EVERY BYTE OF IT IS COUNTED. 543 rows times eight
    cells is where this page's size lives: it is 90 percent of the document, so
@@ -678,11 +678,27 @@
 {% block body_end %}
 <script>
 /* The filter and the facets, and the page does not depend on either. Every row
-   is in the document already: this hides the ones that do not match and keeps
-   the counts honest while it does, which is the only reason it is more than
-   three lines. A group heading reading "4 of 10 endpoints" beside two visible
-   rows would be a wrong number of exactly the kind this page is built to avoid,
-   so filtering appends what is shown rather than editing what was counted.
+   IN THE DOCUMENT is hidden or shown by this script; whether every row in the
+   FLEET is in the document is a separate question this script no longer
+   assumes yes to. A `?q=` on the URL narrows the rows the server sent before
+   this script ever runs, so "every row" here means every row of that already-
+   narrowed set, and the fleet's true size travels separately, in
+   `data-fleet-total` on the row list, because counting `[data-endpoint]`
+   elements would count what the server kept rather than what exists.
+
+   A page can also arrive with the search box already full -- the server
+   read it from the same `?q=`, and printed it back so a client-side edit
+   starts from what is showing rather than from blank. That box is not a
+   client-side narrowing: nobody has typed anything yet. So the first call to
+   apply(), below, must not talk as though a person had just filtered -- an
+   `interacted` flag stays false until an `input` or a chip `click` actually
+   fires, and both the "showing N of M" line and #nothing stay exactly as
+   silent as they are on an unfiltered page until then. This hides the ones
+   that do not match and keeps the counts honest while it does, which is the
+   only reason it is more than three lines. A group heading reading "4 of 10
+   endpoints" beside two visible rows would be a wrong number of exactly the
+   kind this page is built to avoid, so filtering appends what is shown rather
+   than editing what was counted.
 
    THE FACETS COST NOTHING PER ROW, which is the reason they read the DOM the
    way they do. A chip already carries its state in an `enc-<slug>` class, its
@@ -708,8 +724,26 @@
   var shown = document.getElementById("shown");
   var buttons = [].slice.call(document.querySelectorAll("[data-facet]"));
   if (!box && !buttons.length) { return; }
-  var total = document.querySelectorAll("[data-endpoint]").length;
+  /* The fleet's true size, from the server, not from counting rows in the
+     document: a `?q=` already narrowed those, so `[data-endpoint]` elements
+     answer "how many rows did the server send" and not "how many endpoints
+     exist," and this needs the second question. */
+  var listing = document.querySelector("[data-fleet-total]");
+  var total = listing ? parseInt(listing.getAttribute("data-fleet-total"), 10) || 0
+                       : document.querySelectorAll("[data-endpoint]").length;
   var empty = document.getElementById("nothing");
+  /* Whether the server already said, in prose, that this query matches
+     nothing (index.html's `data-no-match` paragraph). If it did, #nothing
+     must never also appear -- one page does not get two differently-worded
+     "nothing found" notices, one naming the query and one talking about
+     facets that were never touched. */
+  var serverNoMatch = !!document.querySelector("[data-no-match]");
+  /* Whether the reader has done anything yet: typed in the box, or pressed a
+     facet chip. A page can load with the box already full and the rows
+     already narrowed -- the server did that from the same `?q=` -- and that
+     is not an event this script fired, so it must not talk as though it
+     were. Both `shown` and #nothing stay silent until this flips true. */
+  var interacted = false;
   /* The facet groups, read off the CHIPS rather than off the panels. Both are
      in the document and only one is right: a panel's data-facet-group names the
      panel, and since the grid landed one panel holds chips of three different
@@ -890,24 +924,42 @@
         chip.chipSpan.textContent = drawn(chip, q, picked) + chip.chipSuffix;
       }
     });
+    /* Both lines below describe CLIENT-SIDE narrowing only -- facet chips, or
+       typing beyond what the server already did. A page that loaded with a
+       server-applied `q` and has had no interaction since has none of that to
+       report, so both stay exactly as silent as an unfiltered page until
+       `interacted` flips true. */
     if (shown) {
-      shown.textContent = filtering
+      shown.textContent = interacted && filtering
         ? "showing " + matched + " of " + total + " endpoints" : "";
     }
-    /* A filter that matches nothing says so. An empty page under a header
-       reading "543 endpoints" would leave a reader to guess whether the page
-       broke or the question has no answer here. */
-    if (empty) { empty.hidden = !(filtering && matched === 0); }
+    /* A filter that matches nothing says so -- but only #nothing's own case,
+       facets (or a client-side edit) that jointly match zero rows. A page the
+       SERVER already narrowed to zero has its own message, `data-no-match`,
+       printed above the rows and true before this script runs at all, so
+       #nothing stays hidden whenever that one is showing: never two notices
+       at once. An empty page under a header reading "543 endpoints" would
+       otherwise leave a reader to guess whether the page broke or the
+       question has no answer here. */
+    if (empty) {
+      empty.hidden = serverNoMatch || !(interacted && filtering && matched === 0);
+    }
   }
 
   chips.forEach(function (chip) {
     chip.el.addEventListener("click", function () {
       var on = chip.el.getAttribute("aria-pressed") === "true";
       chip.el.setAttribute("aria-pressed", on ? "false" : "true");
+      interacted = true;
       apply();
     });
   });
-  if (box) { box.addEventListener("input", apply); }
+  if (box) {
+    box.addEventListener("input", function () {
+      interacted = true;
+      apply();
+    });
+  }
   apply();
 })();
 </script>
