@@ -31,5 +31,13 @@
       {"local": "Drug", "prefix": "db", "iri": "x:Drug", "tokens": "drug"}
     ],
     "expected": []
+  },
+  {
+    "query": "alpha beta gamma",
+    "terms": [
+      {"local": "AlphaBeta", "prefix": "ns", "iri": "x:AlphaBeta", "tokens": "alpha beta"},
+      {"local": "AlphaOnly", "prefix": "ns", "iri": "x:AlphaOnly", "tokens": "alpha"}
+    ],
+    "expected": ["AlphaBeta"]
   }
 ]

@@ -16,6 +16,12 @@ from __future__ import annotations
 import re
 
 # camelCase boundaries, and the punctuation that separates words in an IRI.
+#
+# This only splits a lower-to-upper transition, so a run of capitals is one
+# token with whatever follows it: `hasIRI` -> ["has", "iri"] but `IRIValue` ->
+# ["irivalue"] and `HTTPRequest` -> ["httprequest"]. That is a known gap, not
+# a bug to fix here -- web/static/vocab-search.js (task 10) must reproduce it
+# rather than diverge, since the two are checked against one shared table.
 _BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|[_\-./:]+")
 
 # Below four characters, edit distance 1 matches almost everything, so the
@@ -102,14 +108,20 @@ def rank(terms: list[dict], query: str) -> list[dict]:
             continue
         ranked.append({**term, "band": band, "score": sum(scores)})
 
-    # Band first, then total score, then the shorter name, then alphabetically.
-    # The last two exist so the order cannot shuffle between keystrokes.
+    # Band first, then total score, then the shorter name, then alphabetically,
+    # then the IRI. The first four exist so the order cannot shuffle between
+    # keystrokes; they are not enough to make the order total by themselves --
+    # two different terms can share a `local` (rdfs:label and skos:label are
+    # both ordinary), and would then tie on every one of them, leaving the
+    # result order to whatever order `terms` happened to arrive in. The IRI is
+    # unique per term, so it is the tiebreak that actually finishes the job.
     ranked.sort(
         key=lambda t: (
             0 if t["band"] == "match" else 1,
             -t["score"],
             len(t.get("local", "")),
             t.get("local", ""),
+            t.get("iri", ""),
         )
     )
     return ranked
