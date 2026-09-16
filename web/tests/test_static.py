@@ -1,4 +1,4 @@
-"""The one stylesheet this site serves, and the route that serves it."""
+"""The stylesheet and the vocab-search script this site serves, and their routes."""
 
 import pytest
 from fastapi.testclient import TestClient
@@ -43,6 +43,34 @@ def test_the_hash_covers_the_generated_verdict_rules(client):
     body = client.get(app_module.STYLESHEET_PATH).text
     assert ".enc-verified" in body, "generated verdict rules must be in the file"
     assert ".enc-text-verified" in body
+
+
+def test_the_script_is_served_immutable(client):
+    r = client.get(app_module.SCRIPT_PATH)
+    assert r.status_code == 200, "the hashed vocab-search script must resolve"
+    assert r.headers["content-type"].startswith("application/javascript")
+    assert r.headers["Cache-Control"] == "public, max-age=31536000, immutable"
+
+
+def test_a_wrong_script_hash_is_not_served(client):
+    r = client.get("/static/vocab-search.000000000000.js")
+    assert r.status_code == 404, (
+        "an unversioned or stale URL must 404, not serve current bytes: "
+        "the immutable header promises the bytes never change under a URL"
+    )
+
+
+def test_the_script_hash_covers_the_vocab_match_transliteration(client):
+    """The served script is the JS half of the vocab_match.py contract.
+
+    Hashing the bytes read from disk at import (rather than trusting a
+    filename) is what makes the cache-busting URL honest; this pins that the
+    body served under that hash is actually the ranked-matching
+    transliteration, not some other script that happened to occupy the path.
+    """
+    body = client.get(app_module.SCRIPT_PATH).text
+    assert "export function tokenize" in body
+    assert "vocab_match.py" in body
 
 
 def test_every_token_is_declared_for_both_surfaces(client):

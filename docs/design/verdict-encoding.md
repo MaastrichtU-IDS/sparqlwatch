@@ -67,6 +67,20 @@ sips -m "/System/Library/ColorSync/Profiles/Generic Gray Gamma 2.2 Profile.icc" 
   page.png --out page-gray.png
 ```
 
+## The fill, and the surface
+
+The fill channel is `--fill`, declared once per surface in `web/static/site.css`:
+`rgba(0,0,0,0.20)` on the light surface and `rgba(255,255,255,0.16)` on the dark
+one. Both were measured against their own background — 1.598:1 and 1.627:1.
+
+This matters more than it looks. A fill tuned for one surface is invisible on
+the other, and an invisible fill collapses `verified` into `declared only` and
+`confirmed, not declared` into `indeterminate`: four states become two, with no
+error anywhere. It has happened once already, with a 5% fill measuring 1.139:1.
+
+`web/tests/test_static.py::test_the_verdict_fill_is_visible_on_both_surfaces`
+is what keeps it from happening again.
+
 ## One place, not two
 
 `chipStyle` builds the border and fill for both the chips and the legend

@@ -19,6 +19,7 @@ def routes(base, endpoint_url):
     e = urllib.parse.quote(endpoint_url, safe="")
     return [("/", f"{base}/"), ("/about", f"{base}/about"), ("/docs", f"{base}/docs"),
             ("/docs/metrics", f"{base}/docs/metrics"), ("/docs/states", f"{base}/docs/states"),
+            ("/docs/void", f"{base}/docs/void"),
             ("/explore", f"{base}/explore"), ("/endpoint", f"{base}/endpoint?url={e}")]
 
 PROBE = """() => {
