@@ -15,7 +15,9 @@ from pathlib import Path
 import pytest
 from pyoxigraph import NamedNode, Store
 
+import app as app_module
 from load_run import load_run
+from registry_names import Name
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -350,6 +352,34 @@ def store_registry_and_failure(tmp_path):
         RUN_REGISTRY_SAMPLE,
         RUN_PROBER_FAILED,
     )
+
+
+@pytest.fixture
+def store_many_datasets(tmp_path, monkeypatch):
+    """store_registry_sample's nine endpoints, with app._NAMES monkeypatched
+    so that foodie-cloud carries a `datasets` count of 42 and no title.
+
+    Not a registry file under tmp_path plus the real seeded registry: a store
+    holds runs, and a registry name is a separate input (see
+    registry_names.py), so this stays a monkeypatch of _NAMES rather than a
+    26th store fixture. And not a real registry entry, either -- one exists
+    (linked.opendata.cz, 42 datasets, in prober/registry/lod-cloud.toml) but
+    keying a test to it would break the next time the registry is re-seeded
+    and that endpoint's count changes. test_the_real_registries_parse is what
+    covers the shipped files; this fixture only needs ONE endpoint the store
+    already carries runs for to show a datasets count instead of a name.
+    """
+    store = _loaded_store(tmp_path, "store-many-datasets", RUN_REGISTRY_SAMPLE)
+    monkeypatch.setattr(
+        app_module,
+        "_NAMES",
+        {
+            "https://www.foodie-cloud.org/sparql": Name(
+                title=None, domain=None, datasets=42, host="www.foodie-cloud.org"
+            )
+        },
+    )
+    return store
 
 
 @pytest.fixture

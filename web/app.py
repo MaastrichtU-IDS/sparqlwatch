@@ -76,7 +76,7 @@ from fleet import FleetHistory, fleet_history, fleet_stats
 from endpoint_measurements import EndpointMeasurements, endpoint_measurements
 from load_run import CURRENT_GRAPH, pointers_to_missing_runs
 from queries import read_query
-from registry_names import Name, load_names
+from registry_names import Name, display, load_names
 
 # ---------------------------------------------------------------------------
 # The URL shape
@@ -2069,9 +2069,18 @@ def _index_row(
     # second sweep exists. This is the same guard the three properties on
     # EndpointMeasurements state, for the same reason.
     older_sweep = entry.newest_run is not None and entry.newest_run != entry.run
+    # The registry's word, not the store's: see registry_names.py on why a
+    # catalogue title is read from the registry files and never from a run
+    # graph. name is None for an endpoint no loaded registry names at all,
+    # which display() and the host/datasets/domain fallbacks below all handle.
+    name = _NAMES.get(entry.endpoint)
     return {
         "endpoint": entry.endpoint,
         "href": ENDPOINT_PATH + "?url=" + quote(entry.endpoint, safe=""),
+        "name": display(name, entry.endpoint),
+        "host": name.host if name else entry.endpoint,
+        "datasets": name.datasets if name else None,
+        "domain": name.domain if name else None,
         # Present only where the explorer has something to show. See
         # explore_endpoints on why a link to an empty explorer would be a claim
         # rather than a convenience.

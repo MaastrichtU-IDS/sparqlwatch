@@ -2719,3 +2719,27 @@ def test_a_no_match_pages_fleet_total_is_still_the_fleet(
     fleet_total = int(with_attribute(body, "data-fleet-total")[0]["data-fleet-total"])
     assert fleet_total == 9
     assert endpoints_shown(body) == []
+
+
+# ---------------------------------------------------------------------------
+# Task 5: the row leads with a name.
+# ---------------------------------------------------------------------------
+
+
+def test_a_row_leads_with_the_name_and_keeps_the_url(client_for, store_registry_sample):
+    body = client_for(store_registry_sample).get("/", headers={"accept": "text/html"}).text
+    names = texts_with(body, "data-row-name")
+    urls = texts_with(body, "data-row-url")
+    assert names and len(names) == len(urls), "every row names itself and shows its URL"
+
+
+def test_a_row_for_a_multi_dataset_endpoint_shows_a_count(client_for, store_many_datasets):
+    """The rule: the host, and how many things it serves, never one of their names."""
+    body = client_for(store_many_datasets).get("/", headers={"accept": "text/html"}).text
+    assert "42 datasets" in body
+
+
+def test_the_page_says_where_names_come_from(client_for, store_registry_sample):
+    """A borrowed title is attributed, or the registry is asserting it."""
+    body = client_for(store_registry_sample).get("/", headers={"accept": "text/html"}).text
+    assert "data-name-provenance" in body

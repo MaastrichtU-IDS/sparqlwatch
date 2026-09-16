@@ -124,6 +124,12 @@ STORES: dict[str, tuple[Path, ...]] = {
         conftest.RUN_DORMANCY_THEN_CRASH,
     ),
     "store_dormancy_alone": (conftest.RUN_WITH_DORMANCY,),
+    # Added 2026-09-17 for the row-name task: the same nine endpoints as
+    # store_registry_sample, so the readers freeze identically to that entry.
+    # It exists as its own conftest fixture (monkeypatching app._NAMES rather
+    # than the store) because it is app.py's row that differs, not anything a
+    # reader over this store returns.
+    "store_many_datasets": (conftest.RUN_REGISTRY_SAMPLE,),
 }
 
 _DESCRIPTION = read_query("endpoint_description")
