@@ -25,6 +25,7 @@ web/tests/fixtures/; see each fixture's header comment for its provenance.
 """
 
 import re
+import urllib.parse
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -89,6 +90,16 @@ OWL_CLASS = "http://www.w3.org/2002/07/owl#Class"
 # run-with-samples.nq: kadaster's class sample holds 59 values and is not
 # truncated. See the fixture's header for how it was captured.
 KADASTER_CLASS_COUNT = 59
+
+# The synthetic endpoint run-content-profiles.nq and run-sampled-profile.nq
+# both describe. Task 8's rail states facts read out of void_summary, and
+# void_summary reads a class-profiles pass (web/queries/endpoint_void.rq) --
+# no fixture that predates the profile work has one, so this is the only
+# endpoint in the committed fixtures whose page can carry both a vocabulary
+# section and a rail with more than the two facts (last checked, classes
+# sampled) that need no derived VoID document at all.
+CONTENT_ENDPOINT = "http://127.0.0.1:9200/sparql"
+ENDPOINT_URL = ENDPOINT_PATH + "?url=" + urllib.parse.quote(CONTENT_ENDPOINT, safe="")
 
 CANONICAL_DOC = (
     Path(__file__).resolve().parents[2] / "docs/design/verdict-encoding.md"
@@ -1595,11 +1606,12 @@ def test_the_endpoint_page_links_to_the_docs_section(client_for, store):
     """
     text = page(client_for(store), KADASTER)
     nav = with_attribute(text, "data-nav")
-    # The vocabulary explorer joined the nav on 2026-09-01, when it stopped being
-    # a second server on a second port. Asserted as an exact list, still: the
-    # header is small on purpose, and a link arriving in it without a test
-    # changing is how a nav becomes a menu.
-    assert [a["href"] for a in nav] == [EXPLORE_PATH, DOCS_PATH]
+    # base.html's four-item nav replaced this page's own two-link header on
+    # 2026-09-16, the same shell / , /explore and /docs already carry (see
+    # test_index.py and test_explore.py's identical assertion). Still an exact
+    # list: the header is small on purpose, and a link arriving in it without
+    # a test changing is how a nav becomes a menu.
+    assert [a["href"] for a in nav] == [INDEX_PATH, EXPLORE_PATH, DOCS_PATH, ABOUT_PATH]
 
 
 def test_the_dormancy_sentence_is_not_drawn_as_a_verdict(
@@ -2248,3 +2260,85 @@ def test_every_page_footer_shows_the_version_the_prober_sends(client_for, store)
         body = client.get(path, headers={"accept": "text/html"}).text
         assert '<footer class="site-foot">' in body, f"{path} has no footer"
         assert version in body, f"{path} does not show version {version}"
+
+
+# ---------------------------------------------------------------------------
+# Task 8: the column and the rail
+# ---------------------------------------------------------------------------
+#
+# The six sections stay six sections; what moves is the legend (into a rail,
+# beside the marks it explains) and a handful of identity facts (out of prose
+# and into it). See templates/endpoint.html's own header comment.
+
+
+def test_the_page_keeps_all_six_sections(client_for, store_content_profiles):
+    """Converting the page to a column and a rail must not fold any section
+    into another.
+
+    Deliberately run against store_content_profiles rather than the plain
+    `store` fixture: `store`'s only endpoints (kadaster, qlever) carry no
+    content profile, so their pages never render a vocabulary section at all
+    -- asserting "vocabulary" present against one of them would not exercise
+    the thing this test exists to pin.
+    """
+    body = client_for(store_content_profiles).get(
+        ENDPOINT_URL, headers={"accept": "text/html"}
+    ).text
+    sections = [s["data-section"] for s in with_attribute(body, "data-section")]
+    assert "vocabulary" in sections
+    assert "sample" in sections, (
+        "the classes sample reports a different metric from the vocabulary and "
+        "renders for endpoints that have no vocabulary at all; it keeps its own "
+        "section"
+    )
+
+
+def test_the_sample_survives_an_endpoint_with_no_vocabulary(client_for, store_sampled_profile):
+    """The regression this task exists to avoid.
+
+    Folding the sample into a section wrapped in {% if vocabulary %} would make
+    it vanish for every endpoint without a content profile.
+    """
+    body = client_for(store_sampled_profile).get(
+        ENDPOINT_URL, headers={"accept": "text/html"}
+    ).text
+    assert 'data-sample="present"' in body or 'data-sample="absent"' in body
+
+
+def test_the_legend_sits_beside_the_marks(client_for, store_content_profiles):
+    """The legend moved into the rail so it is adjacent to what it explains,
+    and the rail states identity facts already in this page's context.
+
+    Also run against store_content_profiles rather than plain `store`: the
+    rail's void-derived facts (classes described/reported, whether the
+    description is provably complete, the sampling ladder) all come from
+    void_summary, which is None for every fixture with no class-profiles
+    pass -- including `store`'s kadaster and qlever. Against those, the rail
+    can only ever carry two facts (last checked, classes sampled), which is
+    a true statement about this page's design but does not exercise the
+    >= 3 this test pins.
+    """
+    body = client_for(store_content_profiles).get(
+        ENDPOINT_URL, headers={"accept": "text/html"}
+    ).text
+    assert 'data-rail="legend"' in body, (
+        "the legend moved into the rail so it is adjacent to what it explains"
+    )
+    assert len(with_attribute(body, "data-rail-fact")) >= 3, (
+        "the rail states what the endpoint is, from facts the context already "
+        "holds -- classes described and reported, whether the description is "
+        "provably complete, when it was last checked"
+    )
+
+
+def test_the_endpoint_page_carries_no_stylesheet_of_its_own(client_for, store):
+    """The regression Task 8 closes: between Task 5 and this commit this page
+    kept its own dark-only :root with no --fill, so every .enc- chip on it
+    drew with no fill and no border. Pinned the way test_docs.py and
+    test_explore.py already pin it for their pages: no inline token
+    declaration, and the one generated stylesheet linked."""
+    text = page(client_for(store), KADASTER)
+    assert "--accent:" not in text, (
+        "design tokens belong in web/static/site.css, not in this template"
+    )
+    assert STYLESHEET_PATH in text, "the page must link the one stylesheet"

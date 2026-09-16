@@ -109,6 +109,22 @@ button:focus-visible {
   outline-offset: 2px;
 }
 
+/* The column and the rail: measurements on the left, a sticky strip of
+   identity facts and the legend on the right. First used by the endpoint
+   page on 2026-09-16 -- see endpoint.html's own head_extra for what actually
+   goes in the rail, which is page-specific; this is only the box and the
+   grid that lays it out, so the next page that wants one does not repeat it. */
+.page-body { display: grid; grid-template-columns: minmax(0, 1fr) 258px; gap: 26px;
+             align-items: start; }
+.rail { border: 1px solid var(--border); border-radius: var(--radius);
+        background: var(--bg-secondary); padding: 14px 15px; position: sticky; top: 12px; }
+@media (max-width: 900px) {
+  /* The rail drops below the column rather than beside it, legend last --
+     which is the order it is already written in, so nothing reorders. */
+  .page-body { grid-template-columns: 1fr; }
+  .rail { position: static; }
+}
+
 /* ---- NARROW SCREENS ---------------------------------------------------
    These pages already fit at 375px; the padding still costs an eighth of the
    screen, and a table added later should scroll rather than push the page. */

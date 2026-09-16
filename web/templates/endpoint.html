@@ -1,72 +1,66 @@
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="icon" href="/icon.svg" type="image/svg+xml">
-<link rel="mask-icon" href="/icon-mono.svg" color="#81d4fa">
-<title>{{ endpoint }} · sparqlwatch</title>
+{# The endpoint page: what this service currently knows about one endpoint.
+
+   Moved onto base.html's shared shell on 2026-09-16, the last of the eight
+   templates to move. Its own dark-only token block, its two-link header and
+   its .site-foot went the way index.html's and about.html's did: the tokens,
+   the chrome and the page-body/rail shell are site.css's now, and this
+   block carries only what is genuinely this page's own -- the metric list,
+   the offer, the history matrix, the vocabulary grid and the sample panel.
+
+   THE REGRESSION THIS TASK CLOSES. Between Task 5 (2026-09-16, earlier) and
+   this commit, this page still declared its own :root with no --fill and a
+   dark --bg no reader's browser could match against site.css's tokens, so
+   every .enc- chip on it drew with no fill and no border: an obviously
+   broken page, left that way on purpose rather than quietly wrong. Deleting
+   that block and linking site.css's stylesheet is what makes the chips draw
+   again, from --fill in the shared sheet.
+
+   THE RAIL. Six sections stood in one column before this: conformance, the
+   VoID offer, the history timeline, vocabulary, the legend, and the class
+   sample. What moved is the legend (into a rail, beside the marks it
+   explains) and a handful of identity facts that used to live only in
+   prose (in the header's "run ..." span, and in the sub paragraph below the
+   title). Every other section's body is unchanged.
+
+   THE SAMPLE KEEPS ITS OWN SECTION. It reports a different metric
+   (sw:metric:classes) from vocabulary (sw:metric:class-profiles), and
+   renders for every endpoint whether or not a content profile exists --
+   vocabulary does not. Folding it into vocabulary's {% if vocabulary %}
+   would delete it for most of the fleet, which is a change in what the page
+   claims and not a layout change. #}
+{% extends "base.html" %}
+{% block title %}{{ endpoint }} · sparqlwatch{% endblock %}
+{% block head_extra %}
 <style>
-  /* Blue dark (blueprint), the default theme, from ontoexplorer's tokens by
-     way of the design artboards in design/. The artboards are the authority
-     for layout, typography, spacing and these tokens. They are NOT the
-     authority for the verdict encoding: docs/design/verdict-encoding.md is,
-     and the .enc- rules below are generated from it. */
-  :root {
-    --bg: #0a1929; --bg-secondary: #112a3f; --bg-hover: #1a3952; --bg-deep: #061320;
-    --border: #2a5580; --text: #d0e4f5; --text-bright: #ffffff; --text-muted: #7fa5c8;
-    --text-dim: #5c7c9c; --accent: #4fc3f7; --on-accent: #0a1929; --accent-blue: #81d4fa;
-    --good: #66bb6a; --warn: #ffb74d; --crit: #ef5350; --overlay: rgba(255,255,255,0.05);
-    --radius: 6px; --radius-sm: 4px;
-    --mono: ui-monospace, 'Cascadia Code', 'Source Code Pro', monospace;
-    color-scheme: dark;
-  }
-  * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text);
-         font: 14px/1.5 system-ui, -apple-system, 'Segoe UI', sans-serif; }
-  header { display: flex; align-items: center; gap: 12px; padding: 14px 24px;
-           background: var(--bg-secondary); border-bottom: 1px solid var(--border); }
-  /* A link on every page, including the index, so the way home is always
-     in the same place. Undecorated because it is a mark rather than a
-     phrase in a sentence, and the index's copy carries aria-current so a
-     screen reader says it leads to the page already open. */
-  .logo { display: flex; align-items: center; gap: 9px; font-weight: 600;
-          color: var(--text-bright); text-decoration: none; }
-  .logo:hover { color: var(--accent); }
-  .run { margin-left: auto; font-family: var(--mono); font-size: 12px; color: var(--text-dim); }
-  /* The header's link to /about, in the same token as every other link on the
-     page. Present on all three pages, so that a stranger who lands on their own
-     endpoint's page can reach what the marks mean and who changes them without
-     already knowing the address. */
-  header a { font-family: var(--mono); font-size: 12px; }
-  main { padding: 22px 24px; max-width: 1120px; }
+  /* Wider than site.css's 780px prose measure: this page is a column and a
+     258px rail side by side, the same reason index.html and explore.html
+     both widen to 1120px. */
+  main { max-width: 1120px; }
+
   .outward { margin: 6px 0 0; font-size: 12.5px; }
   .outward a::after { content: " \2197"; }
   .note-inline { color: var(--text-muted); }
-  h1 { margin: 0; font-family: var(--mono); font-size: 18px; font-weight: 600;
-       color: var(--text-bright); letter-spacing: -0.01em; word-break: break-all; }
+  /* Mono and tight, unlike site.css's default h1: the subject of this page is
+     a URL, which reads better in the same face as the mono spans beside it,
+     and word-break: break-all is what keeps one with no spaces from
+     stretching the page at any width -- not only the narrow one. */
+  h1 { margin: 0; font-family: var(--mono); word-break: break-all; }
   .sub { margin: 6px 0 22px; font-size: 13px; color: var(--text-muted); }
-  h2 { font-size: 12px; font-weight: 600; color: var(--text-dim); text-transform: uppercase;
-       letter-spacing: 0.05em; margin: 0 0 12px; }
-  section + section { margin-top: 22px; }
-  .panel { border: 1px solid var(--border); border-radius: var(--radius);
-           background: var(--bg-secondary); padding: 14px 16px; }
   .note { margin: 11px 0 0; font-size: 12.5px; color: var(--text-muted); max-width: 780px; }
-  /* A sentence about the sweep rather than about the endpoint. Drawn in the
-     warn token, the same one the truncation badge uses, because both say the
-     same kind of thing: what you are reading is bounded in a way the numbers
-     do not show. It is a colour on text that is already there, not a state of
-     its own: the sentence is the whole signal and it reads identically with
-     no styling at all. */
-  .warn-note { color: var(--warn); }
 
-  /* The chip geometry is fixed, and the fill token is calibrated to it: see
-     verdict_encoding.py. A chip carries no text, because the metric it belongs
-     to is named beside it and the state is written out beside that, so nothing
-     on this page depends on being able to see the chip at all. */
+  /* Present to a screen reader, absent to the eye. Not shared in site.css --
+     each page that needs it (this one, the index) carries its own copy. */
+  .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0;
+                     margin: -1px; overflow: hidden; clip: rect(0 0 0 0);
+                     white-space: nowrap; border: 0; }
+
+  /* -- Conformance, attribute by attribute -------------------------------- */
+  /* The chip geometry is fixed, and the fill token it draws with -- --fill --
+     is calibrated to it in verdict_encoding.py. A chip carries no text,
+     because the metric it belongs to is named beside it and the state is
+     written out beside that. */
   .chip { flex-shrink: 0; display: inline-block;
           width: {{ chip_width }}px; height: {{ chip_height }}px; border-radius: var(--radius-sm); }
-
   ul.metrics { list-style: none; margin: 0; padding: 0; }
   .metric-row { display: flex; align-items: center; gap: 12px; padding: 11px 12px;
                 border-bottom: 1px solid var(--border); }
@@ -77,24 +71,24 @@
   .m-detail { font-size: 12px; color: var(--text-muted); }
   .m-time { margin-left: auto; font-size: 12px; color: var(--text-muted);
             font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .tok-good { color: var(--good); }
+  .tok-warn { color: var(--warn); }
+  .tok-crit { color: var(--crit); }
+  .tok-accent { color: var(--accent); }
+  .tok-text-muted { color: var(--text-muted); }
+  .tok-text-dim { color: var(--text-dim); }
 
-  /* The timeline: one cell per run, oldest on the left, drawn in the SAME
-     encoding as the chip beside it. A reading in a timeline is the same fact as
-     a reading in a cell, and a second visual language for it would be a second
-     thing to learn.
+  /* -- The offer: sparqlwatch's own VoID for this endpoint ---------------- */
+  .void h2 { margin: 0 0 6px; }
+  .void .claim { font-size: 13px; }
+  .void .complete { color: var(--good); }
+  .void .partial { color: var(--warn); }
+  .void .why { color: var(--text-muted); font-size: 12.5px; margin: 6px 0 0; }
+  .void .get { margin: 10px 0 0; font-family: var(--mono); font-size: 12.5px;
+               overflow-wrap: anywhere; }
 
-     Small, and after the elapsed time rather than before it, because the row's
-     subject is what is true NOW. The history qualifies that answer; it does not
-     replace it.
-
-     A gap is a dot on the baseline and never an empty box: an empty box in a
-     row of boxes reads as a state, and "this run recorded nothing" is not one.
-     Same reading the index gives an empty cell. */
-  .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0;
-                     margin: -1px; overflow: hidden; clip: rect(0 0 0 0);
-                     white-space: nowrap; border: 0; }
-
-  /* -- The timeline ------------------------------------------------------- */
+  /* -- The timeline: one cell per run, in the same encoding as the chip
+     beside it -- this page's analogue of the index's .fleet. -------------- */
   .history { border-collapse: separate; border-spacing: 3px; display: block;
              overflow-x: auto; max-width: 100%; margin-top: 4px; }
   .history th { font-weight: 400; text-align: left; }
@@ -103,8 +97,8 @@
   .h-run span { display: block; font-family: var(--mono); font-size: 10px;
                 color: var(--text-muted); transform: rotate(-90deg);
                 width: 14px; height: 74px; line-height: 14px; white-space: nowrap; }
-  /* The hit target is the CELL, which is wider than the mark it holds, so
-     pointing at a column does not require hitting a 12px box. */
+  /* The hit target is the CELL, wider than the mark it holds, so pointing at
+     a column does not require hitting a 14px box. */
   .history td { padding: 0; }
   .history td, .history th.h-run { cursor: default; }
   .history .hcell { display: block; width: 14px; height: 16px; border-radius: 2px; }
@@ -112,27 +106,39 @@
   .hgap::after { content: ""; position: absolute; left: 5px; bottom: 7px;
                  width: 3px; height: 3px; border-radius: 50%;
                  background: var(--text-muted); }
-  /* The crosshair: the whole sweep lifts, so a reader comparing metrics within
-     one sweep can see which cells belong to it. */
+  /* The crosshair: the whole sweep lifts, so a reader comparing metrics
+     within one sweep can see which cells belong to it. */
   .history [data-col].col-on { outline: 1px solid var(--accent); outline-offset: 1px; }
   .h-run.col-on span { color: var(--text-bright); }
   .h-readout { font-family: var(--mono); font-size: 11.5px; color: var(--text-dim);
                min-height: 1.5em; margin: 10px 0 0; }
   .h-readout:empty::before { content: attr(data-empty); color: var(--text-muted); }
+  /* One column narrow enough to fit forty sweeps is a column nobody can
+     read, so this scrolls sideways at every width rather than shrinking. */
+  table.history { display: block; overflow-x: auto; max-width: 100%; }
 
-  /* -- Vocabulary --------------------------------------------------------- */
+  /* `absent` IS A VERDICT, drawn with no border, which reads right beside its
+     own label everywhere else on this page. A GRID HAS NO LABEL BESIDE THE
+     CELL, so there and only there the slot itself is drawn in the structural
+     border colour: the frame of an empty box, not a state colour, done on
+     the cell rather than on the state's own generated class, so the state
+     table stays untouched and this page carries no second copy of the
+     encoding. See verdict_encoding.py and
+     test_page.py::test_the_page_carries_the_generated_rules_and_no_others. */
+  .history td > .hcell { position: relative; }
+  .history td { background: var(--slot, rgba(255,255,255,0.045)); border-radius: 2px;
+                background-clip: padding-box; }
+
+  /* -- Vocabulary ---------------------------------------------------------- */
   .vocab-controls { display: flex; align-items: center; gap: 12px; margin: 12px 0 10px; }
   #vocab-q { flex: 0 1 320px; font-family: var(--mono); font-size: 12.5px;
              padding: 6px 9px; color: var(--text-bright); background: var(--bg-deep);
              border: 1px solid var(--border); border-radius: 4px; }
-  #vocab-q:focus { outline: none; border-color: var(--accent); }
   .vocab-count { font-size: 11.5px; color: var(--text-dim);
                  font-variant-numeric: tabular-nums; }
-
   /* A grid, so the five columns line up down the list rather than wrapping
-     per row: a reader scanning for a name reads one column, not five. Capped
-     in height and scrolled, because 408 terms is a page of its own otherwise
-     and the panels below it would be unreachable. */
+     per row. Capped in height and scrolled, because 408 terms is a page of
+     its own otherwise and the panels below it would be unreachable. */
   .vocab { list-style: none; margin: 0; padding: 0; max-height: 22rem;
            overflow-y: auto; border: 1px solid var(--border); border-radius: 4px; }
   .vocab li { display: grid; grid-template-columns: 14px minmax(9rem, auto) 4.5rem 4.5rem 1fr;
@@ -145,25 +151,8 @@
   .v-prefix, .v-kind { font-size: 11px; color: var(--text-muted); }
   .v-iri { font-family: var(--mono); font-size: 10.5px; color: var(--text-dim);
            white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .hcell { width: 9px; height: 14px; border-radius: 2px; }
-  .hgap { width: 9px; height: 14px; border: 0; background: none;
-          position: relative; }
-  .hgap::after { content: ""; position: absolute; left: 3px; bottom: 6px;
-                 width: 3px; height: 3px; border-radius: 50%;
-                 background: var(--text-muted); }
 
-  /* A grid rather than a wrapping flex row, so the swatches, the labels and
-     the counts line up in columns. Ragged rows make the reader compare
-     swatches across different indents, which is the opposite of what a key
-     is for. */
-  .legend { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
-            gap: 7px 26px; list-style: none; margin: 0; padding: 0; }
-  .legend li { display: grid; grid-template-columns: 20px minmax(112px, auto) 1fr 2ch;
-               align-items: center; gap: 9px; font-size: 12.5px; color: var(--text-muted); }
-  .legend .swatch { display: inline-block; width: 20px; height: 15px; border-radius: 3px; }
-  .legend .l-label { color: var(--text); }
-  .legend .l-count { text-align: right; font-variant-numeric: tabular-nums; color: var(--text-dim); }
-
+  /* -- Classes sampled ------------------------------------------------------ */
   .sample-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
   .sample-count { font-size: 13px; color: var(--text); font-variant-numeric: tabular-nums; }
   .trunc { font-size: 11.5px; padding: 2px 8px; border-radius: 3px; }
@@ -174,161 +163,53 @@
     font-family: var(--mono); font-size: 11.5px; color: var(--text-muted); list-style: none; }
   ul.sample-values li { padding: 1px 0; word-break: break-all; }
 
-  .tok-good { color: var(--good); }
-  .tok-warn { color: var(--warn); }
-  .tok-crit { color: var(--crit); }
-  .tok-accent { color: var(--accent); }
-  .tok-text-muted { color: var(--text-muted); }
-  .tok-text-dim { color: var(--text-dim); }
+  /* -- The rail: identity facts, then the legend beside the marks it explains */
+  .rail h3 { font-size: 11px; font-weight: 600; color: var(--text-dim);
+             text-transform: uppercase; letter-spacing: 0.05em; margin: 0 0 10px; }
+  .fact { display: flex; justify-content: space-between; gap: 10px;
+          padding: 5px 0; border-bottom: 1px solid var(--border);
+          font-size: 12.5px; }
+  .fact:last-of-type { border-bottom: none; }
+  .fact .k { color: var(--text-muted); }
+  .fact .v { font-family: var(--mono); color: var(--text-bright); text-align: right; }
+  .railbtn { display: block; margin: 12px 0 20px; padding: 7px 10px;
+             text-align: center; border: 1px solid var(--border);
+             border-radius: var(--radius-sm); font-size: 12px; color: var(--text); }
+  .railbtn:hover { border-color: var(--accent); color: var(--accent); text-decoration: none; }
+  /* One column. The wide multi-column grid this rule drew before the legend
+     moved into a 258px rail (repeat(auto-fit, minmax(330px, 1fr))) never
+     fits here, so the rail draws its own narrower rule rather than reusing
+     one built for the full column width. */
+  .legend { display: flex; flex-direction: column; }
+  .lg { padding: 7px 0; border-bottom: 1px solid var(--border); }
+  .lg:last-child { border-bottom: none; }
+  .lg-head { display: flex; align-items: center; gap: 8px; }
+  .swatch { flex-shrink: 0; display: inline-block; width: 20px; height: 15px; border-radius: 3px; }
+  .l-label { font-size: 12.5px; color: var(--text); }
+  .l-count { margin-left: auto; font-size: 11.5px; font-variant-numeric: tabular-nums;
+             color: var(--text-dim); }
+  .l-mean { margin: 3px 0 0 28px; font-size: 11.5px; color: var(--text-muted); }
 
-  /* Generated from docs/design/verdict-encoding.md's table by
-     verdict_encoding.css_rules(). The chips and the legend swatches use these
-     same classes, so a swatch always draws the thing it explains.
-
-     Marked safe because this is CSS this repository generates from a closed
-     table in verdict_encoding.py, not a value from a measured endpoint: no
-     part of it comes from the store or from the request. Autoescaping it
-     instead would turn a quote in a future token value into &#34; inside a
-     stylesheet, which is a silent drawing bug rather than an escape.
-
-     `encoding_css` left this page's context on 2026-09-16 along with the
-     index's: the rules it held are in the generated stylesheet at
-     STYLESHEET_PATH now (see app.py's _STYLESHEET). This page does not link
-     that stylesheet yet -- it still carries its own token block above and
-     Task 8 is what moves it onto base.html -- so its .enc- chips are
-     unstyled between this commit and that one. */
-
-  /* ---- NARROW SCREENS ---------------------------------------------------
+  /* ---- NARROW SCREENS ----------------------------------------------------
      Measured with web/tests/mobile/probe_mobile.py, which reported +103px at
-     375px on this page. The offenders it named were .m-time, .m-detail and
-     the vocabulary grid. */
-
-  /* The history table is this page's .fleet: one column per sweep, and a
-     column narrow enough to fit forty sweeps is a column nobody can tell
-     apart. So it scrolls sideways at every width rather than shrinking. */
-  table.history { display: block; overflow-x: auto; max-width: 100%; }
-
+     375px on this page before the rail existed. The offenders it named were
+     .m-time, .m-detail and the vocabulary grid; the history matrix scrolls
+     rather than shrinks at every width already, above. The page-body grid
+     itself drops the rail below the column at 900px -- see site.css. */
   @media (max-width: 640px) {
-    header { padding: 10px 14px; gap: 4px 10px; flex-wrap: wrap; }
-    /* Standalone nav links are tap targets, unlike links inside a
-       sentence: WCAG 2.2's 24px floor applies and they were 15px tall. */
-    header a { min-height: 24px; display: inline-flex; align-items: center; }
-    main { padding: 16px 14px; }
-    h1 { font-size: 18px; line-height: 1.3; overflow-wrap: anywhere; }
-
-    /* A metric row is chip, name, state, detail, elapsed — five things in a
-       nowrap flex row, and `margin-left: auto` on the elapsed time pinned it
-       to a right edge the row had already passed. Wrapping lets the row use a
-       second line; the elapsed time then sits after the state rather than
-       against an edge that is not there. */
     .metric-row { flex-wrap: wrap; gap: 6px 10px; padding: 10px 10px; }
     .m-time { margin-left: 0; }
     .m-detail { flex-basis: 100%; }
-
     /* Five fixed columns, of which two were 4.5rem each. Prefix and kind go
        under the term; the IRI gets the full width because it is the longest
        thing on the page. */
     .vocab li { grid-template-columns: 14px 1fr auto; gap: 4px 8px; }
-    .vocab li .v-iri { grid-column: 1 / -1; overflow-wrap: anywhere; }
-    .legend { grid-template-columns: minmax(0, 1fr); }
-    .legend li { grid-template-columns: 20px 1fr auto; }
-
-    .endpoint-url, .ep, .v-iri { overflow-wrap: anywhere; }
+    .vocab li .v-iri { grid-column: 1 / -1; }
+    .v-iri { overflow-wrap: anywhere; }
   }
-
-  /* `absent` IS A VERDICT, AND IN A GRID IT WAS DRAWN AS NOTHING.
-     The canonical encoding (docs/design/verdict-encoding.md) gives `absent`
-     border "none", and that is deliberate and stays: the channel means
-     "nothing was there", and beside its own label -- in the metric list, in
-     the legend, in a listing row -- a chip that draws nothing next to the word
-     "absent" reads exactly right.
-
-     A GRID HAS NO LABEL BESIDE THE CELL. There a borderless chip is not "we
-     established nothing is there", it is indistinguishable from no cell at
-     all, and an endpoint whose geo-data was absent in every sweep rendered as
-     an entirely blank row -- which reads as missing data, or as a bug. Found
-     by looking at the page on a phone, but it renders the same way at every
-     width.
-
-     So in the two label-free grids, and ONLY there, `absent` gets the slot it
-     occupies drawn in the structural border colour rather than in transparent.
-     It is the frame of an empty box, not a state colour, so it cannot be
-     mistaken for `declared-only` (a solid border in --text-muted, brighter and
-     meaning something else), and it stays distinct from a gap, which draws a
-     dot on the baseline and no frame at all.
-
-     THE SLOT IS THE GRID'S, THE MARK IS THE STATE'S. This is done on the
-     cell that holds the chip and not on `.enc-absent`, and that is not a
-     detail. verdict_encoding.py generates exactly one rule per state and
-     test_page.py asserts the page carries no second one, because two copies of
-     this encoding drifted twice before. A `.hcell.enc-absent` override is that
-     second copy. Giving `absent` a plain border instead is also wrong, and for
-     a deeper reason: `declared-only` is already solid/empty/1px, so desaturated
-     the two would be the same mark, which is the one property the whole
-     encoding rests on.
-
-     So the state table is untouched. The grid draws the box every reading sits
-     in; the state draws what goes in it. `absent` puts nothing in the box, and
-     an empty box is legible where nothing at all was not. */
-  /* Every cell is a slot. See the note above the history caption. */
-  .history td > .hcell { position: relative; }
-  .history td { background: var(--slot, rgba(255,255,255,0.045)); border-radius: 2px;
-                background-clip: padding-box; }
-
-  /* The footer. One line, and the version is the reason it exists: a reader
-     looking at a verdict needs to know which build produced it, and an
-     operator who found sparqlwatch in their logs needs to match the number
-     against the User-Agent that knocked. `version` is a Jinja global, so it is
-     the same string the /about page quotes.
-
-     NO LINKS HERE. The nav already carries them, and
-     test_the_index_carries_one_nav_link_and_never_one_per_row counts them: its
-     invariant is that a link must not be emitted per row, which at 543 rows is
-     1,200 bytes against 24,000. A footer link is constant rather than per-row
-     and does not break that, but loosening the count to fit decoration nobody
-     asked for is a bad trade for a guard that cheap. */
-  .site-foot { border-top: 1px solid var(--border); margin: 30px 0 0;
-               padding: 14px 24px; display: flex; flex-wrap: wrap;
-               gap: 6px 14px; align-items: baseline;
-               font-size: 12px; color: var(--text-muted); }
-  .site-foot .v { font-family: var(--mono); }
-  .site-foot a { color: var(--text-muted); }
-  @media (max-width: 640px) { .site-foot { padding: 12px 14px; } }
-
-  /* THE OFFER. Everything else on this page grades the endpoint; this is the
-     one block that hands the reader something. It is styled as a statement
-     rather than a panel of readings because it makes one claim, and the claim
-     is either "this is the whole of it" or "this is a sample of it". */
-  .void { border: 1px solid var(--border); border-radius: var(--radius);
-          background: var(--bg-secondary); padding: 14px 16px; margin: 22px 0 0; }
-  .void h2 { margin: 0 0 6px; }
-  .void .claim { font-size: 13px; }
-  .void .complete { color: var(--good); }
-  .void .partial { color: var(--warn); }
-  .void .why { color: var(--text-muted); font-size: 12.5px; margin: 6px 0 0; }
-  .void .get { margin: 10px 0 0; font-family: var(--mono); font-size: 12.5px;
-               overflow-wrap: anywhere; }
 </style>
-</head>
-<body>
-<header>
-  <a class="logo" href="{{ index_path }}">
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)"
-         stroke-width="2" stroke-linecap="round" aria-hidden="true">
-      <circle cx="11" cy="11" r="6"/><path d="M15.5 15.5 21 21"/><path d="M8 11h6"/></svg>
-    sparqlwatch
-  </a>
-  <span class="run">{% if run %}run {{ generated_at }}{% else %}no measurement sweep{% endif %}</span>
-  {# The docs tab. It replaced a direct link to /about on 2026-08-28, which
-     costs a reader one click to reach the monitoring page and buys the other
-     two documentation pages a way in: nothing linked to either before, and
-     nothing linked to /about either until this stage. The sentence on a dormant
-     row still links straight to /about, because the reader it is written for
-     came for that page and not for a section. #}
-  <a href="{{ explore_path }}" data-nav="explore">vocabulary</a>
-    <a href="{{ docs_path }}" data-nav="docs">docs</a>
-</header>
-<main>
+{% endblock %}
+{% block content %}
   <h1>{{ endpoint }}</h1>
   {% if outward_link %}
   {# The endpoint itself, in a new tab. NOT the h1, which stays plain text: the
@@ -404,214 +285,254 @@
      {%- if newest_dormancy_reason %} data-dormancy-reason="{{ newest_dormancy_reason }}"{% endif %}>{{ newest_silence_text }}{% if newest_declined_to_ask %} What dormant claims, what it does not, and how a person changes it either way are set out on <a href="{{ about_path }}">this service's about page</a>.{% endif %}</p>
   {% endif %}
 
-  <section>
-    <h2>Conformance, attribute by attribute</h2>
-    {% if rows %}
-    <ul class="metrics">
-      {% for row in rows %}
-      <li class="metric-row" data-metric="{{ row.metric }}"
-          {%- if row.declined %} data-declined="{{ row.reason }}"
-          {%- else %} data-verdict="{{ row.verdict }}"{% endif %}>
-        <span class="chip {{ row.css_class }}" aria-hidden="true"></span>
-        <span class="m-name">{{ row.name }}</span>
-        <span class="m-state tok-{{ row.token }}">{{ row.state_text }}</span>
-        {% if row.detail %}<span class="m-detail">{{ row.detail }}</span>{% endif %}
-        <span class="m-time">{% if row.elapsed_ms is not none %}{{ row.elapsed_ms }} ms{% endif %}</span>
+  <div class="page-body">
+    <div class="column">
+      <section data-section="conformance">
+        <h2>Conformance, attribute by attribute</h2>
+        {% if rows %}
+        <ul class="metrics">
+          {% for row in rows %}
+          <li class="metric-row" data-metric="{{ row.metric }}"
+              {%- if row.declined %} data-declined="{{ row.reason }}"
+              {%- else %} data-verdict="{{ row.verdict }}"{% endif %}>
+            <span class="chip {{ row.css_class }}" aria-hidden="true"></span>
+            <span class="m-name">{{ row.name }}</span>
+            <span class="m-state tok-{{ row.token }}">{{ row.state_text }}</span>
+            {% if row.detail %}<span class="m-detail">{{ row.detail }}</span>{% endif %}
+            <span class="m-time">{% if row.elapsed_ms is not none %}{{ row.elapsed_ms }} ms{% endif %}</span>
 
-      </li>
-      {% endfor %}
-    </ul>
-    {% else %}
-    <p class="note" data-no-measurements="true">
-      This run recorded no measurement and no decline for this endpoint, so there
-      is nothing here to report. That is not a verdict about the endpoint.
-    </p>
-    {% endif %}
-  </section>
-
-  {% if void %}
-  {# Placed after the conformance list and before the history, because it is
-     the thing a reader came for once they know the endpoint works, and it is
-     the only block on the page that is an offer rather than a grade. #}
-  <section class="panel void" data-section="void">
-    <h2>sparqlwatch's VoID for this endpoint</h2>
-    {% if void.complete %}
-    <p class="claim"><strong class="complete">Provably complete.</strong>
-      All {{ void.described }} classes this endpoint reports were described, and
-      every instance of each was scanned. The counts are the endpoint's, not a
-      sample's.</p>
-    {% else %}
-    <p class="claim"><strong class="partial">A sample only.</strong>
-      This describes what we saw, and is not the whole of what is there.</p>
-    <p class="why">
-      {% if void.reported is none %}
-        This endpoint would not tell us how many classes it holds, so there is
-        no total to check the {{ void.described }} described here against.
-      {% elif void.described < void.reported %}
-        {{ void.described }} of the {{ void.reported }} classes it reports are
-        described here.
-      {% endif %}
-      {% if void.samplings and void.samplings != ['exact'] %}
-        Some classes were profiled from a sample of their instances, so the
-        counts under those are the sample's rather than the class's.
-      {% endif %}
-    </p>
-    {% endif %}
-    <p class="get">GET <a href="{{ void_path }}?url={{ endpoint | urlencode }}">{{ void_path }}?url={{ endpoint | urlencode }}</a>
-      &mdash; RDF only (Turtle, N-Triples, RDF/XML, JSON-LD).</p>
-  </section>
-  {% endif %}
-
-  {% if history.has_history %}
-
-
-  <section class="panel" data-section="history">
-    <h2>What has changed here</h2>
-    <p class="note">Every sweep that said anything about this endpoint, oldest
-      on the left. Point at a column to read that sweep. A faint empty box is
-      <em>absent</em>, which is a verdict: the sweep looked and found nothing
-      there. A dot on the baseline is a sweep that recorded nothing about that
-      metric at all, which is not a verdict.</p>
-
-    <!-- A real table: the rows and columns ARE rows and columns, so a screen
-         reader gets the structure and the accessible view is the view. The
-         readout below is an enhancement over it, not a replacement for it. -->
-    <table class="history" id="history">
-      <caption class="visually-hidden">Each metric's reading in each sweep,
-        oldest sweep first.</caption>
-      <thead>
-        <tr><th scope="col">metric</th>
-          {% for at in history.runs %}<th scope="col" class="h-run" data-col="{{ loop.index0 }}"><span>{{ at[5:16] | replace("T", " ") }}</span></th>{% endfor %}
-        </tr>
-      </thead>
-      <tbody>
-        {% for m in history.metrics %}
-        <tr data-history-metric="{{ m.metric }}">
-          <th scope="row" class="h-metric">{{ m.name }}</th>
-          {% for c in m.cells %}
-          <td data-col="{{ loop.index0 }}">
-            {%- if c.present %}<span class="hcell {{ c.css_class }}"
-              data-at="{{ c.at }}" data-reading="{{ c.label }}{% if c.reason %} ({{ c.reason }}){% endif %}"
-              title="{{ c.at }}: {{ c.label }}{% if c.reason %} ({{ c.reason }}){% endif %}"></span>
-            {%- else %}<span class="hcell hgap" data-at="{{ c.at }}"
-              data-reading="nothing recorded"
-              title="{{ c.at }}: this sweep recorded nothing about this metric"></span>{% endif %}
-          </td>
+          </li>
           {% endfor %}
-        </tr>
+        </ul>
+        {% else %}
+        <p class="note" data-no-measurements="true">
+          This run recorded no measurement and no decline for this endpoint, so there
+          is nothing here to report. That is not a verdict about the endpoint.
+        </p>
+        {% endif %}
+      </section>
+
+      {% if void %}
+      {# Placed after the conformance list and before the history, because it is
+         the thing a reader came for once they know the endpoint works, and it is
+         the only block on the page that is an offer rather than a grade. #}
+      <section class="panel void" data-section="void">
+        <h2>sparqlwatch's VoID for this endpoint</h2>
+        {% if void.complete %}
+        <p class="claim"><strong class="complete">Provably complete.</strong>
+          All {{ void.described }} classes this endpoint reports were described, and
+          every instance of each was scanned. The counts are the endpoint's, not a
+          sample's.</p>
+        {% else %}
+        <p class="claim"><strong class="partial">A sample only.</strong>
+          This describes what we saw, and is not the whole of what is there.</p>
+        <p class="why">
+          {% if void.reported is none %}
+            This endpoint would not tell us how many classes it holds, so there is
+            no total to check the {{ void.described }} described here against.
+          {% elif void.described < void.reported %}
+            {{ void.described }} of the {{ void.reported }} classes it reports are
+            described here.
+          {% endif %}
+          {% if void.samplings and void.samplings != ['exact'] %}
+            Some classes were profiled from a sample of their instances, so the
+            counts under those are the sample's rather than the class's.
+          {% endif %}
+        </p>
+        {% endif %}
+        <p class="get">GET <a href="{{ void_path }}?url={{ endpoint | urlencode }}">{{ void_path }}?url={{ endpoint | urlencode }}</a>
+          &mdash; RDF only (Turtle, N-Triples, RDF/XML, JSON-LD).</p>
+      </section>
+      {% endif %}
+
+      {% if history.has_history %}
+      <section class="panel" data-section="history">
+        <h2>What has changed here</h2>
+        <p class="note">Every sweep that said anything about this endpoint, oldest
+          on the left. Point at a column to read that sweep. A faint empty box is
+          <em>absent</em>, which is a verdict: the sweep looked and found nothing
+          there. A dot on the baseline is a sweep that recorded nothing about that
+          metric at all, which is not a verdict.</p>
+
+        <!-- A real table: the rows and columns ARE rows and columns, so a screen
+             reader gets the structure and the accessible view is the view. The
+             readout below is an enhancement over it, not a replacement for it. -->
+        <table class="history" id="history">
+          <caption class="visually-hidden">Each metric's reading in each sweep,
+            oldest sweep first.</caption>
+          <thead>
+            <tr><th scope="col">metric</th>
+              {% for at in history.runs %}<th scope="col" class="h-run" data-col="{{ loop.index0 }}"><span>{{ at[5:16] | replace("T", " ") }}</span></th>{% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for m in history.metrics %}
+            <tr data-history-metric="{{ m.metric }}">
+              <th scope="row" class="h-metric">{{ m.name }}</th>
+              {% for c in m.cells %}
+              <td data-col="{{ loop.index0 }}">
+                {%- if c.present %}<span class="hcell {{ c.css_class }}"
+                  data-at="{{ c.at }}" data-reading="{{ c.label }}{% if c.reason %} ({{ c.reason }}){% endif %}"
+                  title="{{ c.at }}: {{ c.label }}{% if c.reason %} ({{ c.reason }}){% endif %}"></span>
+                {%- else %}<span class="hcell hgap" data-at="{{ c.at }}"
+                  data-reading="nothing recorded"
+                  title="{{ c.at }}: this sweep recorded nothing about this metric"></span>{% endif %}
+              </td>
+              {% endfor %}
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+
+        <!-- The readout. Empty until something is pointed at, and it says so:
+             a blank strip beside a chart reads as a chart with nothing in it. -->
+        <p class="h-readout" id="h-readout" aria-live="polite"
+           data-empty="point at a cell or a column to read it"></p>
+      </section>
+      {% endif %}
+
+      {% if vocabulary %}
+      <section class="panel" data-section="vocabulary">
+        <h2>Vocabulary</h2>
+        <p class="note">Every class and property a profile pass found here, and
+          every one this endpoint's description names. Type to narrow the list.</p>
+
+        <div class="vocab-controls">
+          <label class="visually-hidden" for="vocab-q">Search this endpoint's vocabulary</label>
+          <input id="vocab-q" type="search" autocomplete="off" spellcheck="false"
+                 placeholder="name, prefix or IRI">
+          <span class="vocab-count" id="vocab-count"
+                data-total="{{ vocabulary | length }}">{{ vocabulary | length }} terms</span>
+        </div>
+
+        <!-- Rendered server-side, all of it. The search narrows what is already
+             here rather than fetching: a reader typing a name should see the list
+             move as they type, and this page is read by people deciding whether to
+             write a query against an endpoint they have not used. -->
+        <ul class="vocab" id="vocab">
+          {% for t in vocabulary %}
+          <li data-kind="{{ t.kind }}" data-state="{{ t.state }}"
+              data-hay="{{ (t.local ~ ' ' ~ t.prefix ~ ' ' ~ t.iri) | lower }}"
+              {%- if t.engine %} data-engine="true"{% endif %}>
+            <span class="v-chip {{ t.state | enc_class }}" title="{{ t.state }}"></span>
+            <span class="v-local">{{ t.local }}</span>
+            <span class="v-prefix">{{ t.prefix }}</span>
+            <span class="v-kind">{{ t.kind }}</span>
+            <span class="v-iri" title="{{ t.iri }}">{{ t.iri }}</span>
+          </li>
+          {% endfor %}
+        </ul>
+        <p class="note vocab-none" id="vocab-none" hidden>Nothing here matches that.</p>
+      </section>
+      {% endif %}
+
+      <section class="panel" data-section="sample">
+        <h2>Classes sampled</h2>
+        {% if sample.this_run_text %}
+        {# What the sweep this page reports says about the classes metric. It is
+           shown beside a sample from another sweep as well as on its own: a run
+           that declined the metric published no sample of its own, whatever an
+           older sweep published. #}
+        <p class="note" data-this-run-sample="none"
+           {%- if not sample.present %} data-sample="absent"{% endif %} style="margin-top: 0">{{ sample.this_run_text }}</p>
+        {% endif %}
+        {% if sample.present %}
+        <div class="sample-head" data-sample="present" data-sample-run="{{ sample.run }}"
+             data-sample-generated-at="{{ sample.generated_at }}">
+          <span class="sample-count">{{ sample.size }} class{{ "" if sample.size == 1 else "es" }} sampled</span>
+          <span class="trunc {{ 'trunc-yes' if sample.truncated else 'trunc-no' }}">{{ sample.truncation_text }}</span>
+        </div>
+        {% if sample.provenance_text %}
+        <p class="note" data-sample-provenance="true">{{ sample.provenance_text }}</p>
+        {% endif %}
+        {% if sample.classes %}
+        <ul class="sample-values">
+          {% for iri in sample.classes %}
+          <li data-class="{{ iri }}">{{ iri }}</li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p class="note" data-sample-empty="true">
+          This sample reports a size and lists no values, which the prober does not
+          write: it skips a sample with no values on purpose, so that a size of zero
+          cannot be read as "this endpoint has no classes". Read the size, not the
+          absence of a list.
+        </p>
+        {% endif %}
+        <p class="note">
+          A sample is what one bounded query actually returned, in the order the
+          endpoint returned it. It is not a dataset description and not a count of
+          what the endpoint holds.
+        </p>
+        {% endif %}
+      </section>
+    </div>
+
+    <aside class="rail">
+      {# THE RAIL STATES ONLY FACTS ALREADY IN THIS PAGE'S CONTEXT: void's
+         described/reported/complete/samplings, generated_at and sample.size.
+         Nothing here is a new query -- void is None whenever there is no
+         derived description, so every fact below that reads it sits inside
+         {% if void %}. #}
+      <h3>This endpoint</h3>
+      {% if void %}
+      <div class="fact" data-rail-fact="classes-described">
+        <span class="k">classes described</span><span class="v">{{ void.described }}</span>
+      </div>
+      {% if void.reported is not none %}
+      <div class="fact" data-rail-fact="classes-reported">
+        <span class="k">classes reported</span><span class="v">{{ void.reported }}</span>
+      </div>
+      {% endif %}
+      <div class="fact" data-rail-fact="void-complete">
+        <span class="k">description</span>
+        <span class="v">{{ "provably complete" if void.complete else "sample only" }}</span>
+      </div>
+      {% if void.samplings and void.samplings != ['exact'] %}
+      <div class="fact" data-rail-fact="sampling">
+        <span class="k">sampling</span><span class="v">{{ void.samplings | join(", ") }}</span>
+      </div>
+      {% endif %}
+      {% endif %}
+      {% if sample.present %}
+      <div class="fact" data-rail-fact="classes-sampled">
+        <span class="k">classes sampled</span><span class="v">{{ sample.size }}</span>
+      </div>
+      {% endif %}
+      {% if generated_at %}
+      <div class="fact" data-rail-fact="last-checked">
+        <span class="k">last checked</span><span class="v">{{ generated_at }}</span>
+      </div>
+      {% endif %}
+      {% if void %}
+      <a class="railbtn" href="{{ void_path }}?url={{ endpoint | urlencode }}">sparqlwatch's VoID</a>
+      {% endif %}
+
+      <div class="legend" data-rail="legend">
+        <h3>What the marks mean</h3>
+        {% for state in legend %}
+        <div class="lg" data-state="{{ state.slug }}">
+          <div class="lg-head">
+            <span class="swatch {{ state.css_class }}" aria-hidden="true"></span>
+            <span class="l-label">{{ state.label }}</span>
+            <span class="l-count">{{ state.count }}</span>
+          </div>
+          <p class="l-mean">{{ state.meaning }}</p>
+        </div>
         {% endfor %}
-      </tbody>
-    </table>
-
-    <!-- The readout. Empty until something is pointed at, and it says so:
-         a blank strip beside a chart reads as a chart with nothing in it. -->
-    <p class="h-readout" id="h-readout" aria-live="polite"
-       data-empty="point at a cell or a column to read it"></p>
-  </section>
-  {% endif %}
-
-  {% if vocabulary %}
-  <section class="panel" data-section="vocabulary">
-    <h2>Vocabulary</h2>
-    <p class="note">Every class and property a profile pass found here, and
-      every one this endpoint's description names. Type to narrow the list.</p>
-
-    <div class="vocab-controls">
-      <label class="visually-hidden" for="vocab-q">Search this endpoint's vocabulary</label>
-      <input id="vocab-q" type="search" autocomplete="off" spellcheck="false"
-             placeholder="name, prefix or IRI">
-      <span class="vocab-count" id="vocab-count"
-            data-total="{{ vocabulary | length }}">{{ vocabulary | length }} terms</span>
-    </div>
-
-    <!-- Rendered server-side, all of it. The search narrows what is already
-         here rather than fetching: a reader typing a name should see the list
-         move as they type, and this page is read by people deciding whether to
-         write a query against an endpoint they have not used. -->
-    <ul class="vocab" id="vocab">
-      {% for t in vocabulary %}
-      <li data-kind="{{ t.kind }}" data-state="{{ t.state }}"
-          data-hay="{{ (t.local ~ ' ' ~ t.prefix ~ ' ' ~ t.iri) | lower }}"
-          {%- if t.engine %} data-engine="true"{% endif %}>
-        <span class="v-chip {{ t.state | enc_class }}" title="{{ t.state }}"></span>
-        <span class="v-local">{{ t.local }}</span>
-        <span class="v-prefix">{{ t.prefix }}</span>
-        <span class="v-kind">{{ t.kind }}</span>
-        <span class="v-iri" title="{{ t.iri }}">{{ t.iri }}</span>
-      </li>
-      {% endfor %}
-    </ul>
-    <p class="note vocab-none" id="vocab-none" hidden>Nothing here matches that.</p>
-  </section>
-  {% endif %}
-
-  <section class="panel">
-    <h2>What the drawing means</h2>
-    <ul class="legend">
-      {% for state in legend %}
-      <li data-state="{{ state.slug }}">
-        <span class="swatch {{ state.css_class }}" aria-hidden="true"></span>
-        <span class="l-label">{{ state.label }}</span>
-        <span>{{ state.meaning }}</span>
-        <span class="l-count">{{ state.count }}</span>
-      </li>
-      {% endfor %}
-    </ul>
-    <p class="note">
-      The drawing never rests on colour, and every state is also written out in
-      words beside its chip. A filled chip means we have positive evidence the
-      capability works; a dashed border means no declaration was seen for it; a
-      heavier border means something is actively wrong rather than merely
-      missing; a dotted border means we did not look; and no border at all means
-      nothing was there.
-    </p>
-  </section>
-
-  <section class="panel">
-    <h2>Classes sampled</h2>
-    {% if sample.this_run_text %}
-    {# What the sweep this page reports says about the classes metric. It is
-       shown beside a sample from another sweep as well as on its own: a run
-       that declined the metric published no sample of its own, whatever an
-       older sweep published. #}
-    <p class="note" data-this-run-sample="none"
-       {%- if not sample.present %} data-sample="absent"{% endif %} style="margin-top: 0">{{ sample.this_run_text }}</p>
-    {% endif %}
-    {% if sample.present %}
-    <div class="sample-head" data-sample="present" data-sample-run="{{ sample.run }}"
-         data-sample-generated-at="{{ sample.generated_at }}">
-      <span class="sample-count">{{ sample.size }} class{{ "" if sample.size == 1 else "es" }} sampled</span>
-      <span class="trunc {{ 'trunc-yes' if sample.truncated else 'trunc-no' }}">{{ sample.truncation_text }}</span>
-    </div>
-    {% if sample.provenance_text %}
-    <p class="note" data-sample-provenance="true">{{ sample.provenance_text }}</p>
-    {% endif %}
-    {% if sample.classes %}
-    <ul class="sample-values">
-      {% for iri in sample.classes %}
-      <li data-class="{{ iri }}">{{ iri }}</li>
-      {% endfor %}
-    </ul>
-    {% else %}
-    <p class="note" data-sample-empty="true">
-      This sample reports a size and lists no values, which the prober does not
-      write: it skips a sample with no values on purpose, so that a size of zero
-      cannot be read as "this endpoint has no classes". Read the size, not the
-      absence of a list.
-    </p>
-    {% endif %}
-    <p class="note">
-      A sample is what one bounded query actually returned, in the order the
-      endpoint returned it. It is not a dataset description and not a count of
-      what the endpoint holds.
-    </p>
-    {% endif %}
-  </section>
-</main>
-<footer class="site-foot">
-  <span>sparqlwatch <span class="v">{{ version }}</span></span>
-</footer>
-
+        <p class="note">
+          The drawing never rests on colour, and every state is also written out in
+          words beside its chip. A filled chip means we have positive evidence the
+          capability works; a dashed border means no declaration was seen for it; a
+          heavier border means something is actively wrong rather than merely
+          missing; a dotted border means we did not look; and no border at all means
+          nothing was there.
+        </p>
+      </div>
+    </aside>
+  </div>
+{% endblock %}
+{% block body_end %}
 <script>
 // The timeline's interaction, and nothing else on this page needs script.
 //
@@ -652,7 +573,7 @@
       if (reading !== "nothing recorded") parts.push(name + " " + reading);
     });
     if (!at) return "";
-    return at + " \u2014 " + (parts.length ? parts.join(", ") : "recorded nothing about any metric");
+    return at + " — " + (parts.length ? parts.join(", ") : "recorded nothing about any metric");
   }
 
   function show(col) {
@@ -684,6 +605,9 @@
 </script>
 <script>
 // Vocabulary search. Narrows what is already on the page; nothing is fetched.
+//
+// LEFT ALONE ON PURPOSE: Task 10 replaces this script, and data-hay per term
+// is its contract to read. Pre-empting either here would be redone there.
 (function () {
   var q = document.getElementById("vocab-q");
   var list = document.getElementById("vocab");
@@ -718,5 +642,4 @@
   apply();
 })();
 </script>
-</body>
-</html>
+{% endblock %}
