@@ -10,7 +10,7 @@ design, and these are neither.
 
     python tests/mobile/probe_mobile.py http://127.0.0.1:8000
 
-Loads all seven routes at three phone viewports and reports the horizontal
+Loads all eight routes at three phone viewports and reports the horizontal
 overflow per route, naming the elements responsible. Exit status is nonzero if
 anything overflows, so it works as a gate.
 

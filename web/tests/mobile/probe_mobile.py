@@ -1,7 +1,12 @@
 """Measure what overflows at phone width, on the real pages.
 
 Run against a live site:  probe_mobile.py https://host
-or against a local store:  probe_mobile.py            (starts uvicorn itself)
+or against a site you have already started yourself, store and all:
+  SPARQLWATCH_STORE=/path/to/store uvicorn app:app --port 8000 &
+  probe_mobile.py            (defaults to http://127.0.0.1:8000)
+
+This script never starts a server on its own -- it only ever talks to a base
+URL that must already be answering, local or remote.
 
 Reports, per route per viewport: the horizontal overflow in px and the
 elements responsible. An element is "responsible" when its own right edge
