@@ -439,16 +439,21 @@
 
   {# The server-side counterpart to #nothing below: that paragraph is hidden
      by default and only JS ever unhides it, for a facet or text filter
-     narrowing the client-rendered rows to zero. A ?q= that the SERVER already
-     narrowed to zero rows never reaches that script with anything to hide,
-     since JS starts from what this page rendered -- so a no-JS visit, or one
-     where the script has not run yet, would render the search box, no rows,
-     and no explanation. This message is that explanation: distinct from
-     #nothing (a facet finding nothing) and from the endpoint_count == 0
-     branch above (a store holding nothing at all). #}
+     narrowing the client-rendered rows to zero. A server-side filter --
+     ?q=, ?domain= or ?facet=, alone or combined -- that already narrowed to
+     zero rows never reaches that script with anything to hide, since JS
+     starts from what this page rendered -- so a no-JS visit, or one where
+     the script has not run yet, would render the search box and pills, no
+     rows, and no explanation. This message is that explanation: distinct
+     from #nothing (a CLIENT-SIDE facet finding nothing) and from the
+     endpoint_count == 0 branch above (a store holding nothing at all).
+     `no_match` (see _no_match_description) names every filter that is
+     actually active, not just ?q= -- fix-round-1's finding: this used to
+     read "matches &ldquo;&rdquo;" on a page a domain or a facet alone had
+     emptied, naming a query that was never set. #}
   {% if summary.matching == 0 %}
   <p class="note" data-no-match="true">
-    No endpoint in this registry matches &ldquo;{{ query }}&rdquo;.
+    No endpoint in this registry matches {{ no_match }}.
     <a href="{{ index_path }}">Show every endpoint.</a>
   </p>
   {% endif %}

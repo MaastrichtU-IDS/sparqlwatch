@@ -46,7 +46,7 @@ from pyoxigraph import NamedNode, RdfFormat, Store, parse
 from starlette.testclient import TestClient
 
 import verdict_encoding
-from endpoint_measurements import endpoint_measurements
+from endpoint_measurements import endpoint_measurements, EndpointMeasurements, MetricVerdict
 import app as app_module
 from app import (
     _index_metrics,
@@ -59,6 +59,7 @@ from app import (
     DORMANCY,
     _index_html,
     _legend,
+    _matches_facet,
     _matches_query,
     _state_facets,
     ENDPOINT_PATH,
@@ -2580,6 +2581,31 @@ def test_matches_query_is_case_insensitive_and_permissive_when_empty():
     assert _matches_query("https://sparql.uniprot.org/sparql", "  uniprot  ")
 
 
+def test_matches_facet_reads_the_vocabulary_described_verdict():
+    """No committed fixture carries a `vocabulary-described` verdict (it is
+    the one `exhaustive`-tier metric none of the cheap-ceiling sweeps these
+    fixtures were cut from ever ran), so this exercises `_matches_facet`'s
+    "void" branch directly against a hand-built entry rather than through a
+    store. Permissive when facet is falsy, same as `_matches_query`."""
+    verified = EndpointMeasurements(
+        endpoint="https://example.org/sparql",
+        assessed=True,
+        verdicts=[
+            MetricVerdict(
+                metric="urn:sparqlwatch:metric:vocabulary-described",
+                verdict="verified",
+            )
+        ],
+    )
+    silent = EndpointMeasurements(endpoint="https://other.example/sparql", assessed=True)
+    assert _matches_facet(verified, "void")
+    assert not _matches_facet(silent, "void")
+    assert _matches_facet(verified, None)
+    assert _matches_facet(silent, None)
+    assert _matches_facet(verified, "")
+    assert not _matches_facet(verified, "not-a-real-facet")
+
+
 def test_a_query_matches_a_host(client_for, store_registry_sample):
     body = client_for(store_registry_sample).get(
         "/?q=uniprot", headers={"accept": "text/html"}
@@ -2646,6 +2672,39 @@ def test_only_a_no_match_query_renders_the_no_match_message(
     narrowed = client.get("/?q=uniprot", headers={"accept": "text/html"}).text
     assert not with_attribute(unfiltered, "data-no-match")
     assert not with_attribute(narrowed, "data-no-match")
+
+
+def test_a_domain_matching_nothing_renders_its_own_message(
+    client_for, store_registry_sample
+):
+    """Fix-round-1's finding: ?domain= is a server-side filter exactly like
+    ?q= and can narrow a page to zero rows the same way, so a domain that
+    matches nothing must get the same explanation -- and it must name the
+    DOMAIN, not a query string that was never set. Before the fix this
+    message was keyed to `query` alone and read "matches &ldquo;&rdquo;" on
+    exactly this page."""
+    body = client_for(store_registry_sample).get(
+        "/?domain=zzzznodomain", headers={"accept": "text/html"}
+    ).text
+    messages = texts_with(body, "data-no-match")
+    assert len(messages) == 1, "the no-match message must render exactly once"
+    assert "zzzznodomain" in messages[0], (
+        f"the message does not name the domain that matched nothing: "
+        f"{messages[0]!r}"
+    )
+
+
+def test_a_domain_that_matches_something_renders_no_message(
+    client_for, store_registry_sample
+):
+    """The flip side, and the fixture this coordinates with: "government" now
+    matches epo and visualdataweb once registry_names.load_names merges per
+    field instead of keying on title alone (fix-round-1, finding 1)."""
+    body = client_for(store_registry_sample).get(
+        "/?domain=government", headers={"accept": "text/html"}
+    ).text
+    assert not with_attribute(body, "data-no-match")
+    assert len(endpoints_shown(body)) == 2
 
 
 def test_a_no_match_page_states_its_denominator_as_zero_of_the_fleet(
@@ -2796,14 +2855,17 @@ def test_the_matrix_sits_below_the_rows(client_for, store_registry_sample):
     assert body.index('data-facet-group="matrix"') > body.index("data-endpoint=")
 
 
-def test_a_facet_pill_narrows_the_rows(client_for, store_registry_sample):
+def test_a_facet_pill_narrows_the_rows(client_for, store_dormant_newest):
     """The non-domain pills are real filters too, not decoration: see
-    _matches_facet. `federates` (the cors verdict) is the one of the three
-    that is neither all-nine nor zero on this fixture, so it is the one that
-    proves the link does something rather than nothing."""
-    client = client_for(store_registry_sample)
+    _matches_facet. store_dormant_newest is three endpoints, one of them
+    (kadaster) dormant -- the newest sweep declined to ask it at all -- so
+    `?facet=answering` is the one of the two remaining named facets
+    (`answering`, `void`) with a fixture on hand that is neither all nor
+    none of a store: it must drop exactly the dormant one."""
+    client = client_for(store_dormant_newest)
     everything = endpoints_shown(client.get("/", headers={"accept": "text/html"}).text)
     narrowed = endpoints_shown(
-        client.get("/?facet=federates", headers={"accept": "text/html"}).text
+        client.get("/?facet=answering", headers={"accept": "text/html"}).text
     )
     assert 0 < len(narrowed) < len(everything)
+    assert "https://data.kkg.kadaster.nl/query" not in narrowed

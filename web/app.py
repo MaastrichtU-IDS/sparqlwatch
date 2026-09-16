@@ -2270,19 +2270,29 @@ def _matches_domain(endpoint: str, domain: str | None) -> bool:
 
 
 # The metric each named, non-domain facet grades, and the label its pill
-# shows. Kept as two small tables rather than four separate booleans, so a
-# reader sees at a glance that "void" and "federates" are the same shape of
-# question (one metric, read positive-or-not) while "answering" is not (it
-# reads a fact this page already names in the strip above, not a metric at
-# all).
+# shows. Kept as two small tables rather than separate booleans, so a reader
+# sees at a glance that a facet is either a real metric, read positive-or-not
+# ("void"), or a fact this page already names elsewhere, reused rather than
+# renamed ("answering").
+#
+# A THIRD FACET, "federates", stood here until fix-round-1 and was removed.
+# sparqlwatch measures eleven things (see prober/metrics.toml) and federation
+# -- one endpoint's query reaching into another -- is not one of them. The
+# first draft read a positive `cors` verdict as "federates", on the argument
+# that access-control-allow-origin is a precondition a browser-based
+# federator needs. That is a real fact about `cors`, but a pill LABELLED
+# "federates" tells a reader this service established something it never
+# measured, which is the exact assertion the page's own "measured rather
+# than asserted" sentence -- and the reason a catalogue's title is
+# attributed rather than claimed -- exists to rule out. If a filter on `cors`
+# is wanted here later, it is honest under a label that says what it reads:
+# "CORS", not what a reader might infer from it.
 _FACET_METRICS = {
     "void": _METRIC_PREFIX + "vocabulary-described",
-    "federates": _METRIC_PREFIX + "cors",
 }
 _FACET_LABELS = {
     "answering": "answering",
     "void": "declares VoID",
-    "federates": "federates",
 }
 
 
@@ -2291,7 +2301,7 @@ def _matches_facet(entry: EndpointMeasurements, facet: str | None) -> bool:
     verdicts its newest run already recorded -- no query the prober has not
     already run.
 
-    Three questions:
+    Two questions:
 
       "answering"  the newest sweep did not decline to ask this endpoint at
                     all. The same fact the strip above this listing already
@@ -2300,18 +2310,10 @@ def _matches_facet(entry: EndpointMeasurements, facet: str | None) -> bool:
 
       "void"       its `vocabulary-described` verdict is positive: the
                     endpoint's own description is confirmed to name the
-                    classes its data actually holds.
-
-      "federates"  its `cors` verdict is positive: it sends access-control-
-                    allow-origin, the one precondition a browser-based
-                    client -- a federator among them -- needs before it can
-                    query this endpoint from another origin at all. Not a
-                    claim that the endpoint federates queries itself; nothing
-                    this prober measures could tell that. cors-preflight asks
-                    the stricter, browser-shaped version of the same
-                    question and was left out here on purpose: this pill
-                    names the precondition every cross-origin client shares,
-                    not the one only a browser sending a preflight needs.
+                    classes its data actually holds -- which is exactly what
+                    the metric measures, so "declares VoID" is not a claim
+                    beyond it (see `_FACET_METRICS`'s comment on why
+                    "federates" failed this same check and was removed).
 
     `_POSITIVE_VERDICTS` is the same table the availability facet above was
     built from: "verified" and "undeclared-but-verified" both mean the fact
@@ -2346,9 +2348,9 @@ def _index_pills(
     outlived the page it described before, and this is the fix repeated
     rather than a fresh idea.
 
-    Six pills: the three commonest registry domains this filtered set holds
+    Five pills: the three commonest registry domains this filtered set holds
     (fewer than three where fewer than three are present -- store_registry_
-    sample's nine endpoints, for instance, split across five), plus the three
+    sample's nine endpoints, for instance, split across five), plus the two
     fixed questions _matches_facet answers. Both groups share one shape,
     {label, param, value, count, on}, so the template loops over them once.
     """
@@ -2376,6 +2378,34 @@ def _index_pills(
         for value, label in _FACET_LABELS.items()
     ]
     return pills
+
+
+def _no_match_description(q: str | None, domain: str | None, facet: str | None) -> str:
+    """What to tell a reader when every active filter together matched
+    nothing, naming each one that is actually set.
+
+    Fix-round-1: the message used to be fixed to `?q=` alone -- "No endpoint
+    in this registry matches “{{ query }}”" -- because `?q=` was the
+    only filter that could ever narrow a page to zero rows. Once `?domain=`
+    and `?facet=` can too, that sentence is wrong twice over for a page a
+    domain or a facet alone emptied: it would print an empty pair of quotes
+    (`query` is None) rather than naming the domain or facet that actually
+    matched nothing, and a combination of two active filters would name only
+    one of them. Every filter this call was given a value for is named, and
+    none that was not.
+    """
+    clauses = []
+    if q:
+        clauses.append(f"the text “{q}”")
+    if domain:
+        clauses.append(f"the domain “{domain}”")
+    if facet:
+        clauses.append(f"the facet “{facet}”")
+    if not clauses:
+        return ""
+    if len(clauses) == 1:
+        return clauses[0]
+    return ", ".join(clauses[:-1]) + " and " + clauses[-1]
 
 
 def _index_context(
@@ -2600,8 +2630,11 @@ def _index_context(
         # a number that quietly stopped meaning the whole registry.
         "summary": {
             # None when unfiltered, so the template can tell "18 of 212" from
-            # "212" without comparing two numbers and guessing.
-            "matching": None if not q else len(entries),
+            # "212" without comparing two numbers and guessing. Widened in
+            # fix-round-1 to any of the three filters: `?domain=` and
+            # `?facet=` can narrow a page exactly as `?q=` can, and a page
+            # narrowed by either must state its denominator too.
+            "matching": None if not (q or domain or facet) else len(entries),
             "total": unfiltered_total,
             "answering": sum(
                 1 for e in entries
@@ -2617,6 +2650,11 @@ def _index_context(
         # enhancement narrows the rows the server already returned instead of
         # re-filtering from an empty box and instantly widening the list.
         "query": q,
+        # What the no-match message (below `summary.matching == 0`) names.
+        # Built here rather than in the template so the sentence is one
+        # decision with a right answer, not three conditionals threaded
+        # through Jinja: see _no_match_description.
+        "no_match": _no_match_description(q, domain, facet),
     }
 
 
@@ -2778,7 +2816,7 @@ def index_resource(
         None,
         description=(
             "Narrow the index to endpoints answering one fixed question: "
-            "answering, void, or federates."
+            "answering or void."
         ),
     ),
     store: Store = Depends(get_store),

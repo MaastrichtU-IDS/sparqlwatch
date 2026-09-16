@@ -73,6 +73,32 @@ def test_a_later_file_does_not_silently_lose_to_an_earlier_one(tmp_path):
     assert load_names([b, a])["https://example.org/sparql"].title == "Real Name"
 
 
+def test_a_bare_entry_does_not_erase_a_later_domain(tmp_path):
+    """The bug fix-round-1 found: the merge used to key on TITLE alone, so a
+    candidate that carried a domain (or a datasets count) but no title --
+    exactly what a multi-dataset endpoint looks like -- could never override
+    an earlier bare entry. Measured against the shipped registry, that
+    silently dropped the domain of 13 real endpoints, because
+    prober/registry/calibration-sample.toml lists some of them bare and is
+    read before lod-cloud.toml's richer, still title-less entries for the
+    same URLs. Fields now merge independently, so this must hold in BOTH
+    read orders."""
+    bare = tmp_path / "bare.toml"
+    bare.write_text('endpoint = ["https://example.org/sparql"]\n')
+    rich = tmp_path / "rich.toml"
+    rich.write_text(
+        '[[endpoint]]\nurl = "https://example.org/sparql"\n'
+        'domain = "government"\ndatasets = 2\n'
+    )
+    bare_then_rich = load_names([bare, rich])["https://example.org/sparql"]
+    assert bare_then_rich.domain == "government"
+    assert bare_then_rich.datasets == 2
+
+    rich_then_bare = load_names([rich, bare])["https://example.org/sparql"]
+    assert rich_then_bare.domain == "government"
+    assert rich_then_bare.datasets == 2
+
+
 def test_a_missing_registry_file_is_not_fatal(tmp_path):
     """The site must serve before anyone has seeded a registry."""
     assert load_names([tmp_path / "nope.toml"]) == {}

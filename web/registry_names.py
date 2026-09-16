@@ -45,10 +45,22 @@ def load_names(paths: list[Path]) -> dict[str, Name]:
     paths. One malformed file erasing good data would be precisely the
     failure that this tolerance exists to prevent.
 
-    Where two files name one endpoint, the entry carrying a title wins,
-    whichever order they were read in. The dev registries are bare strings and
-    list some of the same URLs as the seeded ones; without this rule, loading
-    them second would erase a real name.
+    Where two files name one endpoint, each of `title`, `domain` and
+    `datasets` is kept from whichever file set it FIRST, independently of the
+    other two fields, whichever order the files were read in. This was a
+    title-only rule until 2026-09-17 -- "the entry carrying a title wins" --
+    and that was a bug, not a simplification: a candidate that carried a
+    `domain` or a `datasets` count but no `title` (exactly the shape of a
+    multi-dataset endpoint, which by definition has no one title -- see
+    `display` below) could never override an earlier bare entry, so which of
+    two files' domains survived was decided by glob order rather than by
+    which one actually said something. Measured against the shipped registry,
+    that bug silently dropped the domain of 13 real endpoints, because
+    prober/registry/calibration-sample.toml lists some of them as bare,
+    title-less strings and is read (alphabetically) before lod-cloud.toml's
+    richer entries for the same URLs. Merging per field is what a dev
+    registry listing a URL as a bare string was always supposed to mean:
+    "I don't have anything to ADD", not "erase what another file said".
     """
     out: dict[str, Name] = {}
     for path in paths:
@@ -68,8 +80,15 @@ def load_names(paths: list[Path]) -> dict[str, Name]:
                     continue
                 candidate = Name(title, domain, datasets, _host(url))
                 existing = out.get(url)
-                if existing is None or (existing.title is None and candidate.title):
+                if existing is None:
                     out[url] = candidate
+                else:
+                    out[url] = Name(
+                        title=existing.title if existing.title is not None else candidate.title,
+                        domain=existing.domain if existing.domain is not None else candidate.domain,
+                        datasets=existing.datasets if existing.datasets is not None else candidate.datasets,
+                        host=existing.host,
+                    )
         except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
             continue
     return out
