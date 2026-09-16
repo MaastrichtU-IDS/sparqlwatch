@@ -117,7 +117,7 @@ def test_the_shared_case_table_holds():
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
-def test_the_javascript_agrees_with_python():
+def test_the_javascript_agrees_with_python(tmp_path):
     """The browser and the server must score identically.
 
     There is no JavaScript harness in this repo's CI -- it is cargo plus pytest
@@ -128,19 +128,28 @@ def test_the_javascript_agrees_with_python():
     """
     script = Path(__file__).resolve().parents[1] / "static" / "vocab-search.js"
     cases = Path(__file__).parent / "fixtures" / "vocab_match_cases.json"
+
+    # A bare .js with no controlling package.json is CommonJS as far as node
+    # is concerned, and this repo deliberately has no package.json anywhere
+    # (see the module docstring above) -- so `import` of vocab-search.js
+    # directly fails with a CommonJS/ESM syntax error. .mjs has been
+    # unambiguous ESM since node 12.17 with no flag needed, so the fix is to
+    # hand node a copy under that extension rather than tell it to guess:
+    # a flag good enough to guess right also has to exist on whatever node is
+    # installed, and on an older node it does not, which turns the
+    # `shutil.which` skip above into a hard error instead of a skip.
+    mjs_copy = tmp_path / "vocab-search.mjs"
+    mjs_copy.write_bytes(script.read_bytes())
+
     harness = f"""
-      import {{ rank }} from {str(script)!r};
+      import {{ rank }} from {str(mjs_copy)!r};
       import {{ readFileSync }} from 'node:fs';
       const cases = JSON.parse(readFileSync({str(cases)!r}, 'utf8'));
       const out = cases.map(c => rank(c.terms, c.query).map(t => t.local));
       console.log(JSON.stringify(out));
     """
     result = subprocess.run(
-        # --experimental-detect-module: there is no package.json anywhere in
-        # this repo (by design -- see the module docstring above), so nothing
-        # tells node vocab-search.js is an ES module rather than CommonJS.
-        # This flag makes node look at the file's own syntax instead.
-        ["node", "--experimental-detect-module", "--input-type=module", "-e", harness],
+        ["node", "--input-type=module", "-e", harness],
         capture_output=True, text=True, check=True,
     )
     got = json.loads(result.stdout)

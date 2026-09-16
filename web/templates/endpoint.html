@@ -145,10 +145,13 @@
               gap: 10px; align-items: center; padding: 4px 10px;
               border-bottom: 1px solid var(--border); }
   .vocab li:last-child { border-bottom: 0; }
-  /* `display: grid` above has higher specificity than the UA stylesheet's
-     `[hidden] { display: none }`, so a row the script hides would otherwise
-     stay on screen at full size, just no longer counted -- the search would
-     look like it does nothing. This is the rule that actually removes it. */
+  /* Not a specificity fix: user-agent rules lose to author rules regardless
+     of specificity, so the UA stylesheet's `[hidden] { display: none }` was
+     always going to lose to `display: grid` above, and a row the script hid
+     stayed on screen at full size, just no longer counted -- the search
+     would look like it does nothing. This rule is itself author-origin, so
+     it competes with `.vocab li` on specificity like any other pair of
+     rules from the same origin, and wins because it is more specific. */
   .vocab li[hidden] { display: none; }
   .v-chip { width: 10px; height: 12px; border-radius: 2px; }
   .v-local { font-family: var(--mono); font-size: 12px; color: var(--text-bright);
