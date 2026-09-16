@@ -172,3 +172,61 @@ def test_every_seeded_endpoint_shows_something_other_than_a_bare_url():
     names = load_names(sorted(here.glob("*.toml")))
     bare = [u for u, n in names.items() if display(n, u) == u]
     assert not bare, f"{len(bare)} endpoints would show a bare URL: {bare[:3]}"
+
+
+def test_the_seeded_catalogue_orders_ahead_of_a_hand_kept_supplement(tmp_path):
+    """app._registry_load_order's contract, pinned independently of app.py's
+    real files: the seeded registry comes first whatever the two filenames
+    would sort to, an unlisted third file is appended last, and a directory
+    missing one of the named files does not error.
+
+    This is the fix for fix-round-1: precedence used to be `sorted(glob(...))`,
+    an accident of filename spelling that put kg-catalog.toml ahead of
+    lod-cloud.toml and let a newly-titled supplement entry silently outrank
+    the seeded catalogue's own distinguishing title for the same URL.
+    """
+    import app as app_module
+
+    directory = tmp_path
+    (directory / "kg-catalog.toml").write_text("endpoint = []\n")
+    (directory / "lod-cloud.toml").write_text("endpoint = []\n")
+    (directory / "zzz-unlisted.toml").write_text("endpoint = []\n")
+    order = [p.name for p in app_module._registry_load_order(directory)]
+    assert order == ["lod-cloud.toml", "kg-catalog.toml", "zzz-unlisted.toml"], (
+        "the seeded registry must be read first, the named supplement second, "
+        f"and anything else last: got {order}"
+    )
+
+    # A directory naming only the supplement, no seeded file at all, must not
+    # error -- the site serves before anyone has seeded a registry.
+    empty = tmp_path / "supplement-only"
+    empty.mkdir()
+    (empty / "kg-catalog.toml").write_text("endpoint = []\n")
+    assert [p.name for p in app_module._registry_load_order(empty)] == [
+        "kg-catalog.toml"
+    ]
+
+
+def test_the_seeded_catalogue_names_a_multi_entry_endpoint_over_the_supplement():
+    """Precedence regression, fix-round-1.
+
+    sparql.dblp.org is one of five DBLP endpoints in the registry, and only
+    lod-cloud.toml's own title distinguishes it ("dblp Knowledge Graph") from
+    the other four ("DBLP Bibliography Database in RDF (FU Berlin)" and
+    three more). kg-catalog.toml, given titles in task 7, also names this URL
+    -- with the bare "DBLP", indistinguishable from every other DBLP row on
+    the page. Reading the registries in glob-sorted order let that bare title
+    win, purely because "kg-catalog.toml" sorts before "lod-cloud.toml". This
+    pins the actual, real-registry outcome of app._registry_load_order:
+    the seeded catalogue's title survives.
+    """
+    import app as app_module
+
+    here = Path(__file__).resolve().parents[2] / "prober" / "registry"
+    if not here.is_dir():
+        pytest.skip("registry sources are not in a runtime image")
+    name = app_module._NAMES.get("https://sparql.dblp.org/sparql")
+    assert name is not None, "sparql.dblp.org must still be a named endpoint"
+    assert name.title == "dblp Knowledge Graph", (
+        f"the seeded catalogue's distinguishing title must win, got {name.title!r}"
+    )

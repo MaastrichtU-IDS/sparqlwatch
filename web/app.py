@@ -3851,7 +3851,41 @@ def icon_mask() -> Response:
 # A missing directory yields an empty map rather than an error: the site serves
 # before anything is seeded, and every row falls back to its URL.
 _REGISTRY_DIR = Path(__file__).resolve().parents[1] / "prober" / "registry"
-_NAMES: dict[str, Name] = load_names(sorted(_REGISTRY_DIR.glob("*.toml")))
+
+# The order these files are read in decides, per field, which registry's word
+# wins on an endpoint both of them name -- load_names keeps whichever file set
+# a field FIRST. That order used to be `sorted(glob(...))`, which is not a
+# rank: it is an accident of filename spelling, and it broke the day
+# kg-catalog.toml learned titles (task 7). `sparql.dblp.org` is one of five
+# DBLP endpoints in the registry, distinguished only by lod-cloud.toml's own
+# titles ("dblp Knowledge Graph" beside "DBLP Bibliography Database in RDF (FU
+# Berlin)" and three more). "kg-catalog.toml" sorts before "lod-cloud.toml",
+# so its bare "DBLP" -- indistinguishable from the other four -- silently won.
+# Adding a file named e.g. aa-something.toml would have reshuffled this again
+# with nothing to notice it by.
+#
+# So precedence is named here, not inherited from a sort. `_SEEDED_REGISTRY`
+# is `seed-registry`'s output: it names the whole fleet at once, so it is the
+# one file that can be trusted to distinguish an endpoint from its neighbours,
+# and it is read FIRST. `_SUPPLEMENTS` are hand-kept files whose whole purpose
+# is to name endpoints the seeded catalogue does not cover -- read after, so
+# they can only fill in what the seeded file left blank, never override it.
+# Any registry file this pair does not name is appended last, in sorted order,
+# so a future file can still add endpoints without being able to rename ones
+# the seeded catalogue already named.
+_SEEDED_REGISTRY = "lod-cloud.toml"
+_SUPPLEMENTS = ("kg-catalog.toml",)
+
+
+def _registry_load_order(directory: Path) -> list[Path]:
+    """Every `*.toml` in `directory`, in the precedence order above."""
+    named = (_SEEDED_REGISTRY, *_SUPPLEMENTS)
+    ranked = [directory / name for name in named if (directory / name).is_file()]
+    rest = sorted(p for p in directory.glob("*.toml") if p.name not in named)
+    return ranked + rest
+
+
+_NAMES: dict[str, Name] = load_names(_registry_load_order(_REGISTRY_DIR))
 
 
 # The one stylesheet. Assembled at import from the static file plus the verdict
