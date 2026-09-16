@@ -1202,3 +1202,55 @@ def test_neither_description_query_describes_an_endpoint_the_html_omits(
     assert {triple.subject for triple in described} == {
         activity_at(DORMANT_SWEEP)
     }
+
+
+def rows_of(text):
+    """Every endpoint URL shown as a row on the index page.
+
+    Read off ``data-endpoint`` via this file's own `_Attributes` parser, so
+    this does not depend on tag names, nesting or order. A local copy of
+    test_index.py's `endpoints_shown`, kept local because the test files in
+    this repo each carry their own fixtures and helpers rather than
+    importing across suites.
+    """
+    parser = _Attributes()
+    parser.feed(text)
+    return [
+        element["data-endpoint"]
+        for element in parser.elements
+        if "data-endpoint" in element
+    ]
+
+
+def test_a_filtered_index_describes_exactly_the_endpoints_it_lists(
+    client_for, store_registry_sample
+):
+    """The two representations of a filtered index must name the same set.
+
+    This is the same guarantee as
+    test_neither_description_query_describes_an_endpoint_the_html_omits, now
+    under a query parameter. A filter applied to one representation and not the
+    other is the most ordinary way for them to drift.
+    """
+    client = client_for(store_registry_sample)
+    listed = set(rows_of(client.get("/?q=uniprot", headers={"accept": "text/html"}).text))
+    graph = graph_of(
+        client.get("/?q=uniprot", headers={"accept": "text/turtle"})
+    )
+    # [R3] Endpoints are the OBJECTS of dqv:computedOn / sw:notMeasuredOn.
+    # None is ever a subject -- measured: 0 of 439 constructed triples have an
+    # endpoint IRI as subject. A test that read subjects would compare an empty
+    # set and pass while measuring nothing.
+    described = {
+        str(t.object.value)
+        for t in graph
+        if str(t.predicate.value)
+        in (
+            "http://www.w3.org/ns/dqv#computedOn",
+            "urn:sparqlwatch:notMeasuredOn",
+        )
+    }
+    assert listed, "the fixture must yield a non-empty subset"
+    assert described == listed, (
+        f"the page lists {sorted(listed)} and the RDF describes {sorted(described)}"
+    )

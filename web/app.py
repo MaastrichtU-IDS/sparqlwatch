@@ -2440,9 +2440,51 @@ def _index_html(
     )
 
 
-def _index_rdf(store: Store, media_type: str) -> bytes:
-    """Serialise every endpoint's facts, straight from the store."""
-    triples = store.query(_INDEX_DESCRIPTION_QUERY)
+_COMPUTED_ON = NamedNode("http://www.w3.org/ns/dqv#computedOn")
+_NOT_MEASURED_ON = NamedNode("urn:sparqlwatch:notMeasuredOn")
+
+
+def _only_matching_endpoints(triples: list, q: str) -> list:
+    """The constructed index, narrowed to the endpoints a query names.
+
+    An endpoint is never a subject here -- it is the object of dqv:computedOn
+    or sw:notMeasuredOn, and the subject is the measurement node that points at
+    it. So the filter runs in two passes: find every subject whose endpoint does
+    not match, then drop every triple describing one of those subjects.
+
+    Activity nodes carry no such link because a run is not per-endpoint, so they
+    survive. That is deliberate: they describe the sweep, not a member of the
+    fleet, and a filtered index that dropped its own provenance would be
+    describing less than it knows.
+
+    The membership test is _matches_query, the same predicate the HTML path
+    uses, so the two representations cannot disagree about what a query means.
+    """
+    unwanted = {
+        t.subject
+        for t in triples
+        if t.predicate in (_COMPUTED_ON, _NOT_MEASURED_ON)
+        and not _matches_query(str(t.object.value), q)
+    }
+    return [t for t in triples if t.subject not in unwanted]
+
+
+def _index_rdf(store: Store, media_type: str, q: str | None = None) -> bytes:
+    """Serialise every endpoint's facts, straight from the store.
+
+    `q`, when given, narrows this the same way it narrows the HTML: through
+    _matches_query. The query runs unchanged and the filter is applied to
+    what it returns.
+
+    queries/__init__.py:5-9 is binding: a .rq file stays runnable as pasted,
+    and parameters reach a query through pyoxigraph variable substitution or
+    not at all. A substring test is not expressible that way, so filtering
+    here is the only route that does not bend that rule -- and it means the
+    page and the data share _matches_query rather than two spellings of it.
+    """
+    triples = list(store.query(_INDEX_DESCRIPTION_QUERY))
+    if q:
+        triples = _only_matching_endpoints(triples, q)
     return serialize(triples, format=RdfFormat.from_media_type(media_type))
 
 
@@ -2468,11 +2510,13 @@ def index_resource(
     store that holds no quads or no derived graph, which is the mistake a 404
     here would be reporting as an empty registry.
 
-    `q`, when given, narrows the HTML listing through `_matches_query` -- see
-    that function for why the URL is the only text there is to match. The RDF
-    branch below does not take it: Task 7 wires ?q= into that representation
-    through a different mechanism, deliberately, because a SPARQL FILTER and a
-    Python substring test are not the same operation to apply "the same way".
+    `q`, when given, narrows both representations through the same predicate,
+    `_matches_query` -- see that function for why the URL is the only text
+    there is to match. The HTML branch filters the SELECT bindings before the
+    template ever sees them; the RDF branch filters the CONSTRUCT's triples
+    after the fact, in `_only_matching_endpoints`, because `index_description.rq`
+    stays an unparameterised query and a SPARQL FILTER is not the same
+    operation as a Python substring test to apply "the same way".
     """
     media_type = choose_representation(request.headers.get("accept"))
     if media_type is None:
@@ -2491,7 +2535,7 @@ def index_resource(
             media_type="text/html; charset=utf-8",
         )
     return Response(
-        content=_index_rdf(store, media_type),
+        content=_index_rdf(store, media_type, q),
         media_type=media_type,
     )
 
