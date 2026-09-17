@@ -712,14 +712,17 @@ def test_a_row_states_the_elapsed_time_the_graph_recorded(
     run-with-samples.nq. A declined metric was never run, so its row states
     no time at all: printing a zero there would read as an instant answer.
     """
+    # The unit moved into the column header on 2026-09-17, so the cell carries
+    # the bare number. Repeating "ms" on every row is what a header is for.
     qlever = page(client_for(store), QLEVER)
-    assert row_cells(qlever, M + "classes")["m-time"] == "30003 ms"
+    assert row_cells(qlever, M + "classes")["m-time"] == "30003"
 
     kadaster = page(client_for(store), KADASTER)
-    assert (
-        row_cells(kadaster, M + "service-description")["m-time"] == "151 ms"
+    assert row_cells(kadaster, M + "service-description")["m-time"] == "151"
+    assert row_cells(kadaster, M + "classes")["m-time"] == "73"
+    assert "ms" in [th.lower() for th in texts_with(page(client_for(store), KADASTER), "scope")], (
+        "the unit left the cells, so a column header has to carry it"
     )
-    assert row_cells(kadaster, M + "classes")["m-time"] == "73 ms"
 
     declined = page(client_for(store_declined), KADASTER)
     assert row_cells(declined, M + "classes")["m-time"] == ""
@@ -2106,38 +2109,92 @@ def _counting_verdict(**kw):
     return MetricVerdict(**base)
 
 
-def test_a_counting_row_states_both_numbers():
+def test_an_empty_count_cell_renders_EMPTY_in_the_page_and_not_as_zero(
+    client_for, store_declined
+):
+    """The row-level tests above assert `None`; this one asserts what a reader
+    sees, and they are not the same claim.
+
+    A template rendering `row.declared_count or 0` satisfies every assertion
+    about the row dict and puts a 0 on the page -- checked by making exactly
+    that change, which the row-level tests passed. An empty numeric cell looks
+    like a missing value and the obvious tidy-up is to fill it, so the rendering
+    needs its own guard.
+
+    A declined metric is the case that exists in a fixture: it measured nothing,
+    so both counts are absent, and a 0 in either column would report that we
+    looked and found none.
+    """
+    body = page(client_for(store_declined), KADASTER)
+    cells = with_attribute(body, "data-declared") + with_attribute(body, "data-counted")
+    assert cells, "the table renders no count cells at all"
+    shown = texts_with(body, "data-declared") + texts_with(body, "data-counted")
+    assert shown, "no count cells found by text"
+    assert set(shown) == {""}, f"a declined row shows a count: {sorted(set(shown))}"
+
+
+def _counting_row(**kw):
+    """The row a counting verdict produces, through the real builder."""
+    from app import _rows
+    from endpoint_measurements import EndpointMeasurements
+
+    entry = EndpointMeasurements(
+        endpoint="https://example.org/sparql",
+        assessed=True,
+        verdicts=[_counting_verdict(**kw)],
+    )
+    rows = [r for r in _rows(entry) if r["metric"] == M + "triple-count"]
+    assert len(rows) == 1, rows
+    return rows[0]
+
+
+def test_a_counting_row_carries_both_numbers_in_their_own_columns():
     """The verdict is a grade of a claim and never the claim.
 
     `verified` says a description was right without saying what it said, and a
     reader asking how big an endpoint is wants the number. The prober publishes
     both beside the verdict, and this page did not read them until 2026-09-05.
+
+    They were one sentence -- "declares 1,000,000, counted 1,020,000" -- until
+    2026-09-17, when the owner asked for the results in a column of their own
+    carrying only numbers. TWO columns, because the comparison is the verdict:
+    one "result" column would have to pick a number and drop the other, and
+    `verified` on a count means precisely that these two agreed.
+
+    Formatting is the template's `{:,}` now, so what the row carries is the
+    integer the store holds.
     """
-    from app import _detail
+    row = _counting_row(declared_count=1000000, observed_count=1020000)
+    assert row["declared_count"] == 1000000
+    assert row["observed_count"] == 1020000
+    assert row["detail"] is None, "a count is not a qualifier on the verdict"
 
-    d = _detail(_counting_verdict(declared_count=1000000, observed_count=1020000), True)
-    assert d == "declares 1,000,000, counted 1,020,000", d
 
-
-def test_a_count_with_no_claim_says_so_rather_than_showing_a_zero():
+def test_a_count_with_no_claim_leaves_the_cell_EMPTY_and_never_zero():
     """`undeclared-but-verified` on a count means the endpoint holds this much
-    and says nothing. A zero in the declared slot would be a claim it made."""
-    from app import _detail
+    and says nothing. A zero in the declared column would be a claim it made.
 
-    d = _detail(
-        _counting_verdict(verdict="undeclared-but-verified", observed_count=12510784),
-        True,
-    )
-    assert d == "counted 12,510,784, declared nothing", d
+    This is the assertion the column layout makes easiest to get wrong: an
+    empty numeric cell looks like a missing value, and the obvious tidy-up is
+    to fill it. None is the only honest value, and the template renders it as
+    nothing rather than as 0.
+    """
+    row = _counting_row(verdict="undeclared-but-verified", observed_count=12510784)
+    assert row["observed_count"] == 12510784
+    assert row["declared_count"] is None, "a 0 here is a claim the endpoint never made"
 
 
-def test_a_claim_we_could_not_check_is_stated_as_a_claim():
-    """`declared-only`: the number is the endpoint's word, not our finding, and
-    the wording must not present it as measured."""
-    from app import _detail
+def test_a_claim_we_could_not_check_sits_under_declares_and_not_under_counted():
+    """`declared-only`: the number is the endpoint's word, not our finding.
 
-    d = _detail(_counting_verdict(verdict="declared-only", declared_count=500), True)
-    assert d == "declares 500, not counted", d
+    The sentence this replaced said "declares 500, not counted" and carried the
+    distinction in its wording. The columns carry it by position, which is why
+    the empty cell matters as much as the full one: 500 under `counted` would
+    report as measured a number nothing here measured.
+    """
+    row = _counting_row(verdict="declared-only", declared_count=500)
+    assert row["declared_count"] == 500
+    assert row["observed_count"] is None, "we did not count this"
 
 
 def test_a_metric_with_no_counts_carries_no_count_clause():

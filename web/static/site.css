@@ -120,8 +120,18 @@ button:focus-visible {
         background: var(--bg-secondary); padding: 14px 15px; position: sticky; top: 12px; }
 @media (max-width: 900px) {
   /* The rail drops below the column rather than beside it, legend last --
-     which is the order it is already written in, so nothing reorders. */
-  .page-body { grid-template-columns: 1fr; }
+     which is the order it is already written in, so nothing reorders.
+
+     minmax(0, 1fr) AND NOT 1fr, which is the same fix the wide rule above
+     already carries. A bare `1fr` means minmax(auto, 1fr), and that `auto`
+     floors the track at its content's min-content width, so a wide child stops
+     being able to shrink and stretches the grid instead. Measured at 390px
+     with the metrics table in place: the column went to 507px and took 131px
+     of body overflow with it, and the table's own overflow-x never engaged
+     because it had been handed 507px to fill. The note below this block --
+     "a table added later should scroll rather than push the page" -- is the
+     intent; this is what makes it true on a phone. */
+  .page-body { grid-template-columns: minmax(0, 1fr); }
   .rail { position: static; }
 }
 

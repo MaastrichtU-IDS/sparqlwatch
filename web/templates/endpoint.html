@@ -68,12 +68,43 @@
      written out beside that. */
   .chip { flex-shrink: 0; display: inline-block;
           width: {{ chip_width }}px; height: {{ chip_height }}px; border-radius: var(--radius-sm); }
-  ul.metrics { list-style: none; margin: 0; padding: 0; }
-  .metric-row { display: flex; align-items: center; gap: 12px; padding: 11px 12px;
+  /* SCROLLS ITSELF rather than the page. Six columns do not fit a phone, and a
+     table that simply overflows drags the whole document sideways -- measured
+     at 390px: a 507px table and 131px of body overflow. `display: block` is
+     what lets a table take overflow-x at all, and it is the same treatment
+     table.history below already gets for the same reason. The site's rule is
+     that the body never scrolls horizontally and that a table may, inside its
+     own box. */
+  table.metrics { width: 100%; border-collapse: collapse; margin: 4px 0 0;
+      display: block; overflow-x: auto; max-width: 100%; }
+  table.metrics th { font-weight: 400; text-align: left; }
+  /* The header row, in the same key as every other column heading on the site:
+     small, uppercase, dim. It labels the columns and must not compete with
+     them. */
+  table.metrics thead th { font-size: 11px; text-transform: uppercase;
+      letter-spacing: 0.05em; color: var(--text-dim); padding: 0 12px 6px 0;
+      border-bottom: 1px solid var(--border); }
+  table.metrics td, table.metrics tbody th { padding: 9px 12px 9px 0;
+      border-bottom: 1px solid var(--border); vertical-align: baseline; }
+  /* The chip column: its own width plus a real gap, or the chip sits against
+     the metric name with nothing between them. */
+  .th-chip { width: 18px; padding-right: 10px; }
+  table.metrics td:first-child { padding-right: 10px; }
+  /* Metric ids do not wrap. They are hyphenated mono identifiers, so a wrap
+     breaks one mid-word -- `service-descr` / `iption` -- and the column reads
+     as two metrics. The column takes the width it needs; the verdict beside it
+     is the flexible one. */
+  table.metrics .m-name { white-space: nowrap; width: 1%; }
+  /* Numbers right-aligned and tabular, so magnitudes line up down the column --
+     which is the whole reason they were taken out of a sentence. */
+  table.metrics .num { text-align: right; font-variant-numeric: tabular-nums;
+      font-family: var(--mono); font-size: 12px; white-space: nowrap; }
+  .metric-row { display: table-row; padding: 11px 12px;
                 border-bottom: 1px solid var(--border); }
   .metric-row:first-child { border-top: 1px solid var(--border); }
   .m-name { font-family: var(--mono); font-size: 12.5px; color: var(--text-bright);
             flex-basis: 220px; flex-shrink: 0; word-break: break-all; }
+  .v-cell { font-size: 13px; }
   .m-state { font-size: 13px; }
   .m-detail { font-size: 12px; color: var(--text-muted); }
   .m-time { margin-left: auto; font-size: 12px; color: var(--text-muted);
@@ -237,9 +268,11 @@
      rather than shrinks at every width already, above. The page-body grid
      itself drops the rail below the column at 900px -- see site.css. */
   @media (max-width: 640px) {
-    .metric-row { flex-wrap: wrap; gap: 6px 10px; padding: 10px 10px; }
-    .m-time { margin-left: 0; }
-    .m-detail { flex-basis: 100%; }
+    /* .metric-row's flex-wrap, .m-time's margin and .m-detail's flex-basis
+       stood here until 2026-09-17. They made the old flex row wrap onto
+       several lines on a phone; the row is a table row now and wrapping it is
+       not a thing a table does. The narrow case is handled by the table
+       scrolling inside its own box -- see table.metrics above. */
     /* Five fixed columns, of which two were 4.5rem each. Prefix and kind go
        under the term; the IRI gets the full width because it is the longest
        thing on the page. */
@@ -322,22 +355,56 @@
   <div class="page-body">
     <div class="column">
       <section data-section="conformance">
-        <h2>Conformance, attribute by attribute</h2>
+        <h2>Metrics</h2>
         {% if rows %}
-        <ul class="metrics">
+        {# A REAL TABLE since 2026-09-17, at the owner's request: a header row,
+           and the results in a column of their own carrying only numbers.
+
+           It was a <ul> of flex rows, with both counts written into one cell as
+           "declares 1,234, counted 1,230". That sentence was doing two jobs
+           badly -- it could not be scanned down the page, and it put prose in
+           the one place a reader is looking for a magnitude.
+
+           TWO COUNT COLUMNS, not one, because the comparison IS the verdict:
+           `verified` on a triple-count means the endpoint's own number matched
+           what we counted, and a single "result" column would have to pick one
+           of them and silently drop the other. Either cell is empty when there
+           is no number, which is not a gap to fill with 0 -- a 0 there would
+           report that we looked and found none.
+
+           The chip keeps its own column and its aria-hidden: the verdict beside
+           it is the same fact in words, so a screen reader that announced both
+           would say everything twice. #}
+        <table class="metrics">
+          <thead>
+            <tr>
+              <th scope="col" class="th-chip"><span class="visually-hidden">state</span></th>
+              <th scope="col">metric</th>
+              <th scope="col">verdict</th>
+              <th scope="col" class="num">declares</th>
+              <th scope="col" class="num">counted</th>
+              <th scope="col" class="num">ms</th>
+            </tr>
+          </thead>
+          <tbody>
           {% for row in rows %}
-          <li class="metric-row" data-metric="{{ row.metric }}"
+          <tr class="metric-row" data-metric="{{ row.metric }}"
               {%- if row.declined %} data-declined="{{ row.reason }}"
               {%- else %} data-verdict="{{ row.verdict }}"{% endif %}>
-            <span class="chip {{ row.css_class }}" aria-hidden="true"></span>
-            <span class="m-name">{{ row.name }}</span>
-            <span class="m-state tok-{{ row.token }}">{{ row.state_text }}</span>
-            {% if row.detail %}<span class="m-detail">{{ row.detail }}</span>{% endif %}
-            <span class="m-time">{% if row.elapsed_ms is not none %}{{ row.elapsed_ms }} ms{% endif %}</span>
-
-          </li>
+            <td><span class="chip {{ row.css_class }}" aria-hidden="true"></span></td>
+            <th scope="row" class="m-name">{{ row.name }}</th>
+            {# m-state and m-detail are SIBLING spans, never nested. The suite's
+               row parser reads a row's named cells by class and asserts each
+               appears once; a detail span inside the state span swallows the
+               state's own text and the state cell then never closes. #}
+            <td class="v-cell tok-{{ row.token }}"><span class="m-state">{{ row.state_text }}</span>{%- if row.detail %} <span class="m-detail">{{ row.detail }}</span>{% endif %}</td>
+            <td class="num" data-declared>{% if row.declared_count is not none %}{{ "{:,}".format(row.declared_count) }}{% endif %}</td>
+            <td class="num" data-counted>{% if row.observed_count is not none %}{{ "{:,}".format(row.observed_count) }}{% endif %}</td>
+            <td class="num m-time">{% if row.elapsed_ms is not none %}{{ row.elapsed_ms }}{% endif %}</td>
+          </tr>
           {% endfor %}
-        </ul>
+          </tbody>
+        </table>
         {% else %}
         <p class="note" data-no-measurements="true">
           This run recorded no measurement and no decline for this endpoint, so there
