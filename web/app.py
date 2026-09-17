@@ -1729,9 +1729,29 @@ def _index_metrics(entries: list[EndpointMeasurements]) -> list[dict]:
             "metric": metric,
             "name": _metric_name(metric),
             "abbr": abbreviations[metric],
+            # The words the matrix under the search box already prints for this
+            # same metric, carried onto the column so a row's chip can wear them
+            # too. METRIC_DESCRIPTIONS is defined below this function, resolved
+            # at call time -- the same forward reference _metric_state_matrix
+            # already makes, and for the same reason: the table belongs beside
+            # the other page copy, not above the first function that reads it.
+            "description": METRIC_DESCRIPTIONS.get(_metric_name(metric)),
         }
         for metric in metrics
     ]
+
+
+def _column_title(column: dict) -> str:
+    """What a chip's tooltip calls its metric.
+
+    The words the matrix prints where there are any -- "Answers a trivial
+    query", not "availability" -- because the two letters on a chip are the one
+    thing on this page a reader cannot decode, and the matrix already spells
+    them out a click away. A metric this build has no description for falls
+    back to the id's local name, which is what the store holds rather than
+    something invented for the tooltip.
+    """
+    return column["description"] or column["name"]
 
 
 def _index_chips(entry: EndpointMeasurements, metrics: list[dict]) -> list[dict]:
@@ -1760,6 +1780,14 @@ def _index_chips(entry: EndpointMeasurements, metrics: list[dict]) -> list[dict]
                     # which value the store actually holds.
                     "verdict": verdicts[metric].verdict,
                     "reason": None,
+                    # What the endpoint page prints for this same cell, on a
+                    # native title so the two-letter chip says what it is
+                    # without one. Assembled from the metric's own label and
+                    # the encoding's own word for the state: no third
+                    # spelling, and an unrecognised verdict shows verbatim
+                    # here exactly as it does there.
+                    "title": f"{_column_title(column)} \u2014 "
+                    + (state.label if verdicts[metric].verdict == state.slug else verdicts[metric].verdict),
                     "css_class": verdict_encoding.css_class(state.slug),
                     "slug": state.slug,
                 }
@@ -1777,6 +1805,7 @@ def _index_chips(entry: EndpointMeasurements, metrics: list[dict]) -> list[dict]
                     # died".
                     "verdict": None,
                     "reason": declined[metric].reason,
+                    "title": f"{_column_title(column)} \u2014 {state.label} ({declined[metric].reason})",
                     "css_class": verdict_encoding.css_class(state.slug),
                     "slug": state.slug,
                 }
@@ -2085,6 +2114,13 @@ def _index_row(
         # Present only where the explorer has something to show. See
         # explore_endpoints on why a link to an empty explorer would be a claim
         # rather than a convenience.
+        #
+        # NOT RENDERED since 2026-09-17: the owner removed the [content] link
+        # from the row, the name beside it reaching the same place. Kept on the
+        # row rather than unpicked, because the decision it encodes -- which
+        # endpoints the explorer has anything for -- is the part that took a
+        # store query to get right, and the link is one template line away if
+        # the row wants it back.
         "content_href": (
             EXPLORE_PATH + "?endpoint=" + quote(entry.endpoint, safe="")
             if entry.endpoint in explorable
@@ -2292,20 +2328,20 @@ def _matches_domain(endpoint: str, domain: str | None) -> bool:
 # attributed rather than claimed -- exists to rule out. If a filter on `cors`
 # is wanted here later, it is honest under a label that says what it reads:
 # "CORS", not what a reader might infer from it.
-_FACET_METRICS = {
-    "void": _METRIC_PREFIX + "vocabulary-described",
-}
+# Empty since 2026-09-17, when the two chips became `answering` and its
+# inverse -- neither reads a metric verdict. Kept rather than deleted because
+# `_matches_facet` still consults it, and the next facet that IS a metric
+# (the "void" one removed here was) needs only a line back in this table.
+_FACET_METRICS: dict[str, str] = {}
 _FACET_LABELS = {
+    # Two chips, set by the owner on 2026-09-17. They replaced a domain-pill
+    # trio and a lone "answering": the registry's first question is whether a
+    # thing responds at all, and its complement is the one a reader chasing a
+    # broken endpoint wants. `not-answering` is the exact inverse of
+    # `answering` below, so the two always partition the filtered set and
+    # their counts sum to it.
     "answering": "answering",
-    # Not "declares VoID": `_POSITIVE_VERDICTS` below counts
-    # `undeclared-but-verified` alongside `verified`, and prober/README.md
-    # defines that verdict as the endpoint NOT having declared anything --
-    # "works, and the endpoint could have declared it but did not". A pill
-    # reading "declares VoID" would assert a declaration this facet does not
-    # require. The metric's own canonical label, from
-    # prober/metrics.toml's `vocabulary-described`, says only what was
-    # measured either way.
-    "void": "Describes its own vocabulary",
+    "not-answering": "not answering",
 }
 
 
@@ -2343,6 +2379,11 @@ def _matches_facet(entry: EndpointMeasurements, facet: str | None) -> bool:
         return True
     if facet == "answering":
         return not entry.newest_sweep_declined_to_ask_this_endpoint
+    if facet == "not-answering":
+        # The exact complement, from the same fact rather than a second
+        # reading of it: anything else would let the two chips disagree about
+        # one endpoint, or leave one in neither.
+        return entry.newest_sweep_declined_to_ask_this_endpoint
     metric = _FACET_METRICS.get(facet)
     if metric is None:
         return False
@@ -2395,33 +2436,18 @@ def _index_pills(
     outlived the page it described before, and this is the fix repeated
     rather than a fresh idea.
 
-    Five pills: the three commonest registry domains this filtered set holds
-    (fewer than three where fewer than three are present -- store_registry_
-    sample's nine endpoints, for instance, split across five), plus the two
-    fixed questions _matches_facet answers. Both groups share one shape,
-    {label, param, value, count, on, href}, so the template loops over them
-    once. `href` carries every OTHER active filter alongside this pill's own
+    Two pills, the complementary halves `_matches_facet` partitions the
+    filtered set into. They keep the shape the domain pills also had,
+    {label, param, value, count, on, href}, so the template still loops once.
+    `href` carries every OTHER active filter alongside this pill's own
     parameter -- see `_pill_href` -- so a pill's link never drops a filter
     its own count was computed under.
     """
-    domains = Counter(
-        d for e in entries if (d := (_NAMES.get(e.endpoint) or _NO_NAME).domain)
-    )
+    # Domain pills stood here until 2026-09-17 and were removed at the owner's
+    # request; ?domain= still filters, and still narrows both representations,
+    # it simply has no chip of its own. `_matches_domain` and its tests are
+    # untouched.
     pills = [
-        {
-            # The slug spaced out. `value` below stays the slug, because that
-            # is what ?domain= matches and what the count was computed from --
-            # only the words a person reads change.
-            "label": value.replace("_", " "),
-            "param": "domain",
-            "value": value,
-            "count": count,
-            "on": domain == value,
-            "href": _pill_href(q, domain, facet, "domain", value, domain == value),
-        }
-        for value, count in domains.most_common(3)
-    ]
-    pills += [
         {
             "label": label,
             "param": "facet",
@@ -2432,12 +2458,12 @@ def _index_pills(
         }
         for value, label in _FACET_LABELS.items()
     ]
-    # A pill counting zero is a control that promises a narrower view and
-    # delivers an empty page. Two ways to get one: a domain that survives in
-    # the registry but not in what a search has already left, and a facet whose
-    # metric the current sweep does not run at all -- `vocabulary-described` is
-    # `exhaustive`, so only the nightly profile pass records it, and its pill
-    # read "Describes its own vocabulary 0" on the deployed site.
+    # A chip counting zero is a control that promises a narrower view and
+    # delivers an empty page. With the two chips partitioning the filtered set,
+    # this fires whenever a search leaves only answering endpoints, or only
+    # silent ones: the empty half is not offered. It also caught the removed
+    # "Describes its own vocabulary" chip, whose metric only the nightly
+    # profile pass records, so it read 0 on the deployed site permanently.
     #
     # Dropped rather than disabled: a pill absent until there is something
     # behind it returns on its own once the data arrives, and needs no second

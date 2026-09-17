@@ -1023,11 +1023,12 @@ def test_a_row_the_newest_sweep_declined_to_ask_says_so_in_words(
 
     assert dormant_rows(page) == {KADASTER: "operator-hold"}
 
-    text = row_for(page, KADASTER)["text"]
-    assert text.strip() != KADASTER, "the marker attribute carries no words"
-    assert "did not ask" in text, text
+    # The row said this in words until 2026-09-17, when the owner had the
+    # sentence removed. The fact did not go with it: `data-newest-sweep-dormant`
+    # and `data-dormancy-reason` still mark the row, which is what
+    # `dormant_rows` reads above and what a script filtering these rows uses.
     for endpoint in (QLEVER, ONTOP):
-        assert "did not ask" not in row_for(page, endpoint)["text"]
+        assert endpoint not in dormant_rows(page)
 
 
 def test_a_dormant_rows_words_name_the_reason_the_store_holds(
@@ -1046,9 +1047,10 @@ def test_a_dormant_rows_words_name_the_reason_the_store_holds(
     assert dormant_rows(held) == {KADASTER: "operator-hold"}
     assert dormant_rows(automatic) == {KADASTER: "automatic"}
 
-    assert row_for(held, KADASTER)["text"] != row_for(automatic, KADASTER)["text"]
-    assert "hand" in row_for(held, KADASTER)["text"]
-    assert "cost" in row_for(automatic, KADASTER)["text"]
+    # The two reasons read differently in the attribute, which is where they
+    # live now; the sentence that spelled them out on the row was removed on
+    # 2026-09-17.
+    assert dormant_rows(held)[KADASTER] != dormant_rows(automatic)[KADASTER]
 
 
 def test_a_dormant_row_keeps_the_verdict_its_last_probe_produced(
@@ -1108,7 +1110,6 @@ def test_a_row_whose_facts_are_older_than_the_newest_sweep_names_its_own(
     page = index(client_for(store_dormant_newest))
 
     assert stale_rows(page) == {KADASTER: "2026-08-22T16:00:00Z"}
-    assert "2026-08-22T16:00:00Z" in row_for(page, KADASTER)["text"]
     assert "2026-08-27T10:00:00Z" in page, "the header's own instant is gone"
 
 
@@ -1213,7 +1214,7 @@ def test_a_crashed_declining_sweep_says_it_declined_and_not_that_it_crashed(
         "a sweep that published why it skipped this endpoint is reported as "
         "having crashed before reaching it"
     )
-    assert "did not ask" not in row_for(page, QLEVER)["text"]
+    assert QLEVER not in dormant_rows(page)
     # And the other two rows keep the crash claim, which is true of them: that
     # sweep declined one endpoint and died before reaching either of these. Both
     # claims are on the page at once, about different rows, off one run graph.
@@ -1266,8 +1267,11 @@ def test_the_row_markers_are_explained_in_the_docs_and_not_on_the_index(
     """
     page = index(client_for(store_dormant_newest))
     assert not with_attribute(page, "data-row-marker")
-    marked = texts_with(page, "data-newest-sweep-dormant")
-    assert marked and any("did not ask" in text for text in marked)
+    # The row carried "the newest sweep did not ask" until 2026-09-17, when the
+    # owner had it removed. The MARKER remains as an attribute -- that is what
+    # this test is really about, since the point is that the index marks and
+    # the docs explain.
+    assert with_attribute(page, "data-newest-sweep-dormant")
     nav = with_attribute(page, "data-nav")
     # base.html's four-item nav replaced this page's own two-link header on
     # 2026-09-16, the same shell /explore, /docs and /about already carry.
@@ -2545,29 +2549,121 @@ def test_matches_query_is_case_insensitive_and_permissive_when_empty():
     assert _matches_query("https://sparql.uniprot.org/sparql", "  uniprot  ")
 
 
-def test_matches_facet_reads_the_vocabulary_described_verdict():
-    """No committed fixture carries a `vocabulary-described` verdict (it is
-    the one `exhaustive`-tier metric none of the cheap-ceiling sweeps these
-    fixtures were cut from ever ran), so this exercises `_matches_facet`'s
-    "void" branch directly against a hand-built entry rather than through a
-    store. Permissive when facet is falsy, same as `_matches_query`."""
-    verified = EndpointMeasurements(
-        endpoint="https://example.org/sparql",
+def test_the_two_facets_partition_the_registry():
+    """The chips became `answering | not answering` on 2026-09-17, and a pair
+    of complementary chips is only honest if it is a partition: every endpoint
+    matches exactly one, none matches both, none matches neither. Both branches
+    read one fact -- newest_sweep_declined_to_ask_this_endpoint -- from
+    opposite sides for that reason; a second, independent reading of the store
+    would let the two chips disagree about a single endpoint, or leave it in
+    neither.
+
+    This replaced a test of the `void` facet, which was the one `exhaustive`-
+    tier metric no cheap-ceiling sweep ever ran, so its chip read 0 on the
+    deployed site permanently. The facet went with the chip on 2026-09-17.
+    The last two assertions are why that removal is safe to bookmark over: an
+    unrecognised facet must empty the page, not be silently ignored.
+    """
+    asked = EndpointMeasurements(endpoint="https://example.org/sparql", assessed=True)
+    declined = EndpointMeasurements(
+        endpoint="https://other.example/sparql",
         assessed=True,
-        verdicts=[
-            MetricVerdict(
-                metric="urn:sparqlwatch:metric:vocabulary-described",
-                verdict="verified",
-            )
-        ],
+        run="urn:sparqlwatch:run:older",
+        newest_run="urn:sparqlwatch:run:newest",
+        newest_declared_this_endpoint_dormant=True,
     )
-    silent = EndpointMeasurements(endpoint="https://other.example/sparql", assessed=True)
-    assert _matches_facet(verified, "void")
-    assert not _matches_facet(silent, "void")
-    assert _matches_facet(verified, None)
-    assert _matches_facet(silent, None)
-    assert _matches_facet(verified, "")
-    assert not _matches_facet(verified, "not-a-real-facet")
+    assert declined.newest_sweep_declined_to_ask_this_endpoint
+    assert not asked.newest_sweep_declined_to_ask_this_endpoint
+    for entry in (asked, declined):
+        matched = [f for f in ("answering", "not-answering") if _matches_facet(entry, f)]
+        assert len(matched) == 1, f"{entry.endpoint} matched {matched}"
+    assert _matches_facet(asked, "answering")
+    assert _matches_facet(declined, "not-answering")
+    for permissive in (None, ""):
+        assert _matches_facet(asked, permissive)
+        assert _matches_facet(declined, permissive)
+    assert not _matches_facet(asked, "void")
+    assert not _matches_facet(asked, "not-a-real-facet")
+
+
+def test_every_row_chip_carries_a_tooltip_naming_the_metric_and_the_state(
+    client_for, store_registry_sample
+):
+    """Added on the owner's request, 2026-09-17: "can we also add tooltips over
+    the metric chips in each row?"
+
+    A chip is two letters. Before this, the only place on the page that decoded
+    them was the matrix under the search box, which is an accordion a reader has
+    to open. The tooltip carries the SAME two strings that are already on the
+    page -- the matrix's own metric description and the encoding's own word for
+    the state -- so nothing here is a third spelling of either.
+
+    Every present chip, not a sampled one: a chip with no title is the case
+    this exists to prevent, and it would hide behind any assertion that only
+    looks at the first one.
+    """
+    body = client_for(store_registry_sample).get("/", headers={"accept": "text/html"}).text
+    chips = [
+        a for a in with_attribute(body, "class")
+        if a["class"].startswith("enc-") and ("data-verdict" in a or "data-declined" in a)
+    ]
+    assert chips, "no row chips on the page"
+    state_words = {p.label for p in verdict_encoding.STATES} | {
+        verdict_encoding.UNRECOGNISED.label
+    }
+    for chip in chips:
+        title = chip.get("title", "")
+        assert "\u2014" in title, f"chip has no tooltip: {chip}"
+        name, _, state = title.partition("\u2014")
+        assert name.strip() in set(METRIC_DESCRIPTIONS.values()), title
+        assert state.split("(")[0].strip() in state_words, title
+
+
+def test_a_declined_chips_tooltip_says_why_nobody_looked(client_for, store_declined):
+    """The one case where the tooltip carries a third thing: a declined metric
+    has no verdict, and "not measured" alone leaves a reader unable to tell "we
+    priced it out" from "our own probe died". The reason is the store's own
+    slug, in parentheses -- the same value `data-declined` already carries on
+    the chip, so the tooltip states what the attribute states.
+    """
+    body = client_for(store_declined).get("/", headers={"accept": "text/html"}).text
+    declined = [a for a in with_attribute(body, "data-declined") if a["data-declined"]]
+    assert declined, "this fixture declines nothing"
+    for chip in declined:
+        assert f"({chip['data-declined']})" in chip["title"], chip
+
+
+def test_each_facet_names_the_same_endpoints_in_html_and_in_rdf(
+    client_for, store_dormant_newest
+):
+    """The single-predicate invariant, asked of the two chips that replaced the
+    old ones on 2026-09-17.
+
+    `?facet=` narrows both representations, and they have to narrow to the same
+    set: a reader who presses a chip and a script that asks for the same URL in
+    Turtle are asking one question. Both branches call `_matches_facet` -- HTML
+    in `_index_context`, RDF in `_index_rdf` -- which is the mechanism, not the
+    proof: the old chips were removed and the two new ones are a new branch in
+    that function, and nothing else in this suite compares the two answers.
+
+    store_dormant_newest is the fixture that makes the question non-trivial:
+    three endpoints, one of them declared dormant by the newest sweep, so
+    neither facet is the whole page and neither is empty.
+    """
+    client = client_for(store_dormant_newest)
+    for facet in ("answering", "not-answering"):
+        html = set(endpoints_shown(
+            client.get(f"/?facet={facet}", headers={"accept": "text/html"}).text
+        ))
+        rdf = client.get(f"/?facet={facet}", headers={"accept": "text/turtle"}).text
+        named = {e for e in html} | {
+            e for e in endpoints_shown(
+                client.get("/", headers={"accept": "text/html"}).text
+            )
+        }
+        in_rdf = {e for e in named if f"<{e}>" in rdf}
+        assert html, f"?facet={facet} renders no rows"
+        assert in_rdf == html, f"{facet}: html={sorted(html)} rdf={sorted(in_rdf)}"
 
 
 def test_no_title_is_published_as_rdf(client_for, store_registry_sample):
@@ -2592,7 +2688,7 @@ def test_no_title_is_published_as_rdf(client_for, store_registry_sample):
 # ---------------------------------------------------------------------------
 
 
-DESCRIPTION_SENTENCE = "measured rather than asserted"
+DESCRIPTION_SENTENCE = "what we find compared to what they declare"
 
 
 def test_the_sites_description_survives_a_query_that_matches_nothing(
@@ -2601,7 +2697,10 @@ def test_the_sites_description_survives_a_query_that_matches_nothing(
     body = client_for(store_registry_sample).get(
         "/?q=zzzznomatch", headers={"accept": "text/html"}
     ).text
-    assert DESCRIPTION_SENTENCE in body, (
+    # Whitespace-normalised: the sentence wraps across lines in the template,
+    # and a test that breaks when someone rewraps a paragraph is testing the
+    # formatting rather than the words.
+    assert DESCRIPTION_SENTENCE in " ".join(body.split()), (
         "a query matching no endpoint must not hide the page's own "
         "description of itself"
     )
@@ -2808,32 +2907,39 @@ def test_a_domain_pill_narrows_the_rows(client_for, store_registry_sample):
 
 def test_a_pills_href_carries_the_active_query(client_for, store_registry_sample):
     """Blocker-5 of the whole-branch review: a pill's href used to be built
-    from only its own `{param}={value}`, so on `/?q=uniprot` the
-    life_sciences pill's COUNT was computed over the query-narrowed page (1
-    endpoint) but its LINK, `/?domain=life_sciences`, dropped `q` and landed
-    on a page of 2. A pill's link must carry every sibling filter its count
-    was computed under.
+    from only its own `{param}={value}`, so on `/?q=uniprot` a pill's COUNT
+    was computed over the query-narrowed page but its LINK dropped `q` and
+    landed on the whole registry -- a count for one page on a link to another.
+    A pill's link must carry every sibling filter its count was computed under.
+
+    Written against the domain pills that stood here until 2026-09-17. The
+    facet chips that replaced them are built by the same `_pill_href`, so they
+    inherit the bug if it comes back, and this asserts over whichever chips the
+    narrowed page offers rather than naming one.
     """
     body = client_for(store_registry_sample).get(
         "/?q=uniprot", headers={"accept": "text/html"}
     ).text
     pills = with_attribute(body, "data-pill")
-    life_sciences = next(p for p in pills if p["data-pill"] == "life_sciences")
-    assert life_sciences["data-pill-count"] == "1", life_sciences
-    href = life_sciences["href"]
-    assert "q=uniprot" in href and "domain=life_sciences" in href, href
+    assert pills, "the query-narrowed page offers no chip to press"
+    for p in pills:
+        assert p["data-pill-count"].isdigit(), p
+        href = p["href"]
+        assert "q=uniprot" in href, href
+        assert f"facet={p['data-pill']}" in href, href
 
 
 def test_an_active_pills_href_clears_only_itself(client_for, store_registry_sample):
     """Pressing an already-active pill narrows nothing further -- it clears
     that one filter and keeps any other active one, per the same fix."""
     body = client_for(store_registry_sample).get(
-        "/?domain=life_sciences", headers={"accept": "text/html"}
+        "/?facet=answering&q=uniprot", headers={"accept": "text/html"}
     ).text
     pills = with_attribute(body, "data-pill")
-    life_sciences = next(p for p in pills if p["data-pill"] == "life_sciences")
-    assert "on" in life_sciences.get("class", "")
-    assert "domain=life_sciences" not in life_sciences["href"]
+    answering = next(p for p in pills if p["data-pill"] == "answering")
+    assert "on" in answering.get("class", ""), answering
+    assert "facet=answering" not in answering["href"], answering["href"]
+    assert "q=uniprot" in answering["href"], answering["href"]
 
 
 def test_the_matrix_sits_above_the_rows_and_starts_closed(client_for, store_registry_sample):
@@ -2886,19 +2992,20 @@ def test_no_pill_offers_a_filter_that_would_empty_the_page(client_for, store_reg
     assert "0" not in counts, f"a pill offers an empty page: {counts}"
 
 
-def test_a_domain_pill_reads_as_words_and_filters_by_its_slug(client_for, store_registry_sample):
+def test_a_pill_reads_as_words_and_filters_by_its_slug(client_for, store_registry_sample):
     """The page exists to stop leading with jargon.
 
-    The registry's domains are database keys -- `cross_domain`,
-    `life_sciences`, `user_generated`. The label a person reads is spaced; the
-    value in the URL stays the slug, because that is what `?domain=` matches.
+    A filter's value is a URL token -- `not-answering`, and before 2026-09-17
+    the registry domains `cross_domain`, `life_sciences`, `user_generated`. The
+    label a person reads is spaced; the value in the href stays the token,
+    because that is what the query parameter matches. The domain pills this was
+    written for are gone; the two facet chips are held to the same rule.
     """
     body = client_for(store_registry_sample).get("/", headers={"accept": "text/html"}).text
     pills = with_attribute(body, "data-pill")
-    domain_pills = [p for p in pills if "_" in p["data-pill"]]
-    if not domain_pills:
-        pytest.skip("this fixture holds no multi-word domain")
-    for p in domain_pills:
+    assert pills, "the registry offers no chip to press"
+    for p in pills:
         assert p["href"].count(p["data-pill"]) == 1, "the href must carry the slug"
     labels = texts_with(body, "data-pill")
-    assert not any("_" in t for t in labels), f"a pill shows a raw slug: {labels}"
+    assert labels, "the chips render no text"
+    assert not any("_" in t or "-" in t for t in labels), f"a pill shows a raw slug: {labels}"

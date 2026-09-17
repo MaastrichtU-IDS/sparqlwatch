@@ -12,10 +12,24 @@
     bar in it. So the circle is larger relative to the frame and the bar is
     shorter, which keeps both legible from 16 up.
 
-    Checked by rendering, not by eye on a big screen: qlmanage -t -s 16.
+    Repainted on 2026-09-17 for the light default surface: the tile was
+    #0a1929 with #81d4fa strokes, which is the DARK theme's pairing and sat on
+    the tab strip contradicting every page it stood for.
+
+    The two colours are the light palette's own, from static/site.css: the tile
+    is the bg-deep token (#f0efec), the strokes the accent token (#0b5cad).
+    The bg token (#fcfcfb) was the obvious tile and is the wrong one; it sits
+    within a point of white, so the rounded corners vanish against a light tab
+    strip and the mark reads as three loose strokes rather than a tile.
+    bg-deep is the same surface one step down, still unmistakably light, and
+    holds its edge.
+
+    (No double hyphen anywhere in this comment: XML forbids it inside one, and
+    writing the CSS custom properties by their real names silently produced an
+    icon.svg that no strict parser would open.)
   -->
-  <rect width="32" height="32" rx="6" fill="#0a1929"/>
-  <g fill="none" stroke="#81d4fa" stroke-width="2.8" stroke-linecap="round">
+  <rect width="32" height="32" rx="6" fill="#f0efec"/>
+  <g fill="none" stroke="#0b5cad" stroke-width="2.8" stroke-linecap="round">
     <circle cx="13" cy="13" r="8"/>
     <path d="M19 19 L26.5 26.5"/>
     <path d="M9.5 13h7"/>
