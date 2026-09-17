@@ -73,15 +73,19 @@
      that scrolled sideways would hide the ones past the fold instead of
      just taking a second line. */
   .pills { display: flex; flex-wrap: wrap; gap: 6px 8px; margin: 0 0 18px; }
+  /* Borderless from 2026-09-17, at the owner's request. With two chips rather
+     than eight, a pill outline was drawing a box around a choice that reads as
+     a pair of words; the selected one is now carried by colour and weight, the
+     two channels the verdict encoding deliberately does NOT use for the chips
+     on a row, so nothing here competes with those. */
   .pill { display: inline-flex; align-items: center; gap: 6px; height: 26px;
-    padding: 0 10px; border: 1px solid var(--border); border-radius: 13px;
-    font-size: 12.5px; color: var(--text); text-decoration: none; }
-  .pill:hover { border-color: var(--text-muted); }
-  .pill.on { border-color: var(--text-bright); color: var(--text-bright);
-    box-shadow: inset 0 0 0 1px var(--text-bright); }
+    padding: 0 2px; font-size: 12.5px; color: var(--text-muted);
+    text-decoration: none; }
+  .pill:hover { color: var(--text); }
+  .pill.on { color: var(--accent); font-weight: 600; }
   .pill i { font-style: normal; font-family: var(--mono); font-size: 11px;
     color: var(--text-dim); font-variant-numeric: tabular-nums; }
-  .pill.on i { color: var(--text-bright); }
+  .pill.on i { color: var(--accent); }
 
   /* The abbreviation, drawn the size of a chip. Every cell on a row carries one
      instead of the metric's name, so the metric chips are where each one is
@@ -239,15 +243,12 @@
   .cells > span.gap { border: none; background: none; color: var(--text-dim); }
   .qual { font-size: 11.5px; color: var(--warn); border: 1px dashed var(--warn);
           border-radius: 3px; padding: 1px 7px; white-space: nowrap; }
-  /* The content link. Quiet and bracketed on purpose: the row's subject is the
-     endpoint, and this is a side door to a different page about it. It appears on
-     2 of 543 rows today, so it has to read as an exception rather than as a
-     column that happens to be empty everywhere else. */
-  a.content { margin-left: 8px; font-size: 11.5px; color: var(--text-dim);
-              text-decoration: none; white-space: nowrap; }
-  a.content::before { content: "["; }
-  a.content::after { content: "]"; }
-  a.content:hover { color: var(--accent); }
+  /* The [content] link's rules stood here and were dropped on 2026-09-17 with
+     the link itself: "clicking the entry name gets us to the same page now."
+     Rules for an element the page no longer emits are bytes in every response,
+     which this page has a budget for. `content_href` is still computed on the
+     row -- see _index_row -- so putting the link back is one template change,
+     not a re-derivation. */
   /* Which sweep measured this row, drawn differently from the markers above on
      purpose. Those two are things that went wrong with a sweep; this is
      provenance, and it is true of every row in a store whose newest sweep asked
@@ -386,12 +387,15 @@
       {# The benefit, in one sentence, in the slot that held nothing between
          2026-08-28 and 2026-09-14. Two audiences and one sentence: a consumer
          reads the first half and picks an endpoint, a provider reads the second
-         and gets a to-do list. "Measured, not asserted" is the whole difference
-         between this and a catalogue -- five of nine urls in the DBpedia KG
-         catalogue did not serve SPARQL when we probed them. #}
-      A registry of public SPARQL endpoints, measured rather than asserted: what
-      each one holds, whether tools can reach it, and what its own description
-      leaves out.
+         and gets a to-do list.
+
+         Reworded by the owner on 2026-09-17, verbatim and not paraphrased. It
+         replaced "measured rather than asserted: what each one holds, whether
+         tools can reach it, and what its own description leaves out", which
+         said the same thing in three clauses and never said the one fact that
+         makes the comparison possible -- that the sweep runs again. #}
+      A registry of public SPARQL endpoints with regular polling: what we find
+      compared to what they declare.
       {# The endpoint and metric counts used to open this paragraph and were
          removed on 2026-08-27: every facet chip below now carries its own count
          and the group headings carry the denominator, so the sentence was
@@ -637,7 +641,7 @@
    data-measured-by-sweep, kept for now because a script filtering these rows
    needs the instant as a value and the RDF representation is a second request,
    and it is the cheapest thing to give up if something has to go. #}
-      <li data-endpoint="{{ row.endpoint }}"{% if row.run_unfinished %} data-run-unfinished="true"{% endif %}{% if row.never_reached %} data-newer-run-unfinished="true"{% endif %}{% if row.dormant %} data-newest-sweep-dormant="true"{% if row.dormancy_reason %} data-dormancy-reason="{{ row.dormancy_reason }}"{% endif %}{% endif %}{% if row.measured_by %} data-measured-by-sweep="{{ row.measured_by }}"{% endif %}><span class="row-id"><a data-row-name href="{{ row.href }}">{{ row.name }}</a>{% if row.datasets %} <span class="datasets">{{ row.datasets }} datasets</span>{% endif %}<span class="url" data-row-url>{{ row.endpoint }}</span></span>{% if row.content_href %}<a class="content" href="{{ row.content_href }}" title="Explore the classes and properties observed in this endpoint">content</a>{% endif %}{% if row.run_unfinished %}<span class="qual">{{ row_unfinished_text }}</span>{% endif %}{% if row.never_reached %}<span class="qual">{{ row_never_reached_text }}</span>{% endif %}{% if row.dormant %}<span class="qual">{{ row.dormant_text }}</span>{% endif %}{% if row.measured_by %}<span class="when">{{ row_measured_by_text }} {{ row.measured_by }}</span>{% endif %}{% if row.size %}<span class="size">{% for s in row.size %}{% if not loop.first %} &#183; {% endif %}<span data-size="{{ s.unit }}" data-count="{{ s.n }}">{{ "{:,}".format(s.n) }} {{ s.unit }}</span>{% endfor %}</span>{% endif %}<span class="cells">{% for cell in row.cells %}{% if cell.present %}<span class="{{ cell.css_class }}"{% if cell.verdict is not none %} data-verdict="{{ cell.verdict }}"{% else %} data-declined="{{ cell.reason }}"{% endif %}>{{ cell.abbr }}</span>{% else %}<span class="gap" data-gap="true">&#183;</span>{% endif %}{% endfor %}</span></li>
+      <li data-endpoint="{{ row.endpoint }}"{% if row.run_unfinished %} data-run-unfinished="true"{% endif %}{% if row.never_reached %} data-newer-run-unfinished="true"{% endif %}{% if row.dormant %} data-newest-sweep-dormant="true"{% if row.dormancy_reason %} data-dormancy-reason="{{ row.dormancy_reason }}"{% endif %}{% endif %}{% if row.measured_by %} data-measured-by-sweep="{{ row.measured_by }}"{% endif %}><span class="row-id"><a data-row-name href="{{ row.href }}">{{ row.name }}</a>{% if row.datasets %} <span class="datasets">{{ row.datasets }} datasets</span>{% endif %}<span class="url" data-row-url>{{ row.endpoint }}</span></span>{% if row.run_unfinished %}<span class="qual">{{ row_unfinished_text }}</span>{% endif %}{% if row.never_reached %}<span class="qual">{{ row_never_reached_text }}</span>{% endif %}{% if row.size %}<span class="size">{% for s in row.size %}{% if not loop.first %} &#183; {% endif %}<span data-size="{{ s.unit }}" data-count="{{ s.n }}">{{ "{:,}".format(s.n) }} {{ s.unit }}</span>{% endfor %}</span>{% endif %}<span class="cells">{% for cell in row.cells %}{% if cell.present %}<span class="{{ cell.css_class }}" title="{{ cell.title }}"{% if cell.verdict is not none %} data-verdict="{{ cell.verdict }}"{% else %} data-declined="{{ cell.reason }}"{% endif %}>{{ cell.abbr }}</span>{% else %}<span class="gap" data-gap="true">&#183;</span>{% endif %}{% endfor %}</span></li>
       {% endfor %}
   </ul>
 
