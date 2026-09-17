@@ -64,3 +64,131 @@ jobs:
           platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # ---------------------------------------------------------------------------
+  # Open the deploy PR that used to be typed by hand
+  # ---------------------------------------------------------------------------
+  # ids3 deploys from GitOps and nothing in this repo reaches the cluster, so
+  # shipping a change has always ended the same way: clone
+  # MaastrichtU-IDS/services, rewrite five image pins, branch, commit, PR, merge,
+  # watch Argo. It is identical every time and it was done four times in one
+  # session on 2026-09-17, which is what this job is for.
+  #
+  # IT OPENS A PR AND DOES NOT MERGE IT. The PR is the record of what changed the
+  # cluster and merging stays a person's call; what is automated is the typing.
+  #
+  # IT GATES ON CI, which is the part that is not a convenience. `image` above
+  # runs on every push to main independently of the CI workflow beside it, so an
+  # image is published whether or not the tests passed -- harmless for a tag
+  # nobody has pinned, wrong for a manifest that rolls it onto the cluster.
+  # Waiting for CI's own conclusion on this exact commit is the check that used
+  # to be a person reading two green ticks before bumping.
+  bump:
+    needs: image
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      # A missing secret must not turn every release red. Before SERVICES_TOKEN
+      # exists this job finds no token and stops, and the image is published
+      # exactly as before -- the bump is simply still manual.
+      - id: guard
+        env:
+          TOKEN: ${{ secrets.SERVICES_TOKEN }}
+        run: |
+          if [ -n "$TOKEN" ]; then
+            echo "have=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "have=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::SERVICES_TOKEN is not set; the deploy PR stays manual."
+          fi
+
+      - name: Wait for CI on this commit
+        if: steps.guard.outputs.have == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Up to 30 minutes, comfortably over CI's usual few. A run that has not
+          # been CREATED yet reads as pending rather than as a failure: this job
+          # can start before the CI workflow has registered, and treating "not
+          # there yet" as "not passing" would skip the bump on a good commit.
+          for _ in $(seq 1 90); do
+            state=$(gh run list --repo "$GITHUB_REPOSITORY" \
+              --workflow CI --limit 50 --json headSha,status,conclusion \
+              --jq "[.[] | select(.headSha == \"$GITHUB_SHA\")]
+                    | if length == 0 then \"pending\"
+                      elif any(.status != \"completed\") then \"pending\"
+                      elif all(.conclusion == \"success\") then \"success\"
+                      else \"failed\" end")
+            case "$state" in
+              success) echo "CI is green on $GITHUB_SHA"; exit 0 ;;
+              failed)  echo "::error::CI did not pass on $GITHUB_SHA; no deploy PR"; exit 1 ;;
+              *)       sleep 20 ;;
+            esac
+          done
+          echo "::error::CI had not concluded on $GITHUB_SHA after 30 minutes"
+          exit 1
+
+      - name: Rewrite the pins and open the PR
+        if: steps.guard.outputs.have == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.SERVICES_TOKEN }}
+          SHA: ${{ github.sha }}
+          SUBJECT: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+          git clone --depth 1 \
+            "https://x-access-token:${GH_TOKEN}@github.com/MaastrichtU-IDS/services.git" services
+          cd services
+          git config user.name "sparqlwatch release"
+          git config user.email "noreply@github.com"
+
+          # This regex matches the five image pins and none of the six prose
+          # mentions of "sha-" in the comments beside them, checked against the
+          # real checkout before this job was written. Anchored on the full
+          # repository path and forty hex, so a partial tag or a differently
+          # named image can never be rewritten by accident.
+          find ids3/projects/sparqlwatch/dev -name '*.yaml' -print0 |
+            xargs -0 sed -i -E \
+              "s#(ghcr\.io/maastrichtu-ids/sparqlwatch:sha-)[0-9a-f]{40}#\\1${SHA}#g"
+
+          if git diff --quiet; then
+            echo "::notice::the manifests already pin ${SHA}; nothing to open."
+            exit 0
+          fi
+
+          # The first line of the release commit, so the deploy PR says what it
+          # is deploying and not only which SHA. Built with printf rather than a
+          # heredoc: every line of a `run: |` block must stay indented, and a
+          # message written flush-left silently ends the block instead.
+          subject=$(printf '%s' "$SUBJECT" | head -n 1)
+          short=${SHA:0:7}
+          printf '%s\n' \
+            "sparqlwatch(dev): roll to ${short} — ${subject}" \
+            "" \
+            "sparqlwatch ${SHA}, CI green on that commit, image published as" \
+            "sha-${SHA}." \
+            "" \
+            "Opened by the sparqlwatch release workflow. Merging it is still a" \
+            "person's call: this PR is the record of what changed the cluster." \
+            > ../message.txt
+          printf '%s\n' \
+            "Rolls the dev deployment to \`${short}\`." \
+            "" \
+            "${subject}" \
+            "" \
+            "sparqlwatch [\`${SHA}\`](https://github.com/${GITHUB_REPOSITORY}/commit/${SHA})." \
+            "CI passed on that commit and the image is published as" \
+            "\`sha-${SHA}\`; this job waits for the first before doing anything." \
+            "" \
+            "Opened by the sparqlwatch release workflow." \
+            > ../body.md
+
+          branch="sparqlwatch-dev-${short}"
+          git checkout -qb "$branch"
+          git commit -qaF ../message.txt
+          git push -q origin "$branch"
+          gh pr create --repo MaastrichtU-IDS/services \
+            --base main --head "$branch" \
+            --title "sparqlwatch(dev): roll to ${short} — ${subject}" \
+            --body-file ../body.md
