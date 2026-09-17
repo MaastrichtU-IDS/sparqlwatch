@@ -75,7 +75,7 @@ from explore_payload import (
     split_iri,
 )
 from vocab_match import tokenize
-from void_document import void_summary, void_triples
+from void_document import VOID_PREFIXES, void_summary, void_triples
 from endpoint_index import endpoint_index
 from endpoint_history import EndpointHistory, endpoint_history
 from fleet import FleetHistory, fleet_history, fleet_stats
@@ -4357,9 +4357,15 @@ def void_resource(
             status_code=404,
             media_type="text/plain; charset=utf-8",
         )
+    # PREFIXES, which pyoxigraph applies to Turtle and ignores for the formats
+    # that have no such thing. Same triples either way -- this is a change in
+    # how the document is written down, not in what it says -- and it takes
+    # semopenalex's from 47.9 KB to 34.5 KB of IRIs a person can read. See
+    # void_document.VOID_PREFIXES, including what it does not fix.
     body = serialize(
         triples,
         format=RdfFormat.from_media_type(RDF_MEDIA_TYPES[0] if as_text else media_type),
+        prefixes=VOID_PREFIXES,
     )
     return Response(
         content=body,

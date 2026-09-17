@@ -59,7 +59,10 @@ ENGINE_HOSTS = frozenset({
 # Prefixes for namespaces a reader recognises on sight. Not exhaustive and not
 # meant to be: an unknown namespace gets a generated prefix below, which is
 # honest about being generated rather than inventing an authoritative one.
-_WELL_KNOWN = {
+# Exported as WELL_KNOWN_PREFIXES for void_document, which declares these as
+# @prefix lines in the served Turtle: a term this table abbreviates as skos: on
+# the explorer must not be core: in the document beside it.
+WELL_KNOWN_PREFIXES = _WELL_KNOWN = {
     "http://www.w3.org/1999/02/22-rdf-syntax-ns#": "rdf",
     "http://www.w3.org/2000/01/rdf-schema#": "rdfs",
     "http://www.w3.org/2002/07/owl#": "owl",
