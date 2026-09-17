@@ -37,9 +37,16 @@
      both widen to 1120px. */
   main { max-width: 1120px; }
 
-  .outward { margin: 6px 0 0; font-size: 12.5px; }
-  .outward a::after { content: " \2197"; }
-  .note-inline { color: var(--text-muted); }
+  /* The outward link, now a glyph at the end of the h1 rather than a sentence
+     under it. Same U+2197 the sentence's link carried, so the mark a reader
+     already associates with "leaves this site" is unchanged; it just sits where
+     the address ends. Not mono and not bold: it is punctuation on the title,
+     not part of the url, and inheriting the h1's break-all would let it land on
+     a line of its own. */
+  h1 a.out { font-family: system-ui, sans-serif; font-weight: 400;
+             margin-left: 6px; word-break: normal; text-decoration: none; }
+  h1 a.out::after { content: "\2197"; }
+  h1 a.out:hover { text-decoration: none; color: var(--accent); }
   /* Mono and tight, unlike site.css's default h1: the subject of this page is
      a URL, which reads better in the same face as the mono spans beside it,
      and word-break: break-all is what keeps one with no spaces from
@@ -94,8 +101,19 @@
   .history th { font-weight: 400; text-align: left; }
   .h-metric { font-family: var(--mono); font-size: 11.5px; color: var(--text-dim);
               white-space: nowrap; padding-right: 12px; }
+  /* THE ORIGIN IS NOT THE DEFAULT, and the default is why these dates stood a
+     column and a half to the left of the cells they name until 2026-09-17.
+     The span is 14 wide and 74 tall -- a column's width, and the room the
+     rotated date needs. rotate(-90deg) about the default 50% 50% maps the text's
+     line box to a strip offset by (74 - 14) / 2 = 30px to the LEFT of the box,
+     measured in a browser, which is 1.6 columns at this pitch. An origin at
+     (h/2, h/2) instead maps it onto the box exactly: py in [0,14] becomes x in
+     [0,14], and px = 0 becomes y = 74, so the date reads bottom-to-top from the
+     cells upward, as it did before. Both numbers are half the HEIGHT; changing
+     the 74 means changing all three. */
   .h-run span { display: block; font-family: var(--mono); font-size: 10px;
                 color: var(--text-muted); transform: rotate(-90deg);
+                transform-origin: 37px 37px;
                 width: 14px; height: 74px; line-height: 14px; white-space: nowrap; }
   /* The hit target is the CELL, wider than the mark it holds, so pointing at
      a column does not require hitting a 14px box. */
@@ -178,23 +196,11 @@
     font-family: var(--mono); font-size: 11.5px; color: var(--text-muted); list-style: none; }
   ul.sample-values li { padding: 1px 0; word-break: break-all; }
 
-  /* -- The rail: identity facts, then the legend beside the marks it explains */
+  /* -- The rail: the legend, beside the marks it explains, and nothing else.
+     .fact and .railbtn were removed on 2026-09-17 with the "This endpoint"
+     block and the VoID button they drew. */
   .rail h3 { font-size: 11px; font-weight: 600; color: var(--text-dim);
              text-transform: uppercase; letter-spacing: 0.05em; margin: 0 0 10px; }
-  .fact { display: flex; justify-content: space-between; gap: 10px;
-          padding: 5px 0; border-bottom: 1px solid var(--border);
-          font-size: 12.5px; }
-  /* NOT :last-of-type: that groups by tag, and the unconditional .legend div
-     right after .facts is also a div, so it is always the last div child of
-     .rail and no .fact is ever "last of its type" there. :last-child scoped
-     to .facts works because every child of .facts is a .fact. */
-  .facts .fact:last-child { border-bottom: none; }
-  .fact .k { color: var(--text-muted); }
-  .fact .v { font-family: var(--mono); color: var(--text-bright); text-align: right; }
-  .railbtn { display: block; margin: 12px 0 20px; padding: 7px 10px;
-             text-align: center; border: 1px solid var(--border);
-             border-radius: var(--radius-sm); font-size: 12px; color: var(--text); }
-  .railbtn:hover { border-color: var(--accent); color: var(--accent); text-decoration: none; }
   /* One column. The wide multi-column grid this rule drew before the legend
      moved into a 258px rail (repeat(auto-fit, minmax(330px, 1fr))) never
      fits here, so the rail draws its own narrower rule rather than reusing
@@ -229,44 +235,38 @@
 </style>
 {% endblock %}
 {% block content %}
-  <h1>{{ endpoint }}</h1>
-  {% if outward_link %}
-  {# The endpoint itself, in a new tab. NOT the h1, which stays plain text: the
-     url is the thing a reader most often wants to select and copy, and a click
-     landing on somebody else's server by accident is the wrong outcome for a
-     mis-aimed double click.
+  {# THE ICON IS THE LINK, NOT THE ADDRESS. Moved onto the h1 on 2026-09-17,
+     at the owner's request, replacing a sentence below it. The url itself stays
+     plain text for the reason it always did: it is the thing a reader most often
+     selects and copies, and a mis-aimed double click landing on somebody else's
+     server is the wrong outcome. A 12px target at the end of the line is a
+     deliberate click and never an accidental one.
 
      rel carries both halves for two reasons. `noopener` is the security one.
      `noreferrer` is the courtesy one: without it the operator of that endpoint
      sees this page's url in their referer log, and a reader looking up their own
      server should not have to announce to it that they read us first.
 
-     The sentence says what a browser will actually do, because a GET to a SPARQL
-     endpoint with no query is not a query: what comes back is a form, an error,
-     or a service description, which is the same request `declare.rs` makes and
-     the reason `sw:declarationsRead` is a weaker claim than a verdict. A reader
-     who expects results and gets an error page would otherwise read that as the
-     endpoint being broken, which is a conclusion this page has metrics for. #}
-  <p class="outward">
-    <a href="{{ outward_link }}" target="_blank" rel="noopener noreferrer"
-       data-outward-link="{{ outward_link }}">open this endpoint in a new tab</a>
-    <span class="note-inline">and a plain visit sends no query, so what comes
-      back is whatever the endpoint answers a bare request with: a form, an
-      error, or a description of itself.</span>
-  </p>
-  {% endif %}
+     The sentence that stood under this -- that a plain visit sends no query, so
+     what comes back is a form, an error, or a service description -- went with
+     the move. It is still true, and it is still why `sw:declarationsRead` is a
+     weaker claim than a verdict; it is now only in /docs and in this comment.
+
+     aria-label, not visible text: a link whose whole content is a glyph reads
+     as "link, up-right arrow" to a screen reader otherwise. #}
+  <h1>{{ endpoint }}{% if outward_link %}<a class="out" href="{{ outward_link }}"
+      target="_blank" rel="noopener noreferrer" aria-label="open this endpoint in a new tab"
+      data-outward-link="{{ outward_link }}"></a>{% endif %}</h1>
+  {# The two sentences that dated the verdicts and disclaimed a ranking were
+     removed by the owner on 2026-09-17. The ELEMENT stays, carrying data-run,
+     because three later paragraphs on this page qualify "that timestamp" and a
+     machine reading this page still needs to know which sweep it is reading;
+     the rail's "last checked" is where a person now reads it.
+
+     The third branch's sentence stays: it is not a date, it is the only thing
+     on the page that says why an endpoint with no verdicts has none. #}
   <p class="sub"{% if run %} data-run="{{ run }}"{% endif %}>
-    {% if run and not sample.from_another_sweep -%}
-      Everything below is what one probe sweep observed, at {{ generated_at }}.
-      No score and no ranking: each attribute carries its own verdict.
-    {%- elif run -%}
-      {# The class sample below came from a different sweep, so this sentence
-         covers the verdicts only. Saying "everything below" here would date a
-         sample to a sweep that did not take it. #}
-      Every verdict below is what one probe sweep observed, at {{ generated_at }}.
-      No score and no ranking: each attribute carries its own verdict. The class
-      sample further down came from another sweep, and says which beside itself.
-    {%- else -%}
+    {%- if not run -%}
       No run in this store has measured this endpoint. What follows is only the
       content sample recorded for it.
     {%- endif %}
@@ -366,12 +366,7 @@
 
       {% if history.has_history %}
       <section class="panel" data-section="history">
-        <h2>What has changed here</h2>
-        <p class="note">Every sweep that said anything about this endpoint, oldest
-          on the left. Point at a column to read that sweep. A faint empty box is
-          <em>absent</em>, which is a verdict: the sweep looked and found nothing
-          there. A dot on the baseline is a sweep that recorded nothing about that
-          metric at all, which is not a verdict.</p>
+        <h2>History</h2>
 
         <!-- A real table: the rows and columns ARE rows and columns, so a screen
              reader gets the structure and the accessible view is the view. The
@@ -491,57 +486,17 @@
     </div>
 
     <aside class="rail">
-      {# THE RAIL STATES ONLY FACTS ALREADY IN THIS PAGE'S CONTEXT: void's
-         described/reported/complete/samplings, generated_at and sample.size.
-         Nothing here is a new query -- void is None whenever there is no
-         derived description, so every fact below that reads it sits inside
-         {% if void %}. #}
-      <h3>This endpoint</h3>
-      {# Wrapped so the last fact's hairline can be found reliably: :last-of-type
-         groups by TAG, not by class, and the unconditional .legend div right
-         after this block is also a div, so a bare ".fact:last-of-type" is
-         never true in any rendering (every rendering path's last div child of
-         .rail is .legend, never a .fact) -- found in review, since it looks
-         right in source and draws nothing wrong, it just never fires. Scoping
-         the rule to ".facts > .fact:last-child" needs only child position
-         within THIS container, where every child is a .fact. #}
-      <div class="facts">
-      {% if void %}
-      <div class="fact" data-rail-fact="classes-described">
-        <span class="k">classes described</span><span class="v">{{ void.described }}</span>
-      </div>
-      {% if void.reported is not none %}
-      <div class="fact" data-rail-fact="classes-reported">
-        <span class="k">classes reported</span><span class="v">{{ void.reported }}</span>
-      </div>
-      {% endif %}
-      <div class="fact" data-rail-fact="void-complete">
-        <span class="k">description</span>
-        <span class="v">{{ "provably complete" if void.complete else "sample only" }}</span>
-      </div>
-      {% if void.samplings and void.samplings != ['exact'] %}
-      <div class="fact" data-rail-fact="sampling">
-        <span class="k">sampling</span><span class="v">{{ void.samplings | join(", ") }}</span>
-      </div>
-      {% endif %}
-      {% endif %}
-      {% if sample.present %}
-      <div class="fact" data-rail-fact="classes-sampled">
-        <span class="k">classes sampled</span><span class="v">{{ sample.size }}</span>
-      </div>
-      {% endif %}
-      {% if generated_at %}
-      <div class="fact" data-rail-fact="last-checked">
-        <span class="k">last checked</span><span class="v">{{ generated_at }}</span>
-      </div>
-      {% endif %}
-      </div>
-      {% if void %}
-      <a class="railbtn" href="{{ void_path }}?url={{ endpoint | urlencode }}">sparqlwatch's VoID</a>
-      {% endif %}
-
+      {# THE RAIL IS THE LEGEND AND NOTHING ELSE. "This endpoint" -- classes
+         described, classes reported, description, sampling, classes sampled,
+         last checked -- and the VoID button below it were removed by the owner
+         on 2026-09-17. Every one of those facts is still on the page in the
+         section that measured it: the VoID panel states described, reported,
+         complete and sampling in a sentence, the sample panel states its own
+         size, and the history's last column is the sweep. The rail was a second
+         copy of all of them, which is the thing this page has been losing one
+         piece at a time. #}
       <div class="legend" data-rail="legend">
-        <h3>What the marks mean</h3>
+        <h3>Legend</h3>
         {% for state in legend %}
         <div class="lg" data-state="{{ state.slug }}">
           <div class="lg-head">
@@ -552,14 +507,6 @@
           <p class="l-mean">{{ state.meaning }}</p>
         </div>
         {% endfor %}
-        <p class="note">
-          The drawing never rests on colour, and every state is also written out in
-          words beside its chip. A filled chip means we have positive evidence the
-          capability works; a dashed border means no declaration was seen for it; a
-          heavier border means something is actively wrong rather than merely
-          missing; a dotted border means we did not look; and no border at all means
-          nothing was there.
-        </p>
       </div>
     </aside>
   </div>

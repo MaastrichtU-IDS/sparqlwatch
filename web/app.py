@@ -4197,10 +4197,11 @@ def void_resource(
             media_type="text/plain; charset=utf-8",
         )
     media_type = choose_representation(request.headers.get("accept"))
-    if media_type is None or media_type == HTML_MEDIA_TYPE:
-        # An Accept of text/html reaches here as HTML_MEDIA_TYPE and is refused
-        # with the rest: 406 naming what is on offer, rather than a redirect to
-        # a page that answers a different question.
+    if media_type is None:
+        # A client that named media types and none of them can be served. Not
+        # the browser case below: this one asked for something specific, and
+        # handing it Turtle while reporting success is the confident wrong
+        # answer a 406 exists to avoid.
         return Response(
             content=(
                 "this resource is RDF only; it offers "
@@ -4210,6 +4211,19 @@ def void_resource(
             status_code=406,
             media_type="text/plain; charset=utf-8",
         )
+    # A BROWSER GETS THE TURTLE AS TEXT, changed on 2026-09-17 at the owner's
+    # request. This returned 406 to `Accept: text/html`, which is every reader
+    # who clicks the link the endpoint page prints -- a dead end reached from
+    # a page that offered it. Still RDF only: there is no second rendering to
+    # keep true, these are the same bytes a machine gets. What changes is the
+    # label, because `text/turtle` makes a browser download a file and
+    # `text/plain` makes it paint it.
+    #
+    # The mislabel does not reach a machine. A machine names a media type and
+    # gets that media type, in that type's own header; only `text/html` and the
+    # `*/*` that means "whatever you have" land here. Turtle is the syntax
+    # served because it is the one of the four a person can read.
+    as_text = media_type == HTML_MEDIA_TYPE
     document = str(request.url)
     triples = void_triples(store, url, document)
     if not triples:
@@ -4221,9 +4235,13 @@ def void_resource(
             status_code=404,
             media_type="text/plain; charset=utf-8",
         )
+    body = serialize(
+        triples,
+        format=RdfFormat.from_media_type(RDF_MEDIA_TYPES[0] if as_text else media_type),
+    )
     return Response(
-        content=serialize(triples, format=RdfFormat.from_media_type(media_type)),
-        media_type=media_type,
+        content=body,
+        media_type="text/plain; charset=utf-8" if as_text else media_type,
     )
 
 

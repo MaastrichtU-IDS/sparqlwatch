@@ -11,7 +11,7 @@ from __future__ import annotations
 import urllib.parse
 
 import pytest
-from pyoxigraph import NamedNode, RdfFormat, Store, parse
+from pyoxigraph import BlankNode, NamedNode, RdfFormat, Store, parse
 from starlette.testclient import TestClient
 
 from app import VOID_PATH, app, get_store
@@ -136,13 +136,54 @@ def test_an_endpoint_with_no_profile_is_a_404_and_not_an_empty_description(
     assert "nothing to describe" in response.text
 
 
-def test_the_resource_is_rdf_only(client_for, store_content_profiles):
-    """No HTML rendering, and a 406 that names what is on offer.
+def test_a_browser_gets_the_turtle_as_text_rather_than_a_refusal(
+    client_for, store_content_profiles
+):
+    """Still no HTML rendering. The bytes are the Turtle a machine gets; only
+    the label changes, so a browser paints them instead of downloading a file.
 
-    A person reading about an endpoint has the endpoint page and the explorer.
-    A third rendering of the same facts is a third thing to keep true.
+    This asserted a 406 until 2026-09-17. The 406 was correct about the
+    resource -- there is no HTML here, and a third rendering of these facts
+    would be a third thing to keep true -- and wrong about the reader: the
+    endpoint page prints this url as a link, and every person who clicked it
+    reached a refusal from a page that had just offered it.
+
+    What must not come back is a second rendering. The last assertion is what
+    holds that: the text/plain body has to PARSE as Turtle and describe the same
+    thing the text/turtle body does. Compared as triple counts and IRI triples
+    rather than as bytes, because blank node labels are minted per serialisation
+    and two calls never agree on them -- which is not a difference in what is
+    said.
     """
-    response = fetch(client_for(store_content_profiles), PROFILED, accept="text/html")
+    client = client_for(store_content_profiles)
+    response = fetch(client, PROFILED, accept="text/html")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/plain")
+    assert "<html" not in response.text.lower()
+    turtle = fetch(client, PROFILED, accept="text/turtle")
+
+    def shape(body):
+        triples = list(parse(body.encode(), format=RdfFormat.TURTLE))
+        named = {
+            (str(t.subject), str(t.predicate), str(t.object))
+            for t in triples
+            if isinstance(t.subject, NamedNode) and not isinstance(t.object, BlankNode)
+        }
+        return len(triples), named
+
+    assert shape(response.text) == shape(turtle.text)
+    assert shape(response.text)[0] > 0
+
+
+def test_an_accept_naming_only_unservable_types_is_still_a_406(
+    client_for, store_content_profiles
+):
+    """The browser case above is `text/html` and `*/*` -- a reader, or a client
+    saying "whatever you have". A client that names something specific and
+    unservable is a different request, and handing it Turtle while reporting
+    success is the confident wrong answer 406 exists to avoid.
+    """
+    response = fetch(client_for(store_content_profiles), PROFILED, accept="application/json")
     assert response.status_code == 406
     assert "text/turtle" in response.text
 

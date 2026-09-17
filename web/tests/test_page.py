@@ -1254,13 +1254,14 @@ def test_a_page_from_one_sweep_attributes_everything_to_it(client_for, store):
     Nothing here may hedge about a second sweep, because there is not one:
     a clause explaining which sweep saw what would be noise on every page
     of a freshly swept store.
+
+    It asserted the header sentence "Everything below is what one probe sweep
+    observed, at ..." until the owner removed that sentence on 2026-09-17. The
+    sentence was one expression of the claim; the attributions below are the
+    claim, and they are what a second reader -- a script -- was always reading.
     """
     text = page(client_for(store), KADASTER)
 
-    assert (
-        f"Everything below is what one probe sweep observed, at "
-        f"{SAMPLING_SWEEP}." in text
-    )
     head = with_attribute(text, "data-sample-generated-at")
     assert len(head) == 1
     assert head[0]["data-sample-generated-at"] == SAMPLING_SWEEP
@@ -1301,10 +1302,14 @@ def test_an_older_samples_own_sweep_is_named_beside_it(
     assert SAMPLING_SWEEP in provenance[0]
     assert DECLINING_SWEEP in provenance[0]
 
-    # The header sentence covered both facts and dated both to the newer
-    # sweep. It must no longer claim anything about the sample.
+    # The header sentence covered both facts and dated both to the newer sweep,
+    # and the fix was a second wording that claimed only the verdicts. The owner
+    # removed both sentences on 2026-09-17, so neither may reappear -- but the
+    # provenance line asserted just above is now the ONLY thing on the page that
+    # separates the two sweeps, which is why it is checked before this and not
+    # after.
     assert "Everything below is what one probe sweep observed" not in text
-    assert f"Every verdict below is what one probe sweep observed, at {DECLINING_SWEEP}." in text
+    assert "Every verdict below is what one probe sweep observed" not in text
 
     # Both facts survive. The decline is still drawn as a decline...
     declined = row_for(text, M + "classes")
@@ -1509,19 +1514,21 @@ def test_a_run_from_before_this_stage_reads_exactly_as_it_did(client_for, store)
     because it was captured before they existed. Absence of sw:finalised is
     therefore not evidence of a crash, and a page that read it as one would
     stamp every historical run in the store as unfinished. The existing
-    header sentence is asserted verbatim beside the two absences, so this
-    test fails if either new sentence appears OR if the old one changed
-    shape.
+    The two absences are the assertion. Beside them the page must still
+    attribute its facts to that run rather than saying nothing at all, which
+    is what distinguishes "read as a normal historical run" from "failed to
+    render": until 2026-09-17 that was checked through the header sentence
+    naming the sweep, and it is checked now through data-run, which is the
+    same fact and the one that survived the sentence's removal.
     """
     text = page(client_for(store), KADASTER)
 
     assert with_attribute(text, UNFINISHED) == []
     assert with_attribute(text, NEWER_UNFINISHED) == []
     assert "did not finish" not in text
-    assert (
-        f"Everything below is what one probe sweep observed, at "
-        f"{SAMPLING_SWEEP}." in text
-    )
+    assert [row["data-run"] for row in with_attribute(text, "data-run")] == [
+        RUN + SAMPLING_SWEEP
+    ]
 
 
 def test_two_finished_historical_runs_say_nothing_about_not_finishing(
@@ -1835,17 +1842,36 @@ def test_the_outward_link_opens_the_endpoint_in_a_new_tab(client_for, store):
     assert set(links[0]["rel"].split()) == {"noopener", "noreferrer"}
 
 
-def test_the_outward_link_says_a_plain_visit_sends_no_query(client_for, store):
-    """Because it does not, and the difference matters to a reader.
+def test_the_address_is_not_the_link_but_carries_one(client_for, store):
+    """The url stays selectable; a glyph beside it is what leaves the site.
 
-    A GET with no query is the request `declare.rs` makes, and what comes back is
-    a form, an error, or a service description. A reader expecting results and
-    meeting an error page would read that as the endpoint being broken, which is
-    a conclusion this page has metrics for and this link does not support.
+    This asserted the sentence under the h1 -- that a plain visit sends no query,
+    so what comes back is a form, an error, or a service description -- until the
+    owner removed it on 2026-09-17 and asked for an icon at the end of the
+    address instead.
+
+    What the sentence's link had, and what the icon must not lose, is that the
+    ADDRESS ITSELF is not clickable: the url is the thing a reader most often
+    selects and copies, and a mis-aimed double click landing on somebody else's
+    server is the wrong outcome. An icon at the end of the line is a deliberate
+    click; an h1 wrapped in an anchor is not.
+
+    A glyph-only link also needs an accessible name, or it reads as "link,
+    up-right arrow" and a screen reader user cannot tell where it goes.
     """
     text = page(client_for(store), KADASTER)
-    assert "sends no query" in text
-    assert "a form, an" in text and "error, or a description of itself" in text
+    links = with_attribute(text, "data-outward-link")
+    assert len(links) == 1, links
+    assert links[0]["aria-label"], "a glyph-only link with no accessible name"
+    h1 = texts_with(text, "data-outward-link")
+    assert h1 == [""], f"the link has visible text, so it is not just a glyph: {h1}"
+    # The address is text in the h1, and the anchor is inside it -- not the
+    # other way round.
+    head = text[text.index("<h1"):text.index("</h1>")]
+    assert KADASTER in head, head
+    assert head.index(KADASTER) < head.index("<a "), (
+        "the anchor opens before the address, so the address is inside the link"
+    )
 
 
 def test_only_a_scheme_a_browser_should_follow_becomes_a_link():
@@ -2338,11 +2364,46 @@ def test_the_legend_sits_beside_the_marks(client_for, store_content_profiles):
     assert 'data-rail="legend"' in body, (
         "the legend moved into the rail so it is adjacent to what it explains"
     )
-    assert len(with_attribute(body, "data-rail-fact")) >= 3, (
-        "the rail states what the endpoint is, from facts the context already "
-        "holds -- classes described and reported, whether the description is "
-        "provably complete, when it was last checked"
+    # The rail also carried an identity block -- classes described and reported,
+    # whether the description is provably complete, the sampling ladder, the
+    # sample size, when it was last checked -- and the owner removed it on
+    # 2026-09-17. Every one of those facts is still stated by the section that
+    # measured it, so the rail was a second copy of each. Asserted as zero
+    # rather than deleted: the rail growing a second copy back is the exact
+    # thing this removal was for.
+    assert with_attribute(body, "data-rail-fact") == [], (
+        "the rail is the legend and nothing else"
     )
+
+
+def test_the_history_dates_are_rotated_about_an_origin_that_keeps_them_in_column(
+    client_for, store_two_sweeps
+):
+    """The sweep dates stood a column and a half left of the cells they name.
+
+    Reported by the owner on 2026-09-17 and measured in a browser: the label is
+    a 14x74 block rotated -90deg, and about the default `50% 50%` origin the
+    text's line box lands (74 - 14) / 2 = 30px to the LEFT of its own column --
+    1.6 columns at this pitch. An origin at half the HEIGHT in both axes maps it
+    back onto the column exactly; measured again at offset 0 for every column.
+
+    Pinned as the declaration rather than as a rendered position because the
+    suite has no browser, and the default origin is what the bug WAS: a rule
+    with no `transform-origin` beside that rotate is the regression, whatever
+    else changes around it.
+    """
+    body = page(client_for(store_two_sweeps), KADASTER)
+    assert 'data-section="history"' in body, "this fixture draws no history"
+    rule = body[body.index(".h-run span {"):]
+    rule = rule[: rule.index("}")]
+    assert "rotate(-90deg)" in rule, rule
+    assert "transform-origin: 37px 37px" in rule, (
+        "the rotated dates have no explicit origin, so they paint 30px left of "
+        f"their column: {rule}"
+    )
+    # 37 is half of the 74 the same rule sets. If one moves and the other does
+    # not, the offset comes back silently.
+    assert "height: 74px" in rule, rule
 
 
 def test_the_endpoint_page_carries_no_stylesheet_of_its_own(client_for, store):
