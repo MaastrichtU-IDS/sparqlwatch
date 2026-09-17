@@ -306,9 +306,7 @@ def choose_representation(accept: str | None) -> str | None:
 # content samples, `classes` being declined at the default cost ceiling on every
 # sweep, so there was nothing to compute a payload from.
 #
-# It is computed from the store now. See web/explore_payload.py, and
-# explore_endpoints below for the index link that depended on the file's own
-# endpoint list and so went missing for every row once the registry changed.
+# It is computed from the store now. See web/explore_payload.py.
 def _explore_probe_note(payload: dict) -> str:
     """What this page is a reading of, counted rather than asserted.
 
@@ -330,25 +328,14 @@ def _explore_probe_note(payload: dict) -> str:
     )
 
 
-def explore_endpoints(store: Store) -> frozenset[str]:
-    """The endpoints the explorer has vocabulary for.
-
-    The index links a row to /explore only when this holds its endpoint. A
-    `content` link that opens an explorer with nothing in it tells a reader the
-    endpoint has no vocabulary, when what happened is that nobody looked, and on
-    these pages an absent qualifier is a positive claim. So is a link that leads
-    somewhere empty.
-
-    Read from the STORE since 2026-09-05. It read a static payload file until
-    then, listing the two endpoints a 2026-08-28 prototype probe covered, so
-    every other row lost its link no matter what the store knew. The file's own
-    comment predicted this: "the set will grow to the whole registry when the
-    content-profile work lands, at which point this stops being a filter and
-    becomes a formality". It is still the right shape rather than a formality:
-    an endpoint whose content sweep failed has no profile and still should not
-    get the link.
-    """
-    return frozenset(e["url"] for e in build_payload(store)["endpoints"])
+# explore_endpoints stood here and was removed on 2026-09-17 with its last
+# caller. It answered "which endpoints has the explorer anything for", and the
+# index row read it to decide whether to draw a [content] link -- a link to an
+# empty explorer would say the endpoint has no vocabulary when what happened is
+# that nobody looked. The owner removed that link, the endpoint name beside it
+# reaching the same place, so the question has nobody asking it. Kept in the
+# history rather than as an uncalled function with tests of its own, which is
+# the shape that reads as "someone forgot this".
 
 
 STORE_PATH_VARIABLE = "SPARQLWATCH_STORE"
@@ -2192,9 +2179,7 @@ def _row_size(entry: EndpointMeasurements) -> list[dict]:
     ]
 
 
-def _index_row(
-    entry: EndpointMeasurements, metrics: list[dict], explorable: frozenset[str]
-) -> dict:
+def _index_row(entry: EndpointMeasurements, metrics: list[dict]) -> dict:
     """One row: the endpoint, its link, its cells, and any qualification.
 
     The link is percent-encoded with nothing left safe, because the endpoint
@@ -2233,21 +2218,6 @@ def _index_row(
         "host": name.host if name else entry.endpoint,
         "datasets": name.datasets if name else None,
         "domain": name.domain if name else None,
-        # Present only where the explorer has something to show. See
-        # explore_endpoints on why a link to an empty explorer would be a claim
-        # rather than a convenience.
-        #
-        # NOT RENDERED since 2026-09-17: the owner removed the [content] link
-        # from the row, the name beside it reaching the same place. Kept on the
-        # row rather than unpicked, because the decision it encodes -- which
-        # endpoints the explorer has anything for -- is the part that took a
-        # store query to get right, and the link is one template line away if
-        # the row wants it back.
-        "content_href": (
-            EXPLORE_PATH + "?endpoint=" + quote(entry.endpoint, safe="")
-            if entry.endpoint in explorable
-            else None
-        ),
         "size": _row_size(entry),
         "cells": _index_chips(entry, metrics),
         "run_unfinished": entry.run_did_not_finish,
@@ -2270,7 +2240,7 @@ def _index_row(
 
 
 def _index_rows(
-    entries: list[EndpointMeasurements], metrics: list[dict], explorable: frozenset[str]
+    entries: list[EndpointMeasurements], metrics: list[dict]
 ) -> list[dict]:
     """Every row, alphabetical by endpoint. One listing.
 
@@ -2296,7 +2266,7 @@ def _index_rows(
     scanning for one is scanning for.
     """
     return sorted(
-        (_index_row(entry, metrics, explorable) for entry in entries),
+        (_index_row(entry, metrics) for entry in entries),
         key=lambda row: row["endpoint"],
     )
 
@@ -2670,7 +2640,7 @@ def _index_context(
     # One pass over the store for every row, rather than one per row: the
     # payload is built from a single query and 543 rows asking it 543 times
     # would be the same answer 543 times.
-    rows = _index_rows(entries, metrics, explore_endpoints(store))
+    rows = _index_rows(entries, metrics)
     history = fleet_history(store)
     # `matching` is exactly the endpoint set `entries` above narrowed to,
     # after all three filters -- q, domain and facet -- so history.rows is
@@ -3435,13 +3405,21 @@ def _nav_context() -> dict:
     }
 
 
-def _docs_context() -> dict:
+def _docs_context(current: str | None = None) -> dict:
     """What every page in this section needs: the way home, and its siblings.
 
     One table, so a fourth page is added in one place and every page's nav
     learns about it. Monitoring is a full entry with a `path` like the others,
     which is what lets the index list three pages without knowing that one of
     them lives outside /docs.
+
+    `current` is the page being rendered, and it is what turned this table from
+    an index into a nav on 2026-09-17. Until then /docs listed the four and each
+    of the four linked only back to /docs, so moving from Metrics to States was
+    two clicks through a page that exists to point at both. The table was
+    already on every page; nothing new is fetched and no title is invented here
+    -- `pages` is the same list /docs renders, and a page marks itself so it can
+    be drawn as the one you are on rather than as a link to here.
     """
     return {
         **_nav_context(),
@@ -3452,6 +3430,7 @@ def _docs_context() -> dict:
         "docs_path": DOCS_PATH,
         "explore_path": EXPLORE_PATH,
         "about_path": ABOUT_PATH,
+        "current_doc": current,
         "pages": [
             {
                 "path": DOCS_METRICS_PATH,
@@ -3502,7 +3481,7 @@ def _docs_void_context() -> dict:
     does. Sorted so the order is stable between renders. void_path itself now
     comes from _docs_context (by way of _nav_context, merged in first at the
     call site) rather than from here: docs_void_resource renders
-    **_docs_context(), **_docs_void_context() as two separate keyword
+    **_docs_context(DOCS_VOID_PATH), **_docs_void_context() as two separate keyword
     expansions, and a key both dicts set is a TypeError there, not a silent
     override.
     """
@@ -4065,7 +4044,7 @@ def docs_metrics_resource(request: Request) -> Response:
     return _negotiated(
         request,
         lambda: _TEMPLATES.get_template("docs-metrics.html").render(
-            **_docs_context(), **_docs_metrics_context()
+            **_docs_context(DOCS_METRICS_PATH), **_docs_metrics_context()
         ),
         _docs_metrics_rdf,
     )
@@ -4077,7 +4056,7 @@ def docs_states_resource(request: Request) -> Response:
     return _negotiated(
         request,
         lambda: _TEMPLATES.get_template("docs-states.html").render(
-            **_docs_context(), **_docs_states_context()
+            **_docs_context(DOCS_STATES_PATH), **_docs_states_context()
         ),
         _docs_states_rdf,
     )
@@ -4088,7 +4067,7 @@ def docs_void_resource(request: Request) -> Response:
     """What the derived description is, and what its own terms mean."""
     return Response(
         content=_TEMPLATES.get_template("docs-void.html").render(
-            **_docs_context(), **_docs_void_context()
+            **_docs_context(DOCS_VOID_PATH), **_docs_void_context()
         ),
         media_type="text/html; charset=utf-8",
     )

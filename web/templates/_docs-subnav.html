@@ -1,0 +1,23 @@
+{# The section's own nav, on every page in it.
+
+   Added 2026-09-17. /docs listed these four and each of the four linked only
+   back to /docs, so moving between two of them was two clicks through a page
+   whose whole job is to point at both.
+
+   ONE PARTIAL, INCLUDED, rather than the same markup in three templates: the
+   list it loops over is already shared (`pages`, from _docs_context, the same
+   list /docs renders), and three copies of the loop would be three places for
+   a fifth page to be forgotten.
+
+   The current page is drawn as text, not as a link to itself. aria-current
+   says the same thing to a screen reader, and matches what base.html's header
+   nav already does for the section. #}
+<nav class="subnav" aria-label="Documentation">
+  {% for entry in pages %}
+  {%- if entry.path == current_doc %}
+  <span data-subnav="{{ entry.path }}" aria-current="page">{{ entry.title }}</span>
+  {%- else %}
+  <a data-subnav="{{ entry.path }}" href="{{ entry.path }}">{{ entry.title }}</a>
+  {%- endif %}
+  {% endfor %}
+</nav>

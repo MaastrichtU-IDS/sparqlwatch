@@ -22,6 +22,7 @@
 {% endblock %}
 {% block content %}
   <h1>States</h1>
+  {% include "_docs-subnav.html" %}
   <p class="sub">
     The {{ states | length }} verdicts a measurement can carry. Six are
     verdicts about an endpoint and the last is a fact about this service: it

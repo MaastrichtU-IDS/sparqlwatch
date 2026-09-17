@@ -21,6 +21,60 @@ const BOUNDARY = /(?<=[a-z0-9])(?=[A-Z])|[_\-./:]+/;
 // fuzzy tier would return the whole vocabulary for a three-letter typo.
 const MIN_FUZZY_LENGTH = 4;
 
+/** The spans of `text` that the query matches, as segments to draw.
+ *
+ * Returns [{text, mark}], concatenating back to `text` exactly. A pure
+ * function returning DATA and not markup, for two reasons. It is testable
+ * without a DOM, which is how it is tested. And the caller builds DOM nodes
+ * from it: the query is whatever a person typed, so assembling a string of
+ * HTML here and assigning it to innerHTML would put `<img onerror=...>` into
+ * the page from the search box. Nothing in this file ever writes innerHTML.
+ *
+ * Matching is literal and case-insensitive, on each whitespace-separated word
+ * of the query. Deliberately NOT the same matcher as `rank`: rank also accepts
+ * a token prefix and a one-edit typo, and drawing a mark over `receptor` for
+ * the query `recpetor` would claim those characters are what was asked for.
+ * A fuzzy hit is shown in the "close matches" band with nothing marked, which
+ * says the true thing -- this row is here, and not because it contains what
+ * you typed.
+ *
+ * Overlaps resolve longest-first from the earliest start, so `a` and `ab`
+ * together mark `ab` once rather than nesting two marks.
+ */
+export function highlightRanges(text, query) {
+  const needles = query.toLowerCase().split(/\s+/).filter((n) => n);
+  if (!needles.length) return [{ text: text, mark: false }];
+
+  const hay = text.toLowerCase();
+  const hits = [];
+  needles.forEach((needle) => {
+    let from = 0;
+    for (;;) {
+      const at = hay.indexOf(needle, from);
+      if (at === -1) break;
+      hits.push({ start: at, end: at + needle.length });
+      from = at + 1;
+    }
+  });
+  if (!hits.length) return [{ text: text, mark: false }];
+
+  hits.sort((a, b) => a.start - b.start || b.end - a.end);
+  const segments = [];
+  let cursor = 0;
+  hits.forEach((hit) => {
+    if (hit.start < cursor) return;
+    if (hit.start > cursor) {
+      segments.push({ text: text.slice(cursor, hit.start), mark: false });
+    }
+    segments.push({ text: text.slice(hit.start, hit.end), mark: true });
+    cursor = hit.end;
+  });
+  if (cursor < text.length) {
+    segments.push({ text: text.slice(cursor), mark: false });
+  }
+  return segments;
+}
+
 /** One term's name, as the words it is written from. */
 export function tokenize(name) {
   return name
@@ -161,6 +215,14 @@ if (typeof document !== "undefined") {
           prefix: prefixEl ? prefixEl.textContent.trim() : "",
           iri: iriEl ? (iriEl.getAttribute("title") || iriEl.textContent.trim()) : "",
           tokens: li.getAttribute("data-tok") || "",
+          // The three cells a mark can be drawn in, with the text they were
+          // rendered with. Captured once, because the marking below REPLACES
+          // their children: without the original, the second keystroke would
+          // read back a DOM that already has <mark> in it and mark the marks.
+          cells: [localEl, prefixEl, iriEl].filter((el) => el).map((el) => ({
+            el: el,
+            original: el.textContent,
+          })),
         };
       });
     const total = parseInt(count.getAttribute("data-total"), 10) || items.length;
@@ -168,9 +230,41 @@ if (typeof document !== "undefined") {
     const originalOrder = items.slice();
     const fragment = document.createDocumentFragment();
 
+    /** Redraw one cell with the query's matches wrapped in <mark>.
+     *
+     * DOM nodes, never innerHTML: `query` is whatever a person typed into the
+     * box on the page, and a string of HTML assembled from it would put
+     * `<img onerror=...>` into the document from the search field. A text node
+     * carrying those characters is inert, which is why highlightRanges returns
+     * data and this is the only place that turns it into elements.
+     */
+    function paint(cell, query) {
+      const segments = highlightRanges(cell.original, query);
+      // Nothing matched here, so leave the cell as one text node rather than
+      // rebuilding it into an identical one on every keystroke.
+      if (segments.length === 1 && !segments[0].mark) {
+        if (cell.el.childNodes.length !== 1 || cell.el.firstChild.nodeType !== 3) {
+          cell.el.textContent = cell.original;
+        }
+        return;
+      }
+      cell.el.textContent = "";
+      segments.forEach((segment) => {
+        const node = document.createTextNode(segment.text);
+        if (!segment.mark) {
+          cell.el.appendChild(node);
+          return;
+        }
+        const mark = document.createElement("mark");
+        mark.appendChild(node);
+        cell.el.appendChild(mark);
+      });
+    }
+
     function showServerOrder() {
       originalOrder.forEach((it) => {
         it.el.hidden = false;
+        it.cells.forEach((cell) => paint(cell, ""));
         fragment.appendChild(it.el);
       });
       list.appendChild(fragment);
@@ -196,10 +290,18 @@ if (typeof document !== "undefined") {
         if (!rankedEls.has(it.el)) it.el.hidden = true;
       });
 
+      // A row that is no longer ranked keeps whatever marks it had, unseen,
+      // until it comes back with a different query. Cleared here so a hidden
+      // row never returns wearing the last search's marks.
+      originalOrder.forEach((it) => {
+        if (!rankedEls.has(it.el)) it.cells.forEach((cell) => paint(cell, ""));
+      });
+
       let sawMatch = false;
       let sawClose = false;
       ranked.forEach((t) => {
         t.el.hidden = false;
+        t.cells.forEach((cell) => paint(cell, needle));
         if (t.band === "match" && !sawMatch) {
           if (matchHeading) {
             matchHeading.hidden = false;

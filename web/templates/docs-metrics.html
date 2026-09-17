@@ -28,6 +28,7 @@
 {% endblock %}
 {% block content %}
   <h1>Metrics</h1>
+  {% include "_docs-subnav.html" %}
   <p class="sub">
     The {{ metrics | length }} things this service asks an endpoint. Each
     carries its own verdict and none is combined with another into a score:
