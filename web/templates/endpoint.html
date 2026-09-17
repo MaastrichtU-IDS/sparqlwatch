@@ -152,6 +152,18 @@
   #vocab-q { flex: 0 1 320px; font-family: var(--mono); font-size: 12.5px;
              padding: 6px 9px; color: var(--text-bright); background: var(--bg-deep);
              border: 1px solid var(--border); border-radius: 4px; }
+  /* The status word, in the owner's spelling: sampled | complete. Drawn as a
+     word and not as a chip, because the seven-state encoding is a closed set
+     and this is not one of them -- it is a fact about the LIST, not about a
+     term in it. `complete` takes the good token because it is the stronger
+     claim and the one a reader is looking for; `sampled` stays muted, since it
+     is the ordinary case and not a warning. */
+  .vocab-status { font-size: 11.5px; font-family: var(--mono); }
+  .v-complete { color: var(--good); }
+  .v-sampled { color: var(--text-muted); }
+  /* A term with no state gets the slot and no mark, so the columns line up
+     across a list whose terms did not all come from the same kind of pass. */
+  .v-nostate { visibility: hidden; }
   .vocab-count { font-size: 11.5px; color: var(--text-dim);
                  font-variant-numeric: tabular-nums; }
   /* A grid, so the five columns line up down the list rather than wrapping
@@ -185,16 +197,10 @@
                     letter-spacing: 0.05em; background: var(--bg-deep);
                     border-bottom: 1px solid var(--border); }
 
-  /* -- Classes sampled ------------------------------------------------------ */
-  .sample-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-  .sample-count { font-size: 13px; color: var(--text); font-variant-numeric: tabular-nums; }
-  .trunc { font-size: 11.5px; padding: 2px 8px; border-radius: 3px; }
-  .trunc-no { color: var(--good); border: 1px solid var(--good); }
-  .trunc-yes { color: var(--warn); border: 1px dashed var(--warn); }
-  ul.sample-values { margin: 12px 0 0; padding: 8px 10px; max-height: 260px; overflow-y: auto;
-    background: var(--bg-deep); border: 1px solid var(--border); border-radius: var(--radius-sm);
-    font-family: var(--mono); font-size: 11.5px; color: var(--text-muted); list-style: none; }
-  ul.sample-values li { padding: 1px 0; word-break: break-all; }
+  /* The "Classes sampled" panel's rules stood here. It folded into Vocabulary
+     on 2026-09-17, taking .sample-head, .sample-count, .trunc and
+     ul.sample-values with it. The badge it carried -- truncated or not -- is
+     not what the status word says: see _vocabulary_view. */
 
   /* -- The rail: the legend, beside the marks it explains, and nothing else.
      .fact and .railbtn were removed on 2026-09-17 with the "This endpoint"
@@ -405,18 +411,48 @@
       </section>
       {% endif %}
 
-      {% if vocabulary %}
-      <section class="panel" data-section="vocabulary">
-        <h2>Vocabulary</h2>
-        <p class="note">Every class and property a profile pass found here, and
-          every one this endpoint's description names. Type to narrow the list.</p>
+      {# ONE TERM LIST, folded together on 2026-09-17. "Classes sampled" stood
+         below this with its own heading, and on every page that drew both the
+         two held the same classes -- see _vocabulary_view for the count. The
+         sample is now the source when there is no profile pass, which is the
+         four-of-twelve case that stopped it being simply deleted.
 
+         The status word is the owner's: sampled | complete. It says what the
+         list is, which is the question the two panels were answering badly
+         between them, and it replaces the truncation badge -- a truncated list
+         and an untruncated class list are both "what we saw".
+
+         THE SECTION RENDERS WITHOUT TERMS, on purpose. this_run_text is the
+         only thing on this page that says why there is no list, and one of the
+         cases it covers is an `absent` verdict, which ASSERTS that the endpoint
+         holds no classes. A page that drew nothing there would bury the one
+         negative this metric can establish. #}
+      {% if vocabulary.terms or vocabulary.this_run_text or vocabulary.empty_sample %}
+      <section class="panel" data-section="vocabulary"
+               {%- if vocabulary.sample_run %} data-sample-run="{{ vocabulary.sample_run }}"
+               data-sample-generated-at="{{ vocabulary.sample_generated_at }}"{% endif %}>
+        <h2>Vocabulary</h2>
+
+        {% if vocabulary.this_run_text %}
+        {# What the sweep this page reports says about sw:metric:classes. Shown
+           beside a list from an older sweep as well as instead of one: a run
+           that declined the metric published nothing of its own, whatever an
+           older sweep published, and the reader is entitled to know that this
+           run did not look. #}
+        <p class="note" data-this-run-sample="none"
+           {%- if not vocabulary.sample_present %} data-sample="absent"{% else %} data-sample="present"{% endif %}
+           style="margin-top: 0">{{ vocabulary.this_run_text }}</p>
+        {% endif %}
+
+        {% if vocabulary.terms %}
         <div class="vocab-controls">
           <label class="visually-hidden" for="vocab-q">Search this endpoint's vocabulary</label>
           <input id="vocab-q" type="search" autocomplete="off" spellcheck="false"
                  placeholder="name, prefix or IRI">
           <span class="vocab-count" id="vocab-count" aria-live="polite"
-                data-total="{{ vocabulary | length }}">{{ vocabulary | length }} terms</span>
+                data-total="{{ vocabulary.terms | length }}">{{ vocabulary.terms | length }} terms</span>
+          <span class="vocab-status v-{{ vocabulary.status }}"
+                data-vocab-status="{{ vocabulary.status }}">{{ vocabulary.status }}</span>
         </div>
 
         <!-- Rendered server-side, all of it. The search narrows what is already
@@ -426,12 +462,17 @@
         <ul class="vocab" id="vocab">
           <h3 class="band" data-band="match" hidden>matches</h3>
           <h3 class="band" data-band="close" hidden>close matches</h3>
-          {% for t in vocabulary %}
-          <li data-kind="{{ t.kind }}" data-state="{{ t.state }}"
+          {% for t in vocabulary.terms %}
+          <li data-kind="{{ t.kind }}"{% if t.state %} data-state="{{ t.state }}"{% endif %}
+              data-term="{{ t.iri }}"
               data-hay="{{ (t.local ~ ' ' ~ t.prefix ~ ' ' ~ t.iri) | lower }}"
               data-tok="{{ t.tokens }}"
               {%- if t.engine %} data-engine="true"{% endif %}>
-            <span class="v-chip {{ t.state | enc_class }}" title="{{ t.state }}"></span>
+            {# No chip for a term that came from a class sample: the sample says
+               we saw it and nothing about whether the endpoint declares it, and
+               every one of the seven states asserts one or the other. #}
+            {% if t.state %}<span class="v-chip {{ t.state | enc_class }}" title="{{ t.state }}"></span>
+            {%- else %}<span class="v-chip v-nostate"></span>{% endif %}
             <span class="v-local">{{ t.local }}</span>
             <span class="v-prefix">{{ t.prefix }}</span>
             <span class="v-kind">{{ t.kind }}</span>
@@ -440,49 +481,26 @@
           {% endfor %}
         </ul>
         <p class="note vocab-none" id="vocab-none" hidden>Nothing here matches that.</p>
-      </section>
-      {% endif %}
+        {% endif %}
 
-      <section class="panel" data-section="sample">
-        <h2>Classes sampled</h2>
-        {% if sample.this_run_text %}
-        {# What the sweep this page reports says about the classes metric. It is
-           shown beside a sample from another sweep as well as on its own: a run
-           that declined the metric published no sample of its own, whatever an
-           older sweep published. #}
-        <p class="note" data-this-run-sample="none"
-           {%- if not sample.present %} data-sample="absent"{% endif %} style="margin-top: 0">{{ sample.this_run_text }}</p>
+        {% if vocabulary.provenance_text %}
+        <p class="note" data-sample-provenance="true">{{ vocabulary.provenance_text }}</p>
         {% endif %}
-        {% if sample.present %}
-        <div class="sample-head" data-sample="present" data-sample-run="{{ sample.run }}"
-             data-sample-generated-at="{{ sample.generated_at }}">
-          <span class="sample-count">{{ sample.size }} class{{ "" if sample.size == 1 else "es" }} sampled</span>
-          <span class="trunc {{ 'trunc-yes' if sample.truncated else 'trunc-no' }}">{{ sample.truncation_text }}</span>
-        </div>
-        {% if sample.provenance_text %}
-        <p class="note" data-sample-provenance="true">{{ sample.provenance_text }}</p>
-        {% endif %}
-        {% if sample.classes %}
-        <ul class="sample-values">
-          {% for iri in sample.classes %}
-          <li data-class="{{ iri }}">{{ iri }}</li>
-          {% endfor %}
-        </ul>
-        {% else %}
-        <p class="note" data-sample-empty="true">
+
+        {% if vocabulary.empty_sample %}
+        {# data-sample rides this note when there is no this_run_text above to
+           carry it, so the attribute appears exactly once on every page that
+           has a sample at all -- which is the contract every test of it reads. #}
+        <p class="note" data-sample-empty="true"
+           {%- if not vocabulary.this_run_text %} data-sample="present"{% endif %}>
           This sample reports a size and lists no values, which the prober does not
           write: it skips a sample with no values on purpose, so that a size of zero
           cannot be read as "this endpoint has no classes". Read the size, not the
           absence of a list.
         </p>
         {% endif %}
-        <p class="note">
-          A sample is what one bounded query actually returned, in the order the
-          endpoint returned it. It is not a dataset description and not a count of
-          what the endpoint holds.
-        </p>
-        {% endif %}
       </section>
+      {% endif %}
     </div>
 
     <aside class="rail">

@@ -68,7 +68,13 @@ from pyoxigraph import (
 
 import verdict_encoding
 from endpoint_content import CLASS_SAMPLING_METRICS, EndpointContent, endpoint_content
-from explore_payload import build_payload, endpoint_vocabulary
+from explore_payload import (
+    _prefix_for,
+    build_payload,
+    endpoint_vocabulary,
+    split_iri,
+)
+from vocab_match import tokenize
 from void_document import void_summary, void_triples
 from endpoint_index import endpoint_index
 from endpoint_history import EndpointHistory, endpoint_history
@@ -558,10 +564,18 @@ _METRIC_PREFIX = "urn:sparqlwatch:metric:"
 # absence of a sample is a finding rather than a gap.
 _ABSENT = "absent"
 
-# The truncation state, in words. A truncated sample is the one thing on this
-# page that must not be legible only as a border style: a reader who cannot
-# see the dashed outline, or who is hearing the page read aloud, would
-# otherwise take a cut-off list for a complete vocabulary.
+# The truncation state, in words. NOT RENDERED since 2026-09-17: the owner asked
+# for one term list carrying one status word, sampled or complete, and a
+# truncated class list is `sampled` -- as is an untruncated one, because a list
+# that is all of the classes is still none of the properties. The reasoning the
+# badge existed for is unchanged and is met by that word: a cut-off list must
+# not be legible only as a border style, because a reader who cannot see the
+# dashed outline, or who is hearing the page read aloud, would take it for a
+# complete vocabulary.
+#
+# Kept as constants because `content.truncated` is still a fact the store holds
+# and both tests that own this distinction assert these strings are ABSENT --
+# which is a real assertion only while the strings still exist to compare.
 TRUNCATED_TEXT = "truncated: more may exist beyond the limit"
 COMPLETE_TEXT = "complete: not truncated"
 
@@ -1038,13 +1052,6 @@ def _sample(
         "present": content.sampled,
         "size": content.size,
         "truncated": content.truncated,
-        "truncation_text": (
-            None
-            if not content.sampled
-            else TRUNCATED_TEXT
-            if content.truncated
-            else COMPLETE_TEXT
-        ),
         "classes": content.classes,
         "run": content.run,
         "generated_at": content.generated_at,
@@ -1186,6 +1193,114 @@ def _provenance(
     return None
 
 
+# ---------------------------------------------------------------------------
+# One vocabulary list
+# ---------------------------------------------------------------------------
+# Two lists of terms stood on this page until 2026-09-17: "Vocabulary", from the
+# class-profiles pass, and "Classes sampled", from sw:metric:classes. The owner
+# asked why, having noticed they say the same thing, and the fleet agreed: of the
+# twelve endpoints the dev store then held, five rendered both panels and in all
+# five the class sets were IDENTICAL -- 11/11, 25/25, 200/200, 23/23, 16/16 --
+# the same IRIs in a different order from an older sweep. Four more had a sample
+# and no profile at all, which is why the sample could not simply be deleted:
+# there it is the only list of terms the page has.
+#
+# So: one list, from the profile pass where there is one and from the sample
+# where there is not, and a status word saying which. "sampled | complete" is the
+# owner's wording.
+#
+# A SAMPLE-DERIVED TERM CARRIES NO STATE, and that is the point of doing this
+# here rather than in the template. A term's state is the pair (declared,
+# observed) -- see explore_payload's header -- and a class list says only that we
+# saw it. Calling it `undeclared-but-verified` would assert the endpoint does NOT
+# declare it, which the sample does not establish, and `verified` would assert
+# that it does. The honest rendering is the term with no chip.
+
+
+def _vocabulary_view(
+    vocabulary: list[dict], content: EndpointContent, sample: dict, void: dict | None
+) -> dict:
+    """The page's single term list, whether it is all of them, and the
+    sentences that were explaining its absence from the other panel.
+
+    `complete` requires the profile pass AND the derived description's own
+    `complete` flag, which is this page's existing, tested definition of
+    provably complete: every class the endpoint reports was described and every
+    instance of each was scanned. Nothing weaker earns the word. A class sample
+    that did not hit its limit is NOT complete, however tempting: the query it
+    came from asks for classes, so a list that is all of the classes is still
+    none of the properties. That is also why `sampled` covers what the
+    truncation badge used to say on its own -- a truncated list and an
+    untruncated class list are both "what we saw".
+
+    THE NOTES ARE NOT DECORATION and they come across whole. `this_run_text`
+    is the only thing on the page that says why there is no list -- a probe
+    that timed out, a metric declined on the cost ceiling, or an `absent`
+    verdict, which is one of the two verdicts that ASSERT a negative and must
+    not be denied. `provenance_text` is the only thing that says the terms are
+    older than the verdicts above them. Folding two lists into one was the
+    instruction; dropping either sentence would have been a second change
+    nobody asked for.
+    """
+    status = None
+    terms = vocabulary
+    if vocabulary:
+        status = "complete" if void and void.get("complete") else "sampled"
+    elif content.sampled and content.classes:
+        # ONE PREFIX PER NAMESPACE, which is what the dict is for and a bare
+        # `taken` set is not. `_prefix_for` avoids collisions by counting up, so
+        # asking it five times for five terms of
+        # http://modellen.geostandaarden.nl/def/imx-geo# and adding each answer
+        # to a set produced imx-geo, imx-geo2, imx-geo3, imx-geo4 -- four labels
+        # for one vocabulary, which is exactly what _prefix_for's docstring says
+        # a collision suffix must never mean. Seen in a render, not in the code.
+        prefixes: dict[str, str] = {}
+        terms = []
+        for iri in content.classes:
+            namespace, local = split_iri(iri)
+            prefix = prefixes.get(namespace)
+            if prefix is None:
+                prefix = _prefix_for(namespace, set(prefixes.values()))
+                prefixes[namespace] = prefix
+            terms.append(
+                {
+                    "iri": iri,
+                    "kind": "class",
+                    "local": local,
+                    "prefix": prefix,
+                    "namespace": namespace,
+                    "engine": False,
+                    # See the section comment: no chip, because a sample says we
+                    # saw the term and nothing about whether it is declared.
+                    "state": None,
+                    "tokens": " ".join(tokenize(local) + tokenize(prefix)),
+                }
+            )
+        terms.sort(key=lambda t: (t["local"].lower(), t["iri"]))
+        status = "sampled"
+    else:
+        terms = []
+
+    # From a sample rather than a profile pass, so the sweep that took it is
+    # routinely not the sweep the verdicts came from. The two attributes keep
+    # their old names because they are a published contract a script reads, and
+    # what they name has not changed -- only which element carries them.
+    from_sample = bool(terms) and not vocabulary
+    return {
+        "terms": terms,
+        "status": status,
+        "this_run_text": sample["this_run_text"],
+        "provenance_text": sample["provenance_text"] if from_sample else None,
+        "sample_run": sample["run"] if from_sample else None,
+        "sample_generated_at": sample["generated_at"] if from_sample else None,
+        "sample_present": sample["present"],
+        # A sample that states a size and lists nothing, which the prober never
+        # writes on purpose: it skips a sample with no values so that a size of
+        # zero cannot be read as "this endpoint has no classes". Read the size.
+        "empty_sample": sample["present"] and not sample["classes"],
+    }
+
+
 def _page_context(
     endpoint: str,
     measurements: EndpointMeasurements,
@@ -1201,6 +1316,10 @@ def _page_context(
     right answer, and they belong where they can be tested.
     """
     rows = _rows(measurements)
+    # Hoisted out of the dict literal below, because the vocabulary view now
+    # reads it too: the class sample is that list's source when no profile pass
+    # exists, and carries the sentences that explain an absent one.
+    sample = _sample(measurements, content)
     return {
         **_nav_context(),
         # The timeline is its OWN section rather than a span on each row. The
@@ -1211,7 +1330,11 @@ def _page_context(
         # The vocabulary this endpoint holds, searchable in the page. Passed as
         # data rather than pre-filtered markup because the search is the point:
         # a reader types a name and the list narrows without a round trip.
-        "vocabulary": vocabulary,
+        #
+        # ONE list since 2026-09-17, carrying its own status word: see
+        # _vocabulary_view for why the class sample folds into it rather than
+        # standing beside it, and for why a term from a sample has no state.
+        "vocabulary": _vocabulary_view(vocabulary, content, sample, void),
         # The derived description this endpoint does not publish for itself,
         # and the one thing a reader has to know before using it. Read back out
         # of the document rather than worked out again here: two answers to
@@ -1219,7 +1342,6 @@ def _page_context(
         # deciding whether to depend on it.
         "void": void,
         "void_path": VOID_PATH,
-        "vocabulary_json": json.dumps(vocabulary, separators=(",", ":")),
         # Oldest first, and only where there is more than one: a single-cell
         # timeline implies a trend from one observation.
         "history_runs": history.runs if history.has_history else [],
@@ -1276,7 +1398,7 @@ def _page_context(
         "outward_link": _outward_link(endpoint),
         "rows": rows,
         "legend": _legend(rows),
-        "sample": _sample(measurements, content),
+        "sample": sample,
         "chip_width": verdict_encoding.CHIP_WIDTH_PX,
         "chip_height": verdict_encoding.CHIP_HEIGHT_PX,
     }
