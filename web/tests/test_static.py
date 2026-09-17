@@ -73,6 +73,34 @@ def test_the_script_hash_covers_the_vocab_match_transliteration(client):
     assert "vocab_match.py" in body
 
 
+def test_the_narrow_page_body_track_can_shrink_below_its_content(client):
+    """A grid track that cannot shrink hands its overflow to the page.
+
+    `.page-body` is a column and a 258px rail, and the wide rule has always used
+    `minmax(0, 1fr)` for the column. The narrow rule below 900px reset it to a
+    bare `1fr`, which means `minmax(auto, 1fr)`, and that `auto` floors the
+    track at its content's MIN-CONTENT width. A child too wide to fit then
+    stretches the grid instead of scrolling inside itself.
+
+    Latent until the metrics table arrived on 2026-09-17 and made it visible:
+    measured at 390px, the column went to 507px and took 131px of body overflow
+    with it, and the table's own `overflow-x: auto` never engaged because it had
+    been handed 507px to fill. The stylesheet's own note two rules further down
+    -- "a table added later should scroll rather than push the page" -- is the
+    intent this defeated.
+
+    Pinned as the declaration because the suite has no browser. `1fr` on its own
+    is the regression, whatever else moves around it.
+    """
+    css = client.get(app_module.STYLESHEET_PATH).text
+    narrow = css[css.index("@media (max-width: 900px)"):]
+    narrow = narrow[: narrow.index("\n}")]
+    assert "grid-template-columns: minmax(0, 1fr)" in narrow, narrow
+    assert "grid-template-columns: 1fr;" not in narrow, (
+        "a bare 1fr floors the track at min-content and the page overflows"
+    )
+
+
 def test_every_token_is_declared_for_both_surfaces(client):
     body = client.get(app_module.STYLESHEET_PATH).text
     light = body.split("prefers-color-scheme: dark")[0]

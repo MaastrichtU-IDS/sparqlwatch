@@ -618,6 +618,16 @@ def _rows(measurements: EndpointMeasurements) -> list[dict]:
                 # An unrecognised value is shown verbatim: relabelling it
                 # would hide which value the store actually holds.
                 "state_text": state.label if recognised else verdict.verdict,
+                # NUMBERS AND PROSE SPLIT, 2026-09-17, so the table can give the
+                # results a column of their own that holds only numbers. What is
+                # left in `detail` is the prose that QUALIFIES A VERDICT rather
+                # than reporting a measurement -- a conformance level, or the
+                # note that the store holds a value this build has no encoding
+                # for -- and it is drawn beside the verdict, which is what it is
+                # about. A number has no business in that cell and a sentence
+                # has none in a count column.
+                "declared_count": verdict.declared_count,
+                "observed_count": verdict.observed_count,
                 "detail": _detail(verdict, recognised),
                 "elapsed_ms": verdict.elapsed_ms,
             }
@@ -639,6 +649,11 @@ def _rows(measurements: EndpointMeasurements) -> list[dict]:
                 # Not a verdict, and it does not read like one: no value is
                 # stated, only the fact that nothing was measured and why.
                 "state_text": f"{state.label} ({declined.reason})",
+                # A decline measures nothing, so both count columns stay empty.
+                # That is the honest rendering and not a gap: a 0 there would
+                # report that we looked and found none.
+                "declared_count": None,
+                "observed_count": None,
                 "detail": _declined_detail(declined.reason),
                 "elapsed_ms": None,
             }
@@ -769,39 +784,33 @@ def _history_cells(history: EndpointHistory, metric: str) -> list[dict]:
 
 
 def _detail(verdict, recognised: bool) -> str | None:
-    """The extra clause a row carries beside its state, or nothing."""
+    """The clause that qualifies a verdict, or nothing.
+
+    Counts left here on 2026-09-17, when the table gained a column for them.
+    They were rendered as "declares 1,234, counted 1,230", which is a sentence
+    reporting two numbers, and the owner asked for the results in a column of
+    their own carrying only numbers -- `declared_count` and `observed_count` on
+    the row. `_counts_detail`, which wrote that sentence, went with its only
+    caller.
+
+    What stays is the prose that says something about the VERDICT rather than
+    about the endpoint's size: a conformance level, which is a grade and not a
+    quantity, and the note that the store holds a value this build cannot draw.
+    """
     if not recognised:
         return "unrecognised verdict, shown as the store recorded it"
     if verdict.level is not None:
         return f"conformance level {verdict.level}"
-    return _counts_detail(verdict)
+    return None
 
 
-def _counts_detail(verdict) -> str | None:
-    """The numbers a counting metric compared, in words.
-
-    The verdict alone is a grade of a claim and never the claim: `verified`
-    says a description was right without saying what it said, and a reader
-    asking how big an endpoint is wants the number. The prober publishes both
-    numbers beside the verdict for exactly this, and they went unread on this
-    page until 2026-09-05.
-
-    Thousands separators, because these are the numbers on this site anybody
-    reads as a magnitude rather than a value: 12510784 and 1251078 are one
-    glance apart and an order of magnitude different.
-    """
-    declared, observed = verdict.declared_count, verdict.observed_count
-    if declared is None and observed is None:
-        return None
-    if declared is not None and observed is not None:
-        # Both, so the comparison is the story. Named in the order the verdict
-        # grades them: the claim first, then what we found.
-        return f"declares {declared:,}, counted {observed:,}"
-    if observed is not None:
-        return f"counted {observed:,}, declared nothing"
-    # A claim we could not check. Said as a claim rather than as a fact, since
-    # nothing here confirmed it.
-    return f"declares {declared:,}, not counted"
+# _counts_detail stood here and wrote "declares 1,234, counted 1,230" for the
+# metric list's detail cell. Removed 2026-09-17 with that cell: the two numbers
+# are columns now. Its reasoning is not lost, because the reason it existed is
+# still true and now belongs to the columns -- "the verdict alone is a grade of
+# a claim and never the claim: `verified` says a description was right without
+# saying what it said, and a reader asking how big an endpoint is wants the
+# number". The thousands separators it applied are the template's `{:,}` now.
 
 
 def _unfinished_run_text(measurements: EndpointMeasurements) -> str | None:
