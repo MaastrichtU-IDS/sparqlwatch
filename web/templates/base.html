@@ -27,9 +27,12 @@
 <main>
 {% block content %}{% endblock %}
 </main>
+{# "how we measure" (docs_path) and "VoID" (void_path) stood here and were
+   removed by the owner on 2026-09-17. The header nav reaches /docs on every
+   page, so the first was a second copy of a link already on screen; the VoID
+   document is per-endpoint and the endpoint page links its own. Both context
+   keys stay set -- docs-void.html and endpoint.html still read them. #}
 <footer class="site-foot">
-  <a href="{{ docs_path }}">how we measure</a>
-  <a href="{{ void_path }}">VoID</a>
   <span class="version">{{ version }}</span>
 </footer>
 {% block body_end %}{% endblock %}

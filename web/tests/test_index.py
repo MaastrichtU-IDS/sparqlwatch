@@ -1287,18 +1287,19 @@ def test_the_index_carries_one_nav_link_and_never_one_per_row(
     one per row.
 
     It pointed at /about until 2026-08-28 and points at /docs now. The page
-    moved onto base.html's shared shell on 2026-09-16, whose footer repeats
-    the docs link ("how we measure") beside the header nav's own copy: a
-    second CONSTANT occurrence and not a second one per row. The invariant
-    that matters at 543 rows is unchanged: a link repeated per row would
-    spend about 1,200 bytes as 24,000, and web/README.md's table is the
-    record of how little headroom that leaves.
+    moved onto base.html's shared shell on 2026-09-16, whose footer repeated
+    the docs link ("how we measure") beside the header nav's own copy, making
+    two CONSTANT occurrences. The owner removed the footer's two links on
+    2026-09-17, so it is one again. The invariant that matters at 543 rows is
+    unchanged either way: a link repeated per row would spend about 1,200
+    bytes as 24,000, and web/README.md's table is the record of how little
+    headroom that leaves.
     """
     text = index(client_for(store_dormant_newest))
     rows = len(listed(text))
-    # DOCS_PATH twice -- the header nav and the shared footer both carry it --
-    # EXPLORE_PATH once, since the footer links only docs and VoID.
-    for path, expected in ((DOCS_PATH, 2), (EXPLORE_PATH, 1)):
+    # One each: the header nav carries both, and the footer now carries no
+    # links at all.
+    for path, expected in ((DOCS_PATH, 1), (EXPLORE_PATH, 1)):
         occurrences = text.count(f'href="{path}"')
         assert occurrences == expected, f"{occurrences} links to {path}"
         # The assertion that survives a redesign: whatever the header and

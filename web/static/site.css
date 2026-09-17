@@ -145,11 +145,10 @@ button:focus-visible {
    looking at a verdict needs to know which build produced it, and an
    operator who found sparqlwatch in their logs needs to match the number
    against the User-Agent that knocked. `version` is a Jinja global, so it is
-   the same string the /about page quotes. base.html's footer also carries
-   the two links every page shares -- docs and VoID -- which is safe against
-   test_the_index_carries_one_nav_link_and_never_one_per_row because that
-   guard counts occurrences in the INDEX page's header, and a constant footer
-   link on the docs pages is not a link repeated per row. */
+   the same string the /about page quotes. The footer carried two links --
+   docs and VoID -- until 2026-09-17; `footer a` is kept because the rule is
+   one line and the footer is the one place on the page where a link must read
+   as muted rather than as the accent. */
 footer { border-top: 1px solid var(--border); margin: 30px 0 0;
          padding: 14px 24px; display: flex; flex-wrap: wrap;
          gap: 6px 14px; align-items: baseline;
