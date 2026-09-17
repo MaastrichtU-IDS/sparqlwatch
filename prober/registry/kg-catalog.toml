@@ -2,7 +2,7 @@
 # ANSWER rather than as the catalog declares them.
 #
 # HAND-WRITTEN, unlike lod-cloud.toml beside it. `seed-registry` cannot produce
-# this file: six of the nine urls the catalog states do not serve SPARQL, and
+# this file: seven of the ten urls the catalog states do not serve SPARQL, and
 # the working ones were found by probing candidates, which is a judgement no
 # extraction rule makes. Editing this by hand is therefore correct, and nothing
 # overwrites it.
@@ -56,3 +56,18 @@ title = "YAGO"
 [[endpoint]]
 url = "https://semopenalex.org/sparql"
 title = "SemOpenAlex"
+
+# The tenth, added 2026-09-17, and the only one that did not come from the MOSS
+# query: it is in the catalog's own repository (knowledge-graphs/gnd) and was
+# not in MOSS's answer on 2026-09-14. Why is not knowable from outside -- the
+# entry predates that read by two months and carries the same moss-publish flag
+# as every other, so neither recency nor that flag explains it.
+#
+# Corrected like the five above, and found the same way they were not: the
+# declared https://sparql.dnb.de serves a QLever console, and that console's own
+# page source names its backend (BASEURL). Guessing at /sparql, /query and
+# /sparql/select found nothing, which is how this endpoint was first, wrongly,
+# written off as having no protocol url at all.
+[[endpoint]]
+url = "https://sparql.dnb.de/api/gnd"
+title = "Integrated Authority File"

@@ -17,17 +17,38 @@ read = "2026-09-14"
 [counts]
 # Roughly 673 knowledge graphs carry a databus:Group in the catalog account.
 catalogued_graphs = 673
-declared_endpoints = 10
+declared_endpoints = 11
 # `http://example.org/sparql`, from a `hello-world` entry.
 placeholders_dropped = 1
 declared_urls_that_answer_sparql = 3
-declared_urls_corrected = 5
+declared_urls_corrected = 6
 superseded_service = 1
-seeded = 9
+seeded = 10
+
+# The MOSS query above returned TEN rows; the catalog's own repository carries
+# ELEVEN entries with a sparql.url. The extra is `gnd`, added here 2026-09-17.
+# Why MOSS lacks it is not knowable from outside, and two obvious explanations
+# were checked and are wrong: the entry was last touched 2026-07-07, two months
+# before the read, and every one of the eleven carries moss-publish = false,
+# including the ten MOSS did return. Read the repository, not the metadata
+# store -- it is also the copy a pull request can fix.
+[source_disagreement]
+moss_rows = 10
+repository_entries = 11
+missing_from_moss = ["gnd"]
+repository = "https://github.com/dbpedia/kg-catalog/tree/main/knowledge-graphs"
 
 [validation]
 # Every url in kg-catalog.toml answered a real query before it was listed, and
 # every correction was probed with the same sweep that probes the rest.
 prober = "sparqlwatch-prober 0.1.0"
 max_cost = "expensive"
+# TWO sweeps: nine endpoints on the first date, gnd on the second, by the same
+# prober at the same ceiling. Stated separately rather than averaged, because a
+# reachability verdict is about the moment it was taken.
 swept = "2026-09-14"
+swept_gnd = "2026-09-17"
+
+[reported_upstream]
+issue = "https://github.com/dbpedia/kg-catalog/issues/77"
+opened = "2026-09-17"
