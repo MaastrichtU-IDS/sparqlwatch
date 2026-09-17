@@ -2940,3 +2940,37 @@ def test_a_facet_pill_narrows_the_rows(client_for, store_dormant_newest):
     )
     assert 0 < len(narrowed) < len(everything)
     assert "https://data.kkg.kadaster.nl/query" not in narrowed
+
+
+def test_no_pill_offers_a_filter_that_would_empty_the_page(client_for, store_registry_sample):
+    """A control that promises a narrower view and delivers an empty one.
+
+    `vocabulary-described` is an `exhaustive` metric (prober/metrics.toml), so
+    only the nightly profile pass ever records it; on any store built from
+    cheap sweeps its pill reads 0 permanently. Measured on the deployed dev
+    site before this change: "Describes its own vocabulary 0", linking to a
+    page with no rows. A pill that always says zero teaches a reader the
+    filter is broken.
+    """
+    body = client_for(store_registry_sample).get("/", headers={"accept": "text/html"}).text
+    counts = [a["data-pill-count"] for a in with_attribute(body, "data-pill-count")]
+    assert counts, "the registry offers no pills at all"
+    assert "0" not in counts, f"a pill offers an empty page: {counts}"
+
+
+def test_a_domain_pill_reads_as_words_and_filters_by_its_slug(client_for, store_registry_sample):
+    """The page exists to stop leading with jargon.
+
+    The registry's domains are database keys -- `cross_domain`,
+    `life_sciences`, `user_generated`. The label a person reads is spaced; the
+    value in the URL stays the slug, because that is what `?domain=` matches.
+    """
+    body = client_for(store_registry_sample).get("/", headers={"accept": "text/html"}).text
+    pills = with_attribute(body, "data-pill")
+    domain_pills = [p for p in pills if "_" in p["data-pill"]]
+    if not domain_pills:
+        pytest.skip("this fixture holds no multi-word domain")
+    for p in domain_pills:
+        assert p["href"].count(p["data-pill"]) == 1, "the href must carry the slug"
+    labels = texts_with(body, "data-pill")
+    assert not any("_" in t for t in labels), f"a pill shows a raw slug: {labels}"

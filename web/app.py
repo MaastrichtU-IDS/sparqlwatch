@@ -2408,7 +2408,10 @@ def _index_pills(
     )
     pills = [
         {
-            "label": value,
+            # The slug spaced out. `value` below stays the slug, because that
+            # is what ?domain= matches and what the count was computed from --
+            # only the words a person reads change.
+            "label": value.replace("_", " "),
             "param": "domain",
             "value": value,
             "count": count,
@@ -2428,7 +2431,17 @@ def _index_pills(
         }
         for value, label in _FACET_LABELS.items()
     ]
-    return pills
+    # A pill counting zero is a control that promises a narrower view and
+    # delivers an empty page. Two ways to get one: a domain that survives in
+    # the registry but not in what a search has already left, and a facet whose
+    # metric the current sweep does not run at all -- `vocabulary-described` is
+    # `exhaustive`, so only the nightly profile pass records it, and its pill
+    # read "Describes its own vocabulary 0" on the deployed site.
+    #
+    # Dropped rather than disabled: a pill absent until there is something
+    # behind it returns on its own once the data arrives, and needs no second
+    # visual state to explain itself.
+    return [p for p in pills if p["count"]]
 
 
 def _no_match_description(q: str | None, domain: str | None, facet: str | None) -> str:

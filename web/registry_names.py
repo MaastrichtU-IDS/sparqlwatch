@@ -82,12 +82,21 @@ def load_names(paths: list[Path]) -> dict[str, Name]:
                 existing = out.get(url)
                 if existing is None:
                     out[url] = candidate
-                elif existing.title is None and candidate.title is not None:
-                    # THIS file is the one giving the endpoint an explicit
-                    # name where none existed before, so it also decides
-                    # `datasets` -- its own value (often None), not one
-                    # inherited from an earlier file that had no title for
-                    # this URL at all. Fix (a) of the whole-branch review:
+                elif (existing.title is None) != (candidate.title is None):
+                    # ONE of the two names this endpoint; the other only counts
+                    # datasets for it. The one with the name also decides
+                    # `datasets`, whichever order the files were read in.
+                    # `datasets` travels with the title -- the naming file's
+                    # own value, often None, rather than one inherited from a
+                    # file that had no title for this URL at all.
+                    #
+                    # Symmetric on purpose. An earlier version tested only
+                    # `existing.title is None and candidate.title is not None`,
+                    # which fixed the shipped order and left the reverse
+                    # broken, while the test's docstring claimed both. That is
+                    # a promise nothing checked; it is checked now.
+                    #
+                    # Fix (a) of the whole-branch review:
                     # `query.wikidata.org` gets `datasets = 2` from
                     # lod-cloud.toml's bulk import (which names no title for
                     # it) and then "Wikidata" from kg-catalog.toml. The
@@ -99,10 +108,11 @@ def load_names(paths: list[Path]) -> dict[str, Name]:
                     # ambiguous multi-dataset endpoint) still survives: that
                     # shape is decided in the `existing is None` branch above,
                     # untouched by this one.
+                    named = candidate if candidate.title is not None else existing
                     out[url] = Name(
-                        title=candidate.title,
+                        title=named.title,
                         domain=existing.domain if existing.domain is not None else candidate.domain,
-                        datasets=candidate.datasets,
+                        datasets=named.datasets,
                         host=existing.host,
                     )
                 else:

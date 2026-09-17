@@ -172,10 +172,22 @@ def test_a_supplement_title_clears_an_inherited_dataset_count(tmp_path):
         '[[endpoint]]\nurl = "https://query.wikidata.org/sparql"\ntitle = "Wikidata"\n'
     )
 
-    bulk_then_supplement = load_names([bulk, supplement])["https://query.wikidata.org/sparql"]
+    url = "https://query.wikidata.org/sparql"
+
+    bulk_then_supplement = load_names([bulk, supplement])[url]
     assert bulk_then_supplement.title == "Wikidata"
     assert bulk_then_supplement.datasets is None
-    assert display(bulk_then_supplement, "https://query.wikidata.org/sparql") == "Wikidata"
+    assert display(bulk_then_supplement, url) == "Wikidata"
+
+    # The other order, which the docstring above has always claimed and no
+    # assertion ever checked. _registry_load_order ships bulk-then-supplement,
+    # so this direction is not reachable today -- but a third registry file
+    # supplying a bare count for an already-titled URL would reach it, and the
+    # name would vanish again with nothing going red.
+    supplement_then_bulk = load_names([supplement, bulk])[url]
+    assert supplement_then_bulk.title == "Wikidata"
+    assert supplement_then_bulk.datasets is None
+    assert display(supplement_then_bulk, url) == "Wikidata"
 
 
 def test_wikidata_displays_its_name_not_its_host(tmp_path):
