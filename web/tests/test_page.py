@@ -737,17 +737,31 @@ def test_a_truncated_sample_says_so_in_text(client_for, store_truncated):
     screen reader both.
     """
     text = page(client_for(store_truncated), TRUNCATED)
-    assert TRUNCATED_TEXT in text
-    assert TRUNCATED_TEXT == "truncated: more may exist beyond the limit"
-    assert COMPLETE_TEXT not in text
+    status = with_attribute(text, "data-vocab-status")
+    assert [row["data-vocab-status"] for row in status] == ["sampled"]
+    assert "sampled" in texts_with(text, "data-vocab-status")[0]
+    assert COMPLETE_TEXT not in text and TRUNCATED_TEXT not in text
 
 
 def test_a_complete_sample_says_that_in_text_too(client_for, store):
-    """kadaster's sample is not truncated, and the page says which it is
-    rather than leaving the reader to notice an absence. "No warning" and "we
-    checked and it is complete" are different claims."""
+    """kadaster's sample is not truncated -- and that still does not make its
+    vocabulary complete, which is the distinction the merged list has to keep.
+
+    The two panels became one on 2026-09-17 with a status of `sampled` or
+    `complete`, and the badge this asserted (COMPLETE_TEXT, "complete: not
+    truncated") went with them. It was a claim about the class QUERY: it
+    returned under its limit, so no class was cut off. `complete` on the
+    merged list is a claim about the VOCABULARY, and kadaster has no profile
+    pass at all -- every property it holds is unenumerated. Reading the old
+    badge across to the new word would have promoted "we saw all the classes"
+    into "we saw everything", on the one page element a reader consults to
+    decide whether they can trust the list.
+    """
     text = page(client_for(store), KADASTER)
-    assert COMPLETE_TEXT in text
+    assert [row["data-vocab-status"] for row in with_attribute(text, "data-vocab-status")] == [
+        "sampled"
+    ]
+    assert COMPLETE_TEXT not in text
     assert TRUNCATED_TEXT not in text
 
 
@@ -772,7 +786,7 @@ def test_an_unsampled_endpoint_renders_no_class_list(client_for, store):
     the largest endpoint in the fixture.
     """
     text = page(client_for(store), QLEVER)
-    assert with_attribute(text, "data-class") == []
+    assert with_attribute(text, "data-term") == []
     absent = with_attribute(text, "data-sample")
     assert [row["data-sample"] for row in absent] == ["absent"]
     assert "classes sampled" not in text
@@ -814,9 +828,12 @@ def test_a_sample_of_zero_reports_its_size_rather_than_a_list(
     assert [row["data-sample"] for row in with_attribute(text, "data-sample")] == [
         "present"
     ]
-    assert with_attribute(text, "data-class") == []
+    assert with_attribute(text, "data-term") == [], "a size of 0 lists no terms"
     assert with_attribute(text, "data-sample-empty") != []
-    assert "0 classes sampled" in text
+    # And no status word, because there is no list for one to describe. The
+    # section still renders: its note is what stops the absence being read as
+    # the answer.
+    assert with_attribute(text, "data-vocab-status") == []
 
 
 def test_a_run_that_never_looked_at_classes_borrows_no_reason():
@@ -1014,10 +1031,49 @@ def test_the_class_list_holds_every_sampled_value(client_for, store):
     truncation the page is not admitting to."""
     text = page(client_for(store), KADASTER)
 
-    listed = [row["data-class"] for row in with_attribute(text, "data-class")]
+    listed = [row["data-term"] for row in with_attribute(text, "data-term")]
     assert len(listed) == KADASTER_CLASS_COUNT
     assert OWL_CLASS in listed
-    assert f"{KADASTER_CLASS_COUNT} classes sampled" in text
+    assert f"{KADASTER_CLASS_COUNT} terms" in text
+    # kadaster has no profile pass, so every term here came from the sample and
+    # none may wear a state: a class sample establishes that we SAW the term and
+    # nothing about whether the endpoint declares it, and all seven states
+    # assert one or the other. Read off the TERMS, not the document: the legend
+    # in the rail carries data-state too, one per state it explains.
+    assert [row.get("data-state") for row in with_attribute(text, "data-term")] == [
+        None
+    ] * KADASTER_CLASS_COUNT
+
+
+def test_terms_from_one_namespace_share_one_prefix(client_for, store):
+    """A generated prefix labels a NAMESPACE, so one namespace gets one label.
+
+    Found by rendering, not by reading: kadaster's sample holds five terms of
+    http://modellen.geostandaarden.nl/def/imx-geo# and the page drew them as
+    imx-geo, imx-geo2, imx-geo3 and imx-geo4. `_prefix_for` resolves a collision
+    by counting up, and it was being asked once per TERM with every previous
+    answer marked taken, so each term of a repeated namespace collided with the
+    one before it. Its own docstring says why that is wrong: "two namespaces
+    sharing a label in a facet list would merge two vocabularies into one chip",
+    and the inverse splits one vocabulary into four.
+
+    Both halves are asserted. A namespace never has two prefixes, and two
+    namespaces never share one -- the second is what the counting is for, and a
+    fix that simply stopped counting would break it.
+    """
+    text = page(client_for(store), KADASTER)
+    rows = with_attribute(text, "data-term")
+    assert rows, "kadaster's sample renders no terms"
+    pairs = {}
+    for row in rows:
+        iri = row["data-term"]
+        namespace = iri[: max(iri.rfind("#"), iri.rfind("/")) + 1]
+        pairs.setdefault(namespace, set()).add(row["data-hay"].split()[-2])
+    for namespace, labels in pairs.items():
+        assert len(labels) == 1, f"{namespace} drew {sorted(labels)}"
+    flat = [next(iter(labels)) for labels in pairs.values()]
+    assert len(flat) == len(set(flat)), f"two namespaces share a prefix: {flat}"
+    assert len(pairs) > 1, "this fixture has one namespace; it proves nothing"
 
 
 def test_the_class_list_renders_bare_iris(client_for, store):
@@ -1030,16 +1086,23 @@ def test_the_class_list_renders_bare_iris(client_for, store):
     literals, which can, in
     test_a_hostile_literal_is_escaped_in_the_attribute_and_the_text below.
 
-    Reads the rendered text of each data-class element rather than searching
-    the raw HTML source: the N-Triples form of an IRI is `&lt;http`, not
-    `<http`, so a source-text search for `<http` can only ever catch a
-    template that writes a literal '<' of its own outside an attribute.
+    Reads the rendered text of each term's IRI cell rather than searching the
+    raw HTML source: the N-Triples form of an IRI is `&lt;http`, not `<http`, so
+    a source-text search for `<http` can only ever catch a template that writes
+    a literal '<' of its own outside an attribute.
+
+    Read off data-term since 2026-09-17, when the class sample folded into the
+    vocabulary list. Same values, same guarantee, one list.
     """
     text = page(client_for(store), KADASTER)
-    listed = [row["data-class"] for row in with_attribute(text, "data-class")]
+    listed = [row["data-term"] for row in with_attribute(text, "data-term")]
+    assert listed, "kadaster's sample renders no terms"
     assert all(value.startswith("http") for value in listed)
-    rendered = texts_with(text, "data-class")
-    assert rendered == listed, "each value must render as the bare IRI, not wrapped in <>"
+    rendered = texts_with(text, "data-term")
+    assert len(rendered) == len(listed)
+    for iri, row in zip(listed, rendered):
+        assert iri in row, f"{iri} is not rendered in its own row: {row!r}"
+        assert f"<{iri}>" not in row, "the IRI is wrapped in angle brackets"
 
 
 def test_a_hostile_literal_is_escaped_in_the_attribute_and_the_text(
@@ -1254,13 +1317,14 @@ def test_a_page_from_one_sweep_attributes_everything_to_it(client_for, store):
     Nothing here may hedge about a second sweep, because there is not one:
     a clause explaining which sweep saw what would be noise on every page
     of a freshly swept store.
+
+    It asserted the header sentence "Everything below is what one probe sweep
+    observed, at ..." until the owner removed that sentence on 2026-09-17. The
+    sentence was one expression of the claim; the attributions below are the
+    claim, and they are what a second reader -- a script -- was always reading.
     """
     text = page(client_for(store), KADASTER)
 
-    assert (
-        f"Everything below is what one probe sweep observed, at "
-        f"{SAMPLING_SWEEP}." in text
-    )
     head = with_attribute(text, "data-sample-generated-at")
     assert len(head) == 1
     assert head[0]["data-sample-generated-at"] == SAMPLING_SWEEP
@@ -1301,10 +1365,14 @@ def test_an_older_samples_own_sweep_is_named_beside_it(
     assert SAMPLING_SWEEP in provenance[0]
     assert DECLINING_SWEEP in provenance[0]
 
-    # The header sentence covered both facts and dated both to the newer
-    # sweep. It must no longer claim anything about the sample.
+    # The header sentence covered both facts and dated both to the newer sweep,
+    # and the fix was a second wording that claimed only the verdicts. The owner
+    # removed both sentences on 2026-09-17, so neither may reappear -- but the
+    # provenance line asserted just above is now the ONLY thing on the page that
+    # separates the two sweeps, which is why it is checked before this and not
+    # after.
     assert "Everything below is what one probe sweep observed" not in text
-    assert f"Every verdict below is what one probe sweep observed, at {DECLINING_SWEEP}." in text
+    assert "Every verdict below is what one probe sweep observed" not in text
 
     # Both facts survive. The decline is still drawn as a decline...
     declined = row_for(text, M + "classes")
@@ -1313,11 +1381,11 @@ def test_an_older_samples_own_sweep_is_named_beside_it(
     assert len(this_run) == 1
     assert "cost-ceiling" in this_run[0]
     # ...and the older sweep's 59 classes are still published, not discarded.
-    assert (
-        len(with_attribute(text, "data-class")) == KADASTER_CLASS_COUNT
-    )
-    assert f"{KADASTER_CLASS_COUNT} classes sampled" in text
-    assert COMPLETE_TEXT in text
+    assert len(with_attribute(text, "data-term")) == KADASTER_CLASS_COUNT
+    assert f"{KADASTER_CLASS_COUNT} terms" in text
+    assert [row["data-vocab-status"] for row in with_attribute(text, "data-vocab-status")] == [
+        "sampled"
+    ]
 
 
 def test_a_newer_samples_own_sweep_is_named_beside_it(
@@ -1347,11 +1415,16 @@ def test_a_newer_samples_own_sweep_is_named_beside_it(
     assert LATER_SAMPLING_SWEEP in provenance[0]
     assert SAMPLING_SWEEP in provenance[0]
 
-    listed = [row["data-class"] for row in with_attribute(text, "data-class")]
-    assert listed == LATER_SAMPLE_CLASSES
+    listed = [row["data-term"] for row in with_attribute(text, "data-term")]
+    assert sorted(listed) == sorted(LATER_SAMPLE_CLASSES)
     assert OWL_CLASS not in listed, "that is the 16:00 sample's value"
-    assert "2 classes sampled" in text
-    assert TRUNCATED_TEXT in text
+    assert "2 terms" in text
+    # The truncation badge this asserted became the status word on 2026-09-17.
+    # A truncated list is `sampled`, which is what the word is for.
+    assert [row["data-vocab-status"] for row in with_attribute(text, "data-vocab-status")] == [
+        "sampled"
+    ]
+    assert TRUNCATED_TEXT not in text
 
     # The 16:00 verdict for the same metric is still reported as a verdict.
     assert row_for(text, M + "classes")["data-verdict"] == "verified"
@@ -1449,7 +1522,7 @@ def test_an_unfinished_run_says_so_where_it_names_the_run(
         RUN + CRASHED_SWEEP
     ]
     assert row_for(text, M + "availability")["data-verdict"] == "indeterminate"
-    assert "2 classes sampled" in text
+    assert "2 terms" in text
 
     said = texts_with(text, UNFINISHED)
     assert len(said) == 1, "one sentence, where the run is named"
@@ -1509,19 +1582,21 @@ def test_a_run_from_before_this_stage_reads_exactly_as_it_did(client_for, store)
     because it was captured before they existed. Absence of sw:finalised is
     therefore not evidence of a crash, and a page that read it as one would
     stamp every historical run in the store as unfinished. The existing
-    header sentence is asserted verbatim beside the two absences, so this
-    test fails if either new sentence appears OR if the old one changed
-    shape.
+    The two absences are the assertion. Beside them the page must still
+    attribute its facts to that run rather than saying nothing at all, which
+    is what distinguishes "read as a normal historical run" from "failed to
+    render": until 2026-09-17 that was checked through the header sentence
+    naming the sweep, and it is checked now through data-run, which is the
+    same fact and the one that survived the sentence's removal.
     """
     text = page(client_for(store), KADASTER)
 
     assert with_attribute(text, UNFINISHED) == []
     assert with_attribute(text, NEWER_UNFINISHED) == []
     assert "did not finish" not in text
-    assert (
-        f"Everything below is what one probe sweep observed, at "
-        f"{SAMPLING_SWEEP}." in text
-    )
+    assert [row["data-run"] for row in with_attribute(text, "data-run")] == [
+        RUN + SAMPLING_SWEEP
+    ]
 
 
 def test_two_finished_historical_runs_say_nothing_about_not_finishing(
@@ -1835,17 +1910,36 @@ def test_the_outward_link_opens_the_endpoint_in_a_new_tab(client_for, store):
     assert set(links[0]["rel"].split()) == {"noopener", "noreferrer"}
 
 
-def test_the_outward_link_says_a_plain_visit_sends_no_query(client_for, store):
-    """Because it does not, and the difference matters to a reader.
+def test_the_address_is_not_the_link_but_carries_one(client_for, store):
+    """The url stays selectable; a glyph beside it is what leaves the site.
 
-    A GET with no query is the request `declare.rs` makes, and what comes back is
-    a form, an error, or a service description. A reader expecting results and
-    meeting an error page would read that as the endpoint being broken, which is
-    a conclusion this page has metrics for and this link does not support.
+    This asserted the sentence under the h1 -- that a plain visit sends no query,
+    so what comes back is a form, an error, or a service description -- until the
+    owner removed it on 2026-09-17 and asked for an icon at the end of the
+    address instead.
+
+    What the sentence's link had, and what the icon must not lose, is that the
+    ADDRESS ITSELF is not clickable: the url is the thing a reader most often
+    selects and copies, and a mis-aimed double click landing on somebody else's
+    server is the wrong outcome. An icon at the end of the line is a deliberate
+    click; an h1 wrapped in an anchor is not.
+
+    A glyph-only link also needs an accessible name, or it reads as "link,
+    up-right arrow" and a screen reader user cannot tell where it goes.
     """
     text = page(client_for(store), KADASTER)
-    assert "sends no query" in text
-    assert "a form, an" in text and "error, or a description of itself" in text
+    links = with_attribute(text, "data-outward-link")
+    assert len(links) == 1, links
+    assert links[0]["aria-label"], "a glyph-only link with no accessible name"
+    h1 = texts_with(text, "data-outward-link")
+    assert h1 == [""], f"the link has visible text, so it is not just a glyph: {h1}"
+    # The address is text in the h1, and the anchor is inside it -- not the
+    # other way round.
+    head = text[text.index("<h1"):text.index("</h1>")]
+    assert KADASTER in head, head
+    assert head.index(KADASTER) < head.index("<a "), (
+        "the anchor opens before the address, so the address is inside the link"
+    )
 
 
 def test_only_a_scheme_a_browser_should_follow_becomes_a_link():
@@ -2219,11 +2313,25 @@ def test_the_vocabulary_states_are_the_sites_own(client_for, store_content_profi
     assert drawn <= known, f"{drawn - known} is not a state this site defines"
 
 
-def test_an_endpoint_with_no_profile_gets_no_vocabulary_panel(client_for, store):
+def test_an_endpoint_with_nothing_to_list_gets_no_searchable_list(client_for, store):
     """An empty searchable list would say this endpoint has no vocabulary, when
-    what happened is that nobody profiled it."""
-    body = page(client_for(store), KADASTER)
-    assert 'data-section="vocabulary"' not in body
+    what happened is that nobody looked.
+
+    Asked of qlever rather than kadaster since 2026-09-17. It was kadaster's
+    guard when the panel needed a profile pass; kadaster has a class sample, and
+    the merged list draws from that when there is no profile, so the endpoint
+    with NOTHING is the one that tests this now. qlever's classes probe ran out
+    of its 30 second budget: no profile, no sample, and therefore no list -- but
+    the section still renders, carrying the sentence that says the probe timed
+    out. Silence there would read as "we looked and found none".
+    """
+    body = page(client_for(store), QLEVER)
+    assert with_attribute(body, "data-term") == [], "qlever has nothing to list"
+    assert with_attribute(body, "data-vocab-status") == []
+    assert 'id="vocab-q"' not in body, "a search box over an empty list"
+    assert texts_with(body, "data-this-run-sample"), (
+        "the page must still say why there is no list"
+    )
 
 
 def test_every_page_footer_shows_the_version_the_prober_sends(client_for, store):
@@ -2287,10 +2395,9 @@ def test_the_page_keeps_all_six_sections(client_for, store_content_profiles):
     ).text
     sections = [s["data-section"] for s in with_attribute(body, "data-section")]
     assert "vocabulary" in sections
-    assert "sample" in sections, (
-        "the classes sample reports a different metric from the vocabulary and "
-        "renders for endpoints that have no vocabulary at all; it keeps its own "
-        "section"
+    assert "sample" not in sections, (
+        "the class sample folded into the vocabulary on 2026-09-17: on every "
+        "page that drew both, the two held the same classes"
     )
 
 
@@ -2312,11 +2419,18 @@ def test_the_sample_survives_an_endpoint_with_no_vocabulary(client_for, store):
     without anything here going red.
     """
     body = page(client_for(store), KADASTER)
-    assert 'data-section="vocabulary"' not in body, (
-        "this test's premise: the endpoint must have no vocabulary section, "
-        "or it cannot tell folding-into-vocabulary apart from working code"
+    status = with_attribute(body, "data-vocab-status")
+    assert [row["data-vocab-status"] for row in status] == ["sampled"]
+    listed = [row["data-term"] for row in with_attribute(body, "data-term")]
+    assert len(listed) == KADASTER_CLASS_COUNT, (
+        "the sample's classes must all survive the fold into one list"
     )
-    assert 'data-sample="present"' in body or 'data-sample="absent"' in body
+    assert OWL_CLASS in listed
+    # And the fold did not lose which sweep they came from: the two attributes
+    # keep their names because a script reads them, and only the element
+    # carrying them changed.
+    head = with_attribute(body, "data-sample-generated-at")
+    assert len(head) == 1 and head[0]["data-sample-run"]
 
 
 def test_the_legend_sits_beside_the_marks(client_for, store_content_profiles):
@@ -2338,11 +2452,46 @@ def test_the_legend_sits_beside_the_marks(client_for, store_content_profiles):
     assert 'data-rail="legend"' in body, (
         "the legend moved into the rail so it is adjacent to what it explains"
     )
-    assert len(with_attribute(body, "data-rail-fact")) >= 3, (
-        "the rail states what the endpoint is, from facts the context already "
-        "holds -- classes described and reported, whether the description is "
-        "provably complete, when it was last checked"
+    # The rail also carried an identity block -- classes described and reported,
+    # whether the description is provably complete, the sampling ladder, the
+    # sample size, when it was last checked -- and the owner removed it on
+    # 2026-09-17. Every one of those facts is still stated by the section that
+    # measured it, so the rail was a second copy of each. Asserted as zero
+    # rather than deleted: the rail growing a second copy back is the exact
+    # thing this removal was for.
+    assert with_attribute(body, "data-rail-fact") == [], (
+        "the rail is the legend and nothing else"
     )
+
+
+def test_the_history_dates_are_rotated_about_an_origin_that_keeps_them_in_column(
+    client_for, store_two_sweeps
+):
+    """The sweep dates stood a column and a half left of the cells they name.
+
+    Reported by the owner on 2026-09-17 and measured in a browser: the label is
+    a 14x74 block rotated -90deg, and about the default `50% 50%` origin the
+    text's line box lands (74 - 14) / 2 = 30px to the LEFT of its own column --
+    1.6 columns at this pitch. An origin at half the HEIGHT in both axes maps it
+    back onto the column exactly; measured again at offset 0 for every column.
+
+    Pinned as the declaration rather than as a rendered position because the
+    suite has no browser, and the default origin is what the bug WAS: a rule
+    with no `transform-origin` beside that rotate is the regression, whatever
+    else changes around it.
+    """
+    body = page(client_for(store_two_sweeps), KADASTER)
+    assert 'data-section="history"' in body, "this fixture draws no history"
+    rule = body[body.index(".h-run span {"):]
+    rule = rule[: rule.index("}")]
+    assert "rotate(-90deg)" in rule, rule
+    assert "transform-origin: 37px 37px" in rule, (
+        "the rotated dates have no explicit origin, so they paint 30px left of "
+        f"their column: {rule}"
+    )
+    # 37 is half of the 74 the same rule sets. If one moves and the other does
+    # not, the offset comes back silently.
+    assert "height: 74px" in rule, rule
 
 
 def test_the_endpoint_page_carries_no_stylesheet_of_its_own(client_for, store):
