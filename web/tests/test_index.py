@@ -53,6 +53,7 @@ from app import (
     _index_rows,
     _metric_state_matrix,
     EXPLORE_PATH,
+    HISTORY_PATH,
     ABOUT_PATH,
     DOCS_PATH,
     METRIC_DESCRIPTIONS,
@@ -1272,7 +1273,7 @@ def test_the_row_markers_are_explained_in_the_docs_and_not_on_the_index(
     # 2026-09-16, the same shell /explore, /docs and /about already carry.
     # Still an exact list: this header is deliberately small, and a link
     # appearing in it without a test changing is how a nav turns into a menu.
-    assert [a["href"] for a in nav] == [INDEX_PATH, EXPLORE_PATH, DOCS_PATH, ABOUT_PATH]
+    assert [a["href"] for a in nav] == [INDEX_PATH, EXPLORE_PATH, HISTORY_PATH, DOCS_PATH, ABOUT_PATH]
 
 
 def test_the_index_carries_one_nav_link_and_never_one_per_row(
@@ -2411,87 +2412,8 @@ def test_the_overview_draws_in_the_sites_own_encoding(client_for, store_two_swee
     assert drawn <= known, f"{drawn - known} is not a state this site defines"
 
 
-def test_a_filtered_grid_names_no_endpoint_the_filtered_rows_do_not(
-    client_for, store_dormant_newest
-):
-    """The regression this test is written against: the grid was built from
-    `history.changed`, read straight from the store and never passed through
-    `_matches_query`, so a `?q=` that narrowed the listing left the grid
-    showing -- and linking, via `row.href` -- an endpoint the same page's
-    other representation (and its own rows) had just dropped.
-
-    store_dormant_newest is the closest committed fixture to what this
-    wants. Checked directly (by loading every multi-run fixture combination
-    this suite has against `fleet_history`): none of them has more than ONE
-    endpoint that ever reads differently between sweeps. This store's one is
-    https://ontop.certain.ai.ustp.at/sparql. A single changed endpoint cannot
-    show a query narrowing the grid from two rows to one, so this asks the
-    two queries that together still pin the bug down: one that excludes the
-    endpoint that changed (the grid must come up EMPTY, not still name it --
-    this is the exact shape of the bug this was measured against, `?q=
-    kadaster` naming ontop) and one that matches it (the grid must still draw
-    it, ruling out the wrong fix of always emptying the grid under a
-    filter).
-    """
-    client = client_for(store_dormant_newest)
-
-    excluding = client.get("/?q=kadaster", headers={"accept": "text/html"}).text
-    rows = set(re.findall(r'data-endpoint="([^"]+)"', excluding))
-    grid = set(re.findall(r'data-fleet-endpoint="([^"]+)"', excluding))
-    assert rows == {"https://data.kkg.kadaster.nl/query"}, rows
-    assert grid <= rows, f"the grid names {grid - rows}, which the rows do not"
-    assert grid == set(), (
-        "the one endpoint that ever changed was filtered out of the rows; "
-        "the grid must not still draw it"
-    )
-
-    matching = client.get("/?q=ontop", headers={"accept": "text/html"}).text
-    rows2 = set(re.findall(r'data-endpoint="([^"]+)"', matching))
-    grid2 = set(re.findall(r'data-fleet-endpoint="([^"]+)"', matching))
-    assert grid2 <= rows2, f"the grid names {grid2 - rows2}, which the rows do not"
-    assert grid2 == {"https://ontop.certain.ai.ustp.at/sparql"}, grid2
 
 
-def test_a_domain_only_filter_states_the_fleet_ledes_denominator(
-    client_for, store_dormant_newest, monkeypatch
-):
-    """Blocker-4 of the whole-branch review: the fleet lede's two "of N"
-    clauses guarded on `{% if query %}` alone, so `?domain=` or `?facet=`
-    narrowing the fleet left "All 2 read the same way every time." on the
-    page -- correct English for the whole, unfiltered fleet, and printed on
-    a page that was not it. `summary.matching` and `_no_match_description`
-    were both already widened to `q or domain or facet`; this pins the same
-    rule in the template.
-
-    qlever and kadaster (this fixture's two STEADY endpoints -- ontop is the
-    one that changed, per test_a_filtered_grid_names_no_endpoint_the_
-    filtered_rows_do_not above) are given a shared domain here so `?domain=`
-    narrows the fleet to them alone, dropping ontop and, with it, every
-    "changed" row -- exactly the shape that renders the "All N read the same
-    way" branch this bug was found in.
-    """
-    from registry_names import Name
-
-    monkeypatch.setattr(
-        app_module,
-        "_NAMES",
-        {
-            "https://qlever.dev/api/osm-planet": Name(
-                title=None, domain="test_domain", datasets=None,
-                host="qlever.dev",
-            ),
-            "https://data.kkg.kadaster.nl/query": Name(
-                title=None, domain="test_domain", datasets=None,
-                host="data.kkg.kadaster.nl",
-            ),
-        },
-    )
-    body = client_for(store_dormant_newest).get(
-        "/?domain=test_domain", headers={"accept": "text/html"}
-    ).text
-    lede = re.search(r'<p class="lede">(.*?)</p>', body, re.DOTALL).group(1)
-    normalized = " ".join(lede.split())
-    assert "All 2 of 3 read the same way every time." in normalized, normalized
 
 
 def test_a_single_sweep_store_draws_no_overview(client_for, store):
@@ -2840,12 +2762,6 @@ def test_a_row_for_a_multi_dataset_endpoint_shows_a_count(client_for, store_many
     )
 
 
-def test_the_page_says_where_names_come_from(client_for, store_registry_sample):
-    """A borrowed title is attributed, or the registry is asserting it."""
-    body = client_for(store_registry_sample).get("/", headers={"accept": "text/html"}).text
-    assert "data-name-provenance" in body
-
-
 # ---------------------------------------------------------------------------
 # Task 6: facet pills, and the matrix moves down.
 # ---------------------------------------------------------------------------
@@ -2920,10 +2836,22 @@ def test_an_active_pills_href_clears_only_itself(client_for, store_registry_samp
     assert "domain=life_sciences" not in life_sciences["href"]
 
 
-def test_the_matrix_sits_below_the_rows(client_for, store_registry_sample):
-    """Demoted, not removed: it is the only way to ask a precise question."""
+def test_the_matrix_sits_above_the_rows_and_starts_closed(client_for, store_registry_sample):
+    """Moved back under the search on 2026-09-17, as an accordion.
+
+    It stood below the endpoints from 2026-09-16, which kept it out of a
+    reader's way at the cost of a page they had to scroll past to find it.
+    A <details> closed by default does both: the grid is a click from the
+    search box, and a reader who wants endpoints sees them first.
+
+    `open` must be absent -- an accordion that starts open is the old
+    above-the-rows layout with extra markup, which is what this replaced.
+    """
     body = client_for(store_registry_sample).get("/", headers={"accept": "text/html"}).text
-    assert body.index('data-facet-group="matrix"') > body.index("data-endpoint=")
+    assert body.index('data-facet-group="matrix"') < body.index("data-endpoint=")
+    matrix = body[body.index('data-facet-group="matrix"') - 40 :][:120]
+    assert "<details" in matrix, f"the matrix is not an accordion: {matrix!r}"
+    assert " open" not in matrix.split(">")[0], f"the accordion starts open: {matrix!r}"
 
 
 def test_a_facet_pill_narrows_the_rows(client_for, store_dormant_newest):

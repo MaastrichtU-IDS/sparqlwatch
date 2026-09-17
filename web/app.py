@@ -141,6 +141,7 @@ EXPLORE_PATH = "/explore"
 VOID_PATH = "/void"
 
 ABOUT_PATH = "/about"
+HISTORY_PATH = "/history"
 
 # The tab icon, and the separate monochrome mask a Safari pinned tab uses.
 ICON_PATH = "/icon.svg"
@@ -2754,6 +2755,31 @@ def _index_context(
     }
 
 
+def _history_html(
+    entries: list[EndpointMeasurements],
+    store: Store,
+    q: str | None = None,
+    domain: str | None = None,
+    facet: str | None = None,
+) -> str:
+    """The availability grid, rendered.
+
+    Builds the registry's own context and hands the whole thing to
+    history.html, which uses the `fleet` and `stats` keys and ignores the
+    rest. One context rather than a narrower one of its own because the two
+    pages report the same sweep -- a second assembly would be a second place
+    for "how many sweeps are held" to be worked out, and the answers would
+    drift the first time one was edited.
+    """
+    # `here` overridden after the merge, not before: _index_context sets it to
+    # "index" for the page it was written for, and base.html marks the nav item
+    # whose slug matches. Without this the History page renders with Registry
+    # marked as the page you are on.
+    return _TEMPLATES.get_template("history.html").render(
+        **{**_index_context(entries, store, q, domain, facet), "here": "history"}
+    )
+
+
 def _index_html(
     entries: list[EndpointMeasurements],
     store: Store,
@@ -3251,6 +3277,7 @@ def _nav_context() -> dict:
         "nav": [
             {"path": INDEX_PATH, "label": "Registry", "slug": "index"},
             {"path": EXPLORE_PATH, "label": "Explore", "slug": "explore"},
+            {"path": HISTORY_PATH, "label": "History", "slug": "history"},
             {"path": DOCS_PATH, "label": "Docs", "slug": "docs"},
             {"path": ABOUT_PATH, "label": "About", "slug": "about"},
         ],
@@ -3816,6 +3843,62 @@ def _negotiated(request: Request, html, rdf) -> Response:
     if media_type == HTML_MEDIA_TYPE:
         return Response(content=html(), media_type="text/html; charset=utf-8")
     return Response(content=rdf(media_type), media_type=media_type)
+
+
+@app.get(HISTORY_PATH)
+def history_resource(
+    request: Request,
+    q: str | None = Query(
+        None,
+        description=(
+            "Narrow the grid to endpoints whose URL or registry title "
+            "contains this text."
+        ),
+    ),
+    domain: str | None = Query(
+        None, description="Narrow the grid to endpoints the registry files under this domain."
+    ),
+    facet: str | None = Query(
+        None, description="Narrow the grid to endpoints answering this fixed question."
+    ),
+    store: Store = Depends(get_store),
+) -> Response:
+    """Every endpoint's availability across the sweeps this store holds.
+
+    This stood on the registry until 2026-09-17, between the search and the
+    endpoints it searches. It is its own resource now.
+
+    Its RDF representation is the INDEX's description, unchanged. The grid
+    draws no fact the index does not already publish -- it is the same
+    availability verdicts, laid out by sweep instead of by endpoint -- so a
+    second CONSTRUCT here would be a second chance to disagree with the first
+    about the same measurements. `web/queries/` gains nothing.
+
+    `?q=` narrows it through `_matches_query`, the one predicate the registry's
+    two representations already share, so this page cannot answer a query
+    differently from the page it was cut out of.
+    """
+    media_type = choose_representation(request.headers.get("accept"))
+    if media_type is None:
+        return Response(
+            content=(
+                "none of the requested media types can be served; this "
+                "resource offers " + ", ".join(OFFERED_MEDIA_TYPES) + "\n"
+            ),
+            status_code=406,
+            media_type="text/plain; charset=utf-8",
+        )
+
+    entries = endpoint_index(store)
+    if media_type == HTML_MEDIA_TYPE:
+        return Response(
+            content=_history_html(entries, store, q, domain, facet),
+            media_type="text/html; charset=utf-8",
+        )
+    return Response(
+        content=_index_rdf(store, media_type, entries, q, domain, facet),
+        media_type=media_type,
+    )
 
 
 @app.get(DOCS_PATH)

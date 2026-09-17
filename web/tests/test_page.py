@@ -36,6 +36,7 @@ from starlette.testclient import TestClient
 import verdict_encoding
 from app import (
     EXPLORE_PATH,
+    HISTORY_PATH,
     ABOUT_PATH,
     DOCS_PATH,
     COMPLETE_TEXT,
@@ -1611,7 +1612,7 @@ def test_the_endpoint_page_links_to_the_docs_section(client_for, store):
     # test_index.py and test_explore.py's identical assertion). Still an exact
     # list: the header is small on purpose, and a link arriving in it without
     # a test changing is how a nav becomes a menu.
-    assert [a["href"] for a in nav] == [INDEX_PATH, EXPLORE_PATH, DOCS_PATH, ABOUT_PATH]
+    assert [a["href"] for a in nav] == [INDEX_PATH, EXPLORE_PATH, HISTORY_PATH, DOCS_PATH, ABOUT_PATH]
 
 
 def test_the_dormancy_sentence_is_not_drawn_as_a_verdict(

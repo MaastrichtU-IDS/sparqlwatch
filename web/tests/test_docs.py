@@ -347,7 +347,7 @@ def test_every_page_offers_the_same_header_nav(client):
     for path in ("/docs", "/docs/metrics", "/docs/states", "/docs/void"):
         body = client.get(path, headers={"accept": "text/html"}).text
         nav = [a["href"] for a in with_attribute(body, "data-nav")]
-        assert nav == ["/", "/explore", "/docs", "/about"], f"{path} nav is {nav}"
+        assert nav == ["/", "/explore", "/history", "/docs", "/about"], f"{path} nav is {nav}"
 
 
 def test_the_footer_void_link_has_a_real_href(client):

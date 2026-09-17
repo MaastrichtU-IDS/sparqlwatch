@@ -15,7 +15,16 @@ import pytest
 from starlette.testclient import TestClient
 
 import app as app_module
-from app import ABOUT_PATH, DOCS_PATH, EXPLORE_PATH, INDEX_PATH, app, explore_endpoints, get_store
+from app import (
+    ABOUT_PATH,
+    DOCS_PATH,
+    EXPLORE_PATH,
+    HISTORY_PATH,
+    INDEX_PATH,
+    app,
+    explore_endpoints,
+    get_store,
+)
 
 from test_page import with_attribute
 
@@ -95,7 +104,7 @@ def test_it_is_part_of_this_site_and_not_a_page_beside_it(client):
     body = client.get(EXPLORE_PATH).text
     assert 'class="logo" href="/"' in body, "the logo must lead home"
     nav = [a["href"] for a in with_attribute(body, "data-nav")]
-    assert nav == [INDEX_PATH, EXPLORE_PATH, DOCS_PATH, ABOUT_PATH], f"nav is {nav}"
+    assert nav == [INDEX_PATH, EXPLORE_PATH, HISTORY_PATH, DOCS_PATH, ABOUT_PATH], f"nav is {nav}"
 
 
 def test_the_page_carries_no_stylesheet_of_its_own(client):
