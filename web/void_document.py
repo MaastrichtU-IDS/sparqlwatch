@@ -33,7 +33,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from explore_payload import WELL_KNOWN_PREFIXES
+from explore_payload import WELL_KNOWN_PREFIXES, _prefix_for, split_iri
 from pyoxigraph import (
     BlankNode,
     Literal,
@@ -299,6 +299,134 @@ def void_summary(store: Store, endpoint: str) -> dict | None:
             t.object.value for t in triples if t.predicate.value == SW + "sampling"
         }),
     }
+
+
+def short_name(iri: str, extra: dict[str, str] | None = None) -> str:
+    """An IRI abbreviated, or in full when nothing abbreviates it.
+
+    VOID_PREFIXES first, so a term the served Turtle writes as `skos:prefLabel`
+    is `skos:prefLabel` on the page too -- one table, not two that happen to
+    agree.
+
+    `extra` is for the namespaces that table cannot cover: an endpoint's OWN
+    vocabulary, which is most of what its description is about and is different
+    for every endpoint. Without it the class column was full IRIs and pushed the
+    count columns off the screen entirely -- measured, not guessed. The labels
+    come from the explorer's generator, which is what the vocabulary list on the
+    same page already uses, so one namespace reads the same in both places.
+    """
+    for prefix, namespace in (extra or {}).items():
+        if iri.startswith(namespace) and len(iri) > len(namespace):
+            return f"{prefix}:{iri[len(namespace):]}"
+    for prefix, namespace in VOID_PREFIXES.items():
+        if iri.startswith(namespace) and len(iri) > len(namespace):
+            return f"{prefix}:{iri[len(namespace):]}"
+    return iri
+
+
+def _generated_prefixes(iris: list[str]) -> dict[str, str]:
+    """A label per namespace this document uses that VOID_PREFIXES does not.
+
+    One label per NAMESPACE, never one per term: `_prefix_for` resolves a
+    collision by counting up, so asking it once per term and marking each answer
+    taken splits a single vocabulary across `ns`, `ns2`, `ns3`. That exact bug
+    was written and shipped on the vocabulary list earlier today; this is the
+    same function used correctly.
+    """
+    declared = set(VOID_PREFIXES.values())
+    labels: dict[str, str] = {}
+    for iri in iris:
+        namespace, local = split_iri(iri)
+        if not local or namespace in labels.values() or namespace in declared:
+            continue
+        if any(ns == namespace for ns in labels.values()):
+            continue
+        label = _prefix_for(namespace, set(labels))
+        labels[label] = namespace
+    return labels
+
+
+def void_partitions(store: Store, endpoint: str) -> list[dict]:
+    """The document's class partitions, as rows a page can draw.
+
+    READ BACK OUT OF `void_triples`, for the reason `void_summary` above gives
+    and is worth repeating: a second reader that worked these out from the store
+    by its own arithmetic would eventually disagree with the document it claims
+    to be a rendering of, in front of somebody deciding whether to depend on it.
+    This walks the triples the document actually emits, so a table that shows a
+    partition is a table showing a partition the document has.
+
+    THE POPULATION/SAMPLE SPLIT IS CARRIED PER NUMBER, not per table. Every
+    count here is `void:entities` or `sw:sampledEntities`, and the document's own
+    rdfs:comment exists to keep them apart: one was scanned exactly and the other
+    was drawn from a sample and does not generalise to the class. A table that
+    printed both as "entities" would erase in a column heading the distinction
+    the document spends a sentence on, so each row says which it is.
+    """
+    triples = void_triples(store, endpoint, "urn:sparqlwatch:void-partitions")
+    if not triples:
+        return []
+
+    by_subject: dict = {}
+    for t in triples:
+        by_subject.setdefault(t.subject, []).append(t)
+
+    def one(node, predicate):
+        for t in by_subject.get(node, ()):
+            if t.predicate.value == predicate:
+                return t.object.value
+        return None
+
+    doc = next(iter(t.subject for t in triples), None)
+    classes = []
+    for t in by_subject.get(doc, ()):
+        if t.predicate.value != VOID + "classPartition":
+            continue
+        node = t.object
+        exact = one(node, VOID + "entities")
+        sampled = one(node, SW + "sampledEntities")
+        properties = []
+        for pt in by_subject.get(node, ()):
+            if pt.predicate.value != VOID + "propertyPartition":
+                continue
+            prop = pt.object
+            p_exact = one(prop, VOID + "entities")
+            p_sampled = one(prop, SW + "sampledEntities")
+            properties.append(
+                {
+                    "property": one(prop, VOID + "property"),
+                    "subjects": int(p_exact if p_exact is not None else p_sampled),
+                    "sampled": p_exact is None,
+                    "datatypes": int(one(prop, SW + "datatypeCount")),
+                }
+            )
+        # Alphabetical within a class. Solution order is not specified and a
+        # table whose rows moved between two identical requests would look like
+        # the description had changed.
+        classes.append(
+            {
+                "class": one(node, VOID + "class"),
+                "sampling": one(node, SW + "sampling"),
+                "entities": int(exact if exact is not None else sampled)
+                if (exact is not None or sampled is not None)
+                else None,
+                "sampled": exact is None,
+                "properties": properties,
+            }
+        )
+    # One pass over every term the table will draw, so a namespace gets its
+    # label once and the class and property columns agree about it.
+    prefixes = _generated_prefixes(
+        [c["class"] for c in classes]
+        + [p["property"] for c in classes for p in c["properties"]]
+    )
+    for c in classes:
+        c["short"] = short_name(c["class"], prefixes)
+        for prop in c["properties"]:
+            prop["short"] = short_name(prop["property"], prefixes)
+        c["properties"].sort(key=lambda r: (r["short"].lower(), r["property"]))
+    classes.sort(key=lambda r: (r["short"].lower(), r["class"]))
+    return classes
 
 
 # ---------------------------------------------------------------------------

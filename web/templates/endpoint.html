@@ -178,6 +178,36 @@
   .history td { background: var(--slot, rgba(255,255,255,0.045)); border-radius: 2px;
                 background-clip: padding-box; }
 
+  /* -- The VoID document, as a table ---------------------------------------- */
+  .void-detail { margin-top: 14px; }
+  .void-detail summary { cursor: pointer; font-size: 12.5px; color: var(--text-muted); }
+  .void-detail summary::marker { color: var(--text-dim); }
+  .vt-count { font-family: var(--mono); color: var(--text); }
+  /* Scrolls itself, never the page: five columns of IRIs do not fit a phone.
+     Same treatment as table.metrics and table.history above. */
+  table.vtable { width: 100%; border-collapse: collapse; margin: 10px 0 0;
+      display: block; overflow-x: auto; max-width: 100%; font-size: 12px; }
+  table.vtable th { font-weight: 400; text-align: left; }
+  table.vtable thead th { font-size: 11px; text-transform: uppercase;
+      letter-spacing: 0.05em; color: var(--text-dim); padding: 0 10px 6px 0;
+      border-bottom: 1px solid var(--border); }
+  table.vtable td, table.vtable tbody th { padding: 5px 10px 5px 0;
+      vertical-align: top; }
+  /* The hairline goes between CLASSES, not between every property row: a
+     partition is one thing, and ruling every row would draw the properties as
+     peers of the class they belong to. */
+  table.vtable tbody { border-bottom: 1px solid var(--border); }
+  .vt-class { font-family: var(--mono); color: var(--text-bright);
+      white-space: nowrap; }
+  /* The class's own row, set off from the properties under it. */
+  .vt-head th, .vt-head td { padding-top: 9px; }
+  .vt-head .num { color: var(--text-bright); }
+  .vt-sampling { color: var(--text-muted); white-space: nowrap; }
+  .vt-prop { font-family: var(--mono); color: var(--text-muted);
+      white-space: nowrap; }
+  table.vtable .num { text-align: right; font-family: var(--mono);
+      font-variant-numeric: tabular-nums; white-space: nowrap; }
+
   /* -- Vocabulary ---------------------------------------------------------- */
   .vocab-controls { display: flex; align-items: center; gap: 12px; margin: 12px 0 10px; }
   #vocab-q { flex: 0 1 320px; font-family: var(--mono); font-size: 12.5px;
@@ -443,6 +473,71 @@
         {% endif %}
         <p class="get">GET <a href="{{ void_path }}?url={{ endpoint | urlencode }}">{{ void_path }}?url={{ endpoint | urlencode }}</a>
           &mdash; RDF only (Turtle, N-Triples, RDF/XML, JSON-LD).</p>
+
+        {# THE DOCUMENT AS A TABLE, added 2026-09-17. The Turtle above is 604
+           triples for a mid-sized endpoint, flat, with a blank node per
+           partition cross-referenced by label -- readable by a parser and by
+           almost nobody else. The shape underneath is two levels deep and
+           regular: a class, and the properties observed on its instances.
+
+           AN ACCORDION, closed, for the same reason the index's matrix is one:
+           69 classes with their properties is a page of its own, and a reader
+           who came for the verdicts should not have to scroll past it.
+
+           THE SAMPLING COLUMN IS WHAT KEEPS THE COUNTS APART, and it is not
+           decoration. A count in the document is either void:entities, scanned
+           exactly, or sw:sampledEntities, drawn from a sample of the class and
+           NOT generalising to it -- the difference the document spends a whole
+           rdfs:comment on. void_triples picks between those two predicates from
+           this one value and nothing else, so the column is not a hint about
+           which it is: it is the same decision, shown. A star beside each
+           sampled number was drafted here and removed as a second spelling of
+           a fact already in its own column. #}
+        {% if void_partitions %}
+        <details class="panel void-detail" data-void-table>
+          <summary><span class="vt-count">{{ void_partitions | length }}</span>
+            class{{ "" if void_partitions | length == 1 else "es" }} described</summary>
+          <table class="vtable">
+            <thead>
+              <tr>
+                <th scope="col">class</th>
+                <th scope="col">sampling</th>
+                <th scope="col">property</th>
+                <th scope="col" class="num">subjects</th>
+                <th scope="col" class="num">datatypes</th>
+              </tr>
+            </thead>
+            {% for c in void_partitions %}
+            {# One tbody per class: the class's OWN row first, then a row per
+               property observed on its instances.
+
+               The class had a rowspan with its entity count tucked under its
+               name, and that number sat in no column -- beside a SUBJECTS
+               column full of other numbers, an unlabelled one is a puzzle. On
+               its own row it lands under the heading that names it, and the
+               indent is what says the properties belong to it. #}
+            <tbody data-void-class="{{ c.class }}">
+              <tr class="vt-head">
+                <th scope="rowgroup" class="vt-class" title="{{ c.class }}">{{ c.short }}</th>
+                <td class="vt-sampling">{{ c.sampling }}</td>
+                <td></td>
+                <td class="num">{% if c.entities is not none %}{{ "{:,}".format(c.entities) }}{% endif %}</td>
+                <td></td>
+              </tr>
+              {% for p in c.properties %}
+              <tr data-void-property="{{ p.property }}">
+                <td></td>
+                <td></td>
+                <td class="vt-prop" title="{{ p.property }}">{{ p.short }}</td>
+                <td class="num">{{ "{:,}".format(p.subjects) }}</td>
+                <td class="num">{{ p.datatypes }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+            {% endfor %}
+          </table>
+        </details>
+        {% endif %}
       </section>
       {% endif %}
 

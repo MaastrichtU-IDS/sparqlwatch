@@ -248,6 +248,132 @@ def test_an_accept_naming_only_unservable_types_is_still_a_406(
     assert "text/turtle" in response.text
 
 
+# ---------------------------------------------------------------------------
+# The document, as a table on the endpoint page
+# ---------------------------------------------------------------------------
+
+
+def test_the_table_shows_exactly_what_the_document_holds(store_content_profiles):
+    """The table is a RENDERING of the document, not a second reading of the
+    store, and this is what makes that true rather than intended.
+
+    `void_partitions` walks the triples `void_triples` emits, for the reason
+    `void_summary` gives: a second reader working these out by its own
+    arithmetic would eventually disagree with the document it claims to render,
+    in front of somebody deciding whether to depend on it. So every class and
+    every property in the table is compared against the triples themselves.
+    """
+    from void_document import VOID, void_partitions, void_triples
+
+    store = store_content_profiles
+    rows = void_partitions(store, PROFILED)
+    assert rows, "this fixture describes no classes"
+
+    triples = void_triples(store, PROFILED, "urn:test")
+    in_doc_classes = {
+        str(t.object.value) for t in triples if t.predicate.value == VOID + "class"
+    }
+    in_doc_props = {
+        str(t.object.value) for t in triples if t.predicate.value == VOID + "property"
+    }
+    assert {r["class"] for r in rows} == in_doc_classes
+    assert {p["property"] for r in rows for p in r["properties"]} == in_doc_props
+
+
+def test_every_count_says_whether_it_was_scanned_or_sampled(
+    store_content_profiles, store_sampled_profile
+):
+    """The distinction the document spends an rdfs:comment on.
+
+    A count is `void:entities`, scanned exactly, or `sw:sampledEntities`, drawn
+    from a sample of the class and NOT generalising to it. `void_triples` picks
+    between those two predicates from the sampling value and nothing else, so
+    the table's sampling column is not a hint about which it is -- it is that
+    same decision, shown. This asserts the two agree for every row, which is
+    what lets the table carry one column instead of marking each number.
+
+    BOTH fixtures, and that is the assertion. store_sampled_profile is
+    byte-identical to store_content_profiles but for the sampling, so a run of
+    this against the exact one alone proves nothing: every `sampled` there is
+    False and a function hard-coded to return False passes it. Verified by
+    making exactly that change.
+    """
+    from void_document import void_partitions
+
+    seen = set()
+    for store in (store_content_profiles, store_sampled_profile):
+        rows = void_partitions(store, PROFILED)
+        assert rows, "a fixture describes no classes"
+        for row in rows:
+            exact = row["sampling"] == "exact"
+            seen.add(row["sampling"])
+            assert row["sampled"] is not exact, row
+            for prop in row["properties"]:
+                assert prop["sampled"] is not exact, (row["class"], prop)
+    assert len(seen) > 1, f"both fixtures sampled the same way: {seen}"
+
+
+def test_one_namespace_gets_one_prefix_and_two_never_share_one():
+    """The same bug this repository shipped on the vocabulary list earlier on
+    2026-09-17, guarded here before it could be shipped twice.
+
+    `_prefix_for` resolves a collision by counting up. Asked once per TERM with
+    every previous answer marked taken, it splits one vocabulary across `ns`,
+    `ns2`, `ns3` -- exactly what its own docstring says a suffix must never
+    mean. It is asked once per NAMESPACE here.
+
+    ASKED OF THE FUNCTION, not of a fixture, and that is the point. Every
+    committed profile fixture holds ONE namespace the document does not already
+    declare, so against a store there is nothing for a repeated namespace to
+    collide with and the per-term bug passes unnoticed -- verified by
+    reintroducing it. The input below is what a real endpoint looks like:
+    several terms per namespace, several namespaces, and two whose last path
+    segment is the same word.
+    """
+    from void_document import _generated_prefixes
+
+    labels = _generated_prefixes([
+        "https://example.org/onto/Author",
+        "https://example.org/onto/Work",
+        "https://example.org/onto/cites",
+        "https://other.example/onto/Author",
+        "http://purl.org/spar/fabio/Paper",
+        "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+    ])
+    namespaces = list(labels.values())
+    assert len(namespaces) == len(set(namespaces)), f"a namespace twice: {labels}"
+    assert len(labels) == len(set(labels)), f"a label twice: {labels}"
+    # rdf: is already declared by the document, so it is not generated again.
+    assert "http://www.w3.org/1999/02/22-rdf-syntax-ns#" not in namespaces
+    # The three example.org/onto terms share one label, and other.example's
+    # identically-named namespace gets its own rather than merging into it.
+    assert labels["onto"] in ("https://example.org/onto/", "https://other.example/onto/")
+    assert len(namespaces) == 3, labels
+
+
+def test_the_endpoint_page_draws_the_table_closed(client_for, store_content_profiles):
+    """An accordion, shut, for the reason the index's matrix is one: a
+    mid-sized endpoint has 69 classes with their properties, which is a page of
+    its own, and a reader who came for the verdicts should not scroll past it.
+    """
+    from urllib.parse import quote
+
+    body = client_for(store_content_profiles).get(
+        "/endpoint?url=" + quote(PROFILED, safe=""), headers={"accept": "text/html"}
+    ).text
+    assert "data-void-table" in body, "the endpoint page draws no VoID table"
+    opening = body[body.index("<details") : body.index("data-void-table") + 40]
+    assert " open" not in opening, f"the table starts open: {opening!r}"
+    classes = body.count("data-void-class=")
+    assert classes == len(_partitions(store_content_profiles)), classes
+
+
+def _partitions(store):
+    from void_document import void_partitions
+
+    return void_partitions(store, PROFILED)
+
+
 def test_naming_no_endpoint_is_a_400(client_for, store_content_profiles):
     response = client_for(store_content_profiles).get(
         VOID_PATH, headers={"accept": "text/turtle"}
