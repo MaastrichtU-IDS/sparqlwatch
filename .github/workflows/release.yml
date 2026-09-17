@@ -129,12 +129,41 @@ jobs:
           echo "::error::CI had not concluded on $GITHUB_SHA after 30 minutes"
           exit 1
 
+      # `github.event.head_commit` is part of the PUSH payload and nothing else,
+      # so on workflow_dispatch and on a tag it is absent and the subject came
+      # out empty -- a PR titled "roll to abc1234 — " with a bare dash. Read
+      # from the API instead, which answers for every trigger this workflow has.
+      #
+      # GITHUB_TOKEN here, not SERVICES_TOKEN: this reads THIS repository, and
+      # the job's own token is what that is for.
+      - id: subject
+        name: Read the commit subject
+        if: steps.guard.outputs.have == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          line=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA" \
+            --jq '.commit.message' | head -n 1)
+          # A commit subject is arbitrary text and goes to GITHUB_OUTPUT, which
+          # is parsed line by line: a delimiter is what keeps a message
+          # containing `subject=` or a newline from writing a second variable.
+          {
+            echo "subject<<COMMIT_SUBJECT_EOF"
+            echo "$line"
+            echo "COMMIT_SUBJECT_EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "subject: $line"
+
       - name: Rewrite the pins and open the PR
         if: steps.guard.outputs.have == 'true'
         env:
           GH_TOKEN: ${{ secrets.SERVICES_TOKEN }}
           SHA: ${{ github.sha }}
-          SUBJECT: ${{ github.event.head_commit.message }}
+          # Through env, never interpolated into the script below: a commit
+          # message is attacker-controllable text and `${{ }}` inside a `run:`
+          # block is substituted before the shell ever sees it.
+          SUBJECT: ${{ steps.subject.outputs.subject }}
         run: |
           set -euo pipefail
           git clone --depth 1 \
@@ -157,11 +186,10 @@ jobs:
             exit 0
           fi
 
-          # The first line of the release commit, so the deploy PR says what it
-          # is deploying and not only which SHA. Built with printf rather than a
-          # heredoc: every line of a `run: |` block must stay indented, and a
+          # Already one line, from the step above. Built with printf rather than
+          # a heredoc: every line of a `run: |` block must stay indented, and a
           # message written flush-left silently ends the block instead.
-          subject=$(printf '%s' "$SUBJECT" | head -n 1)
+          subject="$SUBJECT"
           short=${SHA:0:7}
           printf '%s\n' \
             "sparqlwatch(dev): roll to ${short} — ${subject}" \
