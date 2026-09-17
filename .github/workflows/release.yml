@@ -87,6 +87,23 @@ jobs:
     needs: image
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    # A `permissions` block is the COMPLETE set, not an addition: the
+    # workflow-level one above grants contents:read and packages:write, so
+    # everything else -- including actions:read -- is `none`. The first live run
+    # of this job died on exactly that, with
+    #
+    #   couldn't fetch workflows for MaastrichtU-IDS/sparqlwatch:
+    #   HTTP 403: Resource not accessible by integration
+    #
+    # because `gh run list --workflow CI` resolves that name to an id by LISTING
+    # the repository's workflows first. It could not show up in testing off the
+    # runner: a personal token carrying `repo` reads all of this and never asks.
+    #
+    # Declared per-job rather than widened at the top, so the image job keeps
+    # the narrower set it has always had.
+    permissions:
+      contents: read
+      actions: read
     steps:
       # A missing secret must not turn every release red. Before SERVICES_TOKEN
       # exists this job finds no token and stops, and the image is published
