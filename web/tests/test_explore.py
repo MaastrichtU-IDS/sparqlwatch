@@ -22,7 +22,6 @@ from app import (
     HISTORY_PATH,
     INDEX_PATH,
     app,
-    explore_endpoints,
     get_store,
 )
 
@@ -180,58 +179,6 @@ def test_the_generator_can_still_rebuild_the_payload():
     assert "__PAYLOAD__" in (tools / "template.html").read_text()
 
 
-def test_the_index_links_only_the_rows_the_explorer_can_show(client_for, store):
-    """Two of 543 today.
-
-    A `content` link on an endpoint the explorer holds nothing for would open a
-    page with an empty listing, and a reader would take that for "this endpoint
-    has no vocabulary" when what happened is that nobody looked. On these pages
-    an absent qualifier is a positive claim, and so is a link that leads
-    somewhere empty.
-    """
-    body = client_for(store).get("/").text
-    listed = set(re.findall(r'data-endpoint="([^"]+)"', body))
-    linked = {unquote(u) for u in re.findall(r'href="/explore\?endpoint=([^"]+)"', body)}
-
-    # The invariant, stated against whatever this store happens to hold rather
-    # than against a fixed pair: a row is linked exactly when the explorer has
-    # that endpoint. This fixture carries no content profile, so `linked` is
-    # empty and that is the correct answer rather than a missing link.
-    explorable = set(explore_endpoints(store))
-    assert linked == listed & explorable, (
-        f"linked {sorted(linked)}, expected {sorted(listed & explorable)}"
-    )
-    assert linked <= listed, "a link for an endpoint this page does not list"
-
-
-def test_the_decision_itself_both_ways(store_content_profiles):
-    """The positive case, asked of the function that makes the decision.
-
-    Written against `_index_row` because the negative half needs an endpoint the
-    store has no profile for, and a fixture cannot hold one of those and the
-    positive case at once. It used to read the static payload's endpoint list;
-    now the store supplies both sides, so this proves the link appears rather
-    than only that it is withheld.
-    """
-    from app import _index_metrics, _index_row
-    from endpoint_measurements import endpoint_measurements
-
-    store = store_content_profiles
-    explorable = explore_endpoints(store)
-    known = sorted(explorable)[0]
-    entries = [endpoint_measurements(store, e) for e in _endpoints_in(store)]
-    metrics = _index_metrics(entries)
-    sample = entries[0]
-
-    object.__setattr__(sample, "endpoint", known)
-    assert _index_row(sample, metrics, explorable)["content_href"] == (
-        "/explore?endpoint=" + quote(known, safe="")
-    )
-
-    object.__setattr__(sample, "endpoint", "http://example.org/not-probed")
-    assert _index_row(sample, metrics, explorable)["content_href"] is None
-
-
 def _endpoints_in(store):
     rows = store.query(
         "PREFIX dqv: <http://www.w3.org/ns/dqv#> "
@@ -240,23 +187,32 @@ def _endpoints_in(store):
     return sorted(r["e"].value for r in rows)
 
 
-def test_the_link_carries_the_endpoint_encoded(client_for, store):
-    """The endpoint is a URL inside a URL. Unencoded, its own ?url= and & would
-    be read as this page's parameters."""
-    body = client_for(store).get("/").text
-    for target in re.findall(r'href="/explore\?endpoint=([^"]+)"', body):
-        assert "://" not in target, f"{target} is not encoded"
-        assert unquote(target).startswith("http"), target
+def test_the_index_draws_no_per_row_explorer_link(client_for, store_content_profiles):
+    """Four tests stood here until 2026-09-17 and three had stopped asserting
+    anything.
 
+    They covered the [content] link: that it appeared exactly for the rows the
+    explorer holds something for, that its target was percent-encoded, and that
+    every linked endpoint was really in the payload. The owner removed the link
+    -- the endpoint name beside it reaches the same page -- and
+    `explore_endpoints`, the function that made the decision, went with its last
+    caller.
 
-def test_a_linked_endpoint_is_one_the_payload_actually_holds(client_for, store):
-    """The link and the data must agree, or the page opens with a chip selected
-    that matches nothing and shows an empty listing: the exact failure the
-    filtering above exists to prevent."""
-    held = set(explore_endpoints(store))
-    body = client_for(store).get("/").text
-    for target in re.findall(r'href="/explore\?endpoint=([^"]+)"', body):
-        assert unquote(target) in held, f"{unquote(target)} is linked but not in the payload"
+    Three of the four looped over `/explore?endpoint=` links found in the page.
+    With no such link emitted, those loops ran zero times and passed for the
+    wrong reason, which is the failure this suite has been finding all day. One
+    statement replaces them, and it is the one that is true now. Run against a
+    fixture WITH content profiles, so the assertion has something to be wrong
+    about: against a store the explorer holds nothing for, "no links" is true
+    either way and the test would prove nothing again.
+    """
+    body = client_for(store_content_profiles).get("/").text
+    assert re.search(r'data-endpoint="', body), "this fixture lists no rows"
+    assert not re.findall(r'href="/explore\?endpoint=', body), (
+        "the index draws a per-row explorer link again"
+    )
+    # The header nav's own /explore entry is a different thing and stays.
+    assert 'href="/explore"' in body
 
 
 def test_the_explorer_payload_is_built_once_per_render(
