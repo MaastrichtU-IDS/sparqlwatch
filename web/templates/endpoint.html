@@ -166,6 +166,15 @@
   .v-nostate { visibility: hidden; }
   .vocab-count { font-size: 11.5px; color: var(--text-dim);
                  font-variant-numeric: tabular-nums; }
+  /* The search's marks. A background and nothing else: the term is already
+     mono and the row already carries a state chip, so a heavier treatment
+     would compete with the encoding for the same glance. Inherits the row's
+     colour rather than the browser default black-on-yellow, which is the one
+     pairing that would not survive the dark theme. */
+  .vocab mark { background: var(--overlay); color: inherit;
+                box-shadow: inset 0 0 0 1px var(--border);
+                border-radius: 2px; padding: 0 1px; }
+
   /* A grid, so the five columns line up down the list rather than wrapping
      per row. Capped in height and scrolled, because 408 terms is a page of
      its own otherwise and the panels below it would be unreachable. */

@@ -127,6 +127,71 @@ def test_the_shared_case_table_holds():
         )
 
 
+HIGHLIGHT_CASES = [
+    # text, query, expected with matches in brackets
+    ("hasDrugTarget", "drug", "has[Drug]Target"),
+    ("hasDrugTarget", "DRUG", "has[Drug]Target"),
+    ("hasDrugTarget", "has target", "[has]Drug[Target]"),
+    # Overlaps resolve longest-first from the earliest start, so two needles
+    # covering the same characters draw one mark and never a nested pair.
+    ("abc", "a abc", "[abc]"),
+    ("abab", "ab", "[ab][ab]"),
+    # A fuzzy hit marks NOTHING. `rank` would surface this row in the "close
+    # matches" band, and a mark over `Drug` for the query `recpetor` would
+    # claim those characters are what was asked for.
+    ("hasDrugTarget", "recpetor", "hasDrugTarget"),
+    ("hasDrugTarget", "", "hasDrugTarget"),
+    ("hasDrugTarget", "   ", "hasDrugTarget"),
+    # Markup in the query is matched as characters, never interpreted. The DOM
+    # half builds text nodes from these segments and writes no innerHTML, so
+    # this is the value that reaches createTextNode.
+    ("a<img src=x>b", "<img", "a[<img] src=x>b"),
+    ("nothing here", "zzz", "nothing here"),
+]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_search_marks_what_it_matched_and_nothing_else(tmp_path):
+    """Highlighting is a pure function over (text, query), tested as one.
+
+    It returns SEGMENTS rather than a string of HTML, and that shape is the
+    security property as much as a convenience: the query is whatever someone
+    typed into the box, so a function assembling `<mark>` + needle + `</mark>`
+    would put markup from the search field into the page. The caller builds
+    text nodes. The `<img` case below is the one that would show it.
+
+    The other claim is honesty. `rank` also accepts a token prefix and a
+    one-edit typo, and this matcher accepts neither: a row surfaced for
+    `recpetor` appears under "close matches" with nothing marked, which says
+    it is here and not because it contains what you typed.
+
+    Skipped where node is absent, like the transliteration test below it.
+    """
+    script = Path(__file__).resolve().parents[1] / "static" / "vocab-search.js"
+    mjs_copy = tmp_path / "vocab-search.mjs"
+    mjs_copy.write_bytes(script.read_bytes())
+
+    harness = f"""
+      import {{ highlightRanges }} from {str(mjs_copy)!r};
+      const cases = {json.dumps([[t, q] for t, q, _ in HIGHLIGHT_CASES])};
+      const drawn = cases.map(([text, query]) =>
+        highlightRanges(text, query)
+          .map((s) => (s.mark ? "[" + s.text + "]" : s.text)).join(""));
+      // Every result must concatenate back to the input: a highlighter that
+      // drops or duplicates a character has rewritten the term.
+      const identity = cases.every(([text, query]) =>
+        highlightRanges(text, query).map((s) => s.text).join("") === text);
+      console.log(JSON.stringify({{drawn, identity}}));
+    """
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", harness],
+        capture_output=True, text=True, check=True,
+    )
+    got = json.loads(result.stdout)
+    assert got["drawn"] == [expected for _, _, expected in HIGHLIGHT_CASES]
+    assert got["identity"], "a highlighted term is not its own text"
+
+
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_the_javascript_agrees_with_python(tmp_path):
     """The browser and the server must score identically.
