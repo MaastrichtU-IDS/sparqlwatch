@@ -18,6 +18,7 @@ from starlette.testclient import TestClient
 import app as app_module
 import verdict_encoding
 from app import (
+    _docs_context,
     ABOUT_PATH,
     DOCS_METRICS_PATH,
     DOCS_PATH,
@@ -348,6 +349,60 @@ def test_every_page_offers_the_same_header_nav(client):
         body = client.get(path, headers={"accept": "text/html"}).text
         nav = [a["href"] for a in with_attribute(body, "data-nav")]
         assert nav == ["/", "/explore", "/history", "/docs", "/about"], f"{path} nav is {nav}"
+
+
+SUB_PAGES = (DOCS_METRICS_PATH, DOCS_STATES_PATH, DOCS_VOID_PATH)
+
+
+def test_every_docs_page_reaches_every_other_one(client):
+    """The dead end this closes, found by walking the live site on 2026-09-17.
+
+    /docs listed its four pages and each of the four linked ONLY back to /docs,
+    so Metrics to States was two clicks through the page whose whole purpose is
+    to point at both. Asserted as reachability rather than as markup: every
+    sibling must be reachable from every page, however the nav is drawn.
+
+    /docs itself is included in the loop because it is the page the others
+    used to be reachable only through, and it must not lose that.
+    """
+    listed = [entry["path"] for entry in _docs_context()["pages"]]
+    assert len(listed) == 4, listed
+    for path in (DOCS_PATH, *SUB_PAGES):
+        body = client.get(path, headers={"accept": "text/html"}).text
+        hrefs = {a["href"] for a in with_attribute(body, "href")}
+        for sibling in listed:
+            if sibling == path:
+                continue
+            assert sibling in hrefs, f"{path} cannot reach {sibling}"
+
+
+def test_a_docs_page_does_not_link_to_itself(client):
+    """A nav entry for the page you are on is a link that goes nowhere, and it
+    is the one entry a reader uses to work out where they are. It is drawn as
+    text carrying aria-current, which is what base.html's header nav already
+    does for the section."""
+    for path in SUB_PAGES:
+        body = client.get(path, headers={"accept": "text/html"}).text
+        entries = with_attribute(body, "data-subnav")
+        assert len(entries) == 4, f"{path} draws {len(entries)} nav entries"
+        here = [e for e in entries if e["data-subnav"] == path]
+        assert len(here) == 1, f"{path} does not mark itself: {entries}"
+        assert here[0].get("aria-current") == "page", here[0]
+        assert "href" not in here[0], f"{path} links to itself"
+        # And exactly one entry is marked, or "where am I" has two answers.
+        marked = [e for e in entries if e.get("aria-current") == "page"]
+        assert len(marked) == 1, marked
+
+
+def test_the_section_nav_invents_no_titles_of_its_own(client):
+    """The nav renders `pages`, the same table /docs renders, so a fifth page is
+    added in one place. A second hand-kept list is how the index and the nav
+    start disagreeing about what a page is called."""
+    titles = {entry["title"] for entry in _docs_context()["pages"]}
+    for path in SUB_PAGES:
+        body = client.get(path, headers={"accept": "text/html"}).text
+        drawn = set(texts_with(body, "data-subnav"))
+        assert drawn == titles, f"{path} draws {drawn}, the table says {titles}"
 
 
 def test_no_docs_page_ships_an_href_jinja_could_not_resolve(client):

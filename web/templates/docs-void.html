@@ -22,6 +22,7 @@
 {% endblock %}
 {% block content %}
   <h1>The derived description</h1>
+  {% include "_docs-subnav.html" %}
   <p class="sub">Where an endpoint publishes no description of itself, this
     service derives one from what it observed and serves it at
     <code>{{ void_path }}?url=&hellip;</code> as RDF. It is VoID, with a few

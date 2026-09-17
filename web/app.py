@@ -3435,13 +3435,21 @@ def _nav_context() -> dict:
     }
 
 
-def _docs_context() -> dict:
+def _docs_context(current: str | None = None) -> dict:
     """What every page in this section needs: the way home, and its siblings.
 
     One table, so a fourth page is added in one place and every page's nav
     learns about it. Monitoring is a full entry with a `path` like the others,
     which is what lets the index list three pages without knowing that one of
     them lives outside /docs.
+
+    `current` is the page being rendered, and it is what turned this table from
+    an index into a nav on 2026-09-17. Until then /docs listed the four and each
+    of the four linked only back to /docs, so moving from Metrics to States was
+    two clicks through a page that exists to point at both. The table was
+    already on every page; nothing new is fetched and no title is invented here
+    -- `pages` is the same list /docs renders, and a page marks itself so it can
+    be drawn as the one you are on rather than as a link to here.
     """
     return {
         **_nav_context(),
@@ -3452,6 +3460,7 @@ def _docs_context() -> dict:
         "docs_path": DOCS_PATH,
         "explore_path": EXPLORE_PATH,
         "about_path": ABOUT_PATH,
+        "current_doc": current,
         "pages": [
             {
                 "path": DOCS_METRICS_PATH,
@@ -3502,7 +3511,7 @@ def _docs_void_context() -> dict:
     does. Sorted so the order is stable between renders. void_path itself now
     comes from _docs_context (by way of _nav_context, merged in first at the
     call site) rather than from here: docs_void_resource renders
-    **_docs_context(), **_docs_void_context() as two separate keyword
+    **_docs_context(DOCS_VOID_PATH), **_docs_void_context() as two separate keyword
     expansions, and a key both dicts set is a TypeError there, not a silent
     override.
     """
@@ -4065,7 +4074,7 @@ def docs_metrics_resource(request: Request) -> Response:
     return _negotiated(
         request,
         lambda: _TEMPLATES.get_template("docs-metrics.html").render(
-            **_docs_context(), **_docs_metrics_context()
+            **_docs_context(DOCS_METRICS_PATH), **_docs_metrics_context()
         ),
         _docs_metrics_rdf,
     )
@@ -4077,7 +4086,7 @@ def docs_states_resource(request: Request) -> Response:
     return _negotiated(
         request,
         lambda: _TEMPLATES.get_template("docs-states.html").render(
-            **_docs_context(), **_docs_states_context()
+            **_docs_context(DOCS_STATES_PATH), **_docs_states_context()
         ),
         _docs_states_rdf,
     )
@@ -4088,7 +4097,7 @@ def docs_void_resource(request: Request) -> Response:
     """What the derived description is, and what its own terms mean."""
     return Response(
         content=_TEMPLATES.get_template("docs-void.html").render(
-            **_docs_context(), **_docs_void_context()
+            **_docs_context(DOCS_VOID_PATH), **_docs_void_context()
         ),
         media_type="text/html; charset=utf-8",
     )

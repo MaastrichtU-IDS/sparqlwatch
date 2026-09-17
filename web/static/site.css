@@ -141,6 +141,16 @@ button:focus-visible {
   .contact, .contact a { overflow-wrap: anywhere; }
 }
 
+/* The documentation section's own nav, on each of its pages. Muted and small:
+   it sits under an h1 that already says where you are, so it is a way out
+   rather than a heading. The current page is a <span> and not a link, drawn in
+   the text colour so it reads as the one you are on. */
+.subnav { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0 0 18px;
+          font-size: 12.5px; }
+.subnav a { color: var(--text-muted); }
+.subnav a:hover { color: var(--accent); }
+.subnav [aria-current="page"] { color: var(--text-bright); font-weight: 600; }
+
 /* The footer. One line, and the version is the reason it exists: a reader
    looking at a verdict needs to know which build produced it, and an
    operator who found sparqlwatch in their logs needs to match the number
