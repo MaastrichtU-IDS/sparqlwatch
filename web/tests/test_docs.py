@@ -350,17 +350,22 @@ def test_every_page_offers_the_same_header_nav(client):
         assert nav == ["/", "/explore", "/history", "/docs", "/about"], f"{path} nav is {nav}"
 
 
-def test_the_footer_void_link_has_a_real_href(client):
+def test_no_docs_page_ships_an_href_jinja_could_not_resolve(client):
     """void_path reached every docs page through _nav_context on 2026-09-15.
 
     Before that it was set in two of eight page contexts, and Jinja's default
     Undefined renders a missing value as an empty string rather than raising,
     so the other six pages would have shipped href="" with nothing to catch
-    it. This checks the footer actually carries the path and not the empty
-    string a silent Undefined would produce.
+    it. That is the failure this guards, and it is not specific to void_path:
+    ANY path key a context forgets renders the same silent empty href.
+
+    It was written as a check on the footer's VoID link, which is what the
+    missing key showed up as. The owner removed that link on 2026-09-17, so
+    the test now asks the question the bug was actually about, of every link
+    on every docs page rather than of one.
     """
     for path in (DOCS_PATH, DOCS_METRICS_PATH, DOCS_STATES_PATH, DOCS_VOID_PATH):
         body = client.get(path, headers={"accept": "text/html"}).text
         hrefs = [a["href"] for a in with_attribute(body, "href")]
+        assert hrefs, f"{path} has no links at all"
         assert "" not in hrefs, f"{path} has an href Jinja could not resolve"
-        assert app_module.VOID_PATH in hrefs, f"{path}'s footer has no VoID link"
