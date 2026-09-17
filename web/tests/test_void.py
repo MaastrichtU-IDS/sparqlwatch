@@ -175,6 +175,66 @@ def test_a_browser_gets_the_turtle_as_text_rather_than_a_refusal(
     assert shape(response.text)[0] > 0
 
 
+def test_the_turtle_declares_prefixes_and_still_says_the_same_thing(
+    client_for, store_content_profiles
+):
+    """A document a person can read, without becoming a different document.
+
+    Served with no prefixes until 2026-09-17, so every term was a full IRI in
+    angle brackets and semopenalex's description ran to 47.9 KB -- the owner
+    asked whether it could be rendered nicely and this is the half that costs
+    nothing. Both halves are asserted, because only the pair is the claim:
+    prefixes ARE declared and used, and the triples are unchanged. Prefixed
+    Turtle that dropped or altered a statement would be a smaller document
+    saying something else.
+    """
+    client = client_for(store_content_profiles)
+    body = fetch(client, PROFILED, accept="text/turtle").text
+    assert body.startswith("@prefix ") or "\n@prefix " in body
+    assert "@prefix void: <http://rdfs.org/ns/void#> ." in body
+    assert "@prefix sw: <urn:sparqlwatch:> ." in body
+    # Declared AND used: a document full of @prefix lines that still writes
+    # every term out in full is the same document with a longer header.
+    assert "a void:Dataset" in body, body[:400]
+    assert "<http://rdfs.org/ns/void#Dataset>" not in body
+
+    # The same triples. Parsed rather than compared as text, and blank nodes
+    # excluded, because their labels are minted per serialisation.
+    ntriples = fetch(client, PROFILED, accept="application/n-triples").text
+    def shape(text, fmt):
+        triples = list(parse(text.encode(), format=fmt))
+        return len(triples), {
+            (str(t.subject), str(t.predicate), str(t.object))
+            for t in triples
+            if isinstance(t.subject, NamedNode) and not isinstance(t.object, BlankNode)
+        }
+    assert shape(body, RdfFormat.TURTLE) == shape(ntriples, RdfFormat.N_TRIPLES)
+
+
+def test_the_document_and_the_explorer_abbreviate_a_term_the_same_way(
+    client_for, store_content_profiles
+):
+    """One table, not two. A class the explorer labels `skos:` must not be
+    `core:` in the document beside it, which is what a second hand-written
+    prefix list here would eventually produce.
+
+    VOID_PREFIXES inverts explore_payload's own table rather than restating it,
+    so this is a guard on that sharing surviving, not on the values.
+    """
+    from explore_payload import WELL_KNOWN_PREFIXES
+    from void_document import VOID_PREFIXES
+
+    for namespace, prefix in WELL_KNOWN_PREFIXES.items():
+        assert prefix in VOID_PREFIXES, f"{prefix} is on the explorer and not here"
+    # Not injective: http://schema.org/ and https://schema.org/ share `schema`,
+    # and Turtle may declare a prefix once. First-wins is the rule, so the
+    # document keeps the http form and the https one writes out in full.
+    assert VOID_PREFIXES["schema"] == "http://schema.org/"
+    # The document's own five are never overwritten by that merge.
+    assert VOID_PREFIXES["void"] == "http://rdfs.org/ns/void#"
+    assert VOID_PREFIXES["sw"] == "urn:sparqlwatch:"
+
+
 def test_an_accept_naming_only_unservable_types_is_still_a_406(
     client_for, store_content_profiles
 ):

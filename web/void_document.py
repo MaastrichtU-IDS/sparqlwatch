@@ -33,6 +33,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from explore_payload import WELL_KNOWN_PREFIXES
 from pyoxigraph import (
     BlankNode,
     Literal,
@@ -52,6 +53,49 @@ PROV = "http://www.w3.org/ns/prov#"
 RDF = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
 RDFS = "http://www.w3.org/2000/01/rdf-schema#"
 SW = "urn:sparqlwatch:"
+
+# The prefixes the served Turtle declares. Two groups, and the split is the
+# point. The first five are THIS DOCUMENT'S OWN vocabulary -- every document
+# uses all of them, whatever endpoint it describes -- and the rest are the
+# well-known namespaces a described endpoint's classes and properties commonly
+# fall in, shared with the explorer so the two pages abbreviate a term the same
+# way. A namespace nothing in a given document uses costs one unused @prefix
+# line; a namespace that is used and missing costs a full IRI on every term.
+#
+# Nothing here changes what the document SAYS: prefixed Turtle parses to the
+# same triples, which is what test_void's byte-shape comparison asserts. It is
+# a 28% smaller document (47.9 KB to 34.5 KB, measured on semopenalex's) that a
+# person has some chance of reading, which is what the owner asked for.
+#
+# What this does NOT fix is blank nodes: pyoxigraph 0.5.9 writes them as
+# `_:b2934...` references rather than nesting them in `[ ]`, so the class and
+# property partitions are still a flat list of cross-references. Nesting needs
+# a different serialiser.
+VOID_PREFIXES = {
+    "void": VOID,
+    "sw": SW,
+    "rdf": RDF,
+    "rdfs": RDFS,
+    "prov": PROV,
+    "dcterms": DCT,
+    # The explorer's table, inverted. Shared rather than copied so a term this
+    # document abbreviates as skos:prefLabel is not `core:prefLabel` on the page
+    # beside it. `rdf`, `rdfs`, `void`, `prov` and `dcterms` appear in both and
+    # agree; the dict literal above wins on a disagreement, which is right
+    # because those five are the document's own.
+    #
+    # Inverted FIRST-WINS, not last-wins, because the explorer's table is not
+    # injective: http://schema.org/ and https://schema.org/ both label as
+    # `schema`, and a Turtle document may declare a prefix only once. First-wins
+    # picks the http form, the one that appears first there. The loser is not
+    # dropped from the document -- its terms simply write out in full, which is
+    # correct Turtle and the same thing that happens to every namespace not on
+    # this list.
+    **{
+        prefix: ns
+        for ns, prefix in reversed(list(WELL_KNOWN_PREFIXES.items()))
+    },
+}
 XSD_INTEGER = NamedNode("http://www.w3.org/2001/XMLSchema#integer")
 XSD_DATETIME = NamedNode("http://www.w3.org/2001/XMLSchema#dateTime")
 XSD_BOOLEAN = NamedNode("http://www.w3.org/2001/XMLSchema#boolean")
