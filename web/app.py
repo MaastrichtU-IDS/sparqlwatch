@@ -75,7 +75,12 @@ from explore_payload import (
     split_iri,
 )
 from vocab_match import tokenize
-from void_document import VOID_PREFIXES, void_summary, void_triples
+from void_document import (
+    VOID_PREFIXES,
+    void_partitions,
+    void_summary,
+    void_triples,
+)
 from endpoint_index import endpoint_index
 from endpoint_history import EndpointHistory, endpoint_history
 from fleet import FleetHistory, fleet_history, fleet_stats
@@ -1304,6 +1309,7 @@ def _page_context(
     history: EndpointHistory,
     vocabulary: list[dict],
     void: dict | None,
+    partitions: list[dict],
 ) -> dict:
     """Everything the template renders, decided here rather than in the page.
 
@@ -1337,6 +1343,10 @@ def _page_context(
         # "is this complete" would eventually differ in front of somebody
         # deciding whether to depend on it.
         "void": void,
+        # The same document the /void route serves, as rows. Read back out of
+        # void_triples rather than worked out again -- see void_partitions --
+        # so the table cannot show a partition the document does not have.
+        "void_partitions": partitions,
         "void_path": VOID_PATH,
         # Oldest first, and only where there is more than one: a single-cell
         # timeline implies a trend from one observation.
@@ -1407,10 +1417,13 @@ def _endpoint_html(
     history: EndpointHistory,
     vocabulary: list[dict],
     void: dict | None,
+    partitions: list[dict],
 ) -> str:
     """The page, rendered."""
     return _TEMPLATES.get_template("endpoint.html").render(
-        **_page_context(endpoint, measurements, content, history, vocabulary, void)
+        **_page_context(
+            endpoint, measurements, content, history, vocabulary, void, partitions
+        )
     )
 
 
@@ -1536,6 +1549,7 @@ def endpoint_resource(
                 endpoint_history(store, url),
                 endpoint_vocabulary(store, url),
                 void_summary(store, url),
+                void_partitions(store, url),
             ),
             media_type="text/html; charset=utf-8",
         )
