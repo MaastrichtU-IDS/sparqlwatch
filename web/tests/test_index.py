@@ -3057,3 +3057,280 @@ def test_a_pill_reads_as_words_and_filters_by_its_slug(client_for, store_registr
     labels = texts_with(body, "data-pill")
     assert labels, "the chips render no text"
     assert not any("_" in t or "-" in t for t in labels), f"a pill shows a raw slug: {labels}"
+
+
+# ---------------------------------------------------------------------------
+# The dot each row leads with
+# ---------------------------------------------------------------------------
+
+
+class _InRows(HTMLParser):
+    """Elements carrying a named attribute, grouped by the row they are in.
+
+    A single pass in document order, because the question every test below
+    asks is about one row: which dot belongs to which endpoint, and which chip
+    sits beside it. Two separate `with_attribute` sweeps cannot answer that --
+    they return every row and then every dot, and pairing them up by position
+    is an assumption about the markup rather than a reading of it.
+    """
+
+    def __init__(self, attribute):
+        super().__init__()
+        self.attribute = attribute
+        self.rows = {}
+        self._endpoint = None
+
+    def handle_starttag(self, tag, attrs):
+        attributes = dict(attrs)
+        if "data-endpoint" in attributes:
+            self._endpoint = attributes["data-endpoint"]
+            self.rows.setdefault(self._endpoint, [])
+        if self.attribute in attributes and self._endpoint is not None:
+            self.rows[self._endpoint].append(attributes)
+
+
+def _in_rows(text, attribute):
+    parser = _InRows(attribute)
+    parser.feed(text)
+    return parser.rows
+
+
+def _dots(text):
+    """The leading dot of every row, by the endpoint whose row carries it.
+
+    Read off `data-available` and the class, which is the whole of what the dot
+    says: one is the answer in a word, the other is how it is drawn.
+    """
+    found = {}
+    for endpoint, dots in _in_rows(text, "data-available").items():
+        assert len(dots) == 1, f"{endpoint} carries {len(dots)} dots"
+        found[endpoint] = dots[0]
+    return found
+
+
+def test_every_row_leads_with_exactly_one_dot(client_for, store_registry_sample):
+    """One per row, no more and no fewer.
+
+    A row with no dot is a row a reader scanning the column skips over, and two
+    would be two answers to one question.
+    """
+    text = index(client_for(store_registry_sample))
+    rows = with_attribute(text, "data-endpoint")
+    dots = with_attribute(text, "data-available")
+    assert len(rows) == REGISTRY_SAMPLE_ENDPOINTS
+    assert len(dots) == len(rows)
+
+
+def test_the_dot_and_the_availability_chip_never_disagree(
+    client_for, store_registry_sample
+):
+    """The dot duplicates a chip already on the row, so the only question worth
+    asking of it is whether the two can ever say different things.
+
+    They read one function of one verdict, and this is what holds that: row by
+    row, the dot's words have to be the availability chip's words. The two are
+    drawn differently ON PURPOSE -- the chip says which of seven verdicts, the
+    dot says only whether it answered -- so what must not drift is the fact
+    underneath, and the title is where that fact is stated in both.
+
+    A dot whose tooltip named a verdict the chip beside it does not carry would
+    be two readings of one measurement, which is what a second table of
+    "available" produces.
+
+    The chip is found BY ITS TITLE rather than by a metric attribute, because
+    the index's chips carry none -- 74 rows times thirteen chips is the one
+    place on this site where an attribute per chip was judged not worth its
+    bytes. That the dot's title identifies exactly one chip is the first
+    assertion, not an assumption.
+    """
+    text = index(client_for(store_registry_sample))
+    dots = _dots(text)
+    assert dots, "no dots on the page, so this test proves nothing"
+
+    chips = _in_rows(text, "title")
+    for endpoint, dot in dots.items():
+        matching = [
+            chip
+            for chip in chips[endpoint]
+            if chip.get("title") == dot["title"]
+            and "dot" not in chip.get("class", "").split()
+        ]
+        assert len(matching) == 1, (
+            f"{endpoint}: {len(matching)} chips carry the dot's title "
+            f"{dot['title']!r}, so this comparison has nothing to compare "
+            f"against"
+        )
+
+
+def test_available_means_what_it_means_everywhere_else_on_this_page(
+    client_for, store_registry_sample
+):
+    """`_POSITIVE_VERDICTS`, and not a second table with the same name.
+
+    The facet chips were built from that table, and a reader who presses one
+    and then counts dots has asked one question twice. Asserted through the
+    dot's own `data-available`, which is the word the markup gives a reader,
+    against the function the rest of the page filters with.
+    """
+    from app import _POSITIVE_VERDICTS, endpoint_index
+
+    entries = {e.endpoint: e for e in endpoint_index(store_registry_sample)}
+    dots = _dots(index(client_for(store_registry_sample)))
+    assert len(dots) == len(entries)
+
+    for endpoint, dot in dots.items():
+        verdict = next(
+            (
+                v.verdict
+                for v in entries[endpoint].verdicts
+                if v.metric == M + "availability"
+            ),
+            None,
+        )
+        expected = (
+            "unknown"
+            if verdict is None
+            else ("yes" if verdict in _POSITIVE_VERDICTS else "no")
+        )
+        assert dot["data-available"] == expected, (
+            f"{endpoint}: verdict {verdict!r} drew {dot['data-available']!r}"
+        )
+
+
+def test_a_row_nobody_asked_is_not_drawn_as_one_that_failed(
+    client_for, store_no_availability_two_ways
+):
+    """THE case the third state exists for, in the two ways a store reaches it.
+
+    One endpoint's run DECLINED availability; the other recorded nothing about
+    it either way. Neither is a server that failed to answer -- in both, nobody
+    found out -- and a red dot would report an endpoint as down on the strength
+    of a sweep that never asked it. That is the one thing the six-verdict
+    vocabulary exists to prevent, and it is why "whether they last scanned as
+    available" cannot be a boolean.
+
+    There are none of these in the deployed store today: availability is on the
+    hourly cadence and all 74 endpoints carry a verdict. It becomes reachable
+    the moment a sweep declines the metric, and a state first drawn in
+    production is a state drawn wrong.
+    """
+    dots = _dots(index(client_for(store_no_availability_two_ways)))
+    assert set(dots) == {KADASTER, NO_AVAILABILITY}
+    for endpoint, dot in dots.items():
+        assert dot["data-available"] == "unknown", endpoint
+
+
+def test_the_dot_says_the_same_thing_with_the_colour_taken_away(
+    client_for, store_registry_sample
+):
+    """The site's rule, applied to the one element on it a reader would call
+    pure colour.
+
+    docs/design/verdict-encoding.md is canonical that no meaning here rests on
+    colour, because a reader who cannot separate the colours has nothing else
+    left -- and green against red is the pair most of them cannot separate. The
+    dot answers its own three-state question rather than wearing a verdict
+    class (argued above `_availability_dot`), so the rule has to be checked
+    against ITS rules: the three have to differ on the channels that document
+    names, before any colour is applied.
+
+    Read out of the page's own stylesheet, so a rule edited in the template
+    fails here rather than in a reader's eye.
+    """
+    text = index(client_for(store_registry_sample))
+
+    drawings = {}
+    for answer in ("yes", "no", "unknown"):
+        rule = re.search(
+            r'\.dot\[data-available="%s"\]\s*\{([^}]*)\}' % answer, text
+        )
+        assert rule, f"no rule draws data-available={answer}"
+        body = rule.group(1)
+        border = re.search(r"border:\s*(\d+)px\s+(\w+)", body)
+        fill = re.search(r"background:\s*([^;]+)", body)
+        assert border and fill, body
+        # The three colour-free channels, exactly the ones the canonical
+        # document uses: border width, border style, and whether it is filled.
+        drawings[answer] = (
+            border.group(1),
+            border.group(2),
+            fill.group(1).strip() != "transparent",
+        )
+
+    assert len(set(drawings.values())) == 3, (
+        f"two of the three dots draw identically once colour is removed, so a "
+        f"reader who cannot separate them cannot read this column: {drawings}"
+    )
+    assert drawings["yes"][2] is True, "available should be the filled one"
+    assert drawings["no"][2] is False
+
+
+def test_the_dot_adds_no_wording_of_its_own(client_for, store_registry_sample):
+    """Its tooltip is the availability chip's tooltip, built the same way.
+
+    Two strings for one fact is two things to keep right, and page copy on this
+    site is the owner's rather than this code's.
+    """
+    from app import METRIC_DESCRIPTIONS
+
+    text = index(client_for(store_registry_sample))
+    titles = {dot["title"] for dot in _dots(text).values()}
+    assert titles, "no dots carry a title"
+    for title in titles:
+        assert title.startswith(METRIC_DESCRIPTIONS["availability"] + " — ")
+
+
+def test_every_verdict_the_encoding_has_maps_to_one_answer_and_the_right_one():
+    """Asked of `_availability_dot` directly, over all seven states plus a
+    verdict this build has never heard of.
+
+    The page test above compares the dot against `_POSITIVE_VERDICTS`, but it
+    can only compare on the verdicts its fixture happens to hold, and
+    run-registry-sample.nq holds no `undeclared-but-verified` availability. So
+    narrowing "available" to `verdict == "verified"` passed the whole suite --
+    a second definition of the word, shipping green, invisible until the first
+    endpoint that confirmed availability without declaring it.
+
+    This cannot go vacuous the same way: the states come from
+    verdict_encoding.STATES rather than from a store, so a state added to that
+    table arrives here unanswered rather than untested.
+    """
+    import verdict_encoding
+    from app import _POSITIVE_VERDICTS, _availability_dot
+
+    def dot_for(verdict):
+        return _availability_dot(
+            EndpointMeasurements(
+                endpoint="https://example.org/sparql",
+                assessed=True,
+                run="urn:sparqlwatch:run:x",
+                generated_at="2026-08-22T16:00:00Z",
+                verdicts=[MetricVerdict(metric=M + "availability", verdict=verdict)],
+            )
+        )
+
+    answers = {}
+    for state in verdict_encoding.STATES:
+        dot = dot_for(state.slug)
+        answers[state.slug] = dot["available"]
+        expected = "yes" if state.slug in _POSITIVE_VERDICTS else "no"
+        assert dot["available"] == expected, state.slug
+        assert state.label in dot["title"], (
+            f"{state.slug}'s dot does not name the verdict it was drawn from"
+        )
+
+    assert answers["verified"] == "yes"
+    assert answers["undeclared-but-verified"] == "yes", (
+        "confirmed without being declared is still an endpoint that answered; "
+        "this is the pair that made the page test vacuous"
+    )
+    assert answers["declared-only"] == "no"
+    assert answers["indeterminate"] == "no"
+
+    # A verdict from a prober newer than this page. It is not available -- we
+    # have no reading that says it answered -- and it is drawn in the
+    # unrecognised state rather than as one of the seven, which is what this
+    # site does with every value it cannot read.
+    unrecognised = dot_for("hibernating-2027")
+    assert unrecognised["available"] == "no"
+    assert verdict_encoding.UNRECOGNISED.label in unrecognised["title"]
