@@ -1,0 +1,281 @@
+# The SPARQL endpoints YummyData lists, as YummyData states them.
+#
+# MACHINE-EXTRACTED, unlike kg-catalog.toml beside it, and that difference is
+# the point. This list comes from a JSON export that carries the endpoint url as
+# a field, and the urls are right: this is a service that probes them every day
+# and would notice. kg-catalog.toml had to be hand-corrected because seven of
+# its ten urls did not serve SPARQL, which is a judgement no extraction rule
+# makes. Here `seed` is a transcription, so it is written as one.
+#
+# WHOSE LIST THIS IS. YummyData is the front end of Umakadata, from DBCLS, and
+# it publishes an Umaka Score out of 100 and a letter rank A-E for each
+# endpoint. NEITHER IS COPIED HERE and neither should be. This project's whole
+# position is that a score combining several attributes hides which one is
+# wrong -- see docs/design and /docs/metrics -- so importing their ranking
+# alongside their list would import the thing this service exists not to do.
+# What is taken is the endpoints. What they scored them is recorded once, in
+# yummydata.provenance.toml, as a fact about their sweep rather than ours.
+#
+# A DIFFERENT POPULATION from everything else here, which is why it is worth
+# having: DBCLS curates life sciences, and only 6 of these 63 appear anywhere in
+# the other 544 endpoints this repository holds. They are also maintained rather
+# than dumped -- 42 of the 63 publish a service description, against none of the
+# ten in kg-catalog.toml.
+#
+# NOT A DEVELOPMENT LIST. The default --endpoints is prober/endpoints.toml.
+# These are sixty-three strangers' servers; sweeping them is an explicit act.
+#
+# `title` is the "Name" YummyData gives each endpoint, not something this file
+# infers.
+
+[[endpoint]]
+url = "https://idsm.elixir-czech.cz/sparql/endpoint/idsm"
+title = "IDSM ChemWebRDF"
+
+[[endpoint]]
+url = "https://data.allie.dbcls.jp/sparql"
+title = "Allie"
+
+[[endpoint]]
+url = "https://sparql.rhea-db.org/sparql"
+title = "Rhea"
+
+[[endpoint]]
+url = "https://sparql.proconsortium.org/virtuoso/sparql"
+title = "Protein Ontology"
+
+[[endpoint]]
+url = "https://aopwiki.rdf.bigcat-bioinformatics.org/sparql"
+title = "AOP-Wiki SPARQL endpoint"
+
+[[endpoint]]
+url = "https://sparql.uniprot.org/"
+title = "UniProt"
+
+[[endpoint]]
+url = "https://sparql.wikipathways.org/sparql"
+title = "WikiPathways"
+
+[[endpoint]]
+url = "https://www.imgt.org/fuseki/ImgtKg/sparql"
+title = "IMGT-KG"
+
+[[endpoint]]
+url = "https://sparql.omabrowser.org/sparql"
+title = "OMA Orthology database"
+
+[[endpoint]]
+url = "https://ts.glycosmos.org/sparql"
+title = "GlyCosmos"
+
+[[endpoint]]
+url = "https://query.wikidata.org/sparql"
+title = "Wikidata"
+
+[[endpoint]]
+url = "https://hamap.expasy.org/sparql/"
+title = "HAMAP"
+
+[[endpoint]]
+url = "https://ts.glytoucan.org/sparql"
+title = "GlyTouCan"
+
+[[endpoint]]
+url = "https://hitontology.eu/sparql"
+title = "Health IT Ontology"
+
+[[endpoint]]
+url = "http://lsd.dbcls.jp/sparql"
+title = "Life Science Dictionary"
+
+[[endpoint]]
+url = "http://sparql.orthodb.org/sparql"
+title = "OrthoDB @ sib.swiss"
+
+[[endpoint]]
+url = "https://plantmetwiki.bioinformatics.nl/sparql"
+title = "Plant Metabolic Pathways Wiki"
+
+[[endpoint]]
+url = "https://id.nlm.nih.gov/mesh/sparql"
+title = "Medical Subject Headings (MeSH) RDF Linked Data"
+
+[[endpoint]]
+url = "https://rdfportal.org/sib/sparql"
+title = "RDF Portal SIB"
+
+[[endpoint]]
+url = "https://rdf.metanetx.org/sparql"
+title = "MetaNetX"
+
+[[endpoint]]
+url = "https://rdfportal.org/primary/sparql"
+title = "NBDC NikkajiRDF (RDF Portal)"
+
+[[endpoint]]
+url = "https://rdfportal.org/pubchem/sparql"
+title = "RDF Portal PubChem"
+
+[[endpoint]]
+url = "http://navi.first.lifesciencedb.jp/fanavi/sparql"
+title = "FirstAuthor Navigation"
+
+[[endpoint]]
+url = "https://chemblmirror.rdf.bigcat-bioinformatics.org/sparql"
+title = "A SPARQL Explorer for ChEMBL RDF SPARQL Endpoint (mirror)"
+
+[[endpoint]]
+url = "https://2407.biogateway.eu/sparql/"
+title = "BioGateway"
+
+[[endpoint]]
+url = "https://sparql.glycoinfo.org/sparql"
+title = "GLIC SPARQL endpoint"
+
+[[endpoint]]
+url = "http://www.genome.jp/sparql/linkdb"
+title = "LinkDB"
+
+[[endpoint]]
+url = "https://rdfportal.org/ddbj/sparql"
+title = "RDF Portal DDBJ"
+
+[[endpoint]]
+url = "https://rdfportal.org/ebi/sparql"
+title = "RDF Portal EBI"
+
+[[endpoint]]
+url = "https://rdfportal.org/kero/sparql"
+title = "RDF Portal KERO"
+
+[[endpoint]]
+url = "https://rdfportal.org/ncbi/sparql"
+title = "RDF Portal NCBI"
+
+[[endpoint]]
+url = "https://rdfportal.org/pdb/sparql"
+title = "RDF Portal PDB"
+
+[[endpoint]]
+url = "https://rdfportal.org/wikidata/sparql"
+title = "RDF Portal Wikidata"
+
+[[endpoint]]
+url = "https://www.bgee.org/sparql"
+title = "Bgee, a gene expression database"
+
+[[endpoint]]
+url = "https://glyconnect.expasy.org/sparql"
+title = "GlyConnect RDF"
+
+[[endpoint]]
+url = "https://rdfportal.org/bioportal/sparql"
+title = "RDF Portal Bioportal"
+
+[[endpoint]]
+url = "https://forum.semantic-metabolomics.fr/sparql/"
+title = "FORUM Knowledge graph Database"
+
+[[endpoint]]
+url = "http://sparql.hegroup.org/sparql/"
+title = "OBO/OntoBee"
+
+[[endpoint]]
+url = "https://bmrbpub.pdbj.org/search/rdf"
+title = "PDBj-BMRB"
+
+[[endpoint]]
+url = "https://sparql.glyconavi.org/sparql"
+title = "GlycoNAVI"
+
+[[endpoint]]
+url = "https://regulatorycircuits-lod.genouest.org/sparql/"
+title = "Regulatory circuits LOD"
+
+[[endpoint]]
+url = "https://coxpresdb.jp/sparql"
+title = "COXPRESdb"
+
+[[endpoint]]
+url = "https://ideal-rdf.dbcls.jp/sparql"
+title = "IDEAL"
+
+[[endpoint]]
+url = "https://knowledge.brc.riken.jp/sparql"
+title = "BioResource MetaDatabase"
+
+[[endpoint]]
+url = "https://sparql.dsmz.de/api/brenda"
+title = "BRENDA"
+
+[[endpoint]]
+url = "https://lipidmaps.org/sparql"
+title = "LIPID MAPS®"
+
+[[endpoint]]
+url = "https://dydra.com/markw/polyadenylation-sites-in-magnaporthe-oryza/sparql"
+title = "polyadenylation-sites-in-magnaporthe-oryza"
+
+[[endpoint]]
+url = "https://agrovoc.fao.org/sparql"
+title = "AGROVOC"
+
+[[endpoint]]
+url = "https://sparql.dsmz.de/api/bacdive"
+title = "BacDive"
+
+[[endpoint]]
+url = "https://idsm.elixir-czech.cz/sparql/endpoint/chebi"
+title = "ChEBI"
+
+[[endpoint]]
+url = "http://metadb.riken.jp/sparql"
+title = "RIKEN MetaDatabase"
+
+[[endpoint]]
+url = "https://api.data.pldn.nl/datasets/FilipiSoares/AgriPrices-1/sparql"
+title = "KGAP"
+
+[[endpoint]]
+url = "https://sparql.dsmz.de/api/mediadive"
+title = "MediaDive"
+
+[[endpoint]]
+url = "https://idsm.elixir-czech.cz/sparql/endpoint/molmedb"
+title = "MolMeDB"
+
+[[endpoint]]
+url = "https://sparql.string-db.org/"
+title = "STRING"
+
+[[endpoint]]
+url = "https://atted.jp/sparql"
+title = "ATTED-II"
+
+[[endpoint]]
+url = "https://rdfportal.org/proteinatlas/sparql"
+title = "RDF Portal Human Protein Atlas"
+
+[[endpoint]]
+url = "http://colil.dbcls.jp/sparql"
+title = "Colil"
+
+[[endpoint]]
+url = "https://beta.sparql.swisslipids.org/"
+title = "SwissLipids"
+
+[[endpoint]]
+url = "http://sparql.southgreen.fr/"
+title = "Agronomic Linked Data (AgroLD)"
+
+[[endpoint]]
+url = "https://bio2rdf.org/sparql"
+title = "Bio2RDF"
+
+[[endpoint]]
+url = "http://sparql.glygen.org:8880/sparql"
+title = "GlyGen"
+
+[[endpoint]]
+url = "https://sparql.nextprot.org/"
+title = "neXtProt"
