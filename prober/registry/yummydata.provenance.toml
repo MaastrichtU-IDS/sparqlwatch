@@ -1,0 +1,46 @@
+# Where yummydata.toml came from, and what was checked.
+
+[source]
+site = "https://yummydata.org/endpoint"
+# An undocumented but clean JSON export of the same table the page renders. The
+# page itself is server-rendered and the urls ARE in its HTML, so this is a
+# convenience rather than the only route -- unlike kg-catalog, whose list was
+# not readable from its page at all.
+export = "https://yummydata.org/endpoint.json"
+project = "Umakadata, DBCLS"
+read = "2026-09-18"
+# The export's own window, copied rather than inferred.
+data_from = "2016-03-28"
+data_to = "2026-09-17"
+
+[counts]
+endpoints = 63
+seeded = 63
+# Every url was taken as stated. None needed correcting, which is the whole
+# difference from kg-catalog.toml: this is a service that probes these daily
+# and would have noticed. Verified by our own sweep -- see [our_sweep].
+urls_corrected = 0
+# Their flags, on their sweep, recorded as facts about THEIR measurement.
+their_alive = 57
+their_service_description = 42
+
+# WHAT WE DID NOT IMPORT. YummyData publishes an Umaka Score out of 100 and a
+# letter rank A-E per endpoint. Neither is in yummydata.toml and neither should
+# be: this project's position is that a score combining several attributes hides
+# which one is wrong, so carrying their ranking into our registry would import
+# the one thing this service exists not to do. The distribution is recorded here
+# once, as a fact about their sweep, because it is the comparison that makes
+# their list interesting and not because it grades anything.
+[their_score]
+min = 5
+median = 66
+max = 96
+ranks = { A = 10, B = 36, C = 11, D = 2, E = 4 }
+
+[overlap]
+# Against the 544 endpoints the other registry files hold, matched on host plus
+# path with the trailing slash dropped. A different population is the reason to
+# have this list: DBCLS curates life sciences, and the rest of this repository
+# is a LOD Cloud dump and a DBpedia catalogue.
+with_existing_registries = 6
+new = 57

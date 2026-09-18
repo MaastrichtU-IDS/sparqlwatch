@@ -138,7 +138,15 @@ the alternative reading would publish that SemOpenAlex holds no triples.
   browser to query them. DSKG, SemRepo and SemOpenAlex do not.
 - **Service descriptions**: DBLP, SIDEKICK, YAGO and GND serve nothing at all
   at their endpoint url; the rest serve something that is not a readable
-  description. Of ten endpoints, none publishes one this prober can read.
+  description. Of ten endpoints, none publishes one this prober can read --
+  **and that is a fact about these ten, not about SPARQL endpoints.** It read
+  as the latter here until 2026-09-18. YummyData lists 63 life-science
+  endpoints of which it reports 42 publishing one, and that is not a difference
+  of definition: three of theirs were fetched the way this prober fetches,
+  endpoint url with no query and `Accept: text/turtle`, and all three returned
+  `text/turtle` carrying `sd:Service`, `sd:endpoint` and `sd:defaultDataset`.
+  The catalogues seeded here -- a LOD Cloud dump and this one -- are the
+  undescribed corner of the fleet rather than the fleet.
 
 ## Reproducing this
 
