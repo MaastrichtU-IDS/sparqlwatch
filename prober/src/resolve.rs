@@ -637,6 +637,7 @@ mod tests {
             dimension: "d".into(),
             kind,
             query: None,
+            fallback_query: None,
             expect,
             var: None,
             declared_by: None,

@@ -31,6 +31,7 @@ fn preflight_def() -> MetricDef {
         dimension: "interoperability".into(),
         kind: ProbeKind::CorsPreflight,
         query: None,
+        fallback_query: None,
         expect: None,
         var: None,
         declared_by: None,

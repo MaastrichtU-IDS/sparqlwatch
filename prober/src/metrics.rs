@@ -262,6 +262,59 @@ pub struct MetricDef {
     pub kind: ProbeKind,
     #[serde(default)]
     pub query: Option<String>,
+    /// A simpler form of `query` to try when the endpoint REFUSES the first
+    /// one with a 4xx. Absent for every metric that has nothing simpler to
+    /// fall back to.
+    ///
+    /// This exists because the default/named-graph UNION that every content
+    /// query needs is not universally supported. Three of the 63 YummyData
+    /// endpoints answer `SELECT ?c WHERE { ?s a ?c } LIMIT 1` and reject the
+    /// UNION form outright:
+    ///
+    ///   HTTP 400 "Not supported: Named Graphs (FROM, GRAPH) are currently
+    ///   not supported"
+    ///
+    /// Before this, `geo-data` recorded `indeterminate` for all three plus
+    /// Wikidata -- 4 of 58 reachable endpoints on that sweep. The reason was
+    /// not "we could not tell whether there is geometry", it was "our query
+    /// was refused for using a construct this store does not implement", and
+    /// the non-UNION half would have answered. A false `indeterminate` of
+    /// exactly the kind the six-verdict vocabulary exists to prevent.
+    ///
+    /// REMOVING THE UNION INSTEAD IS NOT THE FIX, and the measurement that
+    /// says so is in metrics.toml: on ontoexplorer's content store the
+    /// default-graph-only COUNT returns 0 where the UNION returns 12,510,532.
+    /// A flat zero, published as a confident fact. Named graphs are the normal
+    /// arrangement in Virtuoso, GraphDB and Blazegraph. So both forms are
+    /// needed, and which one an endpoint can answer is a property of the
+    /// endpoint.
+    ///
+    /// AN EMPTY FALLBACK RESULT IS AN HONEST `absent`. A store that rejects
+    /// `GRAPH` as unsupported has no named graphs for data to hide in, so the
+    /// default graph is the whole store and "not there" is the complete
+    /// answer. That inference is the fallback's whole licence; a store that
+    /// refused the first query for any other reason still answers the second
+    /// one or stays `indeterminate`.
+    ///
+    /// IT NEEDS ROOM, and measured against sparql.dsmz.de/api/bacdive on
+    /// 2026-09-18 it does not always have it:
+    ///
+    ///   geo-data alone, default gap  -> absent   (the fallback ran)
+    ///   all six cheap metrics, 2000ms gap -> indeterminate
+    ///   all six cheap metrics, 250ms gap  -> absent
+    ///
+    /// The second request takes the per-host gate again, so it queues behind
+    /// every other metric's request at `--min-gap-ms` apiece, and on a sweep
+    /// running six cheap metrics at the default 2s gap the metric budget can
+    /// run out first. That is NOT a defect in this field and the verdict it
+    /// produces is not wrong: `indeterminate` says no answer was established,
+    /// which is exactly true when the fallback never got to ask. What it means
+    /// is that the improvement lands where there is budget headroom, and a
+    /// sweep of two cheap metrics has far more of it than one of six. Raising
+    /// the gap or the metric count trades this fallback away, and that trade
+    /// should be made knowingly rather than discovered.
+    #[serde(default)]
+    pub fallback_query: Option<String>,
     #[serde(default)]
     pub expect: Option<bool>,
     /// The SPARQL variable the query binds, for probe kinds that read
@@ -672,6 +725,11 @@ pub fn definitions_revision(defs: &[MetricDef]) -> String {
             dimension,
             kind,
             query,
+            // IN THE REVISION. An endpoint that refuses the primary query and
+            // answers the fallback publishes a verdict where it published
+            // `indeterminate` before, so two definition sets differing only in
+            // this measure different things and must not share a revision.
+            fallback_query,
             expect,
             var,
             declared_by,
@@ -691,12 +749,13 @@ pub fn definitions_revision(defs: &[MetricDef]) -> String {
             tolerance,
         } = d;
         canonical.push_str(&format!(
-            "{}\x1f{}\x1f{}\x1f{:?}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{:?}\x1f{}\x1f{}\x1f{}\x1e",
+            "{}\x1f{}\x1f{}\x1f{:?}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{:?}\x1f{}\x1f{}\x1f{}\x1e",
             id,
             label,
             dimension,
             kind,
             query.as_deref().unwrap_or(""),
+            fallback_query.as_deref().unwrap_or(""),
             expect.map(|b| b.to_string()).unwrap_or_default(),
             var.as_deref().unwrap_or(""),
             declared_by.as_deref().unwrap_or(""),
@@ -857,6 +916,7 @@ query = "SELECT ?thing WHERE {{ ?s ?p ?thing }} LIMIT 1"
             dimension,
             kind,
             query,
+            fallback_query,
             expect,
             var,
             declared_by,
@@ -885,6 +945,19 @@ query = "SELECT ?thing WHERE {{ ?s ?p ?thing }} LIMIT 1"
                 "query",
                 MetricDef {
                     query: Some(format!("{} # edited", query.as_deref().unwrap_or(""))),
+                    ..d.clone()
+                },
+            ),
+            // A definition that gains a fallback measures something different:
+            // the endpoint that refused the primary query now publishes a
+            // verdict where it published `indeterminate`. `None` in the base,
+            // so the variant is the one that HAS it.
+            (
+                "fallback_query",
+                MetricDef {
+                    fallback_query: Some(
+                        fallback_query.unwrap_or_else(|| "ASK{} # simpler".into()),
+                    ),
                     ..d.clone()
                 },
             ),

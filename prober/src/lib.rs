@@ -899,7 +899,19 @@ async fn probe_endpoint(
             // compile until it is dispatched. Exhaustiveness checking ensures no
             // routing bugs hide behind plausible-looking fallbacks.
             match def.kind {
-                ProbeKind::AskData => client.ask_literal(ep, &q, var.as_deref().expect(VAR_REQUIRED)).await,
+                // The one kind with a fallback today. See MetricDef::fallback_query:
+                // the default/named-graph UNION these content queries need is
+                // rejected outright by stores with no named-graph support, and
+                // before the fallback that read as `indeterminate` rather than as
+                // the answer the simpler query gives.
+                ProbeKind::AskData => client
+                    .ask_literal_with_fallback(
+                        ep,
+                        &q,
+                        def.fallback_query.as_deref(),
+                        var.as_deref().expect(VAR_REQUIRED),
+                    )
+                    .await,
                 ProbeKind::SelectIris => client.select_iris(ep, &q, var.as_deref().expect(VAR_REQUIRED)).await,
                 // One aggregate, read as a literal. `ask_literal` already
                 // extracts literal bindings and a COUNT comes back as one, so
@@ -1252,6 +1264,7 @@ mod tests {
             dimension: "content".into(),
             kind: ProbeKind::Liveness,
             query: Some("SELECT ?s WHERE { ?s ?p ?o } LIMIT 1".into()),
+            fallback_query: None,
             expect: None,
             var: None,
             declared_by: None,
