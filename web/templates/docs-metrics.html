@@ -45,6 +45,12 @@
       <p class="facts">
         <span data-metric-dimension="{{ metric.id }}">dimension: {{ metric.dimension }}</span>
         <span data-metric-cost="{{ metric.id }}">cost: {{ metric.cost }}</span>
+        {%- if metric.cadence %}
+        {# Cost and cadence read together on purpose: one says what a question
+           costs the endpoint, the other how often that cost is paid. A retired
+           metric has no cadence and shows none. #}
+        <span data-metric-cadence="{{ metric.id }}">cadence: {{ metric.cadence }}</span>
+        {%- endif %}
         {%- if metric.retired %}
         <span>retired: {{ metric.retired }}</span>
         {%- endif %}

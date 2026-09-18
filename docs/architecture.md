@@ -92,8 +92,55 @@ dormancy tests run in milliseconds.
 - `dormancy.rs` (2,215 lines) is the cost-weighted admission policy: which
   endpoints this sweep will probe, which are relegated, which an operator has
   pinned awake or asleep.
+- `metrics.rs` owns what a metric IS, as data, and the two independent axes
+  that decide whether a given sweep asks it. See "Two axes" below.
 - `registry.rs` (1,385 lines) loads and validates the endpoint list, applies the
   exclusion list, and drops URLs carrying credentials.
+
+## Two axes: what a question costs, and how often it is asked
+
+`Cost` says what a metric costs the endpoint it points at (`cheap`,
+`expensive`, `exhaustive`) and `--max-cost` is the ceiling one sweep will pay.
+`Cadence` says how often that cost is worth paying (`hourly`, `daily`) and
+`--cadence` is the rhythm one sweep is. They are independent, and they have to
+be: the four hourly metrics are all `cheap`, and so are two of the daily ones,
+so no ceiling can separate them. That is the whole reason the second axis
+exists.
+
+As deployed: `0 * * * *` runs `--max-cost expensive --cadence hourly`, which is
+availability, service-description, cors and cors-preflight. `30 3 * * *` runs
+`--max-cost exhaustive --cadence daily`, which is everything. `Daily` is a
+SUPERSET rather than the other half of a partition, and `Cadence::default()` is
+`Daily` — a metric added to the file without the field is asked once a day
+rather than sixteen times more often, so forgetting it makes a sweep quieter.
+
+**A metric a sweep does not ask is DECLINED, never omitted.** This is the part
+worth reading twice, because the obvious implementation is wrong and was
+measured to be wrong on 2026-09-18. Giving the hourly job a smaller metrics
+file left SEVEN OF TEN COLUMNS AS GAPS on the endpoint page: a metric absent
+from the definitions produces no fact at all, `endpoint_measurements` reports
+one sweep's facts, and the hourly run is the newest run — so the daily
+measurements went invisible for 23 hours of every 24. "Not mentioned" is not
+"not measured this time". So an out-of-cadence metric gets a `NotMeasured` fact
+with reason `cadence`, exactly as the ceiling has always given one with reason
+`cost-ceiling`, and the column survives saying why it is empty.
+
+**Cost is decided first, and the two reasons stay apart.** `triple-count` is
+both expensive and daily; on a cheap-ceiling sweep it reads `cost-ceiling`,
+because that decision would still apply on a daily run. `geo-data` is cheap and
+daily, so only cadence can decline it. `emit`'s duplicate-subject guard refuses
+two `NotMeasured` facts for one (endpoint, metric) pair, so exactly one reason
+exists to give and it must be the one that was decided first. Collapsing them
+would tell an operator we judged their endpoint too expensive to query when the
+truth is that tonight's sweep will ask.
+
+Both axes are in `metricDefinitionRevision`, the FNV hash of the definition
+list published on every run header. Two definition sets differing only in a
+metric's cadence measure different things on the same sweep, and run graphs are
+immutable, so sharing one revision would leave history that cannot be
+reinterpreted. The destructuring pattern in `definitions_revision` has no `..`,
+which is what makes a new field fail to compile until somebody decides whether
+it belongs there.
 
 ## The interface: the run file
 
@@ -268,6 +315,14 @@ Recorded because they are real, not as a to-do list.
   Python tests, and nothing runs a real prober output through a real load into a
   real rendered page in one assertion. The fixtures are captured prober output,
   which is close, but capture happens by hand.
+- **Nothing tests that the two cronjobs pass the cadence they mean.** The
+  hourly and daily sweeps are distinguished by two env vars in
+  `MaastrichtU-IDS/services`, and `sweep.sh` requires both rather than
+  defaulting either -- so a job with neither fails loudly. What is unguarded is
+  a job with the WRONG one: an hourly schedule passing `--cadence daily` would
+  ask every metric every hour, and nothing here or there would notice. The
+  `registry_pair.rs` treatment, a test comparing the two manifests against what
+  each is for, is what this wants and does not have.
 - **CI gates only the Rust side.** `.github/workflows/ci.yml` runs `cargo
   build`, `cargo test` and `cargo clippy -D warnings`. The 342 web tests never
   run there. Raised repeatedly, never decided.
