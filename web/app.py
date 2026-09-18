@@ -49,7 +49,7 @@ import html
 import json
 import os
 import re
-from collections import Counter
+from collections import Counter, OrderedDict
 from functools import lru_cache
 from pathlib import Path
 from urllib.parse import quote, urlparse
@@ -71,7 +71,7 @@ import verdict_encoding
 from endpoint_content import CLASS_SAMPLING_METRICS, EndpointContent, endpoint_content
 from explore_payload import (
     _prefix_for,
-    build_payload,
+    build_payload as _build_payload,
     endpoint_vocabulary,
     split_iri,
 )
@@ -82,9 +82,9 @@ from void_document import (
     void_summary,
     void_triples,
 )
-from endpoint_index import endpoint_index
+from endpoint_index import endpoint_index as _endpoint_index
 from endpoint_history import EndpointHistory, endpoint_history
-from fleet import FleetHistory, fleet_history, fleet_stats
+from fleet import FleetHistory, fleet_history as _fleet_history, fleet_stats
 from endpoint_measurements import EndpointMeasurements, endpoint_measurements
 from load_run import CURRENT_GRAPH, pointers_to_missing_runs
 from queries import read_query
@@ -489,6 +489,59 @@ def get_store() -> Store:
 
 
 # ---------------------------------------------------------------------------
+# Deriving the same answer twice
+# ---------------------------------------------------------------------------
+#
+# Three reads below are pure functions of the store, and every request used to
+# run them again. They are the whole of what the index, the fleet grid and the
+# explore page cost: measured in the dev pod on 2026-09-18, `/` spent 117ms in
+# endpoint_index and 65ms in fleet_history out of 220ms, and `/explore` spent
+# 67ms in build_payload out of 112ms.
+#
+# THE STORE CANNOT CHANGE UNDER THIS PROCESS, so running them again cannot
+# return anything new. `_opened_store` opens it with `Store.read_only`, whose
+# cost is written out in that function: a read-only handle takes its snapshot
+# at open and never sees a later write. That is not a happy accident here, it
+# is the deployment's contract -- the sweep CronJob in
+# ids3/projects/sparqlwatch/dev writes a run file and then restarts the site,
+# because restarting is the only thing that publishes. A store this process can
+# see changing does not exist.
+#
+# So the cache key is the store HANDLE and there is no invalidation, which is
+# the only kind of cache this site can honestly hold: nothing here guesses how
+# long an answer stays true, and no request can ever be served an answer the
+# handle it was asked of would not give. A TTL would be a guess, and on a site
+# whose doctrine is that a stale qualifier is a positive claim, a guess is the
+# wrong instrument.
+#
+# lru_cache keyed on the store keeps a strong reference to it, which changes
+# nothing in the service -- `_opened_store` already holds the one handle for
+# the process's life. Under the tests it means each test's own store is held
+# too; they are fixtures of a few hundred quads and there is one process.
+#
+# Wrapped HERE rather than in endpoint_index.py, fleet.py and
+# explore_payload.py, so that those three stay what they say they are: pure
+# functions of a store, answerable about any store, with no opinion about how
+# often anyone asks. The opinion belongs next to the handle it depends on.
+@lru_cache(maxsize=4)
+def endpoint_index(store: Store) -> list[EndpointMeasurements]:
+    """`endpoint_index.endpoint_index`, once per store handle."""
+    return _endpoint_index(store)
+
+
+@lru_cache(maxsize=4)
+def fleet_history(store: Store) -> FleetHistory:
+    """`fleet.fleet_history`, once per store handle."""
+    return _fleet_history(store)
+
+
+@lru_cache(maxsize=4)
+def build_payload(store: Store) -> dict:
+    """`explore_payload.build_payload`, once per store handle."""
+    return _build_payload(store)
+
+
+# ---------------------------------------------------------------------------
 # The resource
 # ---------------------------------------------------------------------------
 _DESCRIPTION_QUERY = read_query("endpoint_description")
@@ -542,6 +595,253 @@ app = FastAPI(
 # response's type, so every representation this service negotiates gets the
 # same treatment without naming any of them here.
 app.add_middleware(GZipMiddleware, minimum_size=500)
+
+
+# ---------------------------------------------------------------------------
+# Serving the same bytes twice
+# ---------------------------------------------------------------------------
+#
+# Every response this service sends is a pure function of the store handle and
+# the request: no route reads a clock, and `grep` for `datetime.now` in this
+# file returns nothing, which is a property worth keeping. Combined with the
+# read-only snapshot argued above `endpoint_index`, that makes a response to a
+# GET reproducible for as long as this process lives -- so the second identical
+# request can be answered with the first one's bytes, and the only honest kind
+# of cache is the one that needs no invalidation.
+#
+# OUTSIDE GZipMiddleware, deliberately. Added after it, so it wraps it: what is
+# kept is the finished response, compressed if the client asked for that, and a
+# hit costs neither the render nor the 5ms of zlib. The price is that
+# Accept-Encoding joins the key, which is what `Vary` is for and is why the
+# header is set below.
+#
+# WHAT VARIES IS THE KEY, and it is written out rather than summarised: the
+# STORE HANDLE, because a response is a function of it and one process can be
+# asked about more than one; host, because the VoID route puts `request.url` in
+# the document it serves; path and query, because they select and filter;
+# Accept, because this service serves four representations of most resources
+# off one URL; Accept-Encoding, because of where this sits. A field missing
+# from that list is a way to serve one reader another reader's answer, so the
+# list is the whole of what a handler can read.
+#
+# The store earns its place in that key from the tests rather than from the
+# service. In the service there is one handle for the process's life, so it is
+# constant; under the tests each case installs its own store through
+# `dependency_overrides` and asks the same URLs of it, and the first version of
+# this cache answered fifty of them with an earlier test's store. The service
+# would have reached the same failure the first time it served two stores.
+#
+# The handle is held in the key rather than its `id()`: an id is reused after
+# the object behind it is freed, which is a way to serve a store's answer for a
+# store that no longer exists. Holding it pins at most `max_entries` stores.
+#
+# ONLY 200s. Everything else -- a 404 for an endpoint not in the store, the 406
+# for an Accept this service cannot meet, the 500 a missing store raises -- is
+# cheap to produce and is exactly the kind of answer that should not be pinned
+# by an early request.
+#
+# The ETag is the second half of the same idea, and it is the half a reader
+# sees. `Cache-Control: no-cache` means REVALIDATE, not "do not store": the
+# browser asks every time, so it can never show a sweep-old page, and gets 304
+# with no body whenever the answer has not changed. Before this the service
+# sent no validator at all, so every revisit re-sent 20 KB it already had.
+_CACHE_MAX_ENTRIES = 64
+
+# Big enough for every page this service serves compressed (`/explore`, the
+# largest, is 224 KB of HTML and around 40 KB of it gzipped) and small enough
+# that 64 of them cannot be a memory problem.
+_CACHE_MAX_BYTES = 2 * 1024 * 1024
+
+
+def _if_none_match(raw: str | None, etag: str) -> bool:
+    """Does an If-None-Match header name this entity?
+
+    `*` matches anything we hold. Otherwise the header is a comma-separated
+    list and a weak comparison is the right one for a GET: `W/"x"` and `"x"`
+    are the same entity for the purpose of deciding whether to re-send it.
+    """
+    if not raw:
+        return False
+    if raw.strip() == "*":
+        return True
+    # Only the CANDIDATE is weakened. The stored value is one this middleware
+    # built and is always strong, so stripping a prefix off it would be a line
+    # that can never do anything -- it was here until a mutation showed that
+    # removing it changed no test, which is the only evidence that counts.
+    return any(
+        candidate.strip().removeprefix("W/") == etag
+        for candidate in raw.split(",")
+    )
+
+
+class SnapshotCache:
+    """Answer a repeated GET from the bytes the first one produced."""
+
+    def __init__(self, app, max_entries: int = _CACHE_MAX_ENTRIES) -> None:
+        self.app = app
+        self.max_entries = max_entries
+        self.entries: OrderedDict[tuple, tuple[list, bytes, str]] = OrderedDict()
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http" or scope.get("method") != "GET":
+            await self.app(scope, receive, send)
+            return
+
+        headers = {k.lower(): v for k, v in scope.get("headers", ())}
+        key = (
+            self._store_handle(),
+            headers.get(b"host", b""),
+            scope.get("path", ""),
+            scope.get("query_string", b""),
+            headers.get(b"accept", b""),
+            headers.get(b"accept-encoding", b""),
+        )
+
+        held = self.entries.get(key)
+        if held is None:
+            status, raw_headers, body = await self._run(scope, receive)
+            if status != 200 or len(body) > _CACHE_MAX_BYTES:
+                await self._send(send, status, raw_headers, body)
+                return
+            held = (
+                raw_headers,
+                body,
+                '"%s"' % hashlib.blake2b(body, digest_size=16).hexdigest(),
+            )
+            self.entries[key] = held
+            while len(self.entries) > self.max_entries:
+                self.entries.popitem(last=False)
+        else:
+            self.entries.move_to_end(key)
+
+        await self._respond(headers, send, *held)
+
+    async def _run(self, scope, receive) -> tuple[int, list, bytes]:
+        """The response, whole, before any of it is sent.
+
+        BUFFERED RATHER THAN FORWARDED, because the ETag is a hash of the body
+        and the header carrying it has to go out ahead of the body it
+        describes. Nothing this service serves is streamed -- every route
+        returns a finished `Response` over a document already in memory -- so
+        what this gives up is a property none of them has, and it is what lets
+        the first reader of a page get a validator rather than the second.
+        """
+        status = 500
+        raw_headers: list = []
+        chunks: list[bytes] = []
+
+        async def collect(message):
+            nonlocal status, raw_headers
+            if message["type"] == "http.response.start":
+                status = message["status"]
+                raw_headers = list(message["headers"])
+            elif message["type"] == "http.response.body":
+                chunks.append(message.get("body", b""))
+
+        await self.app(scope, receive, collect)
+        return status, raw_headers, b"".join(chunks)
+
+    @staticmethod
+    async def _send(send, status: int, raw_headers: list, body: bytes) -> None:
+        """A response this middleware has nothing to add to, passed through."""
+        await send(
+            {
+                "type": "http.response.start",
+                "status": status,
+                "headers": raw_headers,
+            }
+        )
+        await send({"type": "http.response.body", "body": body})
+
+    @staticmethod
+    def _store_handle():
+        """The store this request will be answered from, or None.
+
+        Resolved the way FastAPI resolves it, override included, so that this
+        and the handler cannot disagree about which store the request is
+        about. Both sides are cheap: `get_store` is `lru_cache`d onto one
+        handle per path, and a test's override is a lambda over a store it
+        already holds.
+
+        A failure is not this middleware's to report. `get_store` raises on a
+        missing or unreadable store and the handler raises the same thing a
+        moment later, with the message written for it; all that is needed here
+        is a key that does not pretend two different failures are one request.
+        """
+        try:
+            return app.dependency_overrides.get(get_store, get_store)()
+        except Exception:
+            return None
+
+    async def _respond(self, headers, send, raw_headers, body, etag) -> None:
+        """The document, or a 304 saying the reader already has it."""
+        # `no-cache` only where the response does not already say how long it
+        # keeps. The hashed stylesheet is served `immutable` by its own route
+        # and that is a stronger and truer claim than this one: its URL changes
+        # when its bytes do, so a browser holding it never needs to ask again.
+        # Overwriting it would turn a file that is never re-fetched into one
+        # revalidated on every page load.
+        governed = any(k.lower() == b"cache-control" for k, _ in raw_headers)
+        validators = [(b"etag", etag.encode("ascii"))]
+        if not governed:
+            validators.append((b"cache-control", b"no-cache"))
+
+        # AND `Vary: Accept`, which this service owed anyone caching for it
+        # before there was a cache here at all. Most resources are four
+        # documents behind one URL, chosen by Accept, and nothing said so: a
+        # shared cache between here and a reader -- the ingress, a company
+        # proxy -- was entitled to hand a script's Turtle to the next browser
+        # that asked for the same URL. GZipMiddleware already declares
+        # Accept-Encoding, so this merges rather than replaces.
+        #
+        # Not on a response that governs its own caching, which is the hashed
+        # stylesheet: it is content-addressed and negotiates nothing, and
+        # fragmenting a year-long cache entry by Accept would cost something
+        # for a distinction it does not make.
+        if not governed:
+            existing = [v for k, v in raw_headers if k.lower() == b"vary"]
+            fields = [
+                field.strip()
+                for value in existing
+                for field in value.decode("latin-1").split(",")
+                if field.strip()
+            ]
+            if not any(f.lower() == "accept" for f in fields):
+                fields.append("Accept")
+            raw_headers = [
+                (k, v) for k, v in raw_headers if k.lower() != b"vary"
+            ]
+            validators.append((b"vary", ", ".join(fields).encode("latin-1")))
+
+        if _if_none_match(
+            headers.get(b"if-none-match", b"").decode("latin-1"), etag
+        ):
+            # A 304 carries the validators and the headers that would govern a
+            # held copy, and no body. Content-Length and Content-Encoding
+            # describe an entity that is not being sent, so they are left out.
+            keep = {b"vary", b"content-location", b"cache-control"}
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 304,
+                    "headers": [
+                        (k, v) for k, v in raw_headers if k.lower() in keep
+                    ]
+                    + validators,
+                }
+            )
+            await send({"type": "http.response.body", "body": b""})
+            return
+
+        await self._send(
+            send,
+            200,
+            [(k, v) for k, v in raw_headers if k.lower() != b"etag"] + validators,
+            body,
+        )
+
+
+app.add_middleware(SnapshotCache)
 
 
 def _endpoint_rdf(store: Store, endpoint: str, media_type: str) -> bytes:
