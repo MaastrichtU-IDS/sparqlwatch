@@ -922,6 +922,132 @@ async fn a_partial_endpoint_keeps_the_verdicts_it_already_earned() {
     assert!(!samples[0].truncated, "one value under a limit of five is not truncated");
 }
 
+/// THE BUG THE 2026-09-18 PROFILE PASS SURFACED, and the reason the expiry
+/// fill asks which metrics are missing by name rather than by counting rows.
+///
+/// A metric whose kind yields no measurement row -- `ClassProfile`,
+/// `VocabularyDescribed` -- is `continue`d past in the metric loop. So the
+/// number of rows an endpoint has is NOT a position in `defs`, and the fill
+/// used `defs.iter().skip(acc.rows.len())`, which is that position exactly.
+///
+/// With one profile metric in the middle of the set, the skip lands one short
+/// and re-marks a metric that has already been measured. Two rows for one
+/// (endpoint, metric) pair with different verdicts, and `emit`'s duplicate
+/// guard then publishes NEITHER -- so an endpoint that answered loses the
+/// answer, silently, because a timeout happened afterwards. Five of
+/// seventy-four endpoints hit it on the sweep that found it, each losing
+/// graph-count and class-count.
+///
+/// The shape: a fast metric, a profile metric that yields no row, and a metric
+/// that stalls past the endpoint budget. Without the fix the fast metric's
+/// `Verified` is duplicated by an `Indeterminate`; with it, every pair appears
+/// once.
+#[tokio::test]
+async fn an_expiry_after_a_rowless_metric_does_not_re_mark_what_was_measured() {
+    const FAST_QUERY: &str = "SELECT ?s WHERE { ?s a ?c } LIMIT 5";
+    const SLOW_QUERY: &str = "SELECT ?s WHERE { ?s ?p ?o } LIMIT 1";
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/sparql")).and(query_param_is_missing("query"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(STUB_TTL.as_bytes().to_vec(), "text/turtle"))
+        .mount(&server).await;
+    Mock::given(method("GET")).and(path("/sparql")).and(query_param("query", FAST_QUERY))
+        .respond_with(ResponseTemplate::new(200).set_body_string(WORKING_QUERY_RESPONSE))
+        .mount(&server).await;
+    Mock::given(method("GET")).and(path("/sparql")).and(query_param("query", SLOW_QUERY))
+        .respond_with(ResponseTemplate::new(200)
+            .set_delay(std::time::Duration::from_millis(1500))
+            .set_body_string(WORKING_QUERY_RESPONSE))
+        .mount(&server).await;
+
+    let base = MetricDef {
+        id: String::new(),
+        label: "a metric".into(),
+        dimension: "content".into(),
+        kind: ProbeKind::SelectIris,
+        query: Some(FAST_QUERY.into()),
+        fallback_query: None,
+        expect: None,
+        var: Some("s".into()),
+        declared_by: None,
+        graded: false,
+        cost: Cost::Cheap,
+        cadence: Default::default(),
+        sample_limit: Some(5),
+        sample_prefix: None,
+        tolerance: None,
+    };
+    let defs = vec![
+        // Answers, and earns a verdict.
+        MetricDef { id: "answers".into(), ..base.clone() },
+        // Yields NO ROW, which is what makes the row count diverge from the
+        // definition count. This is the whole mechanism: without it the old
+        // arithmetic happens to be right.
+        MetricDef {
+            id: "profiles".into(),
+            kind: ProbeKind::ClassProfile,
+            query: None,
+            var: None,
+            ..base.clone()
+        },
+        // Stalls past the endpoint budget, so the expiry fill runs.
+        MetricDef {
+            id: "stalls".into(),
+            kind: ProbeKind::AskFilter,
+            query: Some(SLOW_QUERY.into()),
+            var: None,
+            sample_limit: None,
+            ..base.clone()
+        },
+    ];
+
+    let budget = Budget {
+        request: std::time::Duration::from_secs(5),
+        metric: std::time::Duration::from_secs(5),
+        endpoint: std::time::Duration::from_millis(400),
+    };
+    let client = std::sync::Arc::new(Client::new(budget, Politeness::unlimited()).unwrap());
+    let url = format!("{}/sparql", server.uri());
+    let Sweep { rows, .. } = without_deadlocking(run_sweep(
+        std::slice::from_ref(&url), &defs, &[], &client, budget,
+        NonZeroUsize::new(1).unwrap(), &Default::default(), &mut common::discarding(),
+    )).await.unwrap();
+
+    // ONE row per pair. Two would be the bug, and `emit` would then drop both.
+    let mut seen: BTreeMap<&str, usize> = BTreeMap::new();
+    for row in &rows {
+        *seen.entry(row.metric_id.as_str()).or_default() += 1;
+    }
+    assert!(
+        seen.values().all(|n| *n == 1),
+        "a metric was written twice, so emit will publish neither: {seen:?}"
+    );
+
+    // The metric that never yields a row must not have gained one.
+    assert!(
+        !seen.contains_key("profiles"),
+        "a profile metric got a verdict row, which puts it in the matrix as a \
+         column of verdicts it does not have"
+    );
+    assert_eq!(seen.keys().copied().collect::<Vec<_>>(), vec!["answers", "stalls"]);
+
+    // And the earned verdict survives, which is the fact the bug destroyed.
+    let answered = rows.iter().find(|r| r.metric_id == "answers").expect("the fast metric has a row");
+    assert_eq!(
+        answered.verdict,
+        Verdict::Verified,
+        "the metric that answered before the stall keeps its verdict; the expiry fill must not re-mark it"
+    );
+    assert!(answered.elapsed_ms.is_some(), "and keeps its measured elapsed time");
+
+    let stalled = rows.iter().find(|r| r.metric_id == "stalls").expect("the stalled metric has a row");
+    assert_eq!(
+        stalled.verdict,
+        Verdict::Indeterminate,
+        "the metric the stall kept us from is indeterminate, or the budget never expired and this test says nothing"
+    );
+}
+
 /// A one-triple service description: parseable, so it grades level 1, but it
 /// names no dataset, carries no VoID partition and declares nothing that
 /// reaches level 4.
