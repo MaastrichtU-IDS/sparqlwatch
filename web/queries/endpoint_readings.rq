@@ -13,10 +13,18 @@
 # it would be a history of one run. The run graphs are the record and they are
 # never rewritten, so walking them IS the history.
 #
-# ORDERED BY THE RUN'S OWN TIMESTAMP, not by the run IRI. The IRI happens to
-# contain an ISO instant today and sorting on it would work by accident; a run
-# named any other way would silently reorder the history, and a reordered
-# history reads as an endpoint that recovered when it broke.
+# NO INSTANT AND NO ORDER HERE, which is the change of 2026-09-18. This file
+# was `endpoint_history.rq` and carried `?generatedAt` from a `prov:Activity`
+# match in the same pattern; that join cost 2.25s against the deployed store
+# where the two halves cost 0.02s apart, and it was the whole of a 2.5 second
+# endpoint page. `run_instants.rq` is the other half and the caller joins them
+# on ?run.
+#
+# ORDERING MOVED WITH THE INSTANT, to the caller, and it still must not be by
+# run IRI. The IRI happens to contain an ISO instant today and sorting on it
+# would work by accident; a run named any other way would silently reorder the
+# history, and a reordered history reads as an endpoint that recovered when it
+# broke.
 #
 # ONE ROW PER (run, metric) THAT SAID SOMETHING, and no row where a run said
 # nothing. A run that predates a metric has no fact about it, and neither does a
@@ -28,16 +36,12 @@
 # look" is something a run said, and drawing it as a gap would lose the
 # difference between a sweep that declined a metric and a sweep that had never
 # heard of it.
-
 PREFIX dqv: <http://www.w3.org/ns/dqv#>
-PREFIX prov: <http://www.w3.org/ns/prov#>
 PREFIX sw: <urn:sparqlwatch:>
 
-SELECT ?endpoint ?run ?generatedAt ?metric ?verdict ?reason
+SELECT ?endpoint ?run ?metric ?verdict ?reason
 WHERE {
   GRAPH ?run {
-    ?activity a prov:Activity ;
-              prov:generatedAtTime ?generatedAt .
     {
       ?measurement dqv:computedOn ?endpoint ;
                    dqv:isMeasurementOf ?metric ;
@@ -51,4 +55,3 @@ WHERE {
     }
   }
 }
-ORDER BY ?generatedAt ?metric

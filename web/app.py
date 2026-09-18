@@ -55,6 +55,7 @@ from pathlib import Path
 from urllib.parse import quote, urlparse
 
 from fastapi import Depends, FastAPI, Query, Request, Response
+from starlette.middleware.gzip import GZipMiddleware
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from pyoxigraph import (
     Literal,
@@ -517,6 +518,30 @@ app = FastAPI(
     docs_url=None,
     redoc_url=None,
 )
+
+# COMPRESSION, and nothing upstream was doing it. Measured against the deployed
+# site on 2026-09-18: the registry answered 175 KB with no `content-encoding`
+# even when the request offered `Accept-Encoding: gzip, br`, and that 175 KB
+# gzips to 19 KB. Nine tenths of every page this service serves was transfer
+# nobody needed, and it was most of what made the site feel slow -- the index
+# builds in 0.19s and took 1.87s to arrive.
+#
+# IN THE APP RATHER THAN THE INGRESS, deliberately. The ingress is a shared
+# platform object this project does not own, and a compression rule added there
+# would be invisible from this repository and silently absent on any other
+# deployment of this image. Here it ships with the thing it compresses and a
+# test can hold it.
+#
+# 500 bytes is starlette's own default floor and it is the right one: below
+# roughly a packet, the gzip header and the CPU on both ends cost more than the
+# bytes saved. /docs answers 3 KB and is compressed; a 404's one line is not.
+#
+# RDF IS COMPRESSED TOO, and that is the bigger share per byte: Turtle is
+# repetitive text and the VoID document for one endpoint is 34 KB of it.
+# GZipMiddleware keys on the request's Accept-Encoding rather than on the
+# response's type, so every representation this service negotiates gets the
+# same treatment without naming any of them here.
+app.add_middleware(GZipMiddleware, minimum_size=500)
 
 
 def _endpoint_rdf(store: Store, endpoint: str, media_type: str) -> bytes:

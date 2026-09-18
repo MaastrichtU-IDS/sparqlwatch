@@ -28,7 +28,12 @@ from pathlib import Path
 
 from pyoxigraph import NamedNode, Store, Variable
 
-_QUERY = (Path(__file__).resolve().parent / "queries" / "endpoint_history.rq").read_text()
+# TWO QUERIES, JOINED HERE, and the join is the whole reason. Asking for the
+# readings and the run instants together cost 2.25s against the deployed store
+# where the two cost 0.02s apart -- see queries/run_instants.rq for the
+# measurement. The page was 2.5 seconds and essentially all of it was this.
+_READINGS = (Path(__file__).resolve().parent / "queries" / "endpoint_readings.rq").read_text()
+_INSTANTS = (Path(__file__).resolve().parent / "queries" / "run_instants.rq").read_text()
 _ENDPOINT = Variable("endpoint")
 
 
@@ -95,12 +100,20 @@ def endpoint_history(store: Store, endpoint: str, limit: int = 30) -> EndpointHi
     asking what has happened lately. The list is returned oldest-first all the
     same, since that is the direction time runs and the direction a row reads.
     """
-    rows = list(store.query(_QUERY, substitutions={_ENDPOINT: NamedNode(endpoint)}))
+    rows = list(store.query(_READINGS, substitutions={_ENDPOINT: NamedNode(endpoint)}))
+    # run IRI -> the instant that run recorded for itself. Read whole: it is one
+    # row per run graph, 121 of them on the deployed store, and the readings
+    # above are looked up in it rather than joined to it in SPARQL.
+    instant = {r["run"].value: r["generatedAt"].value for r in store.query(_INSTANTS)}
 
     runs: list[str] = []
     for row in rows:
-        at = row["generatedAt"].value
-        if at not in runs:
+        at = instant.get(row["run"].value)
+        # A reading whose run graph carries no activity has no instant to sort
+        # by. Dropped rather than placed: the timeline's whole axis is the run's
+        # own timestamp, and a column with no position on that axis would have
+        # to be invented one. See the ORDER note in endpoint_readings.rq.
+        if at is not None and at not in runs:
             runs.append(at)
     runs.sort()
     runs = runs[-limit:]
@@ -108,7 +121,8 @@ def endpoint_history(store: Store, endpoint: str, limit: int = 30) -> EndpointHi
 
     by_metric: dict[str, list[Reading | None]] = {}
     for row in rows:
-        slot = index.get(row["generatedAt"].value)
+        at = instant.get(row["run"].value)
+        slot = index.get(at) if at is not None else None
         if slot is None:
             continue
         metric = row["metric"].value
