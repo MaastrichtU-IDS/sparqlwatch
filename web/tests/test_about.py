@@ -1110,21 +1110,25 @@ def test_the_dormancy_numbers_come_from_the_flags_that_carry_them():
 
 @requires_repo_sources
 def test_the_dormancy_reasons_the_pages_read_are_the_probers_own():
-    """Both reason maps in `web/app.py`, against `SkipReason::slug`.
+    """The row reason map in `web/app.py`, against `SkipReason::slug`.
 
     Nothing else holds these two words together. The prober pins them on its
     own side (`the_two_reason_slugs_are_stable`), and until this test the Python
     side pinned nothing: renaming `operator-hold` in Rust left every row telling
-    the truth through the verbatim fallback while the index panel and the
-    endpoint page went on asserting, in prose, that there are two reasons and
-    naming a value no run graph could carry. That is a positive false claim on
-    pages whose whole doctrine is that a stale qualifier is a claim, and it
-    passed 304 tests.
+    the truth through the verbatim fallback while the index panel went on
+    asserting, in prose, that there are two reasons and naming a value no run
+    graph could carry. That is a positive false claim on pages whose whole
+    doctrine is that a stale qualifier is a claim, and it passed 304 tests.
 
     Set equality in both directions, so a slug the prober adds fails here as
-    loudly as one it renames: a third reason with no reading on either page
-    would fall through to "a reason this page cannot read", which is honest
-    about the row and silently wrong in the panel that says there are two.
+    loudly as one it renames: a third reason with no reading would fall through
+    to "a reason this page cannot read", which is honest about the row and
+    silently wrong in the panel that says there are two.
+
+    The endpoint page used to keep a second map of its own and is no longer in
+    this test: since the dormancy sentence was cut back to `Dormant (<slug>).`
+    it prints the store's value and glosses nothing, so it has no vocabulary
+    left to drift.
 
     `not-in-this-sweep` is that third reason, and this test is what made the two
     sides land together. Rule 3 of the admission policy published `automatic`
@@ -1134,15 +1138,12 @@ def test_the_dormancy_reasons_the_pages_read_are_the_probers_own():
     the variant, and this assertion was red for exactly that window, which is
     the direction it was written for.
     """
-    from app import _DORMANCY_REASONS, _ROW_DORMANCY_REASONS
+    from app import _ROW_DORMANCY_REASONS
 
     slugs = skip_reason_slugs()
     assert slugs == {"automatic", "operator-hold", "not-in-this-sweep"}, (
-        "the prober's reason slugs changed; both pages' prose has to change "
-        "with them, which is what the two assertions below are about"
-    )
-    assert set(_DORMANCY_REASONS) == slugs, (
-        "the endpoint page's reason sentences and the prober's slugs differ"
+        "the prober's reason slugs changed; the prose has to change with them, "
+        "which is what the assertion below is about"
     )
     assert set(_ROW_DORMANCY_REASONS) == slugs, (
         "the index row's reason clauses and the prober's slugs differ"

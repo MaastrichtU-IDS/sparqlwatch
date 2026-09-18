@@ -46,9 +46,10 @@ from app import (
     _outward_link,
     ENDPOINT_PATH,
     TRUNCATED_TEXT,
-    _DECLINE_DETAILS,
-    _DORMANCY_REASONS,
+    DECLINE_REASONS,
+    _ROW_DORMANCY_REASONS,
     _newest_sweep_silence_text,
+    _declined_detail,
     _rows,
     _sample,
     app,
@@ -915,24 +916,22 @@ def test_a_decline_is_drawn_unlike_every_verdict(client_for, store_declined):
     assert not (declined & verdicts)
 
 
-def test_each_decline_reason_gets_its_own_detail():
-    """A declined row's detail is derived from the graph's reason.
+def test_a_declined_row_glosses_nothing_the_prober_can_actually_write():
+    """A declined row's detail, which since 2026-09-18 is almost always none.
 
-    Two reasons exist today, and prober/src/emit.rs's
-    NotMeasuredReason::slug is where both come from: "cost-ceiling", where
-    the sweep looked at its budget and chose not to run the metric, and
-    "prober-failed", where the task probing the endpoint's host panicked or
-    was cancelled so nothing was ever asked. They are opposite claims about
-    who is responsible, and reporting a crash as a cost decision points an
-    operator at --max-cost instead of at the crash.
+    The row already reads `not measured (liveness-failed)` and the slug is the
+    fact. The owner cut the sentence that followed it -- "the endpoint did not
+    answer a trivial query, so the rest of the checks were never sent" -- along
+    with the five others like it: a reader scanning ten rows does not want a
+    clause per row, and what each slug means belongs in /docs/states.
 
-    The third case is the one this project will meet again, because it has
-    added a reason once already: a reason from a prober this page has no
-    sentence for. There the honest answer is to claim nothing and let the
-    state text carry the value verbatim, which is how an unrecognised
-    verdict is already handled.
+    The one case still worth a word is a reason from a prober NEWER than this
+    page, because there the slug is all the reader has and this build has no
+    reading of it at all. That is the same answer an unrecognised verdict
+    already gets, and it is reachable: `cadence` joined the vocabulary this
+    month.
 
-    Asked of _rows directly rather than through a store, because the third
+    Asked of _rows directly rather than through a store, because that third
     case has no committed fixture and inventing one would pin a reason no
     prober emits.
     """
@@ -953,13 +952,8 @@ def test_each_decline_reason_gets_its_own_detail():
         )
     }
 
-    assert rows[M + "classes"]["detail"] == (
-        "we declined to look, so this says nothing about the endpoint"
-    )
-    assert rows[M + "cors"]["detail"] == (
-        "the prober failed on this endpoint, so this run observed nothing "
-        "about it"
-    )
+    assert rows[M + "classes"]["detail"] is None
+    assert rows[M + "cors"]["detail"] is None
     assert rows[M + "geo-data"]["detail"] == (
         "unrecognised reason, shown as the store recorded it"
     )
@@ -985,6 +979,12 @@ def test_a_prober_failed_row_and_a_cost_ceiling_row_read_differently(
     when the prober has crashed, so a prober-failed row that says the metric
     was priced out of the run sends them to --max-cost instead of to the
     crash.
+
+    Since 2026-09-18 the two read differently through the SLUG alone. The
+    owner cut the sentence each row used to carry beside it, so what tells an
+    operator apart is `not measured (prober-failed)` against `not measured
+    (cost-ceiling)` -- and that has to stay true of the rendered row, which is
+    why this asserts on the cell text and not only on the data attribute.
     """
     text = page(client_for(store_prober_failed), KADASTER)
 
@@ -996,13 +996,14 @@ def test_a_prober_failed_row_and_a_cost_ceiling_row_read_differently(
     assert reasons[M + "availability"] == "prober-failed"
     assert len(reasons) == 8, "every metric in this run was declined"
 
-    assert row_cells(text, M + "availability")["m-detail"] == (
-        "the prober failed on this endpoint, so this run observed nothing "
-        "about it"
+    availability = row_cells(text, M + "availability")
+    classes = row_cells(text, M + "classes")
+    assert availability["m-state"] == "not measured (prober-failed)"
+    assert classes["m-state"] == "not measured (cost-ceiling)"
+    assert "m-detail" not in availability, (
+        "a reason the prober actually writes gets no gloss beside it"
     )
-    assert row_cells(text, M + "classes")["m-detail"] == (
-        "we declined to look, so this says nothing about the endpoint"
-    )
+    assert "m-detail" not in classes
 
     # The legend is on this page too, and it explains a state rather than
     # either of the two reasons the rows carry.
@@ -1567,10 +1568,12 @@ def test_an_endpoint_a_crashed_newer_run_never_reached_says_so(
     said = texts_with(text, NEWER_UNFINISHED)
     assert len(said) == 1, "one sentence, where the run is named"
     assert said[0] == (
-        f"A later sweep, at {CRASHED_SWEEP}, did not finish and never "
-        f"recorded finishing this endpoint, so nothing above comes from it. "
-        f"What is above is the newest this store holds for this endpoint, "
-        f"from the sweep at {SAMPLING_SWEEP}."
+        f"A later sweep did not finish. Readings from {SAMPLING_SWEEP}."
+    )
+    assert CRASHED_SWEEP not in said[0], (
+        "the crashed sweep's own instant was cut with the rest of the "
+        "paragraph on 2026-09-18; the RDF still carries that activity and "
+        "test_negotiation.py holds it there"
     )
     # The run being shown is a pre-1c-b4 sweep, which promised nothing about
     # finishing, so the first sentence has no basis and must not appear.
@@ -1654,18 +1657,31 @@ def test_the_endpoint_page_says_the_newest_sweep_did_not_ask(
 
     The newest sweep finished, measured the other two endpoints of the trio
     and published one dormancy group naming this one. So the page carries one
-    sentence, and it has to name three things: the sweep that did not ask, the
-    reason it gives, and the sweep the verdicts above actually come from. It
-    must NOT carry the crash sentence, which is about a sweep that stopped.
+    sentence, and it has to name two things: the reason the sweep gives, and
+    the sweep the verdicts above actually come from. It must NOT carry the
+    crash sentence, which is about a sweep that stopped.
+
+    The DECLINING sweep's own instant is deliberately absent. It was named
+    here until 2026-09-18 and the owner cut it with the rest of the paragraph:
+    a reader comparing this page against the header wants to know which sweep
+    the readings ARE from, and the instant of a sweep that recorded nothing
+    here is a third timestamp to hold in mind for nothing. The assertion below
+    is a negative one so that the sentence cannot quietly grow it back.
     """
     text = page(client_for(store_dormant_newest), KADASTER)
 
     said = texts_with(text, SILENT)
     assert len(said) == 1, "one sentence, in the element contracted to carry it"
-    assert DECLINING_SWEEP_INSTANT in said[0], "name the sweep that did not ask"
-    assert SAMPLING_SWEEP in said[0], "and the sweep the verdicts come from"
-    assert "dormant" in said[0]
+    assert SAMPLING_SWEEP in said[0], "name the sweep the verdicts come from"
+    assert DECLINING_SWEEP_INSTANT not in said[0], (
+        "the sweep that did not ask is not a timestamp this sentence carries"
+    )
+    assert "Dormant" in said[0]
     assert "operator-hold" in said[0]
+    assert len(said[0].split()) < 12, (
+        "this sentence is a qualifier on one timestamp, not a paragraph about "
+        "what dormancy is; /about and /docs carry that"
+    )
 
     marked = with_attribute(text, SILENT)[0]
     assert marked[DORMANT] == "true"
@@ -1739,9 +1755,8 @@ def test_a_crashed_declining_sweep_makes_no_crash_claim(
     )
     said = texts_with(text, SILENT)
     assert len(said) == 1
-    assert DECLINING_SWEEP_INSTANT in said[0]
-    assert "operator-hold" in said[0]
-    assert SAMPLING_SWEEP in said[0]
+    assert "operator-hold" in said[0], "the reason that was bound and unused"
+    assert SAMPLING_SWEEP in said[0], "the sweep the readings come from"
 
 
 def test_the_calibration_shape_qualifies_every_page_the_narrower_run_skipped(
@@ -1763,9 +1778,12 @@ def test_the_calibration_shape_qualifies_every_page_the_narrower_run_skipped(
 
     said = texts_with(text, SILENT)
     assert len(said) == 1
-    assert REGISTRY_SWEEP_INSTANT in said[0]
-    assert FAILED_SWEEP_INSTANT in said[0], "and the sweep the facts come from"
-    assert "dormant" not in said[0]
+    assert FAILED_SWEEP_INSTANT in said[0], "the sweep the facts come from"
+    assert REGISTRY_SWEEP_INSTANT not in said[0], (
+        "the narrower sweep's own instant went with the paragraph on "
+        "2026-09-18; what a reader needs is which sweep the readings ARE from"
+    )
+    assert "ormant" not in said[0]
     marked = with_attribute(text, SILENT)[0]
     assert DORMANT not in marked
     assert "data-dormancy-reason" not in marked
@@ -1809,9 +1827,9 @@ def _silence_text(**overrides):
     return _newest_sweep_silence_text(EndpointMeasurements(**facts))
 
 
-def test_each_dormancy_reason_gets_its_own_sentence():
-    """Every slug prober/src/dormancy.rs::SkipReason emits says something
-    different, and no two of them share a sentence.
+def test_each_dormancy_reason_is_named_in_its_own_sentence():
+    """Every slug prober/src/dormancy.rs::SkipReason emits reaches the page,
+    and no sentence names a reason that is not its own.
 
     "automatic" is this service's cost policy relegating an endpoint that proved
     expensive and silent; "operator-hold" is a person; "not-in-this-sweep" is
@@ -1820,14 +1838,18 @@ def test_each_dormancy_reason_gets_its_own_sentence():
     did a person's work, or a decision was taken about their server that nobody
     took.
 
-    Read off _DORMANCY_REASONS rather than listed here, so that a fourth slug
-    fails this test rather than passing it three out of four.
-    test_about.py's test_the_dormancy_reasons_the_pages_read_are_the_probers_own
-    holds that map's keys to the Rust match arms.
+    Until 2026-09-18 the page carried a written-out sentence per reason and
+    this test held the three apart by their prose. The owner cut those, so what
+    distinguishes them now is the slug itself, printed as the store recorded
+    it -- which is why the assertion is still one per reason and still
+    two-sided. Read off _ROW_DORMANCY_REASONS, whose keys
+    test_about.py::test_the_dormancy_reasons_the_pages_read_are_the_probers_own
+    holds to the Rust match arms, so that a fourth slug fails this test rather
+    than passing it three out of four.
     """
     said = {
         slug: _silence_text(newest_dormancy_reason=slug)
-        for slug in _DORMANCY_REASONS
+        for slug in _ROW_DORMANCY_REASONS
     }
     for slug, sentence in said.items():
         assert slug in sentence, f"{slug} is not named in its own sentence"
@@ -1841,13 +1863,13 @@ def test_it_says_so_without_a_reason_when_no_reason_is_bound():
     """A declaration with no sw:dormancyReason beside it.
 
     The declaration is the fact that matters: the sweep said it declined to
-    ask. So the sentence is still made, and it says the reason is not
-    recorded rather than borrowing either of the two above.
+    ask. So the sentence is still made, it still dates the readings, and it
+    names no reason rather than borrowing one of the three above.
     """
     text = _silence_text(newest_dormancy_reason=None)
-    assert "dormant" in text
-    assert DECLINING_SWEEP_INSTANT in text
-    assert "no reason" in text
+    assert "Dormant" in text
+    assert SAMPLING_SWEEP in text, "the readings still have to be dated"
+    assert "(" not in text, "no parenthesis with nothing in it"
     assert "automatic" not in text and "operator-hold" not in text
 
 
@@ -1979,15 +2001,19 @@ def test_an_endpoint_with_an_unlinkable_scheme_keeps_its_page(store_hostile_lite
 
 
 @requires_repo_sources
-def test_every_decline_reason_the_prober_can_write_has_a_sentence():
-    """The pin this table did not have, and the drift it just failed to catch.
+def test_no_decline_reason_the_prober_can_write_is_glossed():
+    """Two halves of one property, and the second is why this test was rewritten.
 
-    _DECLINE_DETAILS is keyed on NotMeasuredReason::slug, and nothing tied the
-    two together: the enumeration-failed variant was added to the prober and
-    the page said "unrecognised reason" for it, which is the fallback doing its
-    job while the reader learns nothing. The fallback is still right for a
-    store written by a NEWER prober than this page, which is why it stays; it
-    is wrong as a description of a reason shipping in this same commit.
+    The FIRST is the pin this table did not have, and the drift it just failed
+    to catch.
+
+    DECLINE_REASONS is the set of NotMeasuredReason::slug values this build
+    knows, and nothing tied the two together: the enumeration-failed variant
+    was added to the prober and the page said "unrecognised reason" for it,
+    which is the fallback doing its job while the reader learns nothing. The
+    fallback is still right for a store written by a NEWER prober than this
+    page, which is why it stays; it is wrong as a description of a reason
+    shipping in this same commit.
 
     Read out of slug()'s own match arms rather than the enum's variants,
     because the slug is the string the graph carries and the variant name is
@@ -1998,10 +2024,24 @@ def test_every_decline_reason_the_prober_can_write_has_a_sentence():
     assert len(body) == 2, "NotMeasuredReason::slug moved; this pin needs its new shape"
     slugs = set(re.findall(r'NotMeasuredReason::\w+ => "([^"]+)"', body[1]))
     assert slugs, "no slug arms found, so this test would pass vacuously"
-    missing = slugs - set(_DECLINE_DETAILS)
+    missing = slugs - DECLINE_REASONS
     assert not missing, (
-        f"the prober can write {sorted(missing)} and this page has no sentence "
-        f"for it, so a declined row would read 'unrecognised reason'"
+        f"the prober can write {sorted(missing)} and this page does not know "
+        f"it, so a declined row would read 'unrecognised reason'"
+    )
+
+    # The SECOND half: none of them is glossed. The owner cut those clauses on
+    # 2026-09-18 -- "not measured (liveness-failed) the endpoint did not answer
+    # a trivial query, so the rest of the checks were never sent" was the one
+    # he quoted -- and nothing held the cut down: the only fixtures that reach
+    # a declined row carry prober-failed and cost-ceiling, so a sentence
+    # written back for any of the other four would have shipped green. Asserted
+    # over the PROBER's slugs rather than over DECLINE_REASONS so that a reason
+    # added to Rust arrives here unglossed too.
+    glossed = {slug for slug in slugs if _declined_detail(slug) is not None}
+    assert not glossed, (
+        f"{sorted(glossed)} carries a clause beside the slug; the row already "
+        f"reads 'not measured (<slug>)' and that is the whole of it"
     )
 
 

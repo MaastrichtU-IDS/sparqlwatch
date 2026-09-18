@@ -371,15 +371,12 @@
      it is not a finding about the endpoint and the seven states of
      docs/design/verdict-encoding.md are a closed set.
 
-     The link is inside this paragraph rather than only in the header because
-     this is the sentence an endpoint's own operator was sent here by, and it is
-     the one place on the page where knowing what the mark claims, what it does
-     not, and who lifts it is the reader's next question. It appears only for the
-     dormancy case: the other sentence in this element is about a sweep that
-     recorded nothing, and /about has nothing further to tell that reader. #}
+     No link and no explanation of what dormancy is: that was four sentences
+     the owner cut on 2026-09-18, and /about is a click away in the nav on
+     every page. #}
   <p class="note warn-note" data-newest-sweep-silent="true"
      {%- if newest_declined_to_ask %} data-newest-sweep-dormant="true"{% endif %}
-     {%- if newest_dormancy_reason %} data-dormancy-reason="{{ newest_dormancy_reason }}"{% endif %}>{{ newest_silence_text }}{% if newest_declined_to_ask %} What dormant claims, what it does not, and how a person changes it either way are set out on <a href="{{ about_path }}">this service's about page</a>.{% endif %}</p>
+     {%- if newest_dormancy_reason %} data-dormancy-reason="{{ newest_dormancy_reason }}"{% endif %}>{{ newest_silence_text }}</p>
   {% endif %}
 
   <div class="page-body">

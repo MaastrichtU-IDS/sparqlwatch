@@ -966,7 +966,12 @@ def test_the_rdf_carries_the_newest_run_an_endpoint_was_never_reached_by(
         get(client, QLEVER, accept="text/html"), "data-newer-run-unfinished"
     )
     assert len(shown) == 1, "the HTML must be making the claim being compared"
-    assert CRASHED_SWEEP in shown[0]
+    # The HTML names the readings' instant, not the crashed sweep's: the
+    # sentence was cut back on 2026-09-18 and the crashed sweep's own timestamp
+    # went with it. The RDF below still carries that activity and its
+    # prov:generatedAtTime, which is where a consumer gets it and is exactly
+    # the asymmetry this file exists to check.
+    assert SAMPLING_SWEEP in shown[0]
 
     graph = graph_of(get(client, QLEVER, accept="text/turtle"))
     newest = activity_at(CRASHED_SWEEP)
@@ -1075,7 +1080,10 @@ def test_the_turtle_for_a_dormant_endpoint_carries_a_dateable_dormancy(
         get(client, KADASTER, accept="text/html"), "data-newest-sweep-silent"
     )
     assert len(shown) == 1, "the HTML must be making the claim being compared"
-    assert DORMANT_SWEEP in shown[0]
+    # Same cut as the crash sentence above: the HTML dates the readings and
+    # names the reason, and leaves the declining sweep's instant to the RDF.
+    assert SAMPLING_SWEEP in shown[0]
+    assert "operator-hold" in shown[0]
 
     graph = graph_of(get(client, KADASTER, accept="text/turtle"))
     declining = activity_at(DORMANT_SWEEP)

@@ -695,70 +695,44 @@ def _rows(measurements: EndpointMeasurements) -> list[dict]:
     return sorted(rows, key=lambda row: _column_rank(row["metric"]))
 
 
-# What each decline reason means in words, keyed by the slug the graph
-# carries. The slugs are prober/src/emit.rs's NotMeasuredReason::slug, and the
-# two sentences say opposite things about who is responsible: "cost-ceiling"
-# is a decision this project made about budget, "prober-failed" is our own
-# task panicking or being cancelled before it asked the endpoint anything.
-# Reporting the second as the first would send an operator to --max-cost
-# instead of to the crash.
-_DECLINE_DETAILS = {
-    "cost-ceiling": "we declined to look, so this says nothing about the endpoint",
-    # Added 2026-09-18 with the prober's cadence split. DELIBERATELY NOT the
-    # cost-ceiling sentence: that one says we judged the query too expensive to
-    # point at this endpoint, and this one says the opposite -- the metric is
-    # cheap, it simply is not this hour's question. An operator reading
-    # "we declined to look" about a metric that will be measured tonight has
-    # been told the wrong thing about their own server.
-    "cadence": (
-        "we ask this once a day and this was not that sweep, so it says "
-        "nothing about the endpoint"
-    ),
-    "prober-failed": (
-        "the prober failed on this endpoint, so this run observed nothing "
-        "about it"
-    ),
-    # The third party in the same argument about responsibility: not our budget
-    # and not our crash, but a question the endpoint did not answer. The pass
-    # asked which classes are in there and got no readable result, so it
-    # profiled none of them, and that is a fact about this exchange rather than
-    # a finding about the endpoint's content.
-    "enumeration-failed": (
-        "we asked which classes the endpoint holds and got no readable "
-        "answer, so nothing was profiled"
-    ),
-    # The fourth party, and the only one that blames the endpoint outright.
-    # Note what it does NOT say: nothing about being unreachable, because it
-    # covers a host that answers too slowly as well as one that does not answer
-    # at all. And a host that answered with HTML or a 500 was probed in full,
-    # so this never appears for an endpoint that merely refused the query.
-    # The fifth, and the only one that is about cost rather than about failure
-    # of any kind. The pass is up to 200 queries; when the endpoint's triple and
-    # class counts are where they were, repeating it re-derives what the store
-    # already holds. What is shown for that endpoint's vocabulary is the
-    # previous pass's, which is why the decline is published rather than the
-    # row silently left out.
-    "unchanged": (
-        "its content has not moved since we last looked, so we did not look "
-        "again"
-    ),
-    "liveness-failed": (
-        "the endpoint did not answer a trivial query, so the rest of the "
-        "checks were never sent"
-    ),
-}
-
-# The detail for a reason this build has no sentence for, from a prober newer
-# or older than this page. The same shape as _detail's unrecognised-verdict
-# clause, and for the same reason: the row's state text already carries the
-# value verbatim, so this says only that we have no reading of it. A reason
-# has been added to the vocabulary once already, so the branch is reachable.
-_UNRECOGNISED_DECLINE_DETAIL = "unrecognised reason, shown as the store recorded it"
+# The decline reasons the prober can write, kept as a SET rather than as
+# sentences. Removed from the page on 2026-09-18 at the owner's request: a row
+# already reads `not measured (liveness-failed)`, and the slug says what the
+# clause beside it said at four times the length. A reader who wants what a
+# slug means looks it up; a reader scanning ten rows does not want a clause on
+# each. Writing them up is a docs change and is not done yet -- nothing on this
+# site defines them today, which is a gap and not a pointer.
+#
+# Still enumerated here, and still pinned against prober/src/emit.rs, because
+# the page has to know which reasons are the prober's own: one this build has
+# never heard of is a different thing from one it chose not to gloss, and only
+# the first is worth saying anything about.
+DECLINE_REASONS = frozenset(
+    {
+        "cost-ceiling",
+        "cadence",
+        "prober-failed",
+        "enumeration-failed",
+        "unchanged",
+        "liveness-failed",
+    }
+)
 
 
-def _declined_detail(reason: str) -> str:
-    """The extra clause a declined row carries, read out of its reason."""
-    return _DECLINE_DETAILS.get(reason, _UNRECOGNISED_DECLINE_DETAIL)
+def _declined_detail(reason: str) -> str | None:
+    """The clause a declined row carries beside its reason, or nothing.
+
+    Nothing, for every reason the prober actually writes: the row already says
+    `not measured (liveness-failed)` and the slug carries it.
+
+    A reason this build has never heard of is the one case worth a word, and it
+    is reachable -- `cadence` joined the vocabulary today. The row shows the
+    value verbatim either way, so this says only that we have no reading of it,
+    matching what `_detail` does for an unrecognised verdict.
+    """
+    if reason in DECLINE_REASONS:
+        return None
+    return "unrecognised reason, shown as the store recorded it"
 
 
 def _history_view(history: EndpointHistory, rows: list[dict]) -> dict:
@@ -893,69 +867,8 @@ def _newer_unfinished_run_text(
     if not measurements.newer_run_did_not_reach_this_endpoint:
         return None
     return (
-        f"A later sweep, at {measurements.newest_generated_at}, did not "
-        f"finish and never recorded finishing this endpoint, so nothing "
-        f"above comes from it. What is above is the newest this store holds "
-        f"for this endpoint, from the sweep at "
-        f"{measurements.generated_at}."
-    )
-
-
-# What each dormancy reason means in words, keyed by the slug the graph
-# carries. The slugs are prober/src/dormancy.rs's SkipReason::slug, and the
-# sentences differ in WHO decided and in what follows: "automatic" is this
-# project's cost policy relegating an endpoint that proved expensive and silent
-# over consecutive sweeps, "operator-hold" is a person putting it aside by hand.
-# Reporting the second as the first would tell a reader the machine did
-# something a person did, and would send an operator looking for a threshold to
-# change.
-#
-# "not-in-this-sweep" is neither, and it is the reason this map cannot collapse
-# into one sentence: a sweep re-running an instant that already ran asks exactly
-# the endpoints that instant asked, so an endpoint it did not reach was not
-# relegated and nothing about it was decided. Rule 3 of the admission policy
-# used to publish "automatic" for those, which every one of these pages then
-# rendered as a relegation that never happened.
-#
-# No sentence here says anything about the endpoint. Dormancy is a fact about
-# this service's rotation, which is why the vocabulary calls it dormant rather
-# than unresponsive and why it is not one of the six verdicts.
-_DORMANCY_REASONS = {
-    "automatic": (
-        "this service relegated it after consecutive sweeps that cost a great "
-        "deal and returned nothing"
-    ),
-    "operator-hold": "an operator put it aside by hand",
-    "not-in-this-sweep": (
-        "that sweep re-ran an instant that had already run, so it asked "
-        "exactly the endpoints that instant asked before and this endpoint "
-        "was not one of them, which is not a relegation and not a judgement "
-        "about the endpoint"
-    ),
-}
-
-# The clause for a reason this build has no sentence for, from a prober newer
-# or older than this page. The same shape and the same reason as
-# _UNRECOGNISED_DECLINE_DETAIL: the value is carried verbatim so a reader can
-# see which value the store holds, and nothing is claimed about what it means.
-_UNRECOGNISED_DORMANCY_REASON = "is one this page has no reading of"
-
-# And the clause for a declaration with no sw:dormancyReason beside it. Every
-# dormancy group the prober writes carries one, so this is the branch that
-# exists because the DECLARATION is the fact the page turns on: a run that said
-# it declined to ask and did not say why has still said the first half, and
-# that half is what makes the crash sentence false.
-_NO_DORMANCY_REASON = "it recorded no reason for the skip"
-
-
-def _dormancy_clause(reason: str | None) -> str:
-    """How the sentence below names the reason the newest sweep did not ask."""
-    if reason is None:
-        return _NO_DORMANCY_REASON
-    if reason in _DORMANCY_REASONS:
-        return f"{_DORMANCY_REASONS[reason]} ({reason})"
-    return (
-        f"the reason it recorded, {reason}, {_UNRECOGNISED_DORMANCY_REASON}"
+        f"A later sweep did not finish. "
+        f"Readings from {measurements.generated_at}."
     )
 
 
@@ -996,23 +909,26 @@ def _newest_sweep_silence_text(
     store's greatest prov:generatedAtTime would report them as fresher than
     they are, by exactly the gap this sentence exists to disclose.
     """
+    # TWO FACTS, not five sentences. Cut on 2026-09-18 at the owner's request
+    # from a ninety-word paragraph that explained what dormancy is, whose
+    # decision it was, that it is not a verdict, and where to read more. All of
+    # that is true and none of it belongs in a row a reader is trying to scan;
+    # /about carries it, and the word `dormant` links there.
+    #
+    # What a reader cannot get anywhere else, and so stays: WHICH SWEEP these
+    # readings are from, because it is not the newest one and the header says
+    # the newest one. The reason slug stays too -- `automatic` and
+    # `operator-hold` are a machine's decision and a person's, and an operator
+    # looking for a threshold to change needs to know which.
     if measurements.newest_sweep_declined_to_ask_this_endpoint:
+        reason = measurements.newest_dormancy_reason
         return (
-            f"The newest sweep, at {measurements.newest_generated_at}, did "
-            f"not ask this endpoint: it recorded the endpoint as dormant and "
-            f"{_dormancy_clause(measurements.newest_dormancy_reason)}. That "
-            f"is a fact about this service's rotation and not a verdict about "
-            f"the endpoint. Nothing above comes from that sweep. What is "
-            f"above is the newest this store holds for this endpoint, from "
-            f"the sweep at {measurements.generated_at}."
-        )
+            f"Dormant ({reason}). " if reason else "Dormant. "
+        ) + f"Readings from {measurements.generated_at}."
     if measurements.newest_sweep_recorded_nothing_for_this_endpoint:
         return (
-            f"The newest sweep, at {measurements.newest_generated_at}, "
-            f"finished and recorded nothing at all for this endpoint, and no "
-            f"run in this store says why. Nothing above comes from that "
-            f"sweep. What is above is the newest this store holds for this "
-            f"endpoint, from the sweep at {measurements.generated_at}."
+            f"The newest sweep recorded nothing here. "
+            f"Readings from {measurements.generated_at}."
         )
     return None
 
@@ -1735,8 +1651,7 @@ EMPTY_CELL_TEXT = ""
 def _row_dormancy_text(reason: str | None) -> str:
     """The words a dormant row carries, reason included.
 
-    Three branches, and they are the three _dormancy_clause has on the endpoint
-    page, said in fewer words. A reason this build has no reading of is carried
+    Three branches. A reason this build has no reading of is carried
     VERBATIM rather than dropped or relabelled, because the value the store
     holds is the fact and this build's reading of it is not; a declaration with
     no reason at all still made the declaration, which is the half that matters
