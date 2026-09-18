@@ -49,6 +49,7 @@ import verdict_encoding
 from endpoint_measurements import endpoint_measurements, EndpointMeasurements, MetricVerdict
 import app as app_module
 from app import (
+    AVAILABILITY_STATES,
     _index_metrics,
     _index_rows,
     _metric_state_matrix,
@@ -151,8 +152,18 @@ def client_for():
         client.close()
 
 
-def index(client, accept="text/html"):
-    response = client.get(INDEX_PATH, headers={"accept": accept})
+def index(client, accept="text/html", params=None):
+    """The whole registry, which since 2026-09-18 is `?facet=all`.
+
+    `/` on its own is the `available` facet now -- the owner's decision about
+    what a registry's front page is for -- so every test below that means "the
+    index lists these endpoints" has to ask for the listing that holds them
+    all. The default is not untested by that: it has its own tests, which read
+    the bare URL precisely because that is the thing they are about.
+    """
+    response = client.get(
+        INDEX_PATH, params={"facet": "all", **(params or {})}, headers={"accept": accept}
+    )
     assert response.status_code == 200, response.text
     return response.text
 
@@ -801,11 +812,11 @@ def test_the_index_negotiates_like_every_other_resource(
     """
     client = client_for(store_registry_sample)
 
-    html = client.get(INDEX_PATH, headers={"accept": "text/html"})
+    html = client.get(INDEX_PATH, params={"facet": "all"}, headers={"accept": "text/html"})
     assert html.status_code == 200
     assert html.headers["content-type"].startswith("text/html")
 
-    assert client.get(INDEX_PATH, headers={"accept": "*/*"}).headers[
+    assert client.get(INDEX_PATH, params={"facet": "all"}, headers={"accept": "*/*"}).headers[
         "content-type"
     ].startswith("text/html")
 
@@ -813,13 +824,13 @@ def test_the_index_negotiates_like_every_other_resource(
     del request.headers["accept"]
     assert client.send(request).headers["content-type"].startswith("text/html")
 
-    turtle = client.get(INDEX_PATH, headers={"accept": "text/turtle"})
+    turtle = client.get(INDEX_PATH, params={"facet": "all"}, headers={"accept": "text/turtle"})
     assert turtle.status_code == 200
     assert turtle.headers["content-type"].startswith("text/turtle")
     assert list(parse(turtle.content, format=RdfFormat.TURTLE))
 
     assert (
-        client.get(INDEX_PATH, headers={"accept": "application/pdf"}).status_code
+        client.get(INDEX_PATH, params={"facet": "all"}, headers={"accept": "application/pdf"}).status_code
         == 406
     )
 
@@ -835,7 +846,7 @@ def test_the_rdf_index_carries_every_endpoints_verdicts(
     is where they start to disagree.
     """
     client = client_for(store_registry_sample)
-    turtle = client.get(INDEX_PATH, headers={"accept": "text/turtle"})
+    turtle = client.get(INDEX_PATH, params={"facet": "all"}, headers={"accept": "text/turtle"})
     graph = Store()
     graph.extend(list(parse(turtle.content, format=RdfFormat.TURTLE)))
 
@@ -904,7 +915,7 @@ def test_the_rdf_index_carries_every_endpoint_a_crashed_run_left_behind(
     finished and for no other.
     """
     client = client_for(store_crashed_partway)
-    turtle = client.get(INDEX_PATH, headers={"accept": "text/turtle"})
+    turtle = client.get(INDEX_PATH, params={"facet": "all"}, headers={"accept": "text/turtle"})
     graph = Store()
     graph.extend(list(parse(turtle.content, format=RdfFormat.TURTLE)))
 
@@ -1988,6 +1999,10 @@ def test_the_page_is_one_listing_with_no_headings(
     """
     page = index(client_for(store_registry_and_failure))
     assert not with_attribute(page, "data-group-heading")
+    # The retired grouping attribute, not the dot's: the dot carries
+    # `data-availability-state`, deliberately a different name, because reusing
+    # a retired one for a new meaning is how this assertion would have started
+    # passing for the wrong reason.
     assert not with_attribute(page, "data-availability")
     assert len(with_attribute(page, "data-listing")) == 1
     assert grouped_rows(page), "one listing, and it holds the rows"
@@ -2428,12 +2443,19 @@ def test_a_single_sweep_store_draws_no_overview(client_for, store):
     assert 'data-section="overview"' not in body
 
 
-def test_the_index_leads_with_the_fleet_in_four_figures(client_for, store):
-    body = client_for(store).get("/", headers={"accept": "text/html"}).text
+def test_the_index_leads_with_the_fleet_in_five_figures(client_for, store):
+    """endpoints, the three availability states, and the last sweep.
+
+    Four until 2026-09-18, when `answering | not answering` -- one figure about
+    our rotation and its inverse -- became the three states the owner asked
+    for. Asserted as a count so that a figure added without a decision has to
+    change a test.
+    """
+    body = client_for(store).get("/?facet=all", headers={"accept": "text/html"}).text
     figures = texts_with(body, "data-figure")
-    assert len(figures) == 4, (
-        f"the strip states endpoints, answering, not answering and freshness; "
-        f"got {figures}"
+    assert len(figures) == 5, (
+        f"the strip states endpoints, available, unresponsive, dormant and "
+        f"freshness; got {figures}"
     )
 
 
@@ -2459,15 +2481,14 @@ def test_the_strips_figures_are_coloured_by_data_figure_not_by_a_borrowed_verdic
         attrs["data-figure"]: attrs.get("class", "")
         for attrs in with_attribute(body, "data-figure")
     }
-    for name in ("answering", "not-answering"):
+    for name in AVAILABILITY_STATES:
         classes = figures[name].split()
         assert not any(c.startswith("enc-text-") for c in classes), (
             f"{name} still borrows a verdict class: {classes}"
         )
-    assert '.strip .n[data-figure="answering"] { color: var(--good); }' in body
-    assert (
-        '.strip .n[data-figure="not-answering"] { color: var(--crit); }' in body
-    )
+    assert '.strip .n[data-figure="available"] { color: var(--good); }' in body
+    assert '.strip .n[data-figure="unresponsive"] { color: var(--crit); }' in body
+    assert '.strip .n[data-figure="dormant"] { color: var(--text-dim); }' in body
 
 
 def test_the_index_declares_no_tokens_and_no_inline_verdict_css(client_for, store):
@@ -2499,7 +2520,7 @@ def endpoints_shown(body):
 
 def test_a_query_narrows_the_rows_without_javascript(client_for, store_registry_sample):
     client = client_for(store_registry_sample)
-    everything = endpoints_shown(client.get("/", headers={"accept": "text/html"}).text)
+    everything = endpoints_shown(client.get("/?facet=all", headers={"accept": "text/html"}).text)
     narrowed = endpoints_shown(
         client.get("/?q=uniprot", headers={"accept": "text/html"}).text
     )
@@ -2523,13 +2544,36 @@ def test_a_filtered_page_states_its_denominator(client_for, store_registry_sampl
     assert " of " in total, f"the count reads {total!r}, with no denominator"
 
 
-def test_an_unfiltered_page_states_no_denominator(client_for, store_registry_sample):
-    """The flip side: a page nobody filtered should not read "9 of 9"."""
+def test_a_page_showing_everything_states_no_denominator(
+    client_for, store_registry_sample
+):
+    """The flip side: a page showing the whole registry should not read "9 of 9".
+
+    `?facet=all` rather than the bare URL since 2026-09-18, because the bare URL
+    IS narrowed now -- to `available` -- and a denominator is exactly what it
+    owes the reader. The test below is that other half.
+    """
+    body = client_for(store_registry_sample).get(
+        "/?facet=all", headers={"accept": "text/html"}
+    ).text
+    total = texts_with(body, "data-figure")[0]
+    assert " of " not in total, f"the count reads {total!r} showing everything"
+
+
+def test_the_default_page_states_its_denominator(client_for, store_registry_sample):
+    """The bare URL shows one facet, so it has to say so.
+
+    `/` is `available` now. A strip reading a flat "3" over a registry of nine
+    would report the registry as three endpoints -- the same class of wrong
+    answer the "N of M" rule was introduced for, arrived at from the other
+    direction: not a filter that emptied a count, but a default nobody typed.
+    """
     body = client_for(store_registry_sample).get(
         "/", headers={"accept": "text/html"}
     ).text
     total = texts_with(body, "data-figure")[0]
-    assert " of " not in total, f"the count reads {total!r} with no filter applied"
+    assert " of " in total, f"the default page reads {total!r} with no denominator"
+    assert total.split(" of ")[1].strip() == str(REGISTRY_SAMPLE_ENDPOINTS)
 
 
 def test_the_query_survives_in_the_input(client_for, store_registry_sample):
@@ -2548,43 +2592,6 @@ def test_matches_query_is_case_insensitive_and_permissive_when_empty():
     assert _matches_query("https://sparql.uniprot.org/sparql", None)
     assert _matches_query("https://sparql.uniprot.org/sparql", "")
     assert _matches_query("https://sparql.uniprot.org/sparql", "  uniprot  ")
-
-
-def test_the_two_facets_partition_the_registry():
-    """The chips became `answering | not answering` on 2026-09-17, and a pair
-    of complementary chips is only honest if it is a partition: every endpoint
-    matches exactly one, none matches both, none matches neither. Both branches
-    read one fact -- newest_sweep_declined_to_ask_this_endpoint -- from
-    opposite sides for that reason; a second, independent reading of the store
-    would let the two chips disagree about a single endpoint, or leave it in
-    neither.
-
-    This replaced a test of the `void` facet, which was the one `exhaustive`-
-    tier metric no cheap-ceiling sweep ever ran, so its chip read 0 on the
-    deployed site permanently. The facet went with the chip on 2026-09-17.
-    The last two assertions are why that removal is safe to bookmark over: an
-    unrecognised facet must empty the page, not be silently ignored.
-    """
-    asked = EndpointMeasurements(endpoint="https://example.org/sparql", assessed=True)
-    declined = EndpointMeasurements(
-        endpoint="https://other.example/sparql",
-        assessed=True,
-        run="urn:sparqlwatch:run:older",
-        newest_run="urn:sparqlwatch:run:newest",
-        newest_declared_this_endpoint_dormant=True,
-    )
-    assert declined.newest_sweep_declined_to_ask_this_endpoint
-    assert not asked.newest_sweep_declined_to_ask_this_endpoint
-    for entry in (asked, declined):
-        matched = [f for f in ("answering", "not-answering") if _matches_facet(entry, f)]
-        assert len(matched) == 1, f"{entry.endpoint} matched {matched}"
-    assert _matches_facet(asked, "answering")
-    assert _matches_facet(declined, "not-answering")
-    for permissive in (None, ""):
-        assert _matches_facet(asked, permissive)
-        assert _matches_facet(declined, permissive)
-    assert not _matches_facet(asked, "void")
-    assert not _matches_facet(asked, "not-a-real-facet")
 
 
 def test_every_row_chip_carries_a_tooltip_naming_the_metric_and_the_state(
@@ -2670,7 +2677,7 @@ def test_each_facet_names_the_same_endpoints_in_html_and_in_rdf(
         rdf = client.get(f"/?facet={facet}", headers={"accept": "text/turtle"}).text
         named = {e for e in html} | {
             e for e in endpoints_shown(
-                client.get("/", headers={"accept": "text/html"}).text
+                client.get("/?facet=all", headers={"accept": "text/html"}).text
             )
         }
         in_rdf = {e for e in named if f"<{e}>" in rdf}
@@ -2692,8 +2699,8 @@ def test_a_page_and_its_rdf_are_both_compressed(client_for, store_registry_sampl
     """
     client = client_for(store_registry_sample)
     for accept in ("text/html", "text/turtle"):
-        plain = client.get("/", headers={"accept": accept})
-        zipped = client.get("/", headers={"accept": accept, "accept-encoding": "gzip"})
+        plain = client.get("/?facet=all", headers={"accept": accept})
+        zipped = client.get("/?facet=all", headers={"accept": accept, "accept-encoding": "gzip"})
         assert plain.status_code == zipped.status_code == 200, accept
         assert plain.headers["content-type"].startswith(accept.split(";")[0])
         assert zipped.headers.get("content-encoding") == "gzip", (accept, dict(zipped.headers))
@@ -2772,7 +2779,7 @@ def test_only_a_no_match_query_renders_the_no_match_message(
     client_for, store_registry_sample
 ):
     client = client_for(store_registry_sample)
-    unfiltered = client.get("/", headers={"accept": "text/html"}).text
+    unfiltered = client.get("/?facet=all", headers={"accept": "text/html"}).text
     narrowed = client.get("/?q=uniprot", headers={"accept": "text/html"}).text
     assert not with_attribute(unfiltered, "data-no-match")
     assert not with_attribute(narrowed, "data-no-match")
@@ -2805,10 +2812,19 @@ def test_a_domain_that_matches_something_renders_no_message(
     matches epo and visualdataweb once registry_names.load_names merges per
     field instead of keying on title alone (fix-round-1, finding 1)."""
     body = client_for(store_registry_sample).get(
-        "/?domain=government", headers={"accept": "text/html"}
+        "/?domain=government&facet=all", headers={"accept": "text/html"}
     ).text
     assert not with_attribute(body, "data-no-match")
     assert len(endpoints_shown(body)) == 2
+
+    # And the two filters compose rather than one silently winning: the default
+    # facet still applies to a domain-filtered page, so the same domain under
+    # `available` is the subset of those two that answer. epo is verified and
+    # visualdataweb is indeterminate in this fixture, so this is one row.
+    narrowed = client_for(store_registry_sample).get(
+        "/?domain=government", headers={"accept": "text/html"}
+    ).text
+    assert endpoints_shown(narrowed) == [EPO]
 
 
 def test_a_no_match_page_states_its_denominator_as_zero_of_the_fleet(
@@ -2914,19 +2930,110 @@ def test_a_row_for_a_multi_dataset_endpoint_shows_a_count(client_for, store_many
 # ---------------------------------------------------------------------------
 
 
-def test_the_pills_carry_their_counts(client_for, store_registry_sample):
-    body = client_for(store_registry_sample).get("/", headers={"accept": "text/html"}).text
-    pills = with_attribute(body, "data-pill")
-    assert pills, "the registry offers no facets"
-    for p in pills:
-        assert p["data-pill-count"].isdigit(), f"{p['data-pill']} has no count"
+def _figures(text):
+    """The strip's clickable figures, by the facet each one selects."""
+    return {
+        a["data-strip-facet"]: a for a in with_attribute(text, "data-strip-facet")
+    }
 
 
-def test_a_pill_is_a_link_that_works_without_javascript(client_for, store_registry_sample):
-    """A faceted view must be shareable, like ?q=."""
-    body = client_for(store_registry_sample).get("/", headers={"accept": "text/html"}).text
-    hrefs = [a["href"] for a in with_attribute(body, "data-pill")]
-    assert all(h.startswith("/?") for h in hrefs), f"pills are not links: {hrefs}"
+def test_the_strip_offers_the_three_states_and_the_way_back_to_all(
+    client_for, store_registry_sample
+):
+    """Four links: the endpoint total, and one per availability state.
+
+    The three replaced `answering | not answering` on 2026-09-18, and the
+    total became a link at the same time and for the same reason: with
+    `available` the default, a reader needs something that says "all of them",
+    and the figure they already read as the whole registry is it.
+    """
+    body = client_for(store_registry_sample).get(
+        "/?facet=all", headers={"accept": "text/html"}
+    ).text
+    figures = _figures(body)
+    assert set(figures) == {"all", "available", "unresponsive", "dormant"}
+    for value, a in figures.items():
+        assert a["href"].startswith("/?"), f"{value} is not a link: {a}"
+        assert f"facet={value}" in a["href"], a["href"]
+
+
+def test_each_figures_count_is_the_rows_its_own_link_shows(
+    client_for, store_registry_sample
+):
+    """THE property that makes these figures navigation rather than decoration:
+    press one and get exactly the number it showed.
+
+    A count and the page behind it are computed by different code paths -- the
+    count from `_availability_state` over the unfaceted set, the page from
+    `_matches_facet` after the cut -- so this follows each link and counts the
+    rows that come back. A figure that promised 6 and delivered 3 is the defect
+    this page has shipped before under other names.
+    """
+    client = client_for(store_registry_sample)
+    body = client.get("/?facet=all", headers={"accept": "text/html"}).text
+    figures = _figures(body)
+    assert figures, "the strip offers nothing to press"
+
+    for value, a in figures.items():
+        if value == "all":
+            continue
+        promised = int(a["data-strip-count"])
+        shown = endpoints_shown(
+            client.get(a["href"], headers={"accept": "text/html"}).text
+        )
+        assert len(shown) == promised, (
+            f"{value} promised {promised} rows and its link showed {len(shown)}"
+        )
+
+
+def test_a_state_counting_zero_is_still_offered(client_for, store_registry_sample):
+    """Deliberately NOT the old rule, and this says so rather than leaving the
+    reversal to look like a regression.
+
+    Pills counting zero were dropped, because a chip reading "Describes its own
+    vocabulary 0" was a filter that could never do anything: its metric only
+    the nightly profile pass records, so the count was permanently zero and the
+    control taught a reader it was broken.
+
+    These three are not that. They partition the fleet, so each is always a
+    real question about the page in front of the reader, and a zero is an
+    ANSWER to it -- "nothing here is unresponsive" is the best news this strip
+    can carry, and hiding it would make the strip change shape between sweeps
+    for a reader who has learned where to look.
+    """
+    body = client_for(store_registry_sample).get(
+        "/?facet=all", headers={"accept": "text/html"}
+    ).text
+    figures = _figures(body)
+    assert set(figures) - {"all"} == set(AVAILABILITY_STATES), (
+        "a state went missing from the strip"
+    )
+    counts = {v: int(a["data-strip-count"]) for v, a in figures.items() if v != "all"}
+    assert sum(counts.values()) == REGISTRY_SAMPLE_ENDPOINTS, (
+        f"the three states do not sum to the registry: {counts}"
+    )
+
+
+def test_the_figures_read_as_words_and_filter_by_the_same_token(
+    client_for, store_registry_sample
+):
+    """The page exists to stop leading with jargon: the label a person reads is
+    the value the query parameter matches, and neither is a slug with
+    punctuation in it.
+
+    `not-answering` was the old counter-example, and the three words the owner
+    chose are each one word for that reason.
+    """
+    body = client_for(store_registry_sample).get(
+        "/?facet=all", headers={"accept": "text/html"}
+    ).text
+    labels = texts_with(body, "data-strip-facet")
+    assert labels, "the strip renders no text"
+    assert not any("_" in t or "-" in t for t in labels), (
+        f"a figure shows a raw slug: {labels}"
+    )
+    for value, a in _figures(body).items():
+        assert a["href"].count(value) == 1, f"{value}'s href must carry its token"
 
 
 def test_a_domain_pill_narrows_the_rows(client_for, store_registry_sample):
@@ -2946,48 +3053,69 @@ def test_a_domain_pill_narrows_the_rows(client_for, store_registry_sample):
     life_sciences is kept here regardless, since this test only needs SOME
     domain that narrows, not a specific one."""
     client = client_for(store_registry_sample)
-    everything = endpoints_shown(client.get("/", headers={"accept": "text/html"}).text)
+    everything = endpoints_shown(client.get("/?facet=all", headers={"accept": "text/html"}).text)
     narrowed = endpoints_shown(
         client.get("/?domain=life_sciences", headers={"accept": "text/html"}).text
     )
     assert 0 < len(narrowed) < len(everything)
 
 
-def test_a_pills_href_carries_the_active_query(client_for, store_registry_sample):
-    """Blocker-5 of the whole-branch review: a pill's href used to be built
-    from only its own `{param}={value}`, so on `/?q=uniprot` a pill's COUNT
-    was computed over the query-narrowed page but its LINK dropped `q` and
-    landed on the whole registry -- a count for one page on a link to another.
-    A pill's link must carry every sibling filter its count was computed under.
+def test_a_figures_href_carries_the_active_query(client_for, store_registry_sample):
+    """Blocker-5 of the whole-branch review, inherited: a chip's href used to
+    be built from only its own `{param}={value}`, so on `/?q=uniprot` its COUNT
+    was computed over the query-narrowed page while its LINK landed on the
+    whole registry -- a count for one page on a link to another.
 
-    Written against the domain pills that stood here until 2026-09-17. The
-    facet chips that replaced them are built by the same `_pill_href`, so they
-    inherit the bug if it comes back, and this asserts over whichever chips the
-    narrowed page offers rather than naming one.
+    Written against the domain pills that stood here until 2026-09-17 and the
+    facet chips after them. The strip figures are built by the same
+    `_pill_href`, so they inherit the bug if it comes back.
     """
     body = client_for(store_registry_sample).get(
         "/?q=uniprot", headers={"accept": "text/html"}
     ).text
-    pills = with_attribute(body, "data-pill")
-    assert pills, "the query-narrowed page offers no chip to press"
-    for p in pills:
-        assert p["data-pill-count"].isdigit(), p
-        href = p["href"]
-        assert "q=uniprot" in href, href
-        assert f"facet={p['data-pill']}" in href, href
+    figures = _figures(body)
+    assert figures, "the query-narrowed page offers no figure to press"
+    for value, a in figures.items():
+        assert "q=uniprot" in a["href"], a["href"]
 
 
-def test_an_active_pills_href_clears_only_itself(client_for, store_registry_sample):
-    """Pressing an already-active pill narrows nothing further -- it clears
-    that one filter and keeps any other active one, per the same fix."""
+def test_the_selected_figure_still_links_to_itself(client_for, store_registry_sample):
+    """The old pills toggled: pressing the active one cleared its parameter.
+    These do not, and the difference is the default.
+
+    Clearing `?facet=` returns the reader to `available`, so a toggle on
+    `available` would be a link that looks like it turns the filter off and
+    lands on the same page -- and one on `dormant` would silently jump to a
+    different facet rather than to everything. The way out is the endpoint
+    total, which is its own link to `all`.
+    """
     body = client_for(store_registry_sample).get(
-        "/?facet=answering&q=uniprot", headers={"accept": "text/html"}
+        "/?facet=dormant&q=uniprot", headers={"accept": "text/html"}
     ).text
-    pills = with_attribute(body, "data-pill")
-    answering = next(p for p in pills if p["data-pill"] == "answering")
-    assert "on" in answering.get("class", ""), answering
-    assert "facet=answering" not in answering["href"], answering["href"]
-    assert "q=uniprot" in answering["href"], answering["href"]
+    dormant = _figures(body)["dormant"]
+    assert "on" in dormant.get("class", ""), dormant
+    assert "facet=dormant" in dormant["href"], dormant["href"]
+    assert "q=uniprot" in dormant["href"], dormant["href"]
+
+    everything = _figures(body)["all"]
+    assert "facet=all" in everything["href"]
+    assert "q=uniprot" in everything["href"], (
+        "widening the facet must not drop the search the reader is inside"
+    )
+
+
+def test_the_default_page_marks_available_as_the_one_showing(
+    client_for, store_registry_sample
+):
+    """Nobody typed `?facet=available`, so the strip is the only thing that can
+    tell a reader why they are seeing three rows out of nine."""
+    body = client_for(store_registry_sample).get(
+        "/", headers={"accept": "text/html"}
+    ).text
+    figures = _figures(body)
+    assert "on" in figures["available"].get("class", ""), figures["available"]
+    for other in ("unresponsive", "dormant", "all"):
+        assert "on" not in figures[other].get("class", ""), figures[other]
 
 
 def test_the_matrix_sits_above_the_rows_and_starts_closed(client_for, store_registry_sample):
@@ -3008,55 +3136,57 @@ def test_the_matrix_sits_above_the_rows_and_starts_closed(client_for, store_regi
     assert " open" not in matrix.split(">")[0], f"the accordion starts open: {matrix!r}"
 
 
-def test_a_facet_pill_narrows_the_rows(client_for, store_dormant_newest):
-    """The non-domain pills are real filters too, not decoration: see
-    _matches_facet. store_dormant_newest is three endpoints, one of them
-    (kadaster) dormant -- the newest sweep declined to ask it at all -- so
-    `?facet=answering` is the one of the two remaining named facets
-    (`answering`, `void`) with a fixture on hand that is neither all nor
-    none of a store: it must drop exactly the dormant one."""
+def test_a_figure_narrows_the_rows(client_for, store_dormant_newest):
+    """store_dormant_newest has one dormant endpoint of three, so `dormant`
+    selects exactly it and `all` selects the trio."""
     client = client_for(store_dormant_newest)
-    everything = endpoints_shown(client.get("/", headers={"accept": "text/html"}).text)
-    narrowed = endpoints_shown(
-        client.get("/?facet=answering", headers={"accept": "text/html"}).text
+    everything = endpoints_shown(
+        client.get("/?facet=all", headers={"accept": "text/html"}).text
     )
-    assert 0 < len(narrowed) < len(everything)
-    assert "https://data.kkg.kadaster.nl/query" not in narrowed
+    dormant = endpoints_shown(
+        client.get("/?facet=dormant", headers={"accept": "text/html"}).text
+    )
+    assert len(everything) == 3
+    assert dormant == [KADASTER], dormant
 
 
-def test_no_pill_offers_a_filter_that_would_empty_the_page(client_for, store_registry_sample):
-    """A control that promises a narrower view and delivers an empty one.
+def test_an_unrecognised_facet_still_empties_the_page(
+    client_for, store_registry_sample
+):
+    """A typo must not silently widen to everything.
 
-    `vocabulary-described` is an `exhaustive` metric (prober/metrics.toml), so
-    only the nightly profile pass ever records it; on any store built from
-    cheap sweeps its pill reads 0 permanently. Measured on the deployed dev
-    site before this change: "Describes its own vocabulary 0", linking to a
-    page with no rows. A pill that always says zero teaches a reader the
-    filter is broken.
+    `all` is the way to say "no narrowing" now, which makes an unrecognised
+    value the one case with somewhere wrong to fall: resolving it to `all`
+    would turn `?facet=availble` into a full registry listing that looks like
+    it worked.
     """
-    body = client_for(store_registry_sample).get("/", headers={"accept": "text/html"}).text
-    counts = [a["data-pill-count"] for a in with_attribute(body, "data-pill-count")]
-    assert counts, "the registry offers no pills at all"
-    assert "0" not in counts, f"a pill offers an empty page: {counts}"
+    body = client_for(store_registry_sample).get(
+        "/?facet=availble", headers={"accept": "text/html"}
+    ).text
+    assert endpoints_shown(body) == []
 
 
-def test_a_pill_reads_as_words_and_filters_by_its_slug(client_for, store_registry_sample):
-    """The page exists to stop leading with jargon.
+def test_a_retired_facet_name_widens_rather_than_empties(
+    client_for, store_registry_sample
+):
+    """`answering` and `not-answering` were removed on 2026-09-18, and links
+    carrying them were already shared.
 
-    A filter's value is a URL token -- `not-answering`, and before 2026-09-17
-    the registry domains `cross_domain`, `life_sciences`, `user_generated`. The
-    label a person reads is spaced; the value in the href stays the token,
-    because that is what the query parameter matches. The domain pills this was
-    written for are gone; the two facet chips are held to the same rule.
+    They resolve to `all`, not to nothing. Neither is one of the three and
+    neither can be honestly translated into one -- `answering` read our
+    dormancy rotation under a word describing the endpoint, which is why it
+    went -- so the whole registry is the answer that misleads least. An empty
+    page would look like a registry with nothing in it.
     """
-    body = client_for(store_registry_sample).get("/", headers={"accept": "text/html"}).text
-    pills = with_attribute(body, "data-pill")
-    assert pills, "the registry offers no chip to press"
-    for p in pills:
-        assert p["href"].count(p["data-pill"]) == 1, "the href must carry the slug"
-    labels = texts_with(body, "data-pill")
-    assert labels, "the chips render no text"
-    assert not any("_" in t or "-" in t for t in labels), f"a pill shows a raw slug: {labels}"
+    client = client_for(store_registry_sample)
+    everything = endpoints_shown(
+        client.get("/?facet=all", headers={"accept": "text/html"}).text
+    )
+    for retired in ("answering", "not-answering"):
+        shown = endpoints_shown(
+            client.get(f"/?facet={retired}", headers={"accept": "text/html"}).text
+        )
+        assert shown == everything, retired
 
 
 # ---------------------------------------------------------------------------
@@ -3102,7 +3232,7 @@ def _dots(text):
     says: one is the answer in a word, the other is how it is drawn.
     """
     found = {}
-    for endpoint, dots in _in_rows(text, "data-available").items():
+    for endpoint, dots in _in_rows(text, "data-availability-state").items():
         assert len(dots) == 1, f"{endpoint} carries {len(dots)} dots"
         found[endpoint] = dots[0]
     return found
@@ -3116,7 +3246,7 @@ def test_every_row_leads_with_exactly_one_dot(client_for, store_registry_sample)
     """
     text = index(client_for(store_registry_sample))
     rows = with_attribute(text, "data-endpoint")
-    dots = with_attribute(text, "data-available")
+    dots = with_attribute(text, "data-availability-state")
     assert len(rows) == REGISTRY_SAMPLE_ENDPOINTS
     assert len(dots) == len(rows)
 
@@ -3162,39 +3292,49 @@ def test_the_dot_and_the_availability_chip_never_disagree(
         )
 
 
-def test_available_means_what_it_means_everywhere_else_on_this_page(
+def test_the_dot_is_the_state_the_strip_counts_and_filters_on(
     client_for, store_registry_sample
 ):
-    """`_POSITIVE_VERDICTS`, and not a second table with the same name.
+    """One reading of one question, asserted across the three places it shows.
 
-    The facet chips were built from that table, and a reader who presses one
-    and then counts dots has asked one question twice. Asserted through the
-    dot's own `data-available`, which is the word the markup gives a reader,
-    against the function the rest of the page filters with.
+    `_availability_state` is the dot's state, the strip's three counts and the
+    `?facet=` predicate. That is not tidiness: this page shipped two readings
+    of "does this endpoint answer" -- a strip saying "72 answering" beside 66
+    green dots -- because one read our dormancy rotation and the other read the
+    availability verdict, under one word. So the check is that the markup's own
+    per-row answer is what the shared function says, row by row.
     """
-    from app import _POSITIVE_VERDICTS, endpoint_index
+    from app import _availability_state, endpoint_index
 
     entries = {e.endpoint: e for e in endpoint_index(store_registry_sample)}
     dots = _dots(index(client_for(store_registry_sample)))
     assert len(dots) == len(entries)
-
     for endpoint, dot in dots.items():
-        verdict = next(
-            (
-                v.verdict
-                for v in entries[endpoint].verdicts
-                if v.metric == M + "availability"
-            ),
-            None,
+        assert dot["data-availability-state"] == _availability_state(entries[endpoint])
+
+
+def test_the_three_states_partition_the_registry(client_for, store_registry_sample):
+    """Every endpoint in exactly one, and the three summing to the fleet.
+
+    The old pair did partition, and this is the same promise for three. It is
+    what lets the strip's figures be navigation: a reader who presses one and
+    then presses the endpoint total gets back everything, with nothing that
+    fell through the three and nothing counted twice.
+    """
+    from app import AVAILABILITY_STATES, _availability_state, _matches_facet, endpoint_index
+
+    entries = endpoint_index(store_registry_sample)
+    assert entries, "this fixture has no endpoints"
+    for entry in entries:
+        selected = [f for f in AVAILABILITY_STATES if _matches_facet(entry, f)]
+        assert selected == [_availability_state(entry)], (
+            f"{entry.endpoint} is in {selected}, not in exactly one state"
         )
-        expected = (
-            "unknown"
-            if verdict is None
-            else ("yes" if verdict in _POSITIVE_VERDICTS else "no")
-        )
-        assert dot["data-available"] == expected, (
-            f"{endpoint}: verdict {verdict!r} drew {dot['data-available']!r}"
-        )
+    counted = sum(
+        sum(1 for e in entries if _matches_facet(e, f)) for f in AVAILABILITY_STATES
+    )
+    assert counted == len(entries)
+    assert all(_matches_facet(e, "all") for e in entries)
 
 
 def test_a_row_nobody_asked_is_not_drawn_as_one_that_failed(
@@ -3217,7 +3357,11 @@ def test_a_row_nobody_asked_is_not_drawn_as_one_that_failed(
     dots = _dots(index(client_for(store_no_availability_two_ways)))
     assert set(dots) == {KADASTER, NO_AVAILABILITY}
     for endpoint, dot in dots.items():
-        assert dot["data-available"] == "unknown", endpoint
+        assert dot["data-availability-state"] == "unresponsive", endpoint
+        assert "not measured" in dot["title"], (
+            f"{endpoint} is filed under unresponsive, which is only honest "
+            f"while the tooltip still says we hold no reading"
+        )
 
 
 def test_the_dot_says_the_same_thing_with_the_colour_taken_away(
@@ -3240,9 +3384,9 @@ def test_the_dot_says_the_same_thing_with_the_colour_taken_away(
     text = index(client_for(store_registry_sample))
 
     drawings = {}
-    for answer in ("yes", "no", "unknown"):
+    for answer in ("available", "unresponsive", "dormant"):
         rule = re.search(
-            r'\.dot\[data-available="%s"\]\s*\{([^}]*)\}' % answer, text
+            r'\.dot\[data-availability-state="%s"\]\s*\{([^}]*)\}' % answer, text
         )
         assert rule, f"no rule draws data-available={answer}"
         body = rule.group(1)
@@ -3261,8 +3405,8 @@ def test_the_dot_says_the_same_thing_with_the_colour_taken_away(
         f"two of the three dots draw identically once colour is removed, so a "
         f"reader who cannot separate them cannot read this column: {drawings}"
     )
-    assert drawings["yes"][2] is True, "available should be the filled one"
-    assert drawings["no"][2] is False
+    assert drawings["available"][2] is True, "available should be the filled one"
+    assert drawings["unresponsive"][2] is False
 
 
 def test_the_dot_adds_no_wording_of_its_own(client_for, store_registry_sample):
@@ -3312,25 +3456,25 @@ def test_every_verdict_the_encoding_has_maps_to_one_answer_and_the_right_one():
     answers = {}
     for state in verdict_encoding.STATES:
         dot = dot_for(state.slug)
-        answers[state.slug] = dot["available"]
-        expected = "yes" if state.slug in _POSITIVE_VERDICTS else "no"
-        assert dot["available"] == expected, state.slug
+        answers[state.slug] = dot["state"]
+        expected = "available" if state.slug in _POSITIVE_VERDICTS else "unresponsive"
+        assert dot["state"] == expected, state.slug
         assert state.label in dot["title"], (
             f"{state.slug}'s dot does not name the verdict it was drawn from"
         )
 
-    assert answers["verified"] == "yes"
-    assert answers["undeclared-but-verified"] == "yes", (
+    assert answers["verified"] == "available"
+    assert answers["undeclared-but-verified"] == "available", (
         "confirmed without being declared is still an endpoint that answered; "
         "this is the pair that made the page test vacuous"
     )
-    assert answers["declared-only"] == "no"
-    assert answers["indeterminate"] == "no"
+    assert answers["declared-only"] == "unresponsive"
+    assert answers["indeterminate"] == "unresponsive"
 
     # A verdict from a prober newer than this page. It is not available -- we
     # have no reading that says it answered -- and it is drawn in the
     # unrecognised state rather than as one of the seven, which is what this
     # site does with every value it cannot read.
     unrecognised = dot_for("hibernating-2027")
-    assert unrecognised["available"] == "no"
+    assert unrecognised["state"] == "unresponsive"
     assert verdict_encoding.UNRECOGNISED.label in unrecognised["title"]

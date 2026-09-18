@@ -1128,7 +1128,14 @@ def test_the_index_turtle_carries_it_too(client_for, store_dormant_newest):
     dormancy triple about them would be false.
     """
     client = client_for(store_dormant_newest)
-    turtle = client.get(INDEX_PATH, headers={"accept": "text/turtle"})
+    # `facet=all`: the index defaults to `available` since 2026-09-18, and the
+    # endpoint this test is about is the dormant one. Both representations
+    # honour that default together -- test_index.py holds them to it -- so this
+    # asks the listing that holds every endpoint, which is what the document
+    # this test is about describes.
+    turtle = client.get(
+        INDEX_PATH, params={"facet": "all"}, headers={"accept": "text/turtle"}
+    )
     assert turtle.status_code == 200
     graph = graph_of(turtle)
 
@@ -1288,12 +1295,16 @@ def test_a_filtered_index_names_no_non_matching_endpoint_anywhere(
     dropped.
     """
     client = client_for(store_dormant_newest)
-    listed = set(
-        rows_of(client.get("/?q=ontop", headers={"accept": "text/html"}).text)
-    )
+    # `facet=all` on BOTH, and the same string on both, which is the point:
+    # since 2026-09-18 the bare `/` carries a default facet, so a test that
+    # asked the HTML for one URL and the Turtle for another would be comparing
+    # two pages. What is being pinned is that one URL gives one endpoint set in
+    # either representation, so the URL has to be identical.
+    url = "/?q=ontop&facet=all"
+    listed = set(rows_of(client.get(url, headers={"accept": "text/html"}).text))
     assert listed == {ONTOP}, "the fixture must narrow to exactly one endpoint"
 
-    graph = graph_of(client.get("/?q=ontop", headers={"accept": "text/turtle"}))
+    graph = graph_of(client.get(url, headers={"accept": "text/turtle"}))
     non_matching = {KADASTER, "https://qlever.dev/api/osm-planet"}
     mentioned = {
         str(node.value)
@@ -1423,3 +1434,48 @@ def test_a_domain_narrows_both_representations(client_for, store_registry_sample
     assert listed, "the fixture must yield a domain match, or this test proves nothing"
     assert "https://sparql.uniprot.org/sparql" in listed
     assert described == listed
+
+
+def test_the_default_facet_narrows_both_representations_of_the_bare_url(
+    client_for, store_dormant_newest
+):
+    """The single-predicate invariant, at the URL most likely to break it.
+
+    `/` carries a default facet since 2026-09-18 -- `available` -- and the
+    filter in `_index_description` was guarded by `if q or domain or facet:`,
+    which is False for a request that names nothing. Left alone, the bare `/`
+    would have served every endpoint as Turtle while its own HTML showed only
+    those that answer: one URL, two endpoint sets, which is exactly what
+    index.rq's header forbids and what sharing `_matches_facet` between the
+    branches is for.
+
+    store_dormant_newest is the fixture that can show it: three endpoints, one
+    of them dormant, so `available` and `all` are genuinely different sets and
+    a Turtle document that ignored the default would name an endpoint the page
+    does not list.
+    """
+    client = client_for(store_dormant_newest)
+
+    default_html = set(rows_of(client.get("/", headers={"accept": "text/html"}).text))
+    everything = set(
+        rows_of(client.get("/?facet=all", headers={"accept": "text/html"}).text)
+    )
+    assert default_html < everything, (
+        "the default has to narrow something in this fixture, or this test "
+        "passes on a service that ignores it"
+    )
+
+    graph = graph_of(client.get("/", headers={"accept": "text/turtle"}))
+    named = {
+        str(node.value)
+        for quad in graph
+        for node in (quad.subject, quad.object)
+        if isinstance(node, NamedNode)
+    }
+    for dropped in everything - default_html:
+        assert dropped not in named, (
+            f"the bare URL's Turtle names {dropped}, which its own HTML does "
+            f"not list"
+        )
+    for listed in default_html:
+        assert listed in named, f"the Turtle drops {listed}, which the HTML lists"

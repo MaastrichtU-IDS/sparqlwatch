@@ -67,7 +67,16 @@ def test_a_filtered_grid_names_no_endpoint_the_filtered_rows_do_not(
         the split both were on one page and one fetch saw both; the invariant
         is the same and now it takes two.
         """
-        listing = client.get(f"{INDEX_PATH}?q={query}", headers={"accept": "text/html"}).text
+        # `facet=all` on the listing since 2026-09-18, so the two pages are
+        # compared like with like. The registry defaults to `available` and
+        # this grid deliberately does not -- a history of availability that hid
+        # every endpoint which stopped answering would hide the movement it
+        # exists to show. The invariant being pinned here is about `?q=`, the
+        # predicate the two pages DO share, and asking the listing for its
+        # narrower default would test the facet difference instead.
+        listing = client.get(
+            f"{INDEX_PATH}?q={query}&facet=all", headers={"accept": "text/html"}
+        ).text
         history = client.get(f"{HISTORY_PATH}?q={query}", headers={"accept": "text/html"}).text
         return (
             set(re.findall(r'data-endpoint="([^"]+)"', listing)),
