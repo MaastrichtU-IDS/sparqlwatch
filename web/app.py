@@ -3641,6 +3641,43 @@ PROBER_USER_AGENT = (
 # the same reason.
 VERSION = PROBER_USER_AGENT.removeprefix("sparqlwatch/").split(" ", 1)[0]
 
+# WHICH COMMIT THIS BUILD IS, from the environment, because the process has no
+# other way to know it. The Dockerfile takes it as a build arg and the Release
+# workflow passes the same SHA it tags the image with, so the tag and the page
+# cannot name different commits.
+#
+# SEVEN CHARACTERS, the length git itself abbreviates to, because the footer is
+# an identifier a reader compares against a commit list rather than one they
+# retype. The full value stays in the image tag for anything that needs to
+# resolve it exactly.
+#
+# ABSENT IS THE ORDINARY CASE OFF THE CLUSTER: a test run, a laptop, a
+# `docker build` with no --build-arg. Then this is None and the footer shows
+# the version alone. It does NOT fall back to reading git, which would be a
+# different fact -- the working tree's HEAD is not the built artefact, and a
+# footer that said so on a stale image would be worse than one that said
+# nothing.
+def build_label(version: str, revision: str | None) -> str:
+    """What the footer prints: the version, and the build when there is one.
+
+    A function rather than an expression at import time, because the label is a
+    claim about which artefact is running and a test has to be able to ask it
+    both ways. Reading the environment once at import is right for the process
+    -- the value cannot change under a running container -- but it makes the
+    absent case and the present case impossible to compare without reloading
+    the module.
+
+    One string rather than two template slots, so a page cannot render half of
+    it. `+` and not a space: this is one identifier, and semver spells a build
+    that way.
+    """
+    short = (revision or "").strip()[:7]
+    return f"{version}+{short}" if short else version
+
+
+BUILD_REVISION = os.environ.get("SPARQLWATCH_BUILD_REVISION", "").strip()[:7] or None
+BUILD_LABEL = build_label(VERSION, BUILD_REVISION)
+
 # A GLOBAL RATHER THAN A CONTEXT KEY, because the footer is on every page and
 # seven render calls would be seven chances to forget one. A page missing its
 # version would not fail, it would just quietly say nothing, which is the
@@ -3649,7 +3686,7 @@ VERSION = PROBER_USER_AGENT.removeprefix("sparqlwatch/").split(" ", 1)[0]
 # Registered here and not beside `_TEMPLATES` because PROBER_USER_AGENT, which
 # this reads, is declared with the /about page it documents and that is far
 # below the environment.
-_TEMPLATES.globals["version"] = VERSION
+_TEMPLATES.globals["version"] = BUILD_LABEL
 
 # prober/src/client.rs's MAX_REDIRECT_HOPS: how long a redirect chain the
 # prober follows before it gives up. On the page because "follows a redirect
