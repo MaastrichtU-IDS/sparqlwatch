@@ -2551,6 +2551,96 @@ def test_the_history_dates_are_rotated_about_an_origin_that_keeps_them_in_column
     assert "height: 74px" in rule, rule
 
 
+def test_the_footer_names_the_build_and_not_only_the_version():
+    """"Is my change deployed?" has to be answerable from the page.
+
+    The footer read the app version alone until 2026-09-18, so every build
+    between two version bumps looked identical on it -- and on 2026-09-18 that
+    cost real time: four commits had been pushed to a branch rather than main,
+    the site kept saying `0.2.0`, and the version was taken as evidence the
+    deploy had landed when nothing had moved. The image tag was the only thing
+    that knew, and it is not on the page.
+
+    SEVEN CHARACTERS, the length git abbreviates to, because this is an
+    identifier a reader compares against a commit list rather than retypes.
+    """
+    from app import build_label
+
+    assert build_label("0.2.0", "9d934fb4122bce72e426110cee81c7dce1f6744e") == "0.2.0+9d934fb"
+    assert build_label("0.2.0", "9d934fb") == "0.2.0+9d934fb"
+
+
+def test_a_build_with_no_revision_says_the_version_and_invents_nothing():
+    """Absent is the ordinary case off the cluster: a test run, a laptop, a
+    `docker build` with no --build-arg.
+
+    It must NOT fall back to reading git. The working tree's HEAD is a
+    different fact from the built artefact, and a footer claiming it on a stale
+    image would be worse than one that says nothing -- it would answer "is my
+    change deployed?" with the answer to "have I committed it?".
+    """
+    from app import build_label
+
+    assert build_label("0.2.0", None) == "0.2.0"
+    assert build_label("0.2.0", "") == "0.2.0"
+    assert build_label("0.2.0", "   ") == "0.2.0", "whitespace is not a revision"
+
+
+def test_the_rendered_footer_carries_the_build_label(monkeypatch, tmp_path):
+    """The WIRING, not the function.
+
+    The two tests above pass whether or not the label reaches the page: with no
+    revision in the environment `BUILD_LABEL == VERSION`, so a footer wired to
+    either is indistinguishable. Verified by unwiring the global and watching
+    them both stay green -- which is why this one exists and why it goes to the
+    trouble of reimporting the module with the variable set.
+
+    A fresh import rather than a fixture, because the revision is read once at
+    module scope: that is right for a process whose environment cannot change,
+    and it means the only way to observe the other branch is a new import.
+    """
+    import importlib
+    import sys
+
+    monkeypatch.setenv("SPARQLWATCH_BUILD_REVISION", "abcdef1234567890")
+    saved = sys.modules.pop("app")
+    try:
+        rebuilt = importlib.import_module("app")
+        assert rebuilt.BUILD_REVISION == "abcdef1"
+        assert rebuilt.BUILD_LABEL == f"{rebuilt.VERSION}+abcdef1"
+
+        from pyoxigraph import Store
+        from starlette.testclient import TestClient
+
+        rebuilt.app.dependency_overrides[rebuilt.get_store] = lambda: Store()
+        body = TestClient(rebuilt.app).get("/", headers={"accept": "text/html"}).text
+        footer = body[body.index('<footer') : body.index("</footer>")]
+        assert "abcdef1" in footer, f"the build is not on the page: {footer!r}"
+        assert rebuilt.VERSION in footer, "and the version is still there beside it"
+    finally:
+        sys.modules["app"] = saved
+
+
+def test_the_build_label_never_reaches_the_user_agent(client_for, store):
+    """The string an operator greps their logs for stays the version alone.
+
+    PROBER_USER_AGENT is quoted verbatim on /about so a reader can match it
+    against the line in front of them. If it carried the build, it would change
+    on every deploy and every saved grep an operator wrote would stop matching
+    -- which is the opposite of what that page is for.
+    """
+    import app as app_module
+
+    assert app_module.BUILD_REVISION is None or (
+        app_module.BUILD_REVISION not in app_module.PROBER_USER_AGENT
+    )
+    assert app_module.PROBER_USER_AGENT.endswith("/about)")
+    assert app_module.VERSION in app_module.PROBER_USER_AGENT
+    # And the page quotes the agent, not the build label.
+    body = client_for(store).get("/about", headers={"accept": "text/html"}).text
+    assert app_module.PROBER_USER_AGENT in body
+
+
 def test_the_endpoint_page_carries_no_stylesheet_of_its_own(client_for, store):
     """The regression Task 8 closes: between Task 5 and this commit this page
     kept its own dark-only :root with no --fill, so every .enc- chip on it

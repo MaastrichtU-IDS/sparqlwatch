@@ -59,6 +59,11 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # The commit this image is, for the page footer. The same SHA the
+          # `type=sha` tag above is built from, passed once so the tag and the
+          # footer cannot name different commits.
+          build-args: |
+            BUILD_REVISION=${{ github.sha }}
           # The cluster pulls arm64 nowhere and amd64 everywhere; building both
           # doubles the build for an architecture nothing here runs.
           platforms: linux/amd64

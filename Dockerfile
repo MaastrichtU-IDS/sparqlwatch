@@ -111,7 +111,19 @@ RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin sparqlwatch \
 USER sparqlwatch
 
 WORKDIR /app/web
+# WHICH COMMIT THIS IMAGE IS, baked at build time because the running process
+# has no other way to know. The footer read the app version and nothing else
+# until 2026-09-18, so every build since the last version bump looked identical
+# on the page -- and "is my change deployed?" was unanswerable without reaching
+# for the image tag in kubectl. The Release workflow passes the full SHA it
+# already tags the image with, so the two cannot disagree.
+#
+# UNSET IS A CASE, not a failure: a `docker build` on a laptop passes no
+# --build-arg and the footer then shows the version alone rather than inventing
+# a revision. See BUILD_REVISION in web/app.py.
+ARG BUILD_REVISION=""
 ENV SPARQLWATCH_STORE=/data/store/sparqlwatch.db \
+    SPARQLWATCH_BUILD_REVISION=$BUILD_REVISION \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
