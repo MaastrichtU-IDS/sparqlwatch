@@ -211,6 +211,35 @@
      except for overflow-wrap: an endpoint the registry never named displays
      its bare url here (see display()), and that is exactly the one unbroken
      string this column is too narrow for. */
+  /* The leading dot: did this endpoint answer when we last asked?
+     Added 2026-09-18 at the owner's request.
+
+     ITS OWN THREE RULES rather than the generated .enc- classes, which is
+     argued in full above `_availability_dot`. Two of the seven verdict states
+     cannot serve here: `absent` draws no border at all -- right for a chip
+     that must still hold a chip's width, nothing at all for a lone dot, and
+     it rendered blank -- and `indeterminate` is amber because it is not a
+     finding about the endpoint, which is a distinction this dot is not making.
+
+     Three states on the three channels docs/design/verdict-encoding.md uses
+     -- border style, border width, fill -- because green against red is the
+     one pair most colour-blind readers cannot split and nothing on this site
+     may rest on colour alone. Filled disc, heavy ring, light dotted ring:
+     desaturate the page and they are still three distinct drawings.
+
+     The third is the one worth keeping. A row whose availability nobody
+     measured is not a row that failed, and drawing it red would report a
+     server as down on the strength of a sweep that never asked it.
+
+     flex-shrink: 0 because this is the one element in a wrapping row that must
+     never be squeezed to an ellipse -- a squashed circle reads as a different
+     shape, which is a channel this encoding is using. */
+  .dot { flex-shrink: 0; width: 12px; height: 12px; border-radius: 50%;
+         box-sizing: border-box; }
+  .dot[data-available="yes"] { background: var(--good); border: 1px solid var(--good); }
+  .dot[data-available="no"] { background: transparent; border: 2px solid var(--crit); }
+  .dot[data-available="unknown"] { background: transparent;
+                                   border: 1px dotted var(--text-dim); }
   .row-id { flex-grow: 1; min-width: 240px; }
   .row-id > a { overflow-wrap: anywhere; }
   /* block so it always falls to its own line under the name, and truncated
@@ -641,7 +670,7 @@
    data-measured-by-sweep, kept for now because a script filtering these rows
    needs the instant as a value and the RDF representation is a second request,
    and it is the cheapest thing to give up if something has to go. #}
-      <li data-endpoint="{{ row.endpoint }}"{% if row.run_unfinished %} data-run-unfinished="true"{% endif %}{% if row.never_reached %} data-newer-run-unfinished="true"{% endif %}{% if row.dormant %} data-newest-sweep-dormant="true"{% if row.dormancy_reason %} data-dormancy-reason="{{ row.dormancy_reason }}"{% endif %}{% endif %}{% if row.measured_by %} data-measured-by-sweep="{{ row.measured_by }}"{% endif %}><span class="row-id"><a data-row-name href="{{ row.href }}">{{ row.name }}</a>{% if row.datasets %} <span class="datasets">{{ row.datasets }} datasets</span>{% endif %}<span class="url" data-row-url>{{ row.endpoint }}</span></span>{% if row.run_unfinished %}<span class="qual">{{ row_unfinished_text }}</span>{% endif %}{% if row.never_reached %}<span class="qual">{{ row_never_reached_text }}</span>{% endif %}{% if row.size %}<span class="size">{% for s in row.size %}{% if not loop.first %} &#183; {% endif %}<span data-size="{{ s.unit }}" data-count="{{ s.n }}">{{ "{:,}".format(s.n) }} {{ s.unit }}</span>{% endfor %}</span>{% endif %}<span class="cells">{% for cell in row.cells %}{% if cell.present %}<span class="{{ cell.css_class }}" title="{{ cell.title }}"{% if cell.verdict is not none %} data-verdict="{{ cell.verdict }}"{% else %} data-declined="{{ cell.reason }}"{% endif %}>{{ cell.abbr }}</span>{% else %}<span class="gap" data-gap="true">&#183;</span>{% endif %}{% endfor %}</span></li>
+      <li data-endpoint="{{ row.endpoint }}"{% if row.run_unfinished %} data-run-unfinished="true"{% endif %}{% if row.never_reached %} data-newer-run-unfinished="true"{% endif %}{% if row.dormant %} data-newest-sweep-dormant="true"{% if row.dormancy_reason %} data-dormancy-reason="{{ row.dormancy_reason }}"{% endif %}{% endif %}{% if row.measured_by %} data-measured-by-sweep="{{ row.measured_by }}"{% endif %}><span class="dot" data-available="{{ row.availability.available }}" title="{{ row.availability.title }}"></span><span class="row-id"><a data-row-name href="{{ row.href }}">{{ row.name }}</a>{% if row.datasets %} <span class="datasets">{{ row.datasets }} datasets</span>{% endif %}<span class="url" data-row-url>{{ row.endpoint }}</span></span>{% if row.run_unfinished %}<span class="qual">{{ row_unfinished_text }}</span>{% endif %}{% if row.never_reached %}<span class="qual">{{ row_never_reached_text }}</span>{% endif %}{% if row.size %}<span class="size">{% for s in row.size %}{% if not loop.first %} &#183; {% endif %}<span data-size="{{ s.unit }}" data-count="{{ s.n }}">{{ "{:,}".format(s.n) }} {{ s.unit }}</span>{% endfor %}</span>{% endif %}<span class="cells">{% for cell in row.cells %}{% if cell.present %}<span class="{{ cell.css_class }}" title="{{ cell.title }}"{% if cell.verdict is not none %} data-verdict="{{ cell.verdict }}"{% else %} data-declined="{{ cell.reason }}"{% endif %}>{{ cell.abbr }}</span>{% else %}<span class="gap" data-gap="true">&#183;</span>{% endif %}{% endfor %}</span></li>
       {% endfor %}
   </ul>
 

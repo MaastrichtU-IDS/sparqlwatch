@@ -2432,6 +2432,81 @@ def _row_size(entry: EndpointMeasurements) -> list[dict]:
     ]
 
 
+# The dot each row leads with, added 2026-09-18 at the owner's request: "a
+# green circle or red circle to the left of every endpoint in the list
+# corresponding to whether they last scanned as available".
+#
+# WHAT "AVAILABLE" MEANS HERE IS `_POSITIVE_VERDICTS`, the same table the
+# availability facet reads, rather than a second reading of the same word. Two
+# definitions of available on one page is a page that can contradict itself: a
+# reader pressing the "available" pill and counting green dots has asked one
+# question twice and is entitled to one answer.
+#
+# THREE STATES, NOT TWO, and the third is the one worth arguing for. A row can
+# have no availability verdict at all -- a sweep that declined the metric on
+# its cadence, or an endpoint whose newest run predates it -- and neither
+# colour is true of that row. Red would report a server as not answering when
+# what happened is that nobody asked it, which is the one thing this project's
+# conformance model exists to prevent. There are none in the store today; the
+# metric is on the hourly cadence and every one of the 74 endpoints carries a
+# verdict. It is reachable the moment a sweep declines it, and a state that
+# appears for the first time in production is a state that gets drawn wrong.
+#
+# NOT COLOUR ALONE. docs/design/verdict-encoding.md is canonical for this site
+# and its whole argument is that no meaning may rest on colour, because a
+# reader who cannot separate red from green has nothing else left -- and green
+# against red is exactly the axis most of them cannot separate. So the dot uses
+# the same three channels that document does, on its own three states: a filled
+# disc, a heavy ring, a light dotted ring. Desaturate the page and the three are
+# still three. The rules are in index.html beside the geometry.
+#
+# ITS OWN ENCODING RATHER THAN THE VERDICTS', which the first version of this
+# tried and which does not survive contact with the data. Two reasons, and the
+# first is fatal on its own: `absent` is drawn with NO BORDER, correctly, so
+# that a chip carrying no verdict still occupies a chip's width and a row of
+# chips does not reflow -- as a lone dot that is nothing at all, and two rows
+# in the fixtures rendered blank. The second is that this dot answers a
+# different question. `indeterminate` is amber in the verdict table because it
+# is not a finding about the endpoint; here the question asked is only "did it
+# answer when we last asked", and for that question a timeout and a wrong
+# answer are one answer: it did not.
+#
+# The NUANCE is not lost, it is moved to where a reader can ask for it. The
+# tooltip names the verdict itself -- "Answers a trivial query -- indeterminate"
+# -- and the availability chip on the same row is drawn in the verdict encoding
+# as it always was. The dot is the scannable summary of a column of 74; the
+# chip beside it is the reading.
+#
+# It duplicates the availability chip already in the row. That is what was
+# asked for and it is a reasonable ask -- the chips are a byte-dense reference
+# and this is the one fact a reader scans a list of 74 for -- but it is a
+# duplication, so it reads the same function rather than a parallel one.
+def _availability_dot(entry: EndpointMeasurements) -> dict:
+    """How this row's leading dot is drawn, and what it says when asked.
+
+    The title is the availability chip's own title, assembled the same way, so
+    the dot and the chip beside it cannot come to say different things about
+    one endpoint -- and so that this adds no wording of its own to the page.
+    """
+    verdict = next(
+        (v.verdict for v in entry.verdicts if v.metric == _AVAILABILITY_METRIC),
+        None,
+    )
+    if verdict is None:
+        state = verdict_encoding.presentation(verdict_encoding.NOT_MEASURED)
+        available = None
+    else:
+        state = verdict_encoding.presentation(verdict)
+        available = verdict in _POSITIVE_VERDICTS
+    return {
+        # "yes", "no" or "unknown" -- the attribute the row carries and the
+        # stylesheet draws from, rather than a bool a template would have to
+        # turn into three cases at the point of use.
+        "available": "unknown" if available is None else ("yes" if available else "no"),
+        "title": f"{METRIC_DESCRIPTIONS['availability']} \u2014 {state.label}",
+    }
+
+
 def _index_row(entry: EndpointMeasurements, metrics: list[dict]) -> dict:
     """One row: the endpoint, its link, its cells, and any qualification.
 
@@ -2472,6 +2547,7 @@ def _index_row(entry: EndpointMeasurements, metrics: list[dict]) -> dict:
         "datasets": name.datasets if name else None,
         "domain": name.domain if name else None,
         "size": _row_size(entry),
+        "availability": _availability_dot(entry),
         "cells": _index_chips(entry, metrics),
         "run_unfinished": entry.run_did_not_finish,
         "never_reached": entry.newer_run_did_not_reach_this_endpoint,
