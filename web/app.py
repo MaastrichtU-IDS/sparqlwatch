@@ -677,14 +677,28 @@ def _rows(measurements: EndpointMeasurements) -> list[dict]:
                 "css_class": verdict_encoding.css_class(state.slug),
                 "token": state.token,
                 # Not a verdict, and it does not read like one: no value is
-                # stated, only the fact that nothing was measured and why.
-                "state_text": f"{state.label} ({declined.reason})",
+                # stated, only the fact that nothing was measured.
+                #
+                # JUST THE TWO WORDS, since 2026-09-18 at the owner's request.
+                # The cell used to append the prober's reason slug --
+                # `not measured (liveness-failed)` -- and before that a clause
+                # explaining the slug. Neither is a reading of this endpoint:
+                # the metric has no value here, and which of our own six
+                # reasons kept us from asking is our business rather than a
+                # column in a table of findings. The slug is still on the row
+                # as `data-declined` and still in the RDF, so nothing is lost
+                # to a reader who wants it -- it is just not the verdict.
+                "state_text": state.label,
                 # A decline measures nothing, so both count columns stay empty.
                 # That is the honest rendering and not a gap: a 0 there would
                 # report that we looked and found none.
                 "declared_count": None,
                 "observed_count": None,
-                "detail": _declined_detail(declined.reason),
+                # Nothing to gloss. There is no slug in the cell to explain
+                # any more, so even the unrecognised-reason case has nothing
+                # to say: an unknown reason and a known one both render as
+                # `not measured`, which is true of both.
+                "detail": None,
                 "elapsed_ms": None,
             }
         )
@@ -693,46 +707,6 @@ def _rows(measurements: EndpointMeasurements) -> list[dict]:
     # what order these ten things come in, and a reader moving between them had
     # to find each metric twice.
     return sorted(rows, key=lambda row: _column_rank(row["metric"]))
-
-
-# The decline reasons the prober can write, kept as a SET rather than as
-# sentences. Removed from the page on 2026-09-18 at the owner's request: a row
-# already reads `not measured (liveness-failed)`, and the slug says what the
-# clause beside it said at four times the length. A reader who wants what a
-# slug means looks it up; a reader scanning ten rows does not want a clause on
-# each. Writing them up is a docs change and is not done yet -- nothing on this
-# site defines them today, which is a gap and not a pointer.
-#
-# Still enumerated here, and still pinned against prober/src/emit.rs, because
-# the page has to know which reasons are the prober's own: one this build has
-# never heard of is a different thing from one it chose not to gloss, and only
-# the first is worth saying anything about.
-DECLINE_REASONS = frozenset(
-    {
-        "cost-ceiling",
-        "cadence",
-        "prober-failed",
-        "enumeration-failed",
-        "unchanged",
-        "liveness-failed",
-    }
-)
-
-
-def _declined_detail(reason: str) -> str | None:
-    """The clause a declined row carries beside its reason, or nothing.
-
-    Nothing, for every reason the prober actually writes: the row already says
-    `not measured (liveness-failed)` and the slug carries it.
-
-    A reason this build has never heard of is the one case worth a word, and it
-    is reachable -- `cadence` joined the vocabulary today. The row shows the
-    value verbatim either way, so this says only that we have no reading of it,
-    matching what `_detail` does for an unrecognised verdict.
-    """
-    if reason in DECLINE_REASONS:
-        return None
-    return "unrecognised reason, shown as the store recorded it"
 
 
 def _history_view(history: EndpointHistory, rows: list[dict]) -> dict:
@@ -1884,10 +1858,16 @@ def _index_chips(entry: EndpointMeasurements, metrics: list[dict]) -> list[dict]
                     # No verdict at all, which is the point: the run said it did
                     # not look. The reason travels instead, so a reader and a
                     # test can tell "we priced it out" from "our own probe
-                    # died".
+                    # died" -- on `data-declined`, which is where it belongs.
+                    #
+                    # The TOOLTIP is the two words alone, matching the endpoint
+                    # page's cell since 2026-09-18: "the verdict is simply: not
+                    # measured". It read `not measured (cost-ceiling)` here,
+                    # and a tooltip saying more than the page it links to is
+                    # how the two drift apart.
                     "verdict": None,
                     "reason": declined[metric].reason,
-                    "title": f"{_column_title(column)} \u2014 {state.label} ({declined[metric].reason})",
+                    "title": f"{_column_title(column)} \u2014 {state.label}",
                     "css_class": verdict_encoding.css_class(state.slug),
                     "slug": state.slug,
                 }

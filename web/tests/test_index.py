@@ -2620,18 +2620,29 @@ def test_every_row_chip_carries_a_tooltip_naming_the_metric_and_the_state(
         assert state.split("(")[0].strip() in state_words, title
 
 
-def test_a_declined_chips_tooltip_says_why_nobody_looked(client_for, store_declined):
-    """The one case where the tooltip carries a third thing: a declined metric
-    has no verdict, and "not measured" alone leaves a reader unable to tell "we
-    priced it out" from "our own probe died". The reason is the store's own
-    slug, in parentheses -- the same value `data-declined` already carries on
-    the chip, so the tooltip states what the attribute states.
+def test_a_declined_chips_tooltip_is_the_state_and_the_reason_is_the_attribute(
+    client_for, store_declined
+):
+    """A declined chip's tooltip reads `<metric> - not measured`, and the
+    reason travels on `data-declined` beside it.
+
+    The tooltip carried the slug in parentheses until 2026-09-18, when the
+    owner cut it from the endpoint page's verdict cell -- "the verdict is
+    simply: not measured" -- and it comes out here for the same reason and to
+    keep the two surfaces saying one thing. Which of this service's own six
+    reasons kept us from asking is not a finding about the endpoint, and a
+    tooltip that says more than the page it links to is how two surfaces drift.
+
+    Both halves are asserted, because dropping the slug from the tooltip is
+    only right while the attribute still carries it: that is what lets a reader
+    and a script still tell "we priced it out" from "our own probe died".
     """
     body = client_for(store_declined).get("/", headers={"accept": "text/html"}).text
     declined = [a for a in with_attribute(body, "data-declined") if a["data-declined"]]
     assert declined, "this fixture declines nothing"
     for chip in declined:
-        assert f"({chip['data-declined']})" in chip["title"], chip
+        assert chip["title"].endswith("\u2014 not measured"), chip
+        assert chip["data-declined"] not in chip["title"], chip
 
 
 def test_each_facet_names_the_same_endpoints_in_html_and_in_rdf(
