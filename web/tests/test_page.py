@@ -46,10 +46,8 @@ from app import (
     _outward_link,
     ENDPOINT_PATH,
     TRUNCATED_TEXT,
-    DECLINE_REASONS,
     _ROW_DORMANCY_REASONS,
     _newest_sweep_silence_text,
-    _declined_detail,
     _rows,
     _sample,
     app,
@@ -665,19 +663,24 @@ def test_each_state_is_written_out_beside_its_chip(client_for, store):
     assert row_cells(kadaster, M + "classes")["m-state"] == "verified"
 
 
-def test_a_declined_metric_writes_out_the_state_and_the_reason(
+def test_a_declined_metric_writes_out_the_state_in_words(
     client_for, store_declined
 ):
     """A decline is not a verdict, and its row says so in words as well.
 
-    "not measured (cost-ceiling)" states no value about the endpoint and
-    names why nobody looked. Drawn as a dotted border alone it would be
-    indistinguishable, to a reader who cannot see it, from a measurement.
+    "not measured" states no value about the endpoint. Drawn as a dotted
+    border alone it would be indistinguishable, to a reader who cannot see it,
+    from a measurement, which is why the words are the load-bearing half.
+
+    The cell read "not measured (cost-ceiling)" until 2026-09-18. The reason is
+    still on the row as `data-declined` -- pinned by
+    test_a_prober_failed_row_and_a_cost_ceiling_row_are_told_apart_by_the_markup
+    -- and is no longer in the verdict: which of our own reasons kept us from
+    asking is not a finding about their endpoint.
     """
     text = page(client_for(store_declined), KADASTER)
-    assert (
-        row_cells(text, M + "classes")["m-state"] == "not measured (cost-ceiling)"
-    )
+    assert row_cells(text, M + "classes")["m-state"] == "not measured"
+    assert "cost-ceiling" not in row_cells(text, M + "classes")["m-state"]
 
 
 def test_a_graded_metric_states_the_level_the_graph_recorded(client_for, store):
@@ -916,22 +919,24 @@ def test_a_decline_is_drawn_unlike_every_verdict(client_for, store_declined):
     assert not (declined & verdicts)
 
 
-def test_a_declined_row_glosses_nothing_the_prober_can_actually_write():
-    """A declined row's detail, which since 2026-09-18 is almost always none.
+def test_a_declined_row_reads_not_measured_and_nothing_else():
+    """The verdict on a declined row is two words, whatever the reason.
 
-    The row already reads `not measured (liveness-failed)` and the slug is the
-    fact. The owner cut the sentence that followed it -- "the endpoint did not
-    answer a trivial query, so the rest of the checks were never sent" -- along
-    with the five others like it: a reader scanning ten rows does not want a
-    clause per row, and what each slug means belongs in /docs/states.
+    It was `not measured (liveness-failed) the endpoint did not answer a
+    trivial query, so the rest of the checks were never sent`. The owner cut
+    the clause on 2026-09-18 and the slug with it: "the verdict is simply: not
+    measured". Neither half was a reading of this endpoint -- the metric has no
+    value here, and which of our own reasons kept us from asking is this
+    service's business rather than a finding about their server.
 
-    The one case still worth a word is a reason from a prober NEWER than this
-    page, because there the slug is all the reader has and this build has no
-    reading of it at all. That is the same answer an unrecognised verdict
-    already gets, and it is reachable: `cadence` joined the vocabulary this
-    month.
+    THREE reasons, and all three render identically, which is the property. A
+    known reason, another known reason, and one from a prober newer than this
+    page: the last used to be the one case worth a word, and now it is not,
+    because there is no slug left in the cell to explain. The row still carries
+    every one of them as `data-declined`, asserted below, so a machine and a
+    reader who looks still get the fact.
 
-    Asked of _rows directly rather than through a store, because that third
+    Asked of _rows directly rather than through a store, because the third
     case has no committed fixture and inventing one would pin a reason no
     prober emits.
     """
@@ -952,39 +957,39 @@ def test_a_declined_row_glosses_nothing_the_prober_can_actually_write():
         )
     }
 
-    assert rows[M + "classes"]["detail"] is None
-    assert rows[M + "cors"]["detail"] is None
-    assert rows[M + "geo-data"]["detail"] == (
-        "unrecognised reason, shown as the store recorded it"
-    )
-
-    # Whichever branch the detail came from, the row still names the reason
-    # the store holds, so a reader is never left with only our sentence.
     for metric, reason in (
         (M + "classes", "cost-ceiling"),
         (M + "cors", "prober-failed"),
         (M + "geo-data", "from-the-future"),
     ):
-        assert rows[metric]["state_text"] == f"not measured ({reason})"
+        assert rows[metric]["state_text"] == "not measured", (
+            f"{reason} reached the verdict, which is two words for every "
+            f"reason there is"
+        )
+        assert rows[metric]["detail"] is None
+        # The reason is still on the row, and is still the store's own value.
+        assert rows[metric]["reason"] == reason
 
 
-def test_a_prober_failed_row_and_a_cost_ceiling_row_read_differently(
+def test_a_prober_failed_row_and_a_cost_ceiling_row_are_told_apart_by_the_markup(
     client_for, store_prober_failed
 ):
-    """The same page, both reasons, and neither row borrows the other's text.
+    """The same page, both reasons, and the page keeps them apart -- in the
+    markup, which is the only place either belongs.
 
     run-prober-failed.nq is the emitter's own output for an endpoint whose
     group failed under the default cost ceiling: seven metrics prober-failed
     and metric:classes cost-ceiling. An operator reads this page precisely
-    when the prober has crashed, so a prober-failed row that says the metric
-    was priced out of the run sends them to --max-cost instead of to the
-    crash.
+    when the prober has crashed, and telling them the metric was priced out of
+    the run would send them to --max-cost instead of to the crash.
 
-    Since 2026-09-18 the two read differently through the SLUG alone. The
-    owner cut the sentence each row used to carry beside it, so what tells an
-    operator apart is `not measured (prober-failed)` against `not measured
-    (cost-ceiling)` -- and that has to stay true of the rendered row, which is
-    why this asserts on the cell text and not only on the data attribute.
+    Until 2026-09-18 the two were told apart in the VERDICT, first by a
+    sentence each and then by the slug in `not measured (prober-failed)`. Both
+    are gone: the verdict is two words and it is the same two words for every
+    reason, because the reason is a fact about this service's sweep and not a
+    finding about the endpoint. What still distinguishes them is
+    `data-declined`, which the RDF carries too -- so the operator can still
+    find it, and it is no longer in a column of findings.
     """
     text = page(client_for(store_prober_failed), KADASTER)
 
@@ -998,12 +1003,18 @@ def test_a_prober_failed_row_and_a_cost_ceiling_row_read_differently(
 
     availability = row_cells(text, M + "availability")
     classes = row_cells(text, M + "classes")
-    assert availability["m-state"] == "not measured (prober-failed)"
-    assert classes["m-state"] == "not measured (cost-ceiling)"
-    assert "m-detail" not in availability, (
-        "a reason the prober actually writes gets no gloss beside it"
-    )
+    assert availability["m-state"] == "not measured"
+    assert classes["m-state"] == "not measured"
+    assert "m-detail" not in availability, "no clause beside the verdict"
     assert "m-detail" not in classes
+    # Every row on the page, not only the two read above: this run declined
+    # all eight metrics, so a slug leaking into any verdict cell fails here.
+    parser = _RowCells()
+    parser.feed(text)
+    states = {cells.get("m-state") for cells in parser.rows.values()}
+    assert states == {"not measured"}, (
+        f"a verdict cell says more than the two words: {sorted(states)}"
+    )
 
     # The legend is on this page too, and it explains a state rather than
     # either of the two reasons the rows carry.
@@ -1159,12 +1170,12 @@ def test_a_hostile_literal_is_escaped_in_the_attribute_and_the_text(
     assert row_for(text, M + "classes")["data-verdict"] == HOSTILE_VERDICT
     assert row_cells(text, M + "classes")["m-state"] == HOSTILE_VERDICT
 
-    # The decline reason, on both channels, unchanged.
+    # The decline reason, carried verbatim on the channel that still carries
+    # it. Since 2026-09-18 the verdict cell says `not measured` and nothing
+    # else, so the reason reaches the document through the attribute alone --
+    # which is where the escaping this test is about has to hold.
     assert row_for(text, M + "geo-data")["data-declined"] == HOSTILE_REASON
-    assert (
-        row_cells(text, M + "geo-data")["m-state"]
-        == f"not measured ({HOSTILE_REASON})"
-    )
+    assert row_cells(text, M + "geo-data")["m-state"] == "not measured"
 
     # And in the sentence explaining why there is no class sample, which
     # quotes the verdict it read.
@@ -2001,19 +2012,24 @@ def test_an_endpoint_with_an_unlinkable_scheme_keeps_its_page(store_hostile_lite
 
 
 @requires_repo_sources
-def test_no_decline_reason_the_prober_can_write_is_glossed():
-    """Two halves of one property, and the second is why this test was rewritten.
+def test_every_reason_the_prober_can_write_renders_as_the_same_two_words():
+    """Read the prober's own vocabulary, and put every slug through the page.
 
-    The FIRST is the pin this table did not have, and the drift it just failed
-    to catch.
+    This test is what is left of a pin that used to work the other way round.
+    The page kept a set of the reasons it had sentences for, and this test held
+    that set against `NotMeasuredReason::slug` -- because when the
+    enumeration-failed variant was added to the prober, the page said
+    "unrecognised reason" for it and nobody noticed. There is no set any more:
+    since 2026-09-18 the verdict is `not measured` for every reason there is,
+    so a reason added to Rust tomorrow renders correctly on a page that has
+    never heard of it, and there is nothing left to drift.
 
-    DECLINE_REASONS is the set of NotMeasuredReason::slug values this build
-    knows, and nothing tied the two together: the enumeration-failed variant
-    was added to the prober and the page said "unrecognised reason" for it,
-    which is the fallback doing its job while the reader learns nothing. The
-    fallback is still right for a store written by a NEWER prober than this
-    page, which is why it stays; it is wrong as a description of a reason
-    shipping in this same commit.
+    What replaces the pin is the stronger claim, made over the SAME source:
+    every slug the prober can write, through _rows, reading exactly two words.
+    A clause or a slug written back into that cell fails here for all six at
+    once -- which matters, because the only committed fixtures that reach a
+    declined row carry prober-failed and cost-ceiling, and the other four were
+    unexercised for as long as they existed.
 
     Read out of slug()'s own match arms rather than the enum's variants,
     because the slug is the string the graph carries and the variant name is
@@ -2024,25 +2040,26 @@ def test_no_decline_reason_the_prober_can_write_is_glossed():
     assert len(body) == 2, "NotMeasuredReason::slug moved; this pin needs its new shape"
     slugs = set(re.findall(r'NotMeasuredReason::\w+ => "([^"]+)"', body[1]))
     assert slugs, "no slug arms found, so this test would pass vacuously"
-    missing = slugs - DECLINE_REASONS
-    assert not missing, (
-        f"the prober can write {sorted(missing)} and this page does not know "
-        f"it, so a declined row would read 'unrecognised reason'"
-    )
 
-    # The SECOND half: none of them is glossed. The owner cut those clauses on
-    # 2026-09-18 -- "not measured (liveness-failed) the endpoint did not answer
-    # a trivial query, so the rest of the checks were never sent" was the one
-    # he quoted -- and nothing held the cut down: the only fixtures that reach
-    # a declined row carry prober-failed and cost-ceiling, so a sentence
-    # written back for any of the other four would have shipped green. Asserted
-    # over the PROBER's slugs rather than over DECLINE_REASONS so that a reason
-    # added to Rust arrives here unglossed too.
-    glossed = {slug for slug in slugs if _declined_detail(slug) is not None}
-    assert not glossed, (
-        f"{sorted(glossed)} carries a clause beside the slug; the row already "
-        f"reads 'not measured (<slug>)' and that is the whole of it"
+    rows = _rows(
+        EndpointMeasurements(
+            endpoint="https://example.org/sparql",
+            assessed=True,
+            run="urn:sparqlwatch:run:x",
+            generated_at="2026-08-22T16:00:00Z",
+            declined=[
+                DeclinedMetric(metric=M + "classes", reason=slug)
+                for slug in sorted(slugs)
+            ],
+        )
     )
+    assert len(rows) == len(slugs), "every reason has to reach a row"
+    for row, slug in zip(rows, sorted(slugs)):
+        assert row["reason"] == slug, "the store's value, carried verbatim"
+        assert row["state_text"] == "not measured", (
+            f"{slug} reached the verdict cell"
+        )
+        assert row["detail"] is None, f"{slug} carries a clause beside it"
 
 
 def test_a_run_declining_the_profile_pass_reports_that_decline():
