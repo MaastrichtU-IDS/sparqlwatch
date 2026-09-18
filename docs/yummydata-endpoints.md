@@ -54,9 +54,31 @@ class of error as five of the six in the DBpedia catalog: a path missing from
 the listing, where the host is up and a liveness check on it passes.
 
 **IMGT-KG is the honest disagreement.** It scores 86 there and did not answer
-us inside 40 seconds. Both readings can be true of different moments, which is
-what `indeterminate` is for: it says we did not establish an answer, not that
-the endpoint is down.
+us inside 40 seconds. Re-probed three times afterwards at a 45-second budget:
+no response on any attempt, while `https://www.imgt.org/` itself answers 200.
+So the endpoint is persistently silent behind a site that is up, which is the
+same shape as five of the six wrong urls in the DBpedia catalog -- a host check
+passes and the protocol never answers. It is still reported `indeterminate`
+rather than `absent`, because what was established is that no answer arrived in
+the budget, not that the endpoint is down.
+
+## Reported upstream
+
+YummyData's About page directs endpoint matters to
+[dbcls/LinkedData-Agora](https://github.com/dbcls/LinkedData-Agora/issues?q=label:endpoints),
+one issue per endpoint, and two of these three were already open there. All
+three were reported on 2026-09-18 with the measurements above:
+
+- **SwissLipids** -- [#173](https://github.com/dbcls/LinkedData-Agora/issues/173),
+  open since 2022 with an empty body; the missing `/sparql` path added as a
+  comment.
+- **GlyGen** -- [#174](https://github.com/dbcls/LinkedData-Agora/issues/174),
+  which proposes moving it to `https://sparql.glygen.org/`. That url does NOT
+  serve the protocol (404 on `/sparql`, HTML at the root) and the currently
+  listed `:8880` one answers in 604 ms, so the comment is a caution against
+  applying the change rather than a correction to offer.
+- **IMGT-KG** -- [#187](https://github.com/dbcls/LinkedData-Agora/issues/187),
+  a new issue: #179 covered it in 2024 and was closed completed.
 
 ## What a single number hides
 
