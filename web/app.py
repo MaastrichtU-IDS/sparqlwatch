@@ -679,6 +679,16 @@ def _rows(measurements: EndpointMeasurements) -> list[dict]:
 # instead of to the crash.
 _DECLINE_DETAILS = {
     "cost-ceiling": "we declined to look, so this says nothing about the endpoint",
+    # Added 2026-09-18 with the prober's cadence split. DELIBERATELY NOT the
+    # cost-ceiling sentence: that one says we judged the query too expensive to
+    # point at this endpoint, and this one says the opposite -- the metric is
+    # cheap, it simply is not this hour's question. An operator reading
+    # "we declined to look" about a metric that will be measured tonight has
+    # been told the wrong thing about their own server.
+    "cadence": (
+        "we ask this once a day and this was not that sweep, so it says "
+        "nothing about the endpoint"
+    ),
     "prober-failed": (
         "the prober failed on this endpoint, so this run observed nothing "
         "about it"

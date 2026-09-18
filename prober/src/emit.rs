@@ -122,6 +122,25 @@ pub struct DeclarationsRead {
 pub enum NotMeasuredReason {
     /// The metric's cost exceeded the ceiling the sweep was run with.
     CostCeiling,
+    /// This sweep's cadence does not carry the metric. It is cheap enough to
+    /// have run, and a sweep on another cadence measures it.
+    ///
+    /// SEPARATE FROM `CostCeiling` because the two say different things to a
+    /// reader, and both of them are true of some metric on every hourly sweep.
+    /// `cost-ceiling` means "we judged this too expensive to point at you";
+    /// `cadence` means "we ask this less often, and tonight's sweep will".
+    /// Collapsing them would tell an operator their endpoint is being spared
+    /// an expensive query when it is simply not this hour's question.
+    ///
+    /// IT EXISTS BECAUSE OMITTING THE METRIC DOES NOT WORK. A metric absent
+    /// from the definitions file produces no fact at all, and
+    /// `endpoint_measurements` reports ONE sweep's facts -- so an hourly run
+    /// carrying three metrics made the other seven vanish from the endpoint
+    /// page rather than go stale. Measured on 2026-09-18 with a 03:00 full
+    /// sweep followed by a 04:00 three-metric one: seven of ten columns became
+    /// gaps. A decline keeps the column and says why it is empty, which is the
+    /// same service `CostCeiling` has always performed.
+    Cadence,
     /// The prober itself failed on this endpoint: the task probing its host
     /// panicked or was cancelled, so no request was ever answered and no
     /// observation exists to grade.
@@ -185,6 +204,7 @@ impl NotMeasuredReason {
     pub fn slug(&self) -> &'static str {
         match self {
             NotMeasuredReason::CostCeiling => "cost-ceiling",
+            NotMeasuredReason::Cadence => "cadence",
             NotMeasuredReason::ProberFailed => "prober-failed",
             NotMeasuredReason::EnumerationFailed => "enumeration-failed",
             NotMeasuredReason::LivenessFailed => "liveness-failed",

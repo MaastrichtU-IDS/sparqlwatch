@@ -8,6 +8,7 @@ label = "Answers a trivial query"
 dimension = "availability"
 kind = "Liveness"
 cost = "cheap"
+cadence = "hourly"
 query = "SELECT ?s WHERE { ?s ?p ?o } LIMIT 1"
 
 # Two CORS facts, deliberately separate. `cors` is what a curl user sees: an
@@ -21,6 +22,7 @@ label = "Sends access-control-allow-origin on a simple GET"
 dimension = "interoperability"
 kind = "Cors"
 cost = "cheap"
+cadence = "hourly"
 query = "SELECT ?s WHERE { ?s ?p ?o } LIMIT 1"
 
 [[metric]]
@@ -29,6 +31,7 @@ label = "Answers a CORS preflight for a cross-origin GET"
 dimension = "interoperability"
 kind = "CorsPreflight"
 cost = "cheap"
+cadence = "hourly"
 
 [[metric]]
 id = "geo-functions"
@@ -105,6 +108,7 @@ label = "Service description informativeness"
 dimension = "documentation"
 kind = "FetchWellKnown"
 cost = "cheap"
+cadence = "hourly"
 graded = true
 
 # `classes` and `has-classes` were both retired here, and the questions they

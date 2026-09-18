@@ -166,7 +166,7 @@ pub struct Sweep {
 pub async fn run_sweep<W: std::io::Write>(
     endpoints: &[String],
     defs: &[MetricDef],
-    declined: &[MetricDef],
+    declined: &[(MetricDef, NotMeasuredReason)],
     client: &Arc<Client>,
     budget: Budget,
     concurrency: NonZeroUsize,
@@ -436,7 +436,7 @@ fn assemble_endpoint(
     ep: &str,
     slot: Option<EndpointSweep>,
     defs: &[MetricDef],
-    declined: &[MetricDef],
+    declined: &[(MetricDef, NotMeasuredReason)],
 ) -> EndpointFactLists {
     let mut facts = EndpointFactLists {
         endpoint: ep.to_string(),
@@ -515,15 +515,19 @@ fn assemble_endpoint(
             }
         }
     }
-    // One fact per (endpoint, declined metric), recorded whatever the
-    // budget did: the reason is the ceiling, which was decided before any
-    // probing started, so an endpoint whose budget expired still owes the
-    // reader an account of the metrics it was never going to run.
-    for def in declined {
+    // One fact per (endpoint, declined metric), recorded whatever the budget
+    // did: every reason here was decided before any probing started -- the
+    // cost ceiling and the sweep's cadence both -- so an endpoint whose budget
+    // expired still owes the reader an account of the metrics it was never
+    // going to run. The reason travels WITH each metric rather than being
+    // assumed, because an hourly sweep declines for two different reasons at
+    // once and telling an operator "too expensive" about a metric that is
+    // merely tonight's question would be a wrong answer.
+    for (def, reason) in declined {
         facts.not_measured.push(NotMeasured {
             endpoint: ep.to_string(),
             metric_id: def.id.clone(),
-            reason: NotMeasuredReason::CostCeiling,
+            reason: *reason,
         });
     }
     facts
@@ -1270,6 +1274,7 @@ mod tests {
             declared_by: None,
             graded: false,
             cost: Cost::Cheap,
+            cadence: Default::default(),
             sample_limit: None,
             sample_prefix: None, tolerance: None,
         }
@@ -1327,7 +1332,7 @@ mod tests {
         let c = "https://c.example/sparql";
         let endpoints = vec![a.to_string(), b.to_string(), c.to_string()];
         let defs = vec![def("availability"), def("has-classes")];
-        let declined = vec![def("classes")];
+        let declined = vec![(def("classes"), NotMeasuredReason::CostCeiling)];
         let slots = vec![Some(swept(a, &defs)), None, Some(swept(c, &defs))];
 
         let sweep = collect_sweep(

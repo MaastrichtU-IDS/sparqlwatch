@@ -37,6 +37,7 @@ fn preflight_def() -> MetricDef {
         declared_by: None,
         graded: false,
         cost: Cost::Cheap,
+        cadence: Default::default(),
         sample_limit: None,
         sample_prefix: None, tolerance: None,
     }
