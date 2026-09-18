@@ -650,14 +650,54 @@ async fn probe_one_endpoint(
         .with_endpoint_budget(probe_endpoint(ep, defs, client, budget, memory, &mut acc))
         .await;
     if outcome.is_err() {
-        tracing::warn!(endpoint = %ep, reached = acc.rows.len(), of = defs.len(),
-                       "endpoint budget expired; remaining metrics are indeterminate");
+        // WHICH METRICS ARE MISSING, ASKED BY NAME. This was
+        // `defs.iter().skip(acc.rows.len())` until 2026-09-18, which treats the
+        // row count as a position in `defs` -- true only if every definition
+        // pushes exactly one row, and two do not: `probe_endpoint` `continue`s
+        // without a row for `ClassProfile` and `VocabularyDescribed`, whose
+        // pass publishes samples and profiles instead of a verdict.
+        //
+        // So on an exhaustive sweep, eleven definitions produced nine rows, the
+        // skip landed two short, and the expiry re-marked the last two metrics
+        // -- graph-count and class-count -- that had ALREADY been measured. Two
+        // rows for one pair, disagreeing, and `emit`'s duplicate guard then
+        // correctly refused to publish either: a measurement that succeeded was
+        // destroyed by a timeout that happened after it. Seen on five of
+        // seventy-four endpoints in the 2026-09-18 profile pass, all of them
+        // slow enough to expire during the profile phase, which runs after the
+        // metric loop has finished every metric it has.
+        //
+        // Reading the ids off the rows cannot drift that way: it asks the
+        // accumulator what it actually holds instead of reconstructing it from
+        // a count.
+        let measured: std::collections::HashSet<&str> =
+            acc.rows.iter().map(|r| r.metric_id.as_str()).collect();
+        // A metric that never produces a row does not get one HERE either. An
+        // `Indeterminate` row for a profile metric would put it in the matrix
+        // as a column of verdicts it does not have, which is exactly what
+        // `dispatched_per_metric` is consulted for in the loop itself; the
+        // profile pass reports its own unfinished work through
+        // `acc.not_measured` and `acc.profile_unreached`.
+        let unreached: Vec<&MetricDef> = defs
+            .iter()
+            .filter(|d| d.kind.dispatched_per_metric() && !measured.contains(d.id.as_str()))
+            .collect();
+        tracing::warn!(
+            endpoint = %ep,
+            reached = measured.len(),
+            // Counted over the definitions that CAN produce a row, so that
+            // "9 of 11" cannot describe a sweep where all nine were measured
+            // and the two that were not are metrics which never yield one.
+            of = defs.iter().filter(|d| d.kind.dispatched_per_metric()).count(),
+            unreached = unreached.len(),
+            "endpoint budget expired; unmeasured metrics are indeterminate"
+        );
         // The budget expiring tells us nothing about the metrics we never
         // got to, and we did not measure their elapsed time either. Route
         // the verdict through `resolve` rather than writing one here:
         // judgement belongs in one place, and `resolve` already maps an
         // expired budget to `Indeterminate`.
-        for def in defs.iter().skip(acc.rows.len()) {
+        for def in unreached {
             acc.rows.push(MeasurementRow {
                 endpoint: ep.to_string(),
                 metric_id: def.id.clone(),
