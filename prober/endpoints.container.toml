@@ -30,4 +30,83 @@ endpoint = [
   "https://query.wikidata.org/sparql",
   "https://yago-knowledge.org/sparql/qlever",
   "https://semopenalex.org/sparql",
+
+  # GND, the German National Library's authority file. The tenth endpoint of
+  # the DBpedia catalog, added 2026-09-17: registry/kg-catalog.toml has how it
+  # was found and why MOSS did not list it.
+  "https://sparql.dnb.de/api/gnd",
+
+  # YummyData's 63, from registry/yummydata.toml -- DBCLS's life-science
+  # list, added 2026-09-18. Only 6 of them appear anywhere else in this
+  # repository's 544, so this is the one population here that is curated and
+  # maintained rather than dumped. Every url is as YummyData states it: none
+  # needed correcting, which is what a service that probes them daily produces.
+  # docs/yummydata-endpoints.md is our own sweep of them beside their score.
+  #
+  # THESE ARE 63 STRANGERS' SERVERS and the reason the cadence split landed
+  # first: at four cheap metrics an hour rather than nine, an endpoint here
+  # sees fewer requests from us than one of the twelve did before.
+  "https://idsm.elixir-czech.cz/sparql/endpoint/idsm",
+  "https://data.allie.dbcls.jp/sparql",
+  "https://sparql.rhea-db.org/sparql",
+  "https://sparql.proconsortium.org/virtuoso/sparql",
+  "https://aopwiki.rdf.bigcat-bioinformatics.org/sparql",
+  "https://sparql.uniprot.org/",
+  "https://sparql.wikipathways.org/sparql",
+  "https://www.imgt.org/fuseki/ImgtKg/sparql",
+  "https://sparql.omabrowser.org/sparql",
+  "https://ts.glycosmos.org/sparql",
+  "https://query.wikidata.org/sparql",
+  "https://hamap.expasy.org/sparql/",
+  "https://ts.glytoucan.org/sparql",
+  "https://hitontology.eu/sparql",
+  "http://lsd.dbcls.jp/sparql",
+  "http://sparql.orthodb.org/sparql",
+  "https://plantmetwiki.bioinformatics.nl/sparql",
+  "https://id.nlm.nih.gov/mesh/sparql",
+  "https://rdfportal.org/sib/sparql",
+  "https://rdf.metanetx.org/sparql",
+  "https://rdfportal.org/primary/sparql",
+  "https://rdfportal.org/pubchem/sparql",
+  "http://navi.first.lifesciencedb.jp/fanavi/sparql",
+  "https://chemblmirror.rdf.bigcat-bioinformatics.org/sparql",
+  "https://2407.biogateway.eu/sparql/",
+  "https://sparql.glycoinfo.org/sparql",
+  "http://www.genome.jp/sparql/linkdb",
+  "https://rdfportal.org/ddbj/sparql",
+  "https://rdfportal.org/ebi/sparql",
+  "https://rdfportal.org/kero/sparql",
+  "https://rdfportal.org/ncbi/sparql",
+  "https://rdfportal.org/pdb/sparql",
+  "https://rdfportal.org/wikidata/sparql",
+  "https://www.bgee.org/sparql",
+  "https://glyconnect.expasy.org/sparql",
+  "https://rdfportal.org/bioportal/sparql",
+  "https://forum.semantic-metabolomics.fr/sparql/",
+  "http://sparql.hegroup.org/sparql/",
+  "https://bmrbpub.pdbj.org/search/rdf",
+  "https://sparql.glyconavi.org/sparql",
+  "https://regulatorycircuits-lod.genouest.org/sparql/",
+  "https://coxpresdb.jp/sparql",
+  "https://ideal-rdf.dbcls.jp/sparql",
+  "https://knowledge.brc.riken.jp/sparql",
+  "https://sparql.dsmz.de/api/brenda",
+  "https://lipidmaps.org/sparql",
+  "https://dydra.com/markw/polyadenylation-sites-in-magnaporthe-oryza/sparql",
+  "https://agrovoc.fao.org/sparql",
+  "https://sparql.dsmz.de/api/bacdive",
+  "https://idsm.elixir-czech.cz/sparql/endpoint/chebi",
+  "http://metadb.riken.jp/sparql",
+  "https://api.data.pldn.nl/datasets/FilipiSoares/AgriPrices-1/sparql",
+  "https://sparql.dsmz.de/api/mediadive",
+  "https://idsm.elixir-czech.cz/sparql/endpoint/molmedb",
+  "https://sparql.string-db.org/",
+  "https://atted.jp/sparql",
+  "https://rdfportal.org/proteinatlas/sparql",
+  "http://colil.dbcls.jp/sparql",
+  "https://beta.sparql.swisslipids.org/",
+  "http://sparql.southgreen.fr/",
+  "https://bio2rdf.org/sparql",
+  "http://sparql.glygen.org:8880/sparql",
+  "https://sparql.nextprot.org/",
 ]
