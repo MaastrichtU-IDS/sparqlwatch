@@ -1,7 +1,9 @@
 use sparqlwatch_prober::budget::Budget;
 use sparqlwatch_prober::client::Client;
 use sparqlwatch_prober::emit::{emit_nquads, NotMeasured, NotMeasuredReason, RunEmission, RunId};
-use sparqlwatch_prober::metrics::{load_metrics, within_cost, Cost, MetricDef, ProbeKind};
+use sparqlwatch_prober::metrics::{
+    load_metrics, within_cadence, within_cost, Cadence, Cost, MetricDef, ProbeKind,
+};
 use sparqlwatch_prober::politeness::Politeness;
 use sparqlwatch_prober::registry::load_endpoints;
 use sparqlwatch_prober::emit::RunFooter;
@@ -28,6 +30,21 @@ use wiremock::matchers::{method, path, query_param, query_param_is_missing};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 mod common;
 use common::without_deadlocking;
+
+/// `within_cost`, with each declined metric paired to the reason main.rs gives
+/// it. Mirrors the composition in `main.rs` so these tests drive the shape the
+/// binary actually builds; the cadence half is exercised separately, in the
+/// cadence tests below.
+fn cheap_split(
+    defs: &[MetricDef],
+    ceiling: Cost,
+) -> (Vec<MetricDef>, Vec<(MetricDef, NotMeasuredReason)>) {
+    let (run, declined) = within_cost(defs, ceiling);
+    (
+        run,
+        declined.into_iter().map(|d| (d, NotMeasuredReason::CostCeiling)).collect(),
+    )
+}
 
 /// A minimal, valid service description. Turtle, matching what a queryless
 /// fetch actually receives from a real endpoint (see `tests/fetch.rs`). Also
@@ -289,11 +306,13 @@ async fn a_reachable_endpoint_is_asked_the_liveness_question_only_once() {
         dimension: "availability".into(),
         kind: ProbeKind::Liveness,
         query: Some("SELECT ?s WHERE { ?s ?p ?o } LIMIT 1".into()),
+        fallback_query: None,
         expect: None,
         var: None,
         declared_by: None,
         graded: false,
         cost: Cost::Cheap,
+        cadence: Default::default(),
         sample_limit: None,
         sample_prefix: None,
         tolerance: None,
@@ -330,11 +349,13 @@ async fn a_metric_binding_a_nonstandard_variable_is_extracted_via_its_declared_v
         dimension: "content".into(),
         kind: ProbeKind::AskData,
         query: Some("SELECT ?thing WHERE { ?s ?p ?thing } LIMIT 1".into()),
+        fallback_query: None,
         expect: None,
         var: Some("thing".into()),
         declared_by: None,
         graded: false,
         cost: Cost::Cheap,
+        cadence: Default::default(),
         sample_limit: None,
         sample_prefix: None, tolerance: None,
     };
@@ -428,11 +449,13 @@ async fn a_non_graded_fetch_metric_carries_no_level() {
         dimension: "capability".into(),
         kind: ProbeKind::FetchWellKnown,
         query: None,
+        fallback_query: None,
         expect: None,
         var: None,
         declared_by: None,
         graded: false,
         cost: Cost::Cheap,
+        cadence: Default::default(),
         sample_limit: None,
         sample_prefix: None, tolerance: None,
     };
@@ -665,11 +688,13 @@ async fn an_endpoint_budget_expiry_still_yields_one_row_per_metric() {
             dimension: "availability".into(),
             kind: ProbeKind::AskFilter,
             query: Some("SELECT ?s WHERE { ?s ?p ?o } LIMIT 1".into()),
+            fallback_query: None,
             expect: None,
             var: None,
             declared_by: None,
             graded: false,
             cost: Cost::Cheap,
+            cadence: Default::default(),
             sample_limit: None,
             sample_prefix: None, tolerance: None,
         })
@@ -740,11 +765,13 @@ async fn a_budget_expiry_after_the_fetch_still_publishes_declarations_read() {
             dimension: "availability".into(),
             kind: ProbeKind::AskFilter,
             query: Some("SELECT ?s WHERE { ?s ?p ?o } LIMIT 1".into()),
+            fallback_query: None,
             expect: None,
             var: None,
             declared_by: None,
             graded: false,
             cost: Cost::Cheap,
+            cadence: Default::default(),
             sample_limit: None,
             sample_prefix: None, tolerance: None,
         })
@@ -815,11 +842,13 @@ async fn a_partial_endpoint_keeps_the_verdicts_it_already_earned() {
         dimension: "content".into(),
         kind: ProbeKind::SelectIris,
         query: Some(FAST_QUERY.into()),
+        fallback_query: None,
         expect: None,
         var: Some("s".into()),
         declared_by: None,
         graded: false,
         cost: Cost::Cheap,
+        cadence: Default::default(),
         sample_limit: Some(5),
         sample_prefix: None, tolerance: None,
     }];
@@ -835,11 +864,13 @@ async fn a_partial_endpoint_keeps_the_verdicts_it_already_earned() {
         dimension: "availability".into(),
         kind: ProbeKind::AskFilter,
         query: Some(SLOW_QUERY.into()),
+        fallback_query: None,
         expect: None,
         var: None,
         declared_by: None,
         graded: false,
         cost: Cost::Cheap,
+        cadence: Default::default(),
         sample_limit: None,
         sample_prefix: None, tolerance: None,
     }));
@@ -1574,7 +1605,11 @@ struct Swept {
 
 /// Drive the real sweep against a mock, with the definition list already split
 /// by the shipped `within_cost`.
-async fn sweep_against(server: &MockServer, run: &[MetricDef], declined: &[MetricDef]) -> Swept {
+async fn sweep_against(
+    server: &MockServer,
+    run: &[MetricDef],
+    declined: &[(MetricDef, NotMeasuredReason)],
+) -> Swept {
     let client = std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
     let url = format!("{}/sparql", server.uri());
     let Sweep { rows, declarations_read: _read, not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } =
@@ -1604,14 +1639,14 @@ async fn a_declined_metric_is_recorded_as_not_measured_not_as_indeterminate() {
     // Drive the real sweep with a definition list split by `within_cost`, so
     // this exercises the shipped filter rather than one the test performs.
     let server = an_endpoint_that_answers_everything().await;
-    let (run, declined) = within_cost(&load_shipped_metrics(), Cost::Cheap);
+    let (run, declined) = cheap_split(&load_shipped_metrics(), Cost::Cheap);
     let out = sweep_against(&server, &run, &declined).await;
 
     // Named as the rule over the whole declined set, not as one example. The
     // comment below already learned this when `has-classes` went; `classes`
     // went the same way on 2026-09-04 and this assertion no longer has to move.
     assert!(!declined.is_empty(), "the cheap ceiling must decline something");
-    for d in &declined {
+    for (d, _reason) in &declined {
         assert!(out.rows.iter().all(|r| r.metric_id != d.id),
                 "{}: a declined metric produces no measurement row", d.id);
         assert!(out.not_measured.iter().any(|n| n.metric_id == d.id),
@@ -1636,7 +1671,7 @@ async fn a_declined_metric_is_recorded_as_not_measured_not_as_indeterminate() {
 async fn a_declined_metric_issues_no_request() {
     // The whole point of a cost ceiling. A row we do not publish is worthless if
     // we paid for it anyway.
-    let (run, declined) = within_cost(&load_shipped_metrics(), Cost::Cheap);
+    let (run, declined) = cheap_split(&load_shipped_metrics(), Cost::Cheap);
     let server = an_endpoint_that_answers_everything().await;
     let _ = sweep_against(&server, &run, &declined).await;
     // Queries travel as the `query` URL parameter on a GET (`client.rs`
@@ -1655,7 +1690,7 @@ async fn a_declined_metric_reaches_the_published_graph_with_no_verdict() {
     // The sweep's declined list has to survive emission, or the requirement
     // ("record not measured") is met in memory and lost on disk.
     let server = an_endpoint_that_answers_everything().await;
-    let (run, declined) = within_cost(&load_shipped_metrics(), Cost::Cheap);
+    let (run, declined) = cheap_split(&load_shipped_metrics(), Cost::Cheap);
     let client = std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
     let url = format!("{}/sparql", server.uri());
     let Sweep { rows, declarations_read: read, not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } =
@@ -1678,7 +1713,7 @@ async fn a_declined_metric_reaches_the_published_graph_with_no_verdict() {
     // Over every declined metric rather than one named example, for the reason
     // a_declined_metric_is_recorded_as_not_measured_not_as_indeterminate gives.
     assert!(!declined.is_empty(), "the cheap ceiling must decline something");
-    for d in &declined {
+    for (d, _reason) in &declined {
         let iri = NamedNode::new(format!("urn:sparqlwatch:metric:{}", d.id)).unwrap();
         let subjects: Vec<&oxrdf::NamedOrBlankNode> = quads.iter()
             .filter(|q| q.predicate.as_str() == "urn:sparqlwatch:notMeasuredMetric"
@@ -1726,7 +1761,7 @@ async fn a_declined_metric_reaches_the_published_graph_with_no_verdict() {
 async fn a_declined_metric_is_recorded_once_per_endpoint() {
     let a = an_endpoint_that_answers_everything().await;
     let b = an_endpoint_that_answers_everything().await;
-    let (run, declined) = within_cost(&load_shipped_metrics(), Cost::Cheap);
+    let (run, declined) = cheap_split(&load_shipped_metrics(), Cost::Cheap);
     assert!(!declined.is_empty(), "the fixture needs at least one expensive metric to decline");
 
     let client = std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
@@ -1746,7 +1781,7 @@ async fn a_declined_metric_is_recorded_once_per_endpoint() {
         not_measured.iter().map(|n| (n.endpoint.as_str(), n.metric_id.as_str())).collect();
     let expected: std::collections::BTreeSet<(&str, &str)> = urls
         .iter()
-        .flat_map(|u| declined.iter().map(move |d| (u.as_str(), d.id.as_str())))
+        .flat_map(|u| declined.iter().map(move |(d, _)| (u.as_str(), d.id.as_str())))
         .collect();
     assert_eq!(named, expected, "every (endpoint, declined metric) pair is named exactly once");
 }
@@ -1896,11 +1931,13 @@ fn enumerating_metric(limit: usize) -> MetricDef {
         dimension: "content".into(),
         kind: ProbeKind::SelectIris,
         query: Some(format!("SELECT DISTINCT ?c WHERE {{ ?s a ?c }} LIMIT {limit}")),
+        fallback_query: None,
         expect: None,
         var: Some("c".into()),
         declared_by: None,
         graded: false,
         cost: Cost::Expensive,
+        cadence: Default::default(),
         sample_limit: Some(limit),
         sample_prefix: None, tolerance: None,
     }
@@ -2078,8 +2115,8 @@ async fn a_declined_metric_publishes_no_sample_and_still_says_why() {
     // a reader the absence is a choice rather than an empty endpoint. No new
     // machinery: the distinction is already published.
     let server = an_endpoint_binding_classes(&[ZEBRA, APPLE, MANGO]).await;
-    let (run, declined) = within_cost(&load_shipped_metrics(), Cost::Cheap);
-    assert!(declined.iter().any(|d| d.sample_limit.is_some()),
+    let (run, declined) = cheap_split(&load_shipped_metrics(), Cost::Cheap);
+    assert!(declined.iter().any(|(d, _)| d.sample_limit.is_some()),
             "the fixture assumes the cheap ceiling declines every sampling metric");
     assert!(run.iter().all(|d| d.sample_limit.is_none()),
             "and that none of the cheap half samples, or a sample would be legitimate");
@@ -2403,7 +2440,7 @@ async fn mount_recording(
 ///
 /// Three requests per endpoint follow from this: the one queryless description
 /// fetch, plus one query per metric that runs.
-fn probe_and_declined() -> (Vec<MetricDef>, Vec<MetricDef>) {
+fn probe_and_declined() -> (Vec<MetricDef>, Vec<(MetricDef, NotMeasuredReason)>) {
     let run = vec![
         MetricDef {
             id: "availability".into(),
@@ -2411,11 +2448,13 @@ fn probe_and_declined() -> (Vec<MetricDef>, Vec<MetricDef>) {
             dimension: "availability".into(),
             kind: ProbeKind::Liveness,
             query: Some("SELECT ?s WHERE { ?s ?p ?o } LIMIT 1".into()),
+            fallback_query: None,
             expect: None,
             var: None,
             declared_by: None,
             graded: false,
             cost: Cost::Cheap,
+            cadence: Default::default(),
             sample_limit: None,
             sample_prefix: None, tolerance: None,
         },
@@ -2425,11 +2464,13 @@ fn probe_and_declined() -> (Vec<MetricDef>, Vec<MetricDef>) {
             dimension: "content".into(),
             kind: ProbeKind::SelectIris,
             query: Some("SELECT DISTINCT ?c WHERE { ?s a ?c } LIMIT 1".into()),
+            fallback_query: None,
             expect: None,
             var: Some("c".into()),
             declared_by: None,
             graded: false,
             cost: Cost::Cheap,
+            cadence: Default::default(),
             sample_limit: Some(1),
             sample_prefix: None, tolerance: None,
         },
@@ -2440,14 +2481,20 @@ fn probe_and_declined() -> (Vec<MetricDef>, Vec<MetricDef>) {
         dimension: "content".into(),
         kind: ProbeKind::SelectIris,
         query: Some("SELECT DISTINCT ?c WHERE { ?s a ?c } LIMIT 200".into()),
+        fallback_query: None,
         expect: None,
         var: Some("c".into()),
         declared_by: None,
         graded: false,
         cost: Cost::Expensive,
+        cadence: Default::default(),
         sample_limit: Some(200),
         sample_prefix: None, tolerance: None,
     }];
+    let declined = declined
+        .into_iter()
+        .map(|d| (d, NotMeasuredReason::CostCeiling))
+        .collect();
     (run, declined)
 }
 
@@ -2742,11 +2789,13 @@ fn panicking_metric() -> MetricDef {
         dimension: "content".into(),
         kind: ProbeKind::SelectIris,
         query: Some("SELECT ?c WHERE { ?s a ?c } LIMIT 1".into()),
+        fallback_query: None,
         expect: None,
         var: None,
         declared_by: None,
         graded: false,
         cost: Cost::Cheap,
+        cadence: Default::default(),
         sample_limit: None,
         sample_prefix: None, tolerance: None,
     }
@@ -3861,4 +3910,107 @@ async fn no_other_metric_carries_a_count() {
             assert_eq!(r.observed_count, None, "{} carries a count", r.metric_id);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Cadence: the same metrics file, asked at two rhythms
+// ---------------------------------------------------------------------------
+
+/// The hourly sweep runs the four hourly metrics and DECLINES the rest by
+/// cadence -- it does not omit them.
+///
+/// That distinction is the whole reason `Cadence` exists rather than a second
+/// metrics file. A metric absent from the definitions produces no fact at all,
+/// and `endpoint_measurements` reports ONE sweep's facts, so an hourly run
+/// carrying three metrics made the other seven VANISH from the endpoint page
+/// instead of going stale. Measured on 2026-09-18 before this landed: a 03:00
+/// full sweep then a 04:00 three-metric one left seven of ten columns as gaps.
+#[tokio::test]
+async fn an_hourly_sweep_declines_the_daily_metrics_rather_than_omitting_them() {
+    let server = an_endpoint_that_answers_everything().await;
+    let defs = load_shipped_metrics();
+    let (affordable, too_costly) = within_cost(&defs, Cost::Cheap);
+    let (run, out_of_cadence) = within_cadence(&affordable, Cadence::Hourly);
+
+    let hourly: Vec<&str> = run.iter().map(|d| d.id.as_str()).collect();
+    assert_eq!(
+        hourly,
+        vec!["availability", "cors", "cors-preflight", "service-description"],
+        "the hourly set is the four the owner chose on 2026-09-18"
+    );
+    assert!(
+        out_of_cadence.iter().any(|d| d.id == "geo-data"),
+        "geo-data is cheap and daily, so only cadence can decline it"
+    );
+
+    let declined: Vec<(MetricDef, NotMeasuredReason)> = too_costly
+        .into_iter()
+        .map(|d| (d, NotMeasuredReason::CostCeiling))
+        .chain(out_of_cadence.into_iter().map(|d| (d, NotMeasuredReason::Cadence)))
+        .collect();
+    let out = sweep_against(&server, &run, &declined).await;
+
+    // Every metric in the file is accounted for: measured, or declined with a
+    // reason. Nothing is silently missing.
+    let measured: Vec<&str> = out.rows.iter().map(|r| r.metric_id.as_str()).collect();
+    for def in &defs {
+        let seen = measured.contains(&def.id.as_str())
+            || out.not_measured.iter().any(|n| n.metric_id == def.id);
+        assert!(seen, "{} is neither measured nor declined", def.id);
+    }
+}
+
+/// The two decline reasons stay apart, and which one a metric gets is decided
+/// by cost FIRST.
+///
+/// `triple-count` is both too expensive for a cheap ceiling and daily. It must
+/// read `cost-ceiling`: that decision would still apply on a daily sweep, and
+/// telling an operator "we ask this once a day" about a query we would decline
+/// anyway is the wrong account. `emit`'s duplicate-subject guard also refuses
+/// two NotMeasured facts for one pair, so exactly one reason exists to give.
+#[tokio::test]
+async fn cost_and_cadence_are_different_reasons_and_cost_is_decided_first() {
+    let server = an_endpoint_that_answers_everything().await;
+    let defs = load_shipped_metrics();
+    let (affordable, too_costly) = within_cost(&defs, Cost::Cheap);
+    let (run, out_of_cadence) = within_cadence(&affordable, Cadence::Hourly);
+    let declined: Vec<(MetricDef, NotMeasuredReason)> = too_costly
+        .into_iter()
+        .map(|d| (d, NotMeasuredReason::CostCeiling))
+        .chain(out_of_cadence.into_iter().map(|d| (d, NotMeasuredReason::Cadence)))
+        .collect();
+    let out = sweep_against(&server, &run, &declined).await;
+
+    let reason = |id: &str| {
+        out.not_measured
+            .iter()
+            .find(|n| n.metric_id == id)
+            .map(|n| n.reason.slug())
+    };
+    assert_eq!(reason("triple-count"), Some("cost-ceiling"), "expensive AND daily -> cost");
+    assert_eq!(reason("geo-data"), Some("cadence"), "cheap but daily -> cadence");
+    assert_eq!(reason("availability"), None, "an hourly metric is measured, not declined");
+
+    // One fact per (endpoint, metric), never two.
+    let mut ids: Vec<&str> = out.not_measured.iter().map(|n| n.metric_id.as_str()).collect();
+    let before = ids.len();
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), before, "a metric was declined twice");
+}
+
+/// A daily sweep carries EVERY metric, hourly ones included.
+///
+/// `Cadence::Daily` is a superset rather than the other half of a partition: a
+/// daily run that skipped the hourly metrics would leave its own graph with
+/// holes exactly where the hourly sweeps have verdicts, and the endpoint page
+/// reports one run's facts. A sweep run with no `--cadence` flag at all is
+/// this one, which is why the default is `daily`.
+#[tokio::test]
+async fn a_daily_sweep_carries_the_hourly_metrics_too() {
+    let defs = load_shipped_metrics();
+    let (run, declined) = within_cadence(&defs, Cadence::Daily);
+    assert!(declined.is_empty(), "a daily sweep declines nothing for cadence");
+    assert_eq!(run.len(), defs.len());
+    assert_eq!(Cadence::default(), Cadence::Daily, "the safe default is the quiet one");
 }

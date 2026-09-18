@@ -786,6 +786,49 @@ impl Client {
     /// bindings are found under that name, so this reports `Some(false)`
     /// exactly as if the data were genuinely absent.
     pub async fn ask_literal(&self, url: &str, query: &str, var: &str) -> Observation {
+        self.ask_literal_with_fallback(url, query, None, var).await
+    }
+
+    /// `ask_literal`, with a simpler query to try when the endpoint REFUSES
+    /// the first one.
+    ///
+    /// The retry fires on a 4xx and on nothing else. A 4xx is the endpoint
+    /// saying it will not answer THIS REQUEST -- a query it cannot parse or a
+    /// construct it does not implement -- so a simpler query is worth one
+    /// attempt. A 5xx, a timeout or a transport error say nothing about the
+    /// query's shape, and asking again would spend a second request on an
+    /// endpoint that is already struggling.
+    ///
+    /// See `MetricDef::fallback_query` for what this is for and why removing
+    /// the default/named-graph UNION is not the alternative.
+    pub async fn ask_literal_with_fallback(
+        &self,
+        url: &str,
+        query: &str,
+        fallback: Option<&str>,
+        var: &str,
+    ) -> Observation {
+        let first = self.literal_attempt(url, query, var).await;
+        let refused = matches!(first.status, Some(s) if (400..500).contains(&s));
+        let Some(fallback) = fallback.filter(|_| refused) else {
+            return first;
+        };
+        let second = self.literal_attempt(url, fallback, var).await;
+        // The fallback answers or it does not. A second refusal leaves the
+        // FIRST observation standing, because its status is the one that
+        // describes the metric's OWN query -- the thing a provider asking "why
+        // did this score badly" needs, rather than the status of a retry they
+        // never saw us decide to send. (A query observation carries no body:
+        // `query_chain` sets `body: None` and only the declaration fetch
+        // retains one, so the status is all there is to keep.)
+        if second.body_kind == BodyKind::SparqlJson {
+            second
+        } else {
+            first
+        }
+    }
+
+    async fn literal_attempt(&self, url: &str, query: &str, var: &str) -> Observation {
         let a = self.honouring_retry_after(url, || self.query_chain(url, query, false)).await;
         let mut o = a.observation;
         if o.body_kind == BodyKind::SparqlJson {

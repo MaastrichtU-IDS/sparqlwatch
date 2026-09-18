@@ -56,7 +56,17 @@ def html(client, path):
 
 
 def metrics_toml():
-    """{id: {label, dimension, cost}} as prober/metrics.toml states it."""
+    """{id: {label, dimension, cost, cadence}} as prober/metrics.toml states it.
+
+    `cadence` DEFAULTS TO DAILY when the field is absent, which mirrors
+    `Cadence::default()` in prober/src/metrics.rs rather than demanding the
+    field. Two reasons that matters. Most metrics are daily and say nothing, so
+    requiring it would fail on the file as shipped. And the direction of the
+    default is a decision the prober documents -- a metric added without a
+    cadence is asked once a day rather than sixteen times more often -- so a
+    test that assumed the other way would pass while the sweep got quieter than
+    the page promised, or louder.
+    """
     found = {}
     for block in (PROBER / "metrics.toml").read_text().split("[[metric]]")[1:]:
         read = lambda key: re.search(rf'^{key} = "([^"]+)"', block, re.M)
@@ -65,6 +75,7 @@ def metrics_toml():
                 "label": read("label").group(1),
                 "dimension": read("dimension").group(1),
                 "cost": read("cost").group(1),
+                "cadence": read("cadence").group(1) if read("cadence") else "daily",
             }
     return found
 
@@ -75,7 +86,7 @@ def metrics_toml():
 
 
 def test_every_metric_fact_is_the_probers_own():
-    """The label, the dimension and the cost class, all three of them.
+    """The label, the dimension, the cost class and the cadence.
 
     The run graphs carry none of this. A measurement names its metric by IRI and
     nothing publishes a label, a dimension or a cost for that IRI, so the web
@@ -106,8 +117,13 @@ def test_every_metric_fact_is_the_probers_own():
         assert metric not in stated, (
             f"{metric} is marked retired and prober/metrics.toml still defines it"
         )
+    # `cadence` joined the three on 2026-09-18, when the hourly and daily
+    # sweeps stopped asking the same set. It is pinned for the same reason the
+    # others are: this page tells a reader how often we query their server, and
+    # a page saying `hourly` about a metric the file marks daily would be a
+    # promise about somebody else's infrastructure that nothing keeps.
     for metric, facts in stated.items():
-        for field in ("label", "dimension", "cost"):
+        for field in ("label", "dimension", "cost", "cadence"):
             assert METRIC_DOCS[metric][field] == facts[field], (
                 f"{metric}.{field}: docs say {METRIC_DOCS[metric][field]!r}, "
                 f"prober/metrics.toml says {facts[field]!r}"

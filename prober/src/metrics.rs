@@ -233,6 +233,50 @@ impl Cost {
     }
 }
 
+/// How often a metric is asked.
+///
+/// A SECOND AXIS, and not a finer cost tier. `Cost` says what a metric costs
+/// the endpoint it points at; this says how often that cost is worth paying.
+/// The four hourly metrics are all `cheap`, and so are three of the six daily
+/// ones, so no ceiling can separate them -- which is why this exists at all.
+///
+/// `Daily` is the default, and the direction of that default is deliberate: a
+/// metric added to the file without a cadence is asked once a day rather than
+/// every hour, so forgetting the field makes a sweep politer rather than
+/// sixteen times louder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum Cadence {
+    Hourly,
+    #[default]
+    Daily,
+}
+
+impl Cadence {
+    /// The published slug, also the value accepted on the command line. One
+    /// spelling for the TOML field, the CLI flag and the emitted literal, for
+    /// the reason `Cost::slug` gives.
+    pub fn slug(&self) -> &'static str {
+        match self {
+            Cadence::Hourly => "hourly",
+            Cadence::Daily => "daily",
+        }
+    }
+
+    /// Whether a sweep on `self` carries a metric declared `declared`.
+    ///
+    /// The daily sweep carries EVERYTHING, hourly metrics included: a daily
+    /// run that skipped them would leave its own graph with holes where the
+    /// hourly sweeps have verdicts, and the endpoint page reports one run's
+    /// facts. So `Daily` is a superset, not a disjoint half.
+    pub fn carries(self, declared: Cadence) -> bool {
+        match self {
+            Cadence::Daily => true,
+            Cadence::Hourly => declared == Cadence::Hourly,
+        }
+    }
+}
+
 /// The metric whose observed count is the profile gate's VOLUME signal.
 ///
 /// Named here rather than spelled at the call site because `lib.rs` has to find
@@ -262,6 +306,59 @@ pub struct MetricDef {
     pub kind: ProbeKind,
     #[serde(default)]
     pub query: Option<String>,
+    /// A simpler form of `query` to try when the endpoint REFUSES the first
+    /// one with a 4xx. Absent for every metric that has nothing simpler to
+    /// fall back to.
+    ///
+    /// This exists because the default/named-graph UNION that every content
+    /// query needs is not universally supported. Three of the 63 YummyData
+    /// endpoints answer `SELECT ?c WHERE { ?s a ?c } LIMIT 1` and reject the
+    /// UNION form outright:
+    ///
+    ///   HTTP 400 "Not supported: Named Graphs (FROM, GRAPH) are currently
+    ///   not supported"
+    ///
+    /// Before this, `geo-data` recorded `indeterminate` for all three plus
+    /// Wikidata -- 4 of 58 reachable endpoints on that sweep. The reason was
+    /// not "we could not tell whether there is geometry", it was "our query
+    /// was refused for using a construct this store does not implement", and
+    /// the non-UNION half would have answered. A false `indeterminate` of
+    /// exactly the kind the six-verdict vocabulary exists to prevent.
+    ///
+    /// REMOVING THE UNION INSTEAD IS NOT THE FIX, and the measurement that
+    /// says so is in metrics.toml: on ontoexplorer's content store the
+    /// default-graph-only COUNT returns 0 where the UNION returns 12,510,532.
+    /// A flat zero, published as a confident fact. Named graphs are the normal
+    /// arrangement in Virtuoso, GraphDB and Blazegraph. So both forms are
+    /// needed, and which one an endpoint can answer is a property of the
+    /// endpoint.
+    ///
+    /// AN EMPTY FALLBACK RESULT IS AN HONEST `absent`. A store that rejects
+    /// `GRAPH` as unsupported has no named graphs for data to hide in, so the
+    /// default graph is the whole store and "not there" is the complete
+    /// answer. That inference is the fallback's whole licence; a store that
+    /// refused the first query for any other reason still answers the second
+    /// one or stays `indeterminate`.
+    ///
+    /// IT NEEDS ROOM, and measured against sparql.dsmz.de/api/bacdive on
+    /// 2026-09-18 it does not always have it:
+    ///
+    ///   geo-data alone, default gap  -> absent   (the fallback ran)
+    ///   all six cheap metrics, 2000ms gap -> indeterminate
+    ///   all six cheap metrics, 250ms gap  -> absent
+    ///
+    /// The second request takes the per-host gate again, so it queues behind
+    /// every other metric's request at `--min-gap-ms` apiece, and on a sweep
+    /// running six cheap metrics at the default 2s gap the metric budget can
+    /// run out first. That is NOT a defect in this field and the verdict it
+    /// produces is not wrong: `indeterminate` says no answer was established,
+    /// which is exactly true when the fallback never got to ask. What it means
+    /// is that the improvement lands where there is budget headroom, and a
+    /// sweep of two cheap metrics has far more of it than one of six. Raising
+    /// the gap or the metric count trades this fallback away, and that trade
+    /// should be made knowingly rather than discovered.
+    #[serde(default)]
+    pub fallback_query: Option<String>,
     #[serde(default)]
     pub expect: Option<bool>,
     /// The SPARQL variable the query binds, for probe kinds that read
@@ -280,6 +377,10 @@ pub struct MetricDef {
     /// means cheap, but an unrecognized value is a load error, not a guess.
     #[serde(default)]
     pub cost: Cost,
+    /// How often this metric is asked. Silent means `daily`; see `Cadence` for
+    /// why that is the safe direction for a default.
+    #[serde(default)]
+    pub cadence: Cadence,
     /// `Some(n)` means this metric enumerates: publish up to `n` bindings and
     /// say whether the cap was hit. `None` means it publishes no sample.
     /// Checked at load time against the `LIMIT` in the metric's own query, so
@@ -619,6 +720,26 @@ pub fn load_metrics(toml_src: &str) -> anyhow::Result<Vec<MetricDef>> {
 /// `ceiling`, and those declined because their cost exceeds it. Both halves
 /// preserve the input order: a reordered result would make "declined"
 /// harder to line up against the file that declared it.
+/// Split `defs` into those a sweep on `cadence` asks, and those it does not.
+///
+/// Applied AFTER `within_cost`, so a metric declined for cost is never also
+/// declined for cadence: `emit`'s duplicate-subject guard refuses two
+/// `NotMeasured` facts for one (endpoint, metric) pair, and the reader is
+/// owed the reason that was decided first. Both halves preserve input order,
+/// for the reason `within_cost` gives.
+pub fn within_cadence(defs: &[MetricDef], cadence: Cadence) -> (Vec<MetricDef>, Vec<MetricDef>) {
+    let mut run = Vec::new();
+    let mut declined = Vec::new();
+    for d in defs {
+        if cadence.carries(d.cadence) {
+            run.push(d.clone());
+        } else {
+            declined.push(d.clone());
+        }
+    }
+    (run, declined)
+}
+
 pub fn within_cost(defs: &[MetricDef], ceiling: Cost) -> (Vec<MetricDef>, Vec<MetricDef>) {
     let mut run = Vec::new();
     let mut declined = Vec::new();
@@ -672,11 +793,21 @@ pub fn definitions_revision(defs: &[MetricDef]) -> String {
             dimension,
             kind,
             query,
+            // IN THE REVISION. An endpoint that refuses the primary query and
+            // answers the fallback publishes a verdict where it published
+            // `indeterminate` before, so two definition sets differing only in
+            // this measure different things and must not share a revision.
+            fallback_query,
             expect,
             var,
             declared_by,
             graded,
             cost,
+            // IN THE REVISION. Two definition sets differing only in a
+            // metric's cadence measure different things on the same sweep:
+            // one publishes a verdict where the other publishes
+            // `not measured (cadence)`.
+            cadence,
             sample_limit,
             // IN THE REVISION, deliberately. The prefix decides whether a
             // profile is exact or drawn from a sixteenth of the instances, so
@@ -691,17 +822,19 @@ pub fn definitions_revision(defs: &[MetricDef]) -> String {
             tolerance,
         } = d;
         canonical.push_str(&format!(
-            "{}\x1f{}\x1f{}\x1f{:?}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{:?}\x1f{}\x1f{}\x1f{}\x1e",
+            "{}\x1f{}\x1f{}\x1f{:?}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{:?}\x1f{:?}\x1f{}\x1f{}\x1f{}\x1e",
             id,
             label,
             dimension,
             kind,
             query.as_deref().unwrap_or(""),
+            fallback_query.as_deref().unwrap_or(""),
             expect.map(|b| b.to_string()).unwrap_or_default(),
             var.as_deref().unwrap_or(""),
             declared_by.as_deref().unwrap_or(""),
             graded,
             cost,
+            cadence,
             sample_limit.map(|n| n.to_string()).unwrap_or_default(),
             sample_prefix.as_deref().unwrap_or(""),
             // Formatted rather than Debug-printed so that 0.05 and 5e-2 hash
@@ -857,11 +990,13 @@ query = "SELECT ?thing WHERE {{ ?s ?p ?thing }} LIMIT 1"
             dimension,
             kind,
             query,
+            fallback_query,
             expect,
             var,
             declared_by,
             graded,
             cost,
+            cadence,
             sample_limit,
             sample_prefix,
             tolerance,
@@ -885,6 +1020,29 @@ query = "SELECT ?thing WHERE {{ ?s ?p ?thing }} LIMIT 1"
                 "query",
                 MetricDef {
                     query: Some(format!("{} # edited", query.as_deref().unwrap_or(""))),
+                    ..d.clone()
+                },
+            ),
+            // A definition that gains a fallback measures something different:
+            // the endpoint that refused the primary query now publishes a
+            // verdict where it published `indeterminate`. `None` in the base,
+            // so the variant is the one that HAS it.
+            (
+                "fallback_query",
+                MetricDef {
+                    fallback_query: Some(
+                        fallback_query.unwrap_or_else(|| "ASK{} # simpler".into()),
+                    ),
+                    ..d.clone()
+                },
+            ),
+            // A metric moved between cadences is asked on different sweeps:
+            // one definition set publishes a verdict where the other publishes
+            // `not measured (cadence)`.
+            (
+                "cadence",
+                MetricDef {
+                    cadence: if cadence == Cadence::Hourly { Cadence::Daily } else { Cadence::Hourly },
                     ..d.clone()
                 },
             ),

@@ -31,11 +31,13 @@ fn preflight_def() -> MetricDef {
         dimension: "interoperability".into(),
         kind: ProbeKind::CorsPreflight,
         query: None,
+        fallback_query: None,
         expect: None,
         var: None,
         declared_by: None,
         graded: false,
         cost: Cost::Cheap,
+        cadence: Default::default(),
         sample_limit: None,
         sample_prefix: None, tolerance: None,
     }

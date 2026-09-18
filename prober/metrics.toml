@@ -8,6 +8,7 @@ label = "Answers a trivial query"
 dimension = "availability"
 kind = "Liveness"
 cost = "cheap"
+cadence = "hourly"
 query = "SELECT ?s WHERE { ?s ?p ?o } LIMIT 1"
 
 # Two CORS facts, deliberately separate. `cors` is what a curl user sees: an
@@ -21,6 +22,7 @@ label = "Sends access-control-allow-origin on a simple GET"
 dimension = "interoperability"
 kind = "Cors"
 cost = "cheap"
+cadence = "hourly"
 query = "SELECT ?s WHERE { ?s ?p ?o } LIMIT 1"
 
 [[metric]]
@@ -29,6 +31,7 @@ label = "Answers a CORS preflight for a cross-origin GET"
 dimension = "interoperability"
 kind = "CorsPreflight"
 cost = "cheap"
+cadence = "hourly"
 
 [[metric]]
 id = "geo-functions"
@@ -77,6 +80,27 @@ query = """
 PREFIX geo: <http://www.opengis.net/ont/geosparql#>
 SELECT ?g WHERE { { ?s geo:asWKT ?g } UNION { GRAPH ?anyg { ?s geo:asWKT ?g } } } LIMIT 1
 """
+# THE UNION IS NOT UNIVERSALLY SUPPORTED, and before 2026-09-18 that read as
+# `indeterminate` rather than as an answer. Three of the 63 YummyData endpoints
+# -- sparql.dsmz.de's bacdive, brenda and mediadive -- answer the query below
+# and refuse the one above with
+#
+#   HTTP 400 "Not supported: Named Graphs (FROM, GRAPH) are currently not
+#   supported"
+#
+# so the whole query was rejected for a construct they do not implement, and
+# the half of it they could have answered was never asked. Wikidata refuses it
+# too. That was 4 of 58 reachable endpoints on that sweep reporting "we could
+# not tell" when the truth was "we asked badly".
+#
+# Tried only after a 4xx, so an endpoint that answers the UNION is asked once.
+# An empty answer HERE is an honest `absent`: a store that rejects GRAPH as
+# unsupported has no named graphs for geometry to hide in, so the default graph
+# is the whole store. See MetricDef::fallback_query.
+fallback_query = """
+PREFIX geo: <http://www.opengis.net/ont/geosparql#>
+SELECT ?g WHERE { ?s geo:asWKT ?g } LIMIT 1
+"""
 
 [[metric]]
 id = "service-description"
@@ -84,6 +108,7 @@ label = "Service description informativeness"
 dimension = "documentation"
 kind = "FetchWellKnown"
 cost = "cheap"
+cadence = "hourly"
 graded = true
 
 # `classes` and `has-classes` were both retired here, and the questions they

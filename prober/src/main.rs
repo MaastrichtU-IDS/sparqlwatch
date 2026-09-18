@@ -7,7 +7,10 @@ use sparqlwatch_prober::{
         DEFAULT_GRACE_DAYS, DEFAULT_STRIKES, MIN_COST_MS,
     },
     emit::{DormancyFact, MeasurementRow, NotMeasured, NotMeasuredReason, RunFooter, RunHeader, RunId},
-    metrics::{definitions_revision, load_metrics, within_cost, Cost},
+    metrics::{
+        definitions_revision, load_metrics, within_cadence, within_cost, Cadence, Cost,
+        MetricDef,
+    },
     politeness::{Politeness, DEFAULT_MIN_GAP, DEFAULT_RETRY_AFTER_CAP},
     registry::{load_endpoints, read_exclusions},
     run_sweep,
@@ -59,6 +62,16 @@ struct Args {
     /// because the default has to be safe to point at somebody else's server.
     #[arg(long, value_enum, default_value_t = Cost::Cheap)]
     max_cost: Cost,
+    /// Which cadence this sweep is. A metric the cadence does not carry is not
+    /// run and not measured: it is published as a `NotMeasured` fact naming
+    /// `cadence` as the reason, exactly as the cost ceiling does, so the
+    /// endpoint page keeps its column and says why it is empty.
+    ///
+    /// Defaults to `daily`, which carries EVERY metric. So a sweep run without
+    /// this flag behaves exactly as it did before the flag existed, and the
+    /// hourly sweep is the one that has to ask for less.
+    #[arg(long, value_enum, default_value_t = Cadence::Daily)]
+    cadence: Cadence,
     /// The minimum pause between two consecutive requests to one host,
     /// measured from the end of one to the start of the next. Requests to one
     /// host are also never in flight together, whatever this is set to.
@@ -572,9 +585,27 @@ async fn main() -> anyhow::Result<()> {
     // run chose to probe: the ceiling is published separately, on the
     // activity, so two runs of one file at different ceilings stay comparable.
     let revision = definitions_revision(&defs);
-    // The policy lives here, in one place. `run_sweep` receives both halves as
-    // data and never learns what a ceiling is.
-    let (run, declined) = within_cost(&defs, args.max_cost);
+    // The policy lives here, in one place. `run_sweep` receives the halves as
+    // data and never learns what a ceiling or a cadence is.
+    //
+    // COST FIRST, CADENCE SECOND, and the order is the reason each declined
+    // metric carries its own reason rather than the caller assuming one. A
+    // metric too expensive for the ceiling is declined for COST even when this
+    // sweep's cadence would also have skipped it: the ceiling was the first
+    // decision and it is the one that would still apply on a daily run. Two
+    // `NotMeasured` facts for one (endpoint, metric) pair is what `emit`'s
+    // duplicate-subject guard refuses, so exactly one reason is recorded.
+    let (affordable, too_costly) = within_cost(&defs, args.max_cost);
+    let (run, out_of_cadence) = within_cadence(&affordable, args.cadence);
+    let declined: Vec<(MetricDef, NotMeasuredReason)> = too_costly
+        .into_iter()
+        .map(|d| (d, NotMeasuredReason::CostCeiling))
+        .chain(
+            out_of_cadence
+                .into_iter()
+                .map(|d| (d, NotMeasuredReason::Cadence)),
+        )
+        .collect();
     let run_id = RunId(args.at.clone());
     // The file is opened and its header written BEFORE any probing, so a bad
     // `--out` is reported now rather than after a ten-minute sweep, and a sweep

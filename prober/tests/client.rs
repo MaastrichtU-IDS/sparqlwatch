@@ -292,3 +292,175 @@ async fn a_profile_row_with_an_unparseable_count_is_dropped_not_guessed() {
     assert_eq!(rows.len(), 1);
     assert!(rows[0].property.ends_with("good"));
 }
+
+// ---------------------------------------------------------------------------
+// The fallback query: a 4xx refusal of the primary form, answered by a simpler
+// one. See MetricDef::fallback_query and metrics.toml's geo-data block.
+// ---------------------------------------------------------------------------
+
+/// The body sparql.dsmz.de actually returns, copied from a real response on
+/// 2026-09-18. Three of the 63 YummyData endpoints answer this way.
+const NAMED_GRAPHS_UNSUPPORTED: &str =
+    r#"{ "exception": "Not supported: Named Graphs (FROM, GRAPH) are currently not supported" }"#;
+
+#[tokio::test]
+async fn a_refused_query_falls_back_and_the_fallback_answers() {
+    // The real shape: the UNION form is refused with a 400, the default-graph
+    // form answers. Before the fallback this endpoint read `indeterminate` for
+    // geo-data -- "we could not tell" -- when the truth was that the half of
+    // the query it could answer was never asked.
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/sparql"))
+        .and(wiremock::matchers::query_param_contains("query", "GRAPH"))
+        .respond_with(ResponseTemplate::new(400).set_body_string(NAMED_GRAPHS_UNSUPPORTED))
+        .mount(&server).await;
+    Mock::given(method("GET")).and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            r#"{"head":{"vars":["g"]},"results":{"bindings":[{"g":{"type":"literal","value":"POINT(5 52)"}}]}}"#))
+        .mount(&server).await;
+
+    let c = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
+    let o = without_deadlocking(c.ask_literal_with_fallback(
+        &format!("{}/sparql", server.uri()),
+        "SELECT ?g WHERE { { ?s ?p ?g } UNION { GRAPH ?anyg { ?s ?p ?g } } } LIMIT 1",
+        Some("SELECT ?g WHERE { ?s ?p ?g } LIMIT 1"),
+        "g",
+    )).await;
+    assert_eq!(o.status, Some(200), "the fallback's answer is what stands");
+    assert_eq!(o.boolean, Some(true));
+    assert_eq!(o.bindings, vec!["POINT(5 52)".to_string()]);
+}
+
+#[tokio::test]
+async fn an_empty_fallback_is_an_answer_and_not_a_shrug() {
+    // The other half of the licence. A store that rejects GRAPH as unsupported
+    // has no named graphs for data to hide in, so an empty default-graph result
+    // is the complete answer: `boolean` false, which resolves to `absent`, not
+    // the `indeterminate` a refusal alone would have produced.
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/sparql"))
+        .and(wiremock::matchers::query_param_contains("query", "GRAPH"))
+        .respond_with(ResponseTemplate::new(400).set_body_string(NAMED_GRAPHS_UNSUPPORTED))
+        .mount(&server).await;
+    Mock::given(method("GET")).and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            r#"{"head":{"vars":["g"]},"results":{"bindings":[]}}"#))
+        .mount(&server).await;
+
+    let c = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
+    let o = without_deadlocking(c.ask_literal_with_fallback(
+        &format!("{}/sparql", server.uri()),
+        "SELECT ?g WHERE { { ?s ?p ?g } UNION { GRAPH ?anyg { ?s ?p ?g } } } LIMIT 1",
+        Some("SELECT ?g WHERE { ?s ?p ?g } LIMIT 1"),
+        "g",
+    )).await;
+    assert_eq!(o.status, Some(200));
+    assert_eq!(o.boolean, Some(false), "an empty fallback is `absent`, not a shrug");
+    assert!(o.bindings.is_empty());
+}
+
+#[tokio::test]
+async fn a_5xx_does_not_trigger_the_fallback() {
+    // The trigger is a 4xx and nothing else. A 500, a timeout or a transport
+    // error say nothing about the query's SHAPE, and a second request would be
+    // spent on an endpoint that is already struggling. One request, and the
+    // observation is the first one's.
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(503).set_body_string("upstream is down"))
+        .expect(1)
+        .mount(&server).await;
+
+    let c = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
+    let o = without_deadlocking(c.ask_literal_with_fallback(
+        &format!("{}/sparql", server.uri()),
+        "SELECT ?g WHERE { { ?s ?p ?g } UNION { GRAPH ?anyg { ?s ?p ?g } } } LIMIT 1",
+        Some("SELECT ?g WHERE { ?s ?p ?g } LIMIT 1"),
+        "g",
+    )).await;
+    assert_eq!(o.status, Some(503));
+    assert_eq!(o.boolean, None);
+    // `expect(1)` above is the assertion that matters: a second request would
+    // fail the mock on drop.
+}
+
+#[tokio::test]
+async fn a_refused_fallback_leaves_the_first_observation_standing() {
+    // Both refused. The FIRST observation is kept, because its status is the
+    // one describing the metric's own query rather than the retry's. Asserted
+    // on the status alone: a query observation carries no body -- `query_chain`
+    // sets `body: None`, and only the declaration fetch retains one -- which I
+    // asserted wrongly here first and the test caught.
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/sparql"))
+        .and(wiremock::matchers::query_param_contains("query", "GRAPH"))
+        .respond_with(ResponseTemplate::new(400).set_body_string(NAMED_GRAPHS_UNSUPPORTED))
+        .mount(&server).await;
+    Mock::given(method("GET")).and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(403).set_body_string("no"))
+        .mount(&server).await;
+
+    let c = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
+    let o = without_deadlocking(c.ask_literal_with_fallback(
+        &format!("{}/sparql", server.uri()),
+        "SELECT ?g WHERE { { ?s ?p ?g } UNION { GRAPH ?anyg { ?s ?p ?g } } } LIMIT 1",
+        Some("SELECT ?g WHERE { ?s ?p ?g } LIMIT 1"),
+        "g",
+    )).await;
+    assert_eq!(o.status, Some(400), "the primary query's own refusal is reported");
+    assert_eq!(o.boolean, None, "nothing was established either way");
+}
+
+#[tokio::test]
+async fn no_fallback_means_one_request_and_todays_behaviour() {
+    // Every other AskData metric passes None and must be unaffected.
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(400).set_body_string(NAMED_GRAPHS_UNSUPPORTED))
+        .expect(1)
+        .mount(&server).await;
+
+    let c = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
+    let o = without_deadlocking(c.ask_literal_with_fallback(
+        &format!("{}/sparql", server.uri()),
+        "SELECT ?g WHERE { GRAPH ?anyg { ?s ?p ?g } } LIMIT 1",
+        None,
+        "g",
+    )).await;
+    assert_eq!(o.status, Some(400));
+}
+
+#[tokio::test]
+async fn the_real_dsmz_refusal_shape_triggers_the_fallback() {
+    // The response sparql.dsmz.de actually sends, headers included: a 400 with
+    // `content-type: application/json` and a JSON body. My first test for this
+    // sent the 400 as text/plain and passed while the live endpoint still read
+    // `indeterminate`, so the mock was not the thing being measured. This one
+    // is the wire shape.
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/sparql"))
+        .and(wiremock::matchers::query_param_contains("query", "GRAPH"))
+        .respond_with(
+            ResponseTemplate::new(400)
+                .insert_header("content-type", "application/json")
+                .set_body_string(NAMED_GRAPHS_UNSUPPORTED),
+        )
+        .mount(&server).await;
+    Mock::given(method("GET")).and(path("/sparql"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/sparql-results+json")
+                .set_body_string(r#"{"head":{"vars":["g"]},"results":{"bindings":[]}}"#),
+        )
+        .mount(&server).await;
+
+    let c = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
+    let o = without_deadlocking(c.ask_literal_with_fallback(
+        &format!("{}/sparql", server.uri()),
+        "SELECT ?g WHERE { { ?s ?p ?g } UNION { GRAPH ?anyg { ?s ?p ?g } } } LIMIT 1",
+        Some("SELECT ?g WHERE { ?s ?p ?g } LIMIT 1"),
+        "g",
+    )).await;
+    assert_eq!(o.status, Some(200), "the fallback's 200 must be what stands");
+    assert_eq!(o.boolean, Some(false), "an empty fallback is absent, not indeterminate");
+}

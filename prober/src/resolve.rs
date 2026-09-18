@@ -637,11 +637,13 @@ mod tests {
             dimension: "d".into(),
             kind,
             query: None,
+            fallback_query: None,
             expect,
             var: None,
             declared_by: None,
             graded: false,
             cost: Cost::Cheap,
+            cadence: Default::default(),
             sample_limit: None,
             sample_prefix: None, tolerance: None,
         }

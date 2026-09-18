@@ -679,6 +679,16 @@ def _rows(measurements: EndpointMeasurements) -> list[dict]:
 # instead of to the crash.
 _DECLINE_DETAILS = {
     "cost-ceiling": "we declined to look, so this says nothing about the endpoint",
+    # Added 2026-09-18 with the prober's cadence split. DELIBERATELY NOT the
+    # cost-ceiling sentence: that one says we judged the query too expensive to
+    # point at this endpoint, and this one says the opposite -- the metric is
+    # cheap, it simply is not this hour's question. An operator reading
+    # "we declined to look" about a metric that will be measured tonight has
+    # been told the wrong thing about their own server.
+    "cadence": (
+        "we ask this once a day and this was not that sweep, so it says "
+        "nothing about the endpoint"
+    ),
     "prober-failed": (
         "the prober failed on this endpoint, so this run observed nothing "
         "about it"
@@ -3161,6 +3171,7 @@ METRIC_DOCS = {
         "label": "Answers a trivial query",
         "dimension": "availability",
         "cost": "cheap",
+        "cadence": "hourly",
         "explains": (
             "Whether a query reaches the endpoint and comes back. The probe is "
             "one SELECT for a single triple, which is the smallest question a "
@@ -3175,6 +3186,7 @@ METRIC_DOCS = {
         "label": "Sends access-control-allow-origin on a simple GET",
         "dimension": "interoperability",
         "cost": "cheap",
+        "cadence": "hourly",
         "explains": (
             "Whether a script in a browser could read this endpoint's answer. "
             "This is what a curl user sees: the header on a plain GET. It is "
@@ -3187,6 +3199,7 @@ METRIC_DOCS = {
         "label": "Answers a CORS preflight for a cross-origin GET",
         "dimension": "interoperability",
         "cost": "cheap",
+        "cadence": "hourly",
         "explains": (
             "Whether a browser would even attempt a real query. Before sending "
             "a cross-origin request that is not simple, a browser asks the "
@@ -3203,6 +3216,7 @@ METRIC_DOCS = {
         "label": "GeoSPARQL relation functions",
         "dimension": "capability",
         "cost": "cheap",
+        "cadence": "daily",
         "explains": (
             "Whether the engine evaluates GeoSPARQL relation functions, asked "
             "with a filter over constants so the answer is about the engine "
@@ -3218,6 +3232,7 @@ METRIC_DOCS = {
         "label": "Holds WKT geometry",
         "dimension": "content",
         "cost": "cheap",
+        "cadence": "daily",
         "explains": (
             "Whether any geometry is actually stored, asked separately from the "
             "functions above because holding geometry and being able to reason "
@@ -3231,6 +3246,7 @@ METRIC_DOCS = {
         "label": "Service description informativeness",
         "dimension": "documentation",
         "cost": "cheap",
+        "cadence": "hourly",
         "explains": (
             "What the endpoint says about itself when asked with no query at "
             "all. Graded rather than yes or no, because a description that "
@@ -3270,6 +3286,7 @@ METRIC_DOCS = {
         "label": "States how many triples it holds",
         "dimension": "content",
         "cost": "expensive",
+        "cadence": "daily",
         "explains": (
             "How many triples the endpoint says it holds, in "
             "void:triples, set against a count of them. A description that is "
@@ -3288,6 +3305,7 @@ METRIC_DOCS = {
         "label": "States how many graphs it holds",
         "dimension": "content",
         "cost": "expensive",
+        "cadence": "daily",
         "explains": (
             "How many named graphs the endpoint says it has, against a count "
             "of them. No VoID or service-description term states a NUMBER of "
@@ -3300,6 +3318,7 @@ METRIC_DOCS = {
         "label": "States how many classes it holds",
         "dimension": "content",
         "cost": "expensive",
+        "cadence": "daily",
         "explains": (
             "How many distinct classes the endpoint says it holds, in "
             "void:classes, against a count of them. Distinct from 'describes "
@@ -3322,6 +3341,7 @@ METRIC_DOCS = {
         "label": "Describes its own vocabulary",
         "dimension": "content",
         "cost": "exhaustive",
+        "cadence": "daily",
         "explains": (
             "Whether the endpoint's own description names the classes it "
             "actually holds. The class profile pass finds what is there; a "
@@ -3376,6 +3396,7 @@ METRIC_DOCS = {
         "label": "Properties per class",
         "dimension": "content",
         "cost": "exhaustive",
+        "cadence": "daily",
         # NO COLUMN, and the flag is read rather than the comment above it.
         # _index_metrics unions every metric carrying a verdict OR a decline, so
         # before this existed one endpoint's failed pass was enough to draw a

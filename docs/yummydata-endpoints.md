@@ -132,3 +132,10 @@ sixty-three strangers' servers on first contact, and the expensive metrics run
 `COUNT` aggregates -- one of those took 17.5 seconds on a single endpoint
 earlier the same day. The attributes compared above are all cheap ones.
 YummyData's own list and flags come from `https://yummydata.org/endpoint.json`.
+
+These 63 joined the swept fleet on 2026-09-18, taking it from 12 endpoints to
+76, and the cadence split landed first to make that defensible: the hourly
+sweep had been nine metrics per endpoint including all three `COUNT`
+aggregates, and it is now four cheap ones. An endpoint on this list sees fewer
+requests per hour from this service than one of the original twelve did
+before. See "Two axes" in `docs/architecture.md`.
