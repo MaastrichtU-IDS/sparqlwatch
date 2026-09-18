@@ -2481,8 +2481,92 @@ def _row_size(entry: EndpointMeasurements) -> list[dict]:
 # asked for and it is a reasonable ask -- the chips are a byte-dense reference
 # and this is the one fact a reader scans a list of 74 for -- but it is a
 # duplication, so it reads the same function rather than a parallel one.
+# The three the fleet partitions into, and the ORDER they are shown in, which
+# is the registry's own question asked once: does it work, did it fail, did we
+# stop asking. Set by the owner on 2026-09-18.
+AVAILABILITY_STATES = ("available", "unresponsive", "dormant")
+
+# The one shown when a request names none, and the only page on this site whose
+# bare URL is not its whole contents. `/` is the 66 that answer; `/?facet=all`
+# is all 74. That is a choice about what the front page is FOR -- a reader
+# arriving at a registry wants the endpoints they can use -- and it is the
+# reason `_effective_facet` exists rather than a `None` meaning "everything"
+# threaded through two branches.
+DEFAULT_FACET = "available"
+
+# The value that means "do not narrow". Spelled rather than reusing None,
+# because None now means "the reader said nothing" and those two became
+# different questions the moment there was a default.
+ALL_FACET = "all"
+
+# Retired 2026-09-18, and resolved rather than dropped. `answering` read the
+# DORMANCY fact while its label said the endpoint answers, which is what sent
+# this task off: the page reported 72 answering over 66 green dots, and the six
+# in the gap were endpoints we ask and that do not reply. A link someone
+# already shared carrying one of these resolves to the whole fleet, which is
+# the honest degradation -- `answering` is not one of the three and never was,
+# and an unresolvable facet renders an empty page that looks like a registry
+# with nothing in it.
+_RETIRED_FACETS = {"answering": ALL_FACET, "not-answering": ALL_FACET}
+
+
+def _effective_facet(facet: str | None) -> str:
+    """The facet actually applied, from what the request asked for.
+
+    ONE resolution, called by both representations. The HTML branch and the
+    RDF branch each decide their own endpoint set, and web/queries/index.rq's
+    header makes it a rule that they name the same endpoints; a default
+    applied in one of them would be the cleanest possible way to break that,
+    because the failing case is the bare URL that every test hits.
+    """
+    if facet is None:
+        return DEFAULT_FACET
+    return _RETIRED_FACETS.get(facet, facet)
+
+
+def _availability_state(entry: EndpointMeasurements) -> str:
+    """Which of the three this endpoint is in. Exactly one, always.
+
+    THE SINGLE READING of the question "does this endpoint answer", shared by
+    the dot each row leads with, the three counts in the strip, and the filter
+    those counts link to. That sharing is the whole point of the function
+    existing: the page shipped two readings of this question before -- a strip
+    saying "72 answering" beside 66 green dots -- because one read dormancy and
+    the other read the availability verdict while both were labelled with the
+    same word.
+
+    DORMANT FIRST, and the order is load-bearing. A dormant endpoint still
+    carries whatever availability verdict its last sweep recorded, and both of
+    the two in the store today last read `indeterminate`. Reading the verdict
+    first would file them under `unresponsive`, which reports as a fact about
+    their server something that is a fact about our rotation -- and would leave
+    `dormant` with a count of zero while two rows on the page wore the dormant
+    marker.
+
+    THE RESIDUE, stated because it is the one case the three words do not fit
+    cleanly: an endpoint nobody set aside and that has no availability verdict
+    at all lands in `unresponsive`. There we hold no confirmation that it
+    answers, which is true and is what the word has to mean here, but it is not
+    the same as having watched it fail. It cannot arise from the cadence --
+    availability is hourly, so an hourly sweep never declines it -- and there
+    are none in the store. The dot's tooltip names the verdict it was drawn
+    from, so such a row reads "not measured" to anyone who looks at it.
+    """
+    if entry.newest_sweep_declined_to_ask_this_endpoint:
+        return "dormant"
+    verdict = next(
+        (v.verdict for v in entry.verdicts if v.metric == _AVAILABILITY_METRIC),
+        None,
+    )
+    return "available" if verdict in _POSITIVE_VERDICTS else "unresponsive"
+
+
 def _availability_dot(entry: EndpointMeasurements) -> dict:
     """How this row's leading dot is drawn, and what it says when asked.
+
+    `state` is `_availability_state`'s, so the dot and the count in the strip
+    that selects it cannot come to disagree: pressing `unresponsive` and
+    counting red dots is one question asked twice.
 
     The title is the availability chip's own title, assembled the same way, so
     the dot and the chip beside it cannot come to say different things about
@@ -2492,17 +2576,11 @@ def _availability_dot(entry: EndpointMeasurements) -> dict:
         (v.verdict for v in entry.verdicts if v.metric == _AVAILABILITY_METRIC),
         None,
     )
-    if verdict is None:
-        state = verdict_encoding.presentation(verdict_encoding.NOT_MEASURED)
-        available = None
-    else:
-        state = verdict_encoding.presentation(verdict)
-        available = verdict in _POSITIVE_VERDICTS
+    state = verdict_encoding.presentation(
+        verdict_encoding.NOT_MEASURED if verdict is None else verdict
+    )
     return {
-        # "yes", "no" or "unknown" -- the attribute the row carries and the
-        # stylesheet draws from, rather than a bool a template would have to
-        # turn into three cases at the point of use.
-        "available": "unknown" if available is None else ("yes" if available else "no"),
+        "state": _availability_state(entry),
         "title": f"{METRIC_DESCRIPTIONS['availability']} \u2014 {state.label}",
     }
 
@@ -2731,80 +2809,42 @@ def _matches_domain(endpoint: str, domain: str | None) -> bool:
     return (_NAMES.get(endpoint) or _NO_NAME).domain == domain
 
 
-# The metric each named, non-domain facet grades, and the label its pill
-# shows. Kept as two small tables rather than separate booleans, so a reader
-# sees at a glance that a facet is either a real metric, read positive-or-not
-# ("void"), or a fact this page already names elsewhere, reused rather than
-# renamed ("answering").
+# The metric each named, non-domain facet grades. Empty since 2026-09-17, when
+# the chips stopped reading metric verdicts; kept rather than deleted because
+# `_matches_facet` still consults it and the next facet that IS a metric (the
+# "void" one removed here was) needs only a line back in this table.
 #
-# A THIRD FACET, "federates", stood here until fix-round-1 and was removed.
-# sparqlwatch measures eleven things (see prober/metrics.toml) and federation
-# -- one endpoint's query reaching into another -- is not one of them. The
-# first draft read a positive `cors` verdict as "federates", on the argument
-# that access-control-allow-origin is a precondition a browser-based
-# federator needs. That is a real fact about `cors`, but a pill LABELLED
-# "federates" tells a reader this service established something it never
-# measured, which is the exact assertion the page's own "measured rather
-# than asserted" sentence -- and the reason a catalogue's title is
-# attributed rather than claimed -- exists to rule out. If a filter on `cors`
-# is wanted here later, it is honest under a label that says what it reads:
-# "CORS", not what a reader might infer from it.
-# Empty since 2026-09-17, when the two chips became `answering` and its
-# inverse -- neither reads a metric verdict. Kept rather than deleted because
-# `_matches_facet` still consults it, and the next facet that IS a metric
-# (the "void" one removed here was) needs only a line back in this table.
+# A FACET THAT WAS a metric and should not have been: "federates" stood here
+# until fix-round-1. sparqlwatch measures eleven things (see
+# prober/metrics.toml) and federation -- one endpoint's query reaching into
+# another -- is not one of them. The first draft read a positive `cors` verdict
+# as "federates", on the argument that access-control-allow-origin is a
+# precondition a browser-based federator needs. That is a real fact about
+# `cors`, but a pill LABELLED "federates" tells a reader this service
+# established something it never measured. `answering` failed the same check on
+# 2026-09-18 and for the same reason, one level subtler: it read a fact this
+# service holds (we set this endpoint aside) under a word that describes the
+# endpoint (it answers).
 _FACET_METRICS: dict[str, str] = {}
-_FACET_LABELS = {
-    # Two chips, set by the owner on 2026-09-17. They replaced a domain-pill
-    # trio and a lone "answering": the registry's first question is whether a
-    # thing responds at all, and its complement is the one a reader chasing a
-    # broken endpoint wants. `not-answering` is the exact inverse of
-    # `answering` below, so the two always partition the filtered set and
-    # their counts sum to it.
-    "answering": "answering",
-    "not-answering": "not answering",
-}
 
 
 def _matches_facet(entry: EndpointMeasurements, facet: str | None) -> bool:
-    """Whether one endpoint answers a fixed, named question, from the
-    verdicts its newest run already recorded -- no query the prober has not
-    already run.
+    """Whether one endpoint belongs in the facet a request asked for.
 
-    Two questions:
+    `facet` here is ALREADY `_effective_facet`'s answer, so `None` cannot
+    reach this function meaning "the default" -- it means the caller had no
+    request to resolve, which is how the RDF branch's unfiltered path and the
+    matrix's own counting call it.
 
-      "answering"  the newest sweep did not decline to ask this endpoint at
-                    all. The same fact the strip above this listing already
-                    labels "answering" (see `summary`); this reuses it rather
-                    than naming the same thing twice.
-
-      "void"       its `vocabulary-described` verdict is positive: the
-                    endpoint's own description is confirmed to name the
-                    classes its data actually holds. `_POSITIVE_VERDICTS`
-                    below counts `undeclared-but-verified` here too, which
-                    prober/README.md defines as the endpoint NOT having
-                    declared anything -- so this facet does not establish a
-                    declaration, only that the fact holds. The pill's label
-                    is the metric's own canonical name, not a claim of
-                    "declares", for the same reason "federates" failed this
-                    check and was removed (see `_FACET_METRICS`'s comment).
-
-    `_POSITIVE_VERDICTS` is the same table the availability facet above was
-    built from: "verified" and "undeclared-but-verified" both mean the fact
-    holds, declared or not, and only the declared HALF of that -- verified
-    alone -- would undercount an endpoint this project's own philosophy says
-    to credit: see prober/metrics.toml's note on geo-functions, "the rare
-    honest endpoint is credited".
+    The three availability states partition the fleet, so each one selects its
+    own and `all` selects everything. A name that is none of these selects
+    nothing: a typo showing the whole registry would be a filter that silently
+    is not one.
     """
-    if not facet:
+    if not facet or facet == ALL_FACET:
         return True
-    if facet == "answering":
-        return not entry.newest_sweep_declined_to_ask_this_endpoint
-    if facet == "not-answering":
-        # The exact complement, from the same fact rather than a second
-        # reading of it: anything else would let the two chips disagree about
-        # one endpoint, or leave one in neither.
-        return entry.newest_sweep_declined_to_ask_this_endpoint
+    if facet in AVAILABILITY_STATES:
+        return _availability_state(entry) == facet
     metric = _FACET_METRICS.get(facet)
     if metric is None:
         return False
@@ -2826,7 +2866,7 @@ def _pill_href(
     its own `{param}={value}`, so `/?q=uniprot`'s "life_sciences 1" pill
     linked to `/?domain=life_sciences` alone, silently discarding the `q`
     the pill's own count was computed under -- a count for one page on a
-    link to another. `_index_pills`' docstring already promises a pill's
+    link to another. `_availability_figures`' docstring already promises a
     COUNT states the page in front of the reader; this is the same promise
     kept for the pill's LINK.
     """
@@ -2841,55 +2881,48 @@ def _pill_href(
     return "/?" + "&".join(f"{k}={quote(v, safe='')}" for k, v in pairs)
 
 
-def _index_pills(
+def _availability_figures(
     entries: list[EndpointMeasurements],
     q: str | None,
     domain: str | None,
     facet: str | None,
 ) -> list[dict]:
-    """The registry's most common questions, as links above the rows.
+    """The three figures in the strip: a count each, and the link that selects
+    it.
 
-    Built from `entries` AFTER `?q=`, `?domain=` and `?facet=` have already
-    narrowed it, so a pill's count states what is on the page in front of the
-    reader right now, not a fact about the whole registry a search has
-    already cut away from. See the "Global constraints" note this task was
-    written against: two chip strips on this page have printed a count that
-    outlived the page it described before, and this is the fix repeated
-    rather than a fresh idea.
+    COUNTED BEFORE THE FACET NARROWS, and after `?q=` and `?domain=` do, which
+    is the one rule here that is not the page's usual one. Every other count on
+    this page states the page in front of the reader, because a count that
+    outlived the page it described has been shipped twice. These three cannot:
+    they are the page's own navigation, and a set of figures that reads
+    "available 66 | unresponsive 0 | dormant 0" the moment `available` is
+    selected is a control a reader cannot get back out of. `?q=` and
+    `?domain=` still narrow them, so a search says how its own results divide.
 
-    Two pills, the complementary halves `_matches_facet` partitions the
-    filtered set into. They keep the shape the domain pills also had,
-    {label, param, value, count, on, href}, so the template still loops once.
-    `href` carries every OTHER active filter alongside this pill's own
-    parameter -- see `_pill_href` -- so a pill's link never drops a filter
-    its own count was computed under.
+    So `entries` here is the q-and-domain-filtered set, and the caller is
+    responsible for that -- see `_index_context`, which does the facet cut
+    afterwards.
+
+    `on` is compared against the EFFECTIVE facet, so the front page with no
+    query string at all shows `available` selected, which is what it is
+    showing. The href for the one already selected does NOT toggle it off the
+    way the old pills did: with a default, clearing the parameter returns the
+    reader to that same facet, so pressing the active figure would look broken.
+    `all` is the way out, and it is the figure the reader already has -- the
+    endpoint total beside them.
     """
-    # Domain pills stood here until 2026-09-17 and were removed at the owner's
-    # request; ?domain= still filters, and still narrows both representations,
-    # it simply has no chip of its own. `_matches_domain` and its tests are
-    # untouched.
-    pills = [
+    effective = _effective_facet(facet)
+    counts = Counter(_availability_state(entry) for entry in entries)
+    return [
         {
-            "label": label,
-            "param": "facet",
-            "value": value,
-            "count": sum(1 for e in entries if _matches_facet(e, value)),
-            "on": facet == value,
-            "href": _pill_href(q, domain, facet, "facet", value, facet == value),
+            "label": state,
+            "value": state,
+            "count": counts.get(state, 0),
+            "on": effective == state,
+            "href": _pill_href(q, domain, facet, "facet", state, False),
         }
-        for value, label in _FACET_LABELS.items()
+        for state in AVAILABILITY_STATES
     ]
-    # A chip counting zero is a control that promises a narrower view and
-    # delivers an empty page. With the two chips partitioning the filtered set,
-    # this fires whenever a search leaves only answering endpoints, or only
-    # silent ones: the empty half is not offered. It also caught the removed
-    # "Describes its own vocabulary" chip, whose metric only the nightly
-    # profile pass records, so it read 0 on the deployed site permanently.
-    #
-    # Dropped rather than disabled: a pill absent until there is something
-    # behind it returns on its own once the data arrives, and needs no second
-    # visual state to explain itself.
-    return [p for p in pills if p["count"]]
 
 
 def _no_match_description(q: str | None, domain: str | None, facet: str | None) -> str:
@@ -2930,6 +2963,14 @@ def _index_context(
     """Everything the index template renders, decided here rather than in the
     page.
 
+    `facet` ARRIVES ALREADY RESOLVED -- `_effective_facet`'s answer, never the
+    raw query parameter -- and `ALL_FACET` rather than `None` is how a caller
+    says "do not narrow". The default belongs to the ROUTE, not here, because
+    the two pages built from this context want different ones: the registry
+    defaults to `available`, and /history defaults to everything. A history
+    grid narrowed to the endpoints that answer would hide exactly the rows a
+    reader opens it for, since what that page is about is availability MOVING.
+
     The template loops and formats. What order the rows come in, what a missing
     metric means, how a state is drawn and what each cell of the grid counts are
     all decisions with a right answer, and they belong where they can be tested.
@@ -2951,7 +2992,10 @@ def _index_context(
     # already widened to `q or domain or facet` in an earlier fix round;
     # this is that same rule, computed once so a filter added later cannot
     # be widened into two of the three places and missed in the third.
-    filtered = bool(q or domain or facet)
+    # True on the BARE page too, since `available` is the default: `/` shows 66
+    # of 74 and a strip reading a flat "74" over 66 rows would be the same
+    # wrong answer the facet counts above are arranged to avoid.
+    filtered = bool(q or domain) or facet != ALL_FACET
     entries = [e for e in entries if _matches_query(e.endpoint, q)]
     if domain:
         # Fix-round-2: this used to re-inline _matches_domain's own
@@ -2963,8 +3007,15 @@ def _index_context(
         # happens to hold, and a second spelling of it defeats that whether
         # or not the two currently compute the same thing.
         entries = [e for e in entries if _matches_domain(e.endpoint, domain)]
-    if facet:
-        entries = [e for e in entries if _matches_facet(e, facet)]
+    # The three figures are counted HERE, before the facet cut below, so that
+    # they go on offering the reader the other two. See _availability_figures.
+    figures = _availability_figures(entries, q, domain, facet)
+    # ALWAYS, since 2026-09-18: there is a default facet now, so "the reader
+    # asked for no facet" and "no facet applies" stopped being the same thing.
+    # The old guard was `if facet:`, which with a default would have left the
+    # bare `/` unfiltered here while `_index_description` filtered it, and the
+    # two representations of one URL would have named different endpoint sets.
+    entries = [e for e in entries if _matches_facet(e, facet)]
     metrics = _index_metrics(entries)
     # One pass over the store for every row, rather than one per row: the
     # payload is built from a single query and 543 rows asking it 543 times
@@ -2998,7 +3049,7 @@ def _index_context(
             for r in history.rows
             if _matches_query(r.endpoint, q)
             and _matches_domain(r.endpoint, domain)
-            and (not facet or r.endpoint in matching)
+            and r.endpoint in matching
         ],
     )
     # The legend counts the chips on this page, and it is built by the same
@@ -3034,8 +3085,13 @@ def _index_context(
         "endpoint_count": unfiltered_total,
         # The facet pills, above the rows -- domain and metric questions
         # both, one list so the template loops over it once. See
-        # _index_pills for what each one counts and why.
-        "pills": _index_pills(entries, q, domain, facet),
+        # _availability_figures for what each one counts and why.
+        "figures": figures,
+        # The endpoint total's own link, which is the way out of the default
+        # facet and into all three. Built through _pill_href like the figures,
+        # so it carries `?q=` and `?domain=` for the same reason they do.
+        "all_href": _pill_href(q, domain, facet, "facet", ALL_FACET, False),
+        "all_on": facet == ALL_FACET,
         "metrics": metrics,
         "metric_count": len(metrics),
         # The three facet groups, above the rows. Each filters by reading
@@ -3150,13 +3206,16 @@ def _index_context(
         "legend": _legend(drawn),
         "chip_width": verdict_encoding.CHIP_WIDTH_PX,
         "chip_height": verdict_encoding.CHIP_HEIGHT_PX,
-        # The fleet in four figures, above the search. New in the 2026-09-15
+        # The fleet's own two figures, above the search. New in the 2026-09-15
         # redesign: the page led with rows, which answers "what is here" only
-        # after the reader has counted. `answering` and `not_answering` are
-        # derived from the FILTERED `entries`, so a filtered page reports the
-        # filtered set; `total` stays the unfiltered fleet size so the strip
-        # can state a denominator instead of letting the reader guess it from
-        # a number that quietly stopped meaning the whole registry.
+        # after the reader has counted.
+        #
+        # The three availability counts moved out of here on 2026-09-18 and
+        # into `figures`, which carries each one's link beside it. What is left
+        # is the total, its denominator and the sweep. `total` stays the
+        # UNFILTERED fleet size so the strip can state a denominator instead of
+        # letting the reader guess it from a number that quietly stopped
+        # meaning the whole registry.
         "summary": {
             # None when unfiltered, so the template can tell "18 of 212" from
             # "212" without comparing two numbers and guessing. Widened in
@@ -3165,14 +3224,6 @@ def _index_context(
             # narrowed by either must state its denominator too.
             "matching": None if not filtered else len(entries),
             "total": unfiltered_total,
-            "answering": sum(
-                1 for e in entries
-                if not e.newest_sweep_declined_to_ask_this_endpoint
-            ),
-            "not_answering": sum(
-                1 for e in entries
-                if e.newest_sweep_declined_to_ask_this_endpoint
-            ),
             "last_sweep": stats.last_sweep,
         },
         # The submitted ?q=, echoed into the input's value so the client-side
@@ -3223,7 +3274,15 @@ def _history_html(
     # whose slug matches. Without this the History page renders with Registry
     # marked as the page you are on.
     return _TEMPLATES.get_template("history.html").render(
-        **{**_index_context(entries, store, q, domain, facet), "here": "history"}
+        **{
+            # ALL_FACET, not `_effective_facet`: this page shows how every
+            # endpoint's availability moved across the sweeps, and defaulting
+            # it to `available` would drop every endpoint that stopped
+            # answering -- which is the movement it exists to show. An explicit
+            # `?facet=` is still honoured.
+            **_index_context(entries, store, q, domain, facet or ALL_FACET),
+            "here": "history",
+        }
     )
 
 
@@ -3232,7 +3291,7 @@ def _index_html(
     store: Store,
     q: str | None = None,
     domain: str | None = None,
-    facet: str | None = None,
+    facet: str | None = None,  # raw; resolved below
 ) -> str:
     """The index, rendered.
 
@@ -3241,7 +3300,10 @@ def _index_html(
     read a static file until 2026-09-05 and needed no store at all.
     """
     return _TEMPLATES.get_template("index.html").render(
-        **_index_context(entries, store, q, domain, facet)
+        # The registry's own default, resolved here so that this page and its
+        # Turtle (see _index_description, which resolves the same way) cannot
+        # answer one URL with two endpoint sets.
+        **_index_context(entries, store, q, domain, _effective_facet(facet))
     )
 
 
@@ -3352,14 +3414,21 @@ def _index_rdf(
     `_matches_facet` rather than a second spelling of any of them.
     """
     triples = store.query(_INDEX_DESCRIPTION_QUERY)
-    if q or domain or facet:
+    # The guard was `if q or domain or facet:` until 2026-09-18, when `/` got a
+    # default facet and "the reader named no filter" stopped meaning "no filter
+    # applies". Left as it was, the bare `/` would have served all 74 endpoints
+    # as Turtle while its own HTML showed the 66 that answer -- one URL, two
+    # endpoint sets, which is precisely what index.rq's header forbids and what
+    # sharing these three predicates between the branches is for.
+    effective = _effective_facet(facet)
+    if q or domain or effective != ALL_FACET:
         known_endpoints = {entry.endpoint for entry in entries}
         matching_endpoints = {
             entry.endpoint
             for entry in entries
             if _matches_query(entry.endpoint, q)
             and _matches_domain(entry.endpoint, domain)
-            and _matches_facet(entry, facet)
+            and _matches_facet(entry, effective)
         }
         triples = _only_matching_endpoints(
             list(triples), known_endpoints, matching_endpoints
@@ -3384,8 +3453,9 @@ def index_resource(
     facet: str | None = Query(
         None,
         description=(
-            "Narrow the index to endpoints answering one fixed question: "
-            "answering or void."
+            "Narrow the index to one availability state: available, "
+            "unresponsive or dormant. Defaults to available; `all` widens it "
+            "to every endpoint in the registry."
         ),
     ),
     store: Store = Depends(get_store),

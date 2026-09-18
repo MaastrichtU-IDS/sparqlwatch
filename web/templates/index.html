@@ -42,7 +42,7 @@
               font-variant-numeric: tabular-nums; line-height: 1.1; }
   .strip .k { font-size: 11.5px; color: var(--text-dim); text-transform: uppercase;
               letter-spacing: 0.04em; }
-  /* The two counted figures are coloured by hand, NOT by the verdict
+  /* The three counted figures are coloured by hand, NOT by the verdict
      encoding's enc-text- classes: those name a per-metric VERDICT state
      ("confirmed and declared", "a declared claim found wrong"), and what
      this strip reports is fleet-wide LIVENESS -- did the endpoint answer
@@ -54,8 +54,18 @@
      enc-text-verified / enc-text-declared-but-wrong: it looks like the
      more "correct" encoding and is the same bug again, the second time
      with a state that does not even mean the right thing. */
-  .strip .n[data-figure="answering"] { color: var(--good); }
-  .strip .n[data-figure="not-answering"] { color: var(--crit); }
+  .strip .n[data-figure="available"] { color: var(--good); }
+  .strip .n[data-figure="unresponsive"] { color: var(--crit); }
+  .strip .n[data-figure="dormant"] { color: var(--text-dim); }
+  /* The three are LINKS now (2026-09-18), so they need the link's own reset
+     and a mark for the one currently showing. Underline on the LABEL rather
+     than on the number, and only when selected: at 26px the number carries
+     the eye already, and an underline under a figure reads as part of it. */
+  .strip a.figure { text-decoration: none; color: inherit; display: flex;
+                    flex-direction: column; gap: 2px; }
+  .strip a.figure:hover .k { color: var(--text); }
+  .strip a.figure.on .k { color: var(--text); text-decoration: underline;
+                          text-underline-offset: 3px; }
   /* The filter. It is one input and one line of text, and the page does not
      depend on the script that drives it: with JavaScript off every row is
      still here and only the filtering is missing. */
@@ -64,28 +74,6 @@
     border-radius: var(--radius); border: 1px solid var(--border);
     background: var(--bg-secondary); color: var(--text); font: inherit; outline: none; }
   .shown { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
-
-  /* The pills. LINKS, not the buttons the grid below uses: each one names a
-     URL (this page with one query parameter set) rather than a script-only
-     state, so it can be pasted, bookmarked or crawled, and it does something
-     with no script at all. wrap rather than scroll at phone width, the same
-     choice ul.facets already made below, for the same reason: a row of six
-     that scrolled sideways would hide the ones past the fold instead of
-     just taking a second line. */
-  .pills { display: flex; flex-wrap: wrap; gap: 6px 8px; margin: 0 0 18px; }
-  /* Borderless from 2026-09-17, at the owner's request. With two chips rather
-     than eight, a pill outline was drawing a box around a choice that reads as
-     a pair of words; the selected one is now carried by colour and weight, the
-     two channels the verdict encoding deliberately does NOT use for the chips
-     on a row, so nothing here competes with those. */
-  .pill { display: inline-flex; align-items: center; gap: 6px; height: 26px;
-    padding: 0 2px; font-size: 12.5px; color: var(--text-muted);
-    text-decoration: none; }
-  .pill:hover { color: var(--text); }
-  .pill.on { color: var(--accent); font-weight: 600; }
-  .pill i { font-style: normal; font-family: var(--mono); font-size: 11px;
-    color: var(--text-dim); font-variant-numeric: tabular-nums; }
-  .pill.on i { color: var(--accent); }
 
   /* The abbreviation, drawn the size of a chip. Every cell on a row carries one
      instead of the metric's name, so the metric chips are where each one is
@@ -227,19 +215,22 @@
      may rest on colour alone. Filled disc, heavy ring, light dotted ring:
      desaturate the page and they are still three distinct drawings.
 
-     The third is the one worth keeping. A row whose availability nobody
-     measured is not a row that failed, and drawing it red would report a
-     server as down on the strength of a sweep that never asked it.
+     The three are `_availability_state`'s three, so the dot and the figure in
+     the strip that selects it are one reading -- press `dormant` and the two
+     rows you get are the two grey dots. The third state is the one worth
+     keeping: a row this service stopped asking is not a row that failed, and
+     drawing it red would report a server as down on the strength of a sweep
+     that never asked it.
 
      flex-shrink: 0 because this is the one element in a wrapping row that must
      never be squeezed to an ellipse -- a squashed circle reads as a different
      shape, which is a channel this encoding is using. */
   .dot { flex-shrink: 0; width: 12px; height: 12px; border-radius: 50%;
          box-sizing: border-box; }
-  .dot[data-available="yes"] { background: var(--good); border: 1px solid var(--good); }
-  .dot[data-available="no"] { background: transparent; border: 2px solid var(--crit); }
-  .dot[data-available="unknown"] { background: transparent;
-                                   border: 1px dotted var(--text-dim); }
+  .dot[data-availability-state="available"] { background: var(--good); border: 1px solid var(--good); }
+  .dot[data-availability-state="unresponsive"] { background: transparent; border: 2px solid var(--crit); }
+  .dot[data-availability-state="dormant"] { background: transparent;
+                                     border: 1px dotted var(--text-dim); }
   .row-id { flex-grow: 1; min-width: 240px; }
   .row-id > a { overflow-wrap: anywhere; }
   /* block so it always falls to its own line under the name, and truncated
@@ -448,16 +439,37 @@
   {% endif %}
 
   <div class="strip">
-    <div class="stat"><span class="n" data-figure="total">{%- if summary.matching is not none -%}
+    {# The total is the way OUT of the default facet: `/` shows the 66 that
+       answer, and this is the link that shows all 74. It carries `?q=` and
+       `?domain=` along, so widening the facet does not silently drop a search
+       the reader is in the middle of. #}
+    <div class="stat"><a class="figure{% if all_on %} on{% endif %}" href="{{ all_href }}"
+         data-strip-facet="all"><span class="n" data-figure="total">{%- if summary.matching is not none -%}
         {{ summary.matching }} of {{ summary.total }}
       {%- else -%}
         {{ summary.total }}
       {%- endif -%}</span>
-      <span class="k">endpoints</span></div>
-    <div class="stat"><span class="n" data-figure="answering">{{ summary.answering }}</span>
-      <span class="k">answering</span></div>
-    <div class="stat"><span class="n" data-figure="not-answering">{{ summary.not_answering }}</span>
-      <span class="k">not answering</span></div>
+      <span class="k">endpoints</span></a></div>
+    {# The three availability states, as LINKS in the strip rather than as
+       pills below it, at the owner's request on 2026-09-18: they are the
+       registry's first question and they read better beside the total they
+       divide. Same .stat shape as the figures either side, so the row keeps
+       one size.
+
+       Each is a link and not a button, exactly as the search and the old pills
+       were: a link names a URL a reader can share or reload, and it works with
+       no script at all. The one currently showing is marked `on` and still
+       links to itself -- pressing it is a no-op rather than a toggle, because
+       with `available` as the default, clearing the parameter would land the
+       reader back on the same facet and look broken. The way to all three is
+       the endpoint total above, which is the figure a reader already reads as
+       the whole registry. #}
+    {% for f in figures %}
+    <div class="stat"><a class="figure{% if f.on %} on{% endif %}" href="{{ f.href }}"
+         data-strip-facet="{{ f.value }}" data-strip-count="{{ f.count }}"><span class="n"
+         data-figure="{{ f.value }}">{{ f.count }}</span>
+      <span class="k">{{ f.label }}</span></a></div>
+    {% endfor %}
     <div class="stat"><span class="n" data-figure="freshness">{% if summary.last_sweep %}{{ summary.last_sweep[:10] }}{% else %}&mdash;{% endif %}</span>
       <span class="k">last sweep</span></div>
   </div>
@@ -477,21 +489,14 @@
     <span class="shown" id="shown"></span>
   </form>
 
-  {# The registry's most common questions, above the rows and as LINKS rather
-     than the buttons the grid below uses: a link names a URL a reader can
-     share or reload, and works with no script at all, exactly like ?q= does.
-     Built in _index_pills from the same filtered entries the rows below are
-     built from, so a count here states what is on THIS page, never a fact
-     about the whole registry a search already cut away from. #}
-  {% if pills %}
-  <div class="pills">
-    {% for p in pills %}
-    <a class="pill{% if p.on %} on{% endif %}" data-pill="{{ p.value }}"
-       data-pill-count="{{ p.count }}" href="{{ p.href }}">
-      {{ p.label }} <i>{{ p.count }}</i></a>
-    {% endfor %}
-  </div>
-
+  {# Guarded on `metrics` since 2026-09-18. It was inside `{% if pills %}`,
+     which read as a guard on the pills above it and was in fact a guard on
+     this panel too: the pill builder dropped a chip counting zero, so a page whose
+     two chips both counted zero lost the metric grid as well, for no reason a
+     reader could see. Removing the pills made that visible -- the panel
+     vanished from every page -- and the honest guard is the one naming what
+     this panel is built from. #}
+  {% if metrics %}
   <details class="panel" data-facet-group="matrix">
     <summary><h2>Metrics and states</h2></summary>
     <table class="matrix">
@@ -576,7 +581,7 @@
      ?q=, ?domain= or ?facet=, alone or combined -- that already narrowed to
      zero rows never reaches that script with anything to hide, since JS
      starts from what this page rendered -- so a no-JS visit, or one where
-     the script has not run yet, would render the search box and pills, no
+     the script has not run yet, would render the search box and strip, no
      rows, and no explanation. This message is that explanation: distinct
      from #nothing (a CLIENT-SIDE facet finding nothing) and from the
      endpoint_count == 0 branch above (a store holding nothing at all).
@@ -670,14 +675,14 @@
    data-measured-by-sweep, kept for now because a script filtering these rows
    needs the instant as a value and the RDF representation is a second request,
    and it is the cheapest thing to give up if something has to go. #}
-      <li data-endpoint="{{ row.endpoint }}"{% if row.run_unfinished %} data-run-unfinished="true"{% endif %}{% if row.never_reached %} data-newer-run-unfinished="true"{% endif %}{% if row.dormant %} data-newest-sweep-dormant="true"{% if row.dormancy_reason %} data-dormancy-reason="{{ row.dormancy_reason }}"{% endif %}{% endif %}{% if row.measured_by %} data-measured-by-sweep="{{ row.measured_by }}"{% endif %}><span class="dot" data-available="{{ row.availability.available }}" title="{{ row.availability.title }}"></span><span class="row-id"><a data-row-name href="{{ row.href }}">{{ row.name }}</a>{% if row.datasets %} <span class="datasets">{{ row.datasets }} datasets</span>{% endif %}<span class="url" data-row-url>{{ row.endpoint }}</span></span>{% if row.run_unfinished %}<span class="qual">{{ row_unfinished_text }}</span>{% endif %}{% if row.never_reached %}<span class="qual">{{ row_never_reached_text }}</span>{% endif %}{% if row.size %}<span class="size">{% for s in row.size %}{% if not loop.first %} &#183; {% endif %}<span data-size="{{ s.unit }}" data-count="{{ s.n }}">{{ "{:,}".format(s.n) }} {{ s.unit }}</span>{% endfor %}</span>{% endif %}<span class="cells">{% for cell in row.cells %}{% if cell.present %}<span class="{{ cell.css_class }}" title="{{ cell.title }}"{% if cell.verdict is not none %} data-verdict="{{ cell.verdict }}"{% else %} data-declined="{{ cell.reason }}"{% endif %}>{{ cell.abbr }}</span>{% else %}<span class="gap" data-gap="true">&#183;</span>{% endif %}{% endfor %}</span></li>
+      <li data-endpoint="{{ row.endpoint }}"{% if row.run_unfinished %} data-run-unfinished="true"{% endif %}{% if row.never_reached %} data-newer-run-unfinished="true"{% endif %}{% if row.dormant %} data-newest-sweep-dormant="true"{% if row.dormancy_reason %} data-dormancy-reason="{{ row.dormancy_reason }}"{% endif %}{% endif %}{% if row.measured_by %} data-measured-by-sweep="{{ row.measured_by }}"{% endif %}><span class="dot" data-availability-state="{{ row.availability.state }}" title="{{ row.availability.title }}"></span><span class="row-id"><a data-row-name href="{{ row.href }}">{{ row.name }}</a>{% if row.datasets %} <span class="datasets">{{ row.datasets }} datasets</span>{% endif %}<span class="url" data-row-url>{{ row.endpoint }}</span></span>{% if row.run_unfinished %}<span class="qual">{{ row_unfinished_text }}</span>{% endif %}{% if row.never_reached %}<span class="qual">{{ row_never_reached_text }}</span>{% endif %}{% if row.size %}<span class="size">{% for s in row.size %}{% if not loop.first %} &#183; {% endif %}<span data-size="{{ s.unit }}" data-count="{{ s.n }}">{{ "{:,}".format(s.n) }} {{ s.unit }}</span>{% endfor %}</span>{% endif %}<span class="cells">{% for cell in row.cells %}{% if cell.present %}<span class="{{ cell.css_class }}" title="{{ cell.title }}"{% if cell.verdict is not none %} data-verdict="{{ cell.verdict }}"{% else %} data-declined="{{ cell.reason }}"{% endif %}>{{ cell.abbr }}</span>{% else %}<span class="gap" data-gap="true">&#183;</span>{% endif %}{% endfor %}</span></li>
       {% endfor %}
   </ul>
 
   {# The grid, demoted below the listing it used to sit above. Moved whole and
      unedited on 2026-09-17: it is still the only way on this page to ask a
      precise question (which metric, in which state), it is just no longer
-     the first thing a reader meets -- the pills above and the rows this now
+     the first thing a reader meets -- the strip above and the rows this now
      follows answer the more common questions faster. Guarded by the same
      `{% if metrics %}` it was guarded by at the top of the page, moved down
      with it rather than left behind. #}
