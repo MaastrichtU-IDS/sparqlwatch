@@ -1,0 +1,34 @@
+# When did each run happen?
+#
+# The run -> instant map, on its own, because joining it to the readings inside
+# one query costs a hundred times what the two cost apart. Measured against the
+# deployed store on 2026-09-18, 251,798 quads across 121 run graphs:
+#
+#   this query alone                          0.00s    121 rows
+#   endpoint_readings.rq alone                0.02s  1,107 rows
+#   the two as one query, joined on ?run      2.25s  1,107 rows
+#
+# The one query was `endpoint_history.rq`, and it made the endpoint page take
+# 2.5 seconds. It matched `?activity a prov:Activity ; prov:generatedAtTime
+# ?generatedAt` inside `GRAPH ?run` beside a UNION of the readings, and the
+# planner evidently re-derives the activity match per reading rather than
+# building this 121-row map once. The join is a dict lookup in Python and the
+# page is the only caller, so nothing is lost by doing it there.
+#
+# IT GETS WORSE WITH TIME, which is why this was worth splitting rather than
+# tolerating: the cost scales with the number of run graphs and the sweep adds
+# twenty-four a day.
+#
+# ONE ROW PER RUN. An activity is written once per sweep, so this needs no
+# DISTINCT; a run graph with no activity has no instant and is correctly absent
+# rather than sorted as if it had one.
+
+PREFIX prov: <http://www.w3.org/ns/prov#>
+
+SELECT ?run ?generatedAt
+WHERE {
+  GRAPH ?run {
+    ?activity a prov:Activity ;
+              prov:generatedAtTime ?generatedAt .
+  }
+}

@@ -73,6 +73,37 @@ def test_the_script_hash_covers_the_vocab_match_transliteration(client):
     assert "vocab_match.py" in body
 
 
+def test_the_stylesheet_is_compressed_when_the_client_asks(client):
+    """Nine tenths of every response was transfer nobody needed.
+
+    Measured against the deployed site on 2026-09-18: the registry answered
+    175 KB with no `content-encoding` even when the request offered
+    `Accept-Encoding: gzip, br`, and that 175 KB gzips to 19 KB. It was most of
+    what made the site feel slow -- the index BUILDS in 0.19s and took 1.87s to
+    arrive.
+
+    The stylesheet here because this file's client deliberately has no store:
+    the page and RDF cases live in test_index.py beside a fixture that has one.
+    Asserted on the wire rather than on the middleware list, because
+    `add_middleware` present and misconfigured looks identical from the inside.
+    """
+    plain = client.get(app_module.STYLESHEET_PATH)
+    zipped = client.get(app_module.STYLESHEET_PATH, headers={"accept-encoding": "gzip"})
+    assert plain.status_code == zipped.status_code == 200
+    assert zipped.headers.get("content-encoding") == "gzip", dict(zipped.headers)
+    assert plain.text == zipped.text
+    sent = int(zipped.headers["content-length"])
+    assert sent < len(plain.content) / 2, f"{sent} of {len(plain.content)} bytes"
+
+
+def test_a_client_that_does_not_ask_is_not_given_gzip(client):
+    """Content-encoding is negotiated, not imposed. A client that sent no
+    `Accept-Encoding` gets the bytes it can read."""
+    r = client.get(app_module.STYLESHEET_PATH, headers={"accept-encoding": "identity"})
+    assert r.status_code == 200
+    assert "gzip" not in r.headers.get("content-encoding", "")
+
+
 def test_the_narrow_page_body_track_can_shrink_below_its_content(client):
     """A grid track that cannot shrink hands its overflow to the page.
 

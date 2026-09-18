@@ -2667,6 +2667,42 @@ def test_each_facet_names_the_same_endpoints_in_html_and_in_rdf(
         assert in_rdf == html, f"{facet}: html={sorted(html)} rdf={sorted(in_rdf)}"
 
 
+def test_a_page_and_its_rdf_are_both_compressed(client_for, store_registry_sample):
+    """The index is the biggest thing this service serves, and RDF is the
+    bigger share per byte.
+
+    175 KB of HTML on the deployed site, uncompressed, where gzip makes it
+    19 KB. Turtle is worse per byte -- repetitive text, and the derived VoID for
+    one endpoint is 34 KB of it -- which is why the middleware keys on the
+    REQUEST's Accept-Encoding rather than on a list of content types. A rule
+    naming text/html would have left every machine-readable representation this
+    service negotiates uncompressed, and that is the half consumers fetch in
+    bulk.
+    """
+    client = client_for(store_registry_sample)
+    for accept in ("text/html", "text/turtle"):
+        plain = client.get("/", headers={"accept": accept})
+        zipped = client.get("/", headers={"accept": accept, "accept-encoding": "gzip"})
+        assert plain.status_code == zipped.status_code == 200, accept
+        assert plain.headers["content-type"].startswith(accept.split(";")[0])
+        assert zipped.headers.get("content-encoding") == "gzip", (accept, dict(zipped.headers))
+        sent = int(zipped.headers["content-length"])
+        assert sent < len(plain.content) / 2, f"{accept}: {sent} of {len(plain.content)}"
+        # The client decodes transparently, so both hand back the same
+        # document. Compared as TRIPLES for the RDF, never as bytes: CONSTRUCT
+        # solution order is unspecified, so two identical requests serialise
+        # the same graph in different orders. Asserting byte equality here
+        # passed alone and failed in the full suite, which is the shape of a
+        # test that is measuring the wrong thing.
+        if accept == "text/turtle":
+            shape = lambda body: sorted(
+                str(t) for t in parse(body.encode(), format=RdfFormat.TURTLE)
+            )
+            assert shape(plain.text) == shape(zipped.text), accept
+        else:
+            assert plain.text == zipped.text, accept
+
+
 def test_no_title_is_published_as_rdf(client_for, store_registry_sample):
     """A catalogue's title is not a measurement and does not enter the graph."""
     rdf = client_for(store_registry_sample).get(
