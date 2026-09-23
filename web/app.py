@@ -2060,6 +2060,42 @@ def _yields_measurement(metric: str) -> bool:
     return METRIC_DOCS.get(name, {}).get("yields_measurement", True)
 
 
+# The metrics the row chips leave out, at the owner's request on 2026-09-23.
+# Their abbreviations were TC, GC, CC and VD.
+#
+# NOT REMOVED FROM THE MATRIX, which is the other thing `_index_metrics` feeds:
+# the grid under the search box still counts all eleven, because a count of
+# what this service has and has not measured is exactly what that panel is for.
+# What came off is the per-row chip, where eleven columns of two letters is a
+# lot of width for four that currently say the same thing on every row.
+#
+# WHY THEY SAY THE SAME THING is worth writing down, because it is a temporary
+# state and this list should be revisited when it ends. All four are declined
+# on every hourly sweep -- the first three on `cadence`, since they moved to a
+# daily cadence on 2026-09-18, and `vocabulary-described` on `cost-ceiling`,
+# since only the exhaustive pass runs it. The nightly pass measures all four,
+# and once the per-metric current rule lands they will carry real readings
+# again rather than a column of "not measured".
+CHIPLESS_METRICS = frozenset(
+    {
+        _METRIC_PREFIX + "triple-count",
+        _METRIC_PREFIX + "graph-count",
+        _METRIC_PREFIX + "class-count",
+        _METRIC_PREFIX + "vocabulary-described",
+    }
+)
+
+
+# MARKED, NOT DROPPED, and the difference is load-bearing. `_metric_state_matrix`
+# counts out of `row["cells"]`, so a row built without these four would leave the
+# grid reading zero for them -- a panel whose whole job is to say what has and
+# has not been measured, silently reporting that nothing was. The cells are all
+# built; the template renders only the ones marked.
+def _draws_a_chip(metric: str) -> bool:
+    """Whether a row draws this metric's chip. The matrix counts it either way."""
+    return metric not in CHIPLESS_METRICS
+
+
 def _index_metrics(entries: list[EndpointMeasurements]) -> list[dict]:
     """Every metric any row has a fact for, in metric id order.
 
@@ -2129,6 +2165,7 @@ def _index_chips(entry: EndpointMeasurements, metrics: list[dict]) -> list[dict]
             cells.append(
                 {
                     "present": True,
+                    "chip": _draws_a_chip(metric),
                     "name": column["name"],
                     "abbr": column["abbr"],
                     # The value the store holds, verbatim, including a value
@@ -2153,6 +2190,7 @@ def _index_chips(entry: EndpointMeasurements, metrics: list[dict]) -> list[dict]
             cells.append(
                 {
                     "present": True,
+                    "chip": _draws_a_chip(metric),
                     "name": column["name"],
                     "abbr": column["abbr"],
                     # No verdict at all, which is the point: the run said it did
@@ -2173,7 +2211,7 @@ def _index_chips(entry: EndpointMeasurements, metrics: list[dict]) -> list[dict]
                 }
             )
         else:
-            cells.append({"present": False})
+            cells.append({"present": False, "chip": _draws_a_chip(metric)})
     return cells
 
 
