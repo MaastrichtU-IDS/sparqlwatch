@@ -416,6 +416,8 @@
           <tbody>
           {% for row in rows %}
           <tr class="metric-row" data-metric="{{ row.metric }}"
+              {%- if row.measured_at %} data-measured-at="{{ row.measured_at }}"{% endif %}
+              {%- if row.older_sweep %} data-older-sweep="true"{% endif %}
               {%- if row.declined %} data-declined="{{ row.reason }}"
               {%- else %} data-verdict="{{ row.verdict }}"{% endif %}>
             <td><span class="chip {{ row.css_class }}" aria-hidden="true"></span></td>
@@ -424,7 +426,18 @@
                row parser reads a row's named cells by class and asserts each
                appears once; a detail span inside the state span swallows the
                state's own text and the state cell then never closes. #}
-            <td class="v-cell tok-{{ row.token }}"><span class="m-state">{{ row.state_text }}</span>{%- if row.detail %} <span class="m-detail">{{ row.detail }}</span>{% endif %}</td>
+            {# The row's own sweep, said only where it is not the one the header names.
+               Since 2026-09-23 a run that declines a metric no longer erases an
+               older reading of it, so these rows can come from several sweeps, and
+               a page that dated them all by its own header would misdate every row
+               the newest sweep did not retake. On this site an absent qualifier is
+               a positive claim, so the row that differs has to say so.
+
+               `row_measured_by_text` is the index's own words for this, reused
+               rather than reworded: the listing has marked a row whose facts are
+               not the newest sweep's with "measured by the sweep at" since
+               2026-09-16, and one fact deserves one phrasing across two pages. #}
+            <td class="v-cell tok-{{ row.token }}"><span class="m-state">{{ row.state_text }}</span>{%- if row.detail %} <span class="m-detail">{{ row.detail }}</span>{% endif %}{%- if row.older_sweep %} <span class="m-sweep">{{ row_measured_by_text }} {{ row.measured_at }}</span>{% endif %}</td>
             <td class="num" data-declared>{% if row.declared_count is not none %}{{ "{:,}".format(row.declared_count) }}{% endif %}</td>
             <td class="num" data-counted>{% if row.observed_count is not none %}{{ "{:,}".format(row.observed_count) }}{% endif %}</td>
             <td class="num m-time">{% if row.elapsed_ms is not none %}{{ row.elapsed_ms }}{% endif %}</td>

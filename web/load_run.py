@@ -336,6 +336,27 @@ SELECT (MAX(?instant) AS ?newest) WHERE {
 # same three shapes endpoint_measurements.rq reads, plus sw:declarationsRead so
 # that fact is never left in current without a pointer to the run that stated
 # it.
+# Which (endpoint, metric) pairs a run MEASURED, and which it DECLINED. Two
+# queries and not one, because the two are not interchangeable under the rule
+# _REPLACE_MEASURED states: a measurement supersedes an older decline, and a
+# decline supersedes only an older decline. A rebuild therefore has to know
+# which kind of fact each run holds for each pair, not merely that it holds one.
+#
+# Keyed on the PAIR for the same reason _SAMPLED_PAIRS is: since the cadence
+# split a single run routinely measures some of an endpoint's metrics and
+# declines the rest, so "the newest run for this endpoint" is not one run.
+_MEASURED_PAIRS = _PREAMBLE + """
+SELECT DISTINCT ?endpoint ?metric WHERE {
+  GRAPH run: { ?thing dqv:computedOn ?endpoint ; dqv:isMeasurementOf ?metric }
+}
+"""
+
+_DECLINED_PAIRS = _PREAMBLE + """
+SELECT DISTINCT ?endpoint ?metric WHERE {
+  GRAPH run: { ?thing sw:notMeasuredOn ?endpoint ; sw:notMeasuredMetric ?metric }
+}
+"""
+
 _MEASURED_ENDPOINTS = _PREAMBLE + """
 SELECT DISTINCT ?endpoint WHERE {
   GRAPH run: {
@@ -459,27 +480,136 @@ SELECT ?endpoint ?metric WHERE {
 # INSERT DATA {...} ; PREFIX b: <...> INSERT DATA {...}" is refused with
 # "expected one of CREATE, DELETE, INSERT". So the two units below are bodies
 # and _update_text prepends one prologue for however many are combined.
+# PER (ENDPOINT, METRIC), not per endpoint, since 2026-09-23. This used to
+# clear every measurement and every decline the endpoint had and re-insert only
+# this run's, so a run that DECLINED a metric deleted the reading an earlier run
+# had taken of it and put nothing in its place.
+#
+# That was tolerable while every sweep asked every metric. The cost/cadence
+# split of 2026-09-18 ended that: five metrics moved to a daily cadence, so each
+# hourly sweep declines them with reason `cadence` and each hourly sweep was
+# deleting the nightly profile pass's real readings. Measured on dev
+# 2026-09-21: six of ten rows on an endpoint page read "not measured", and every
+# one of them had been measured hours earlier.
+#
+# THE RULE IS THE SAMPLE POINTER'S RULE, which has always been right and is two
+# statements further down this file: `sw:sampleRunIs` names the newest run that
+# actually PUBLISHED a sample, and a later run that sampled nothing has never
+# been able to erase it. Measurements now work the same way. Per metric:
+#
+#   a measurement supersedes an older measurement AND an older decline
+#   a decline supersedes an older decline, and nothing else
+#
+# so `current` holds, for each (endpoint, metric), the newest real measurement
+# if one was ever taken, and a decline only where none was.
+#
+# WHAT THIS COSTS, stated because it is the reason the readers changed with it:
+# an endpoint's rows no longer all come from one run, so nothing may date them
+# by the endpoint's `sw:currentRun` any more. They do not need a new pointer to
+# be dated -- every measurement node carries its own prov:wasGeneratedBy and is
+# copied into current verbatim, so each row can name its own sweep and the read
+# queries do exactly that.
 _REPLACE_MEASURED = """
-DELETE { GRAPH sw:current { ?thing ?p ?o } }
-WHERE  { GRAPH sw:current { ?thing dqv:computedOn endpoint: . ?thing ?p ?o } } ;
-DELETE { GRAPH sw:current { ?thing ?p ?o } }
-WHERE  { GRAPH sw:current { ?thing sw:notMeasuredOn endpoint: . ?thing ?p ?o } } ;
-DELETE { GRAPH sw:current { ?thing ?p ?o } }
+DELETE { GRAPH sw:current { ?old ?p ?o } }
 WHERE  {
-  GRAPH run: { ?thing dqv:computedOn endpoint: }
-  GRAPH sw:current { ?thing ?p ?o }
+  GRAPH run: { ?new dqv:computedOn endpoint: ; dqv:isMeasurementOf ?metric }
+  GRAPH sw:current {
+    ?old dqv:computedOn endpoint: ; dqv:isMeasurementOf ?metric .
+    ?old ?p ?o
+  }
 } ;
-DELETE { GRAPH sw:current { ?thing ?p ?o } }
+DELETE { GRAPH sw:current { ?old ?p ?o } }
 WHERE  {
-  GRAPH run: { ?thing sw:notMeasuredOn endpoint: }
-  GRAPH sw:current { ?thing ?p ?o }
+  GRAPH run: { ?new dqv:computedOn endpoint: ; dqv:isMeasurementOf ?metric }
+  GRAPH sw:current {
+    ?old sw:notMeasuredOn endpoint: ; sw:notMeasuredMetric ?metric .
+    ?old ?p ?o
+  }
+} ;
+DELETE { GRAPH sw:current { ?old ?p ?o } }
+WHERE  {
+  GRAPH run: { ?new sw:notMeasuredOn endpoint: ; sw:notMeasuredMetric ?metric }
+  GRAPH sw:current {
+    ?old sw:notMeasuredOn endpoint: ; sw:notMeasuredMetric ?metric .
+    ?old ?p ?o
+  }
 } ;
 DELETE WHERE { GRAPH sw:current { endpoint: sw:declarationsRead ?read } } ;
 DELETE WHERE { GRAPH sw:current { endpoint: sw:currentRun ?run } } ;
 INSERT { GRAPH sw:current { ?thing ?p ?o } }
 WHERE  { GRAPH run: { ?thing dqv:computedOn endpoint: . ?thing ?p ?o } } ;
 INSERT { GRAPH sw:current { ?thing ?p ?o } }
-WHERE  { GRAPH run: { ?thing sw:notMeasuredOn endpoint: . ?thing ?p ?o } } ;
+WHERE  {
+  GRAPH run: {
+    ?thing sw:notMeasuredOn endpoint: ; sw:notMeasuredMetric ?metric .
+    ?thing ?p ?o
+  }
+  FILTER NOT EXISTS {
+    GRAPH sw:current { ?m dqv:computedOn endpoint: ; dqv:isMeasurementOf ?metric }
+  }
+} ;
+INSERT { GRAPH sw:current { endpoint: sw:declarationsRead ?read } }
+WHERE  { GRAPH run: { endpoint: sw:declarationsRead ?read } } ;
+INSERT DATA { GRAPH sw:current { endpoint: sw:currentRun run: } }
+"""
+
+# ONE (endpoint, metric) pair's measurement, written from the run that holds
+# it. The rebuild path uses these; the load path uses _REPLACE_MEASURED, which
+# does the same thing for every pair a run touches in one transactional update.
+#
+# Scoped to the pair and never to the endpoint, so writing one metric cannot
+# disturb another -- the property the sample pointer's comment below states,
+# and the one a rebuild needs in order to reassemble a current graph whose
+# rows come from several runs.
+_REPLACE_PAIR_MEASURED = """
+DELETE { GRAPH sw:current { ?old ?p ?o } }
+WHERE  {
+  GRAPH sw:current {
+    ?old dqv:computedOn endpoint: ; dqv:isMeasurementOf metric: .
+    ?old ?p ?o
+  }
+} ;
+DELETE { GRAPH sw:current { ?old ?p ?o } }
+WHERE  {
+  GRAPH sw:current {
+    ?old sw:notMeasuredOn endpoint: ; sw:notMeasuredMetric metric: .
+    ?old ?p ?o
+  }
+} ;
+INSERT { GRAPH sw:current { ?thing ?p ?o } }
+WHERE  {
+  GRAPH run: {
+    ?thing dqv:computedOn endpoint: ; dqv:isMeasurementOf metric: .
+    ?thing ?p ?o
+  }
+}
+"""
+
+# The same for a pair no run ever measured, where the newest DECLINE is the
+# whole of what is known.
+_REPLACE_PAIR_DECLINED = """
+DELETE { GRAPH sw:current { ?old ?p ?o } }
+WHERE  {
+  GRAPH sw:current {
+    ?old sw:notMeasuredOn endpoint: ; sw:notMeasuredMetric metric: .
+    ?old ?p ?o
+  }
+} ;
+INSERT { GRAPH sw:current { ?thing ?p ?o } }
+WHERE  {
+  GRAPH run: {
+    ?thing sw:notMeasuredOn endpoint: ; sw:notMeasuredMetric metric: .
+    ?thing ?p ?o
+  }
+}
+"""
+
+# An endpoint's run-level facts: which sweep is its newest, and what that sweep
+# read of its description. Separated from the per-pair units above because they
+# are properties of the ENDPOINT and of one run, not of a metric.
+_REPLACE_ENDPOINT_RUN = """
+DELETE WHERE { GRAPH sw:current { endpoint: sw:declarationsRead ?read } } ;
+DELETE WHERE { GRAPH sw:current { endpoint: sw:currentRun ?run } } ;
 INSERT { GRAPH sw:current { endpoint: sw:declarationsRead ?read } }
 WHERE  { GRAPH run: { endpoint: sw:declarationsRead ?read } } ;
 INSERT DATA { GRAPH sw:current { endpoint: sw:currentRun run: } }
@@ -508,6 +638,40 @@ INSERT DATA { GRAPH sw:current {
 # graph: bound to urn:sparqlwatch:current and against a run graph with graph:
 # bound to the run, so the check cannot compare two different shapes and call
 # the difference drift.
+# One (endpoint, metric) pair's facts in one graph. The check compares current
+# against the run graphs pair by pair since 2026-09-23, because current's rows
+# no longer all come from one run: a pair's facts must match the newest run
+# that MEASURED it, or the newest that declined it where none ever did, and a
+# whole-endpoint comparison against a single run reports every row that run did
+# not retake as drift.
+_FACTS_FOR_PAIR = _PREAMBLE + """
+SELECT ?thing ?p ?o WHERE {
+  GRAPH graph: {
+    {
+      ?thing dqv:computedOn endpoint: ; dqv:isMeasurementOf metric: .
+      ?thing ?p ?o
+    }
+    UNION
+    {
+      ?thing sw:notMeasuredOn endpoint: ; sw:notMeasuredMetric metric: .
+      ?thing ?p ?o
+    }
+  }
+}
+"""
+
+# An endpoint's own run-level fact, compared separately from its rows for the
+# same reason they are written separately: it belongs to sw:currentRun's run.
+_DECLARATIONS_READ_FACT = _PREAMBLE + """
+SELECT ?thing ?p ?o WHERE {
+  GRAPH graph: {
+    endpoint: sw:declarationsRead ?o
+    BIND (endpoint: AS ?thing)
+    BIND (sw:declarationsRead AS ?p)
+  }
+}
+"""
+
 _FACTS_FOR_ENDPOINT = _PREAMBLE + """
 SELECT ?thing ?p ?o WHERE {
   GRAPH graph: {
@@ -533,6 +697,22 @@ def _run_sampled_pairs(store: Store, run: str) -> set[tuple[str, str]]:
     return {
         (str(row["endpoint"].value), str(row["metric"].value))
         for row in store.query(_SAMPLED_PAIRS, prefixes={_RUN_PREFIX: run})
+    }
+
+
+def _run_measured_pairs(store: Store, run: str) -> set[tuple[str, str]]:
+    """The (endpoint, metric) pairs ``run`` recorded a real MEASUREMENT for."""
+    return {
+        (str(row["endpoint"].value), str(row["metric"].value))
+        for row in store.query(_MEASURED_PAIRS, prefixes={_RUN_PREFIX: run})
+    }
+
+
+def _run_declined_pairs(store: Store, run: str) -> set[tuple[str, str]]:
+    """The (endpoint, metric) pairs ``run`` recorded a DECLINE for."""
+    return {
+        (str(row["endpoint"].value), str(row["metric"].value))
+        for row in store.query(_DECLINED_PAIRS, prefixes={_RUN_PREFIX: run})
     }
 
 
@@ -879,8 +1059,17 @@ def _run_graphs(store: Store) -> list[tuple[str, str]]:
 
 def _newest_per_endpoint(
     store: Store, runs: list[tuple[str, str]]
-) -> tuple[dict[str, str], dict[str, str]]:
-    """The newest run that measured each endpoint, and that sampled each one.
+) -> tuple[
+    dict[str, str],
+    dict[tuple[str, str], str],
+    dict[tuple[str, str], str],
+    dict[tuple[str, str], str],
+]:
+    """The newest run per endpoint, and per (endpoint, metric) three ways.
+
+    Returns, in order: the newest run that recorded anything for each endpoint;
+    the newest run that MEASURED each (endpoint, metric); the newest that
+    DECLINED each; and the newest that SAMPLED each.
 
     This is the computation the three read queries used to do at query time,
     and moving it here is what this stage is for: over a 30-run store of the
@@ -896,15 +1085,39 @@ def _newest_per_endpoint(
     # Keyed on the PAIR, because a run may sample classes and decline properties
     # and each half then has its own newest run.
     sampled: dict[tuple[str, str], str] = {}
+    # The same, for measurements, since 2026-09-23. `measured` above is still
+    # the newest run that recorded ANYTHING for an endpoint -- it is what
+    # sw:currentRun and sw:declarationsRead are written from -- but it is no
+    # longer what the rows come from. See _REPLACE_MEASURED: a run that declines
+    # a metric no longer erases an older reading of it, so a rebuild that wrote
+    # only each endpoint's newest run would drop every reading that run did not
+    # retake, and would derive a different graph from the load path.
+    measured_pairs: dict[tuple[str, str], str] = {}
+    declined_pairs: dict[tuple[str, str], str] = {}
     instants: dict[str, str] = {}
     for run, instant in runs:
         for endpoint in _run_endpoints(store, run, _MEASURED_ENDPOINTS):
             _keep_newest(measured, instants, endpoint, run, instant, CURRENT_RUN)
+        # The `pointer` argument namespaces the tie-detection key, and these
+        # three dicts are all keyed on (endpoint, metric): passing the bare
+        # metric for each made them share one key, so a run that measured a
+        # pair and a later run that sampled it were compared against each
+        # other's instants and reported as tied. Each kind gets its own space.
+        for endpoint, metric in _run_measured_pairs(store, run):
+            _keep_newest(
+                measured_pairs, instants, (endpoint, metric), run, instant,
+                "measured\n" + metric,
+            )
+        for endpoint, metric in _run_declined_pairs(store, run):
+            _keep_newest(
+                declined_pairs, instants, (endpoint, metric), run, instant,
+                "declined\n" + metric,
+            )
         for endpoint, metric in _run_sampled_pairs(store, run):
             _keep_newest(
                 sampled, instants, (endpoint, metric), run, instant, metric
             )
-    return measured, sampled
+    return measured, measured_pairs, declined_pairs, sampled
 
 
 def _keep_newest(
@@ -950,7 +1163,9 @@ def rebuild_current(store: Store) -> RebuildResult:
     diagnose.
     """
     runs = _run_graphs(store)
-    measured, sampled = _newest_per_endpoint(store, runs)
+    measured, measured_pairs, declined_pairs, sampled = _newest_per_endpoint(
+        store, runs
+    )
 
     if store.contains_named_graph(CURRENT_GRAPH):
         store.remove_graph(CURRENT_GRAPH)
@@ -965,8 +1180,22 @@ def rebuild_current(store: Store) -> RebuildResult:
     # repaired by running it again.
     for endpoint in sorted(measured):
         store.update(
-            _update_text(_REPLACE_MEASURED),
+            _update_text(_REPLACE_ENDPOINT_RUN),
             prefixes=_endpoint_run(endpoint, measured[endpoint]),
+        )
+    for (endpoint, metric), run in sorted(measured_pairs.items()):
+        store.update(
+            _update_text(_REPLACE_PAIR_MEASURED),
+            prefixes=_pair_run(endpoint, metric, run),
+        )
+    # Only where nothing was ever measured: a measurement supersedes a decline,
+    # which is the rule _REPLACE_MEASURED applies on the load path.
+    for (endpoint, metric), run in sorted(declined_pairs.items()):
+        if (endpoint, metric) in measured_pairs:
+            continue
+        store.update(
+            _update_text(_REPLACE_PAIR_DECLINED),
+            prefixes=_pair_run(endpoint, metric, run),
         )
     for (endpoint, metric), run in sorted(sampled.items()):
         store.update(
@@ -1003,7 +1232,9 @@ def check_current(store: Store) -> CheckResult:
     operator running a check, not by a page load.
     """
     runs = _run_graphs(store)
-    measured, sampled = _newest_per_endpoint(store, runs)
+    measured, measured_pairs, declined_pairs, sampled = _newest_per_endpoint(
+        store, runs
+    )
     reasons: dict[str, list[str]] = {}
 
     def note(endpoint: str, reason: str) -> None:
@@ -1030,11 +1261,29 @@ def check_current(store: Store) -> CheckResult:
                     _FACTS_FOR_ENDPOINT,
                     {_ENDPOINT_PREFIX: endpoint, "graph": CURRENT_GRAPH_IRI},
                 )
+                # Assembled pair by pair, each from the run that pair's facts
+                # are supposed to come from, plus the one run-level fact.
                 in_run = _facts(
                     store,
-                    _FACTS_FOR_ENDPOINT,
+                    _DECLARATIONS_READ_FACT,
                     {_ENDPOINT_PREFIX: endpoint, "graph": measured[endpoint]},
                 )
+                for (pair_endpoint, metric), run in measured_pairs.items():
+                    if pair_endpoint != endpoint:
+                        continue
+                    in_run |= _facts(
+                        store,
+                        _FACTS_FOR_PAIR,
+                        _pair_run(endpoint, metric, run) | {"graph": run},
+                    )
+                for (pair_endpoint, metric), run in declined_pairs.items():
+                    if pair_endpoint != endpoint or (endpoint, metric) in measured_pairs:
+                        continue
+                    in_run |= _facts(
+                        store,
+                        _FACTS_FOR_PAIR,
+                        _pair_run(endpoint, metric, run) | {"graph": run},
+                    )
                 missing = in_run - in_current
                 extra = in_current - in_run
                 if missing:

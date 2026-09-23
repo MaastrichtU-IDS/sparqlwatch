@@ -49,6 +49,16 @@ class MetricVerdict:
     declared_count: int | None = None
     observed_count: int | None = None
     elapsed_ms: int | None = None
+    # WHICH SWEEP TOOK THIS READING, since 2026-09-23, and it is not always the
+    # sweep `EndpointMeasurements.generated_at` names. A run that declines a
+    # metric no longer erases an older measurement of it (see load_run.py's
+    # _REPLACE_MEASURED), so an endpoint's rows can come from several sweeps and
+    # each one has to carry its own date or the page misdates it.
+    #
+    # `None` where the row's own run graph has been dropped: the verdict is
+    # still worth showing and the instant is simply not known, which is the one
+    # case endpoint_measurements.rq deliberately does not filter away.
+    measured_at: str | None = None
 
 
 @dataclass
@@ -66,6 +76,11 @@ class DeclinedMetric:
 
     metric: str
     reason: str
+    # The sweep that recorded this decline, on the same terms as
+    # MetricVerdict.measured_at. A decline can outlive the sweep that made it
+    # too: it stays in current until a later run measures the metric or declines
+    # it again.
+    measured_at: str | None = None
 
 
 @dataclass
@@ -379,6 +394,7 @@ def measurements_from_rows(endpoint: str, rows: list) -> EndpointMeasurements:
                 DeclinedMetric(
                     metric=row["metric"].value,
                     reason=row["reason"].value,
+                    measured_at=_value(row, "measuredAt"),
                 )
             )
         else:
@@ -386,6 +402,7 @@ def measurements_from_rows(endpoint: str, rows: list) -> EndpointMeasurements:
                 MetricVerdict(
                     metric=row["metric"].value,
                     verdict=row["verdict"].value,
+                    measured_at=_value(row, "measuredAt"),
                     level=(
                         int(row["level"].value)
                         if row["level"] is not None

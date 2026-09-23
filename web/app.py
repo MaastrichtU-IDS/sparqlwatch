@@ -909,6 +909,26 @@ def _metric_name(metric: str) -> str:
     return metric
 
 
+def _from_an_older_sweep(row, measurements: EndpointMeasurements) -> bool:
+    """Whether this row's reading predates the sweep the page's header names.
+
+    The page dates itself by `measurements.generated_at`, which is the newest
+    run that recorded ANYTHING for this endpoint. A row whose own sweep is that
+    one needs no qualifier. A row from an earlier sweep does, because on this
+    site an absent qualifier is a positive claim: silence would date a reading
+    to a sweep that did not take it.
+
+    False where the row's own instant is unknown -- a run graph that has been
+    dropped -- because "older than the header" is then a claim the store cannot
+    support either way, and the row already carries no date to contradict.
+    """
+    return (
+        row.measured_at is not None
+        and measurements.generated_at is not None
+        and row.measured_at != measurements.generated_at
+    )
+
+
 def _rows(measurements: EndpointMeasurements) -> list[dict]:
     # Verdictless metrics are excluded here, as they are from the index's
     # columns and for the same reason, found by reading a real timeline. A
@@ -960,6 +980,14 @@ def _rows(measurements: EndpointMeasurements) -> list[dict]:
                 "observed_count": verdict.observed_count,
                 "detail": _detail(verdict, recognised),
                 "elapsed_ms": verdict.elapsed_ms,
+                # WHICH SWEEP TOOK THIS READING, and whether that is the sweep
+                # the page's header names. Since 2026-09-23 a run that declines
+                # a metric no longer erases an older measurement of it, so an
+                # endpoint's rows can come from several sweeps -- and a page
+                # that dated them all by its own header would misdate every row
+                # the newest sweep did not retake.
+                "measured_at": verdict.measured_at,
+                "older_sweep": _from_an_older_sweep(verdict, measurements),
             }
         )
     for declined in measurements.declined:
@@ -972,6 +1000,8 @@ def _rows(measurements: EndpointMeasurements) -> list[dict]:
                 "name": _metric_name(declined.metric),
                 "declined": True,
                 "reason": declined.reason,
+                "measured_at": declined.measured_at,
+                "older_sweep": _from_an_older_sweep(declined, measurements),
                 "verdict": None,
                 "slug": state.slug,
                 "css_class": verdict_encoding.css_class(state.slug),
@@ -1632,6 +1662,10 @@ def _page_context(
         "sample": sample,
         "chip_width": verdict_encoding.CHIP_WIDTH_PX,
         "chip_height": verdict_encoding.CHIP_HEIGHT_PX,
+        # The index's own words for a row whose facts are not the newest
+        # sweep's, reused here now that an endpoint's rows can differ from each
+        # other. See the template: one fact, one phrasing, two pages.
+        "row_measured_by_text": ROW_MEASURED_BY_TEXT,
     }
 
 

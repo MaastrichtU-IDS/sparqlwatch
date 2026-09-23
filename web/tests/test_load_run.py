@@ -2009,3 +2009,62 @@ def test_no_currentsamplerun_triple_survives(store_two_metrics):
         )["n"].value
     )
     assert n == 0, f"sw:currentSampleRun is retired: {n} left"
+
+
+def test_a_decline_does_not_erase_the_measurement_it_cannot_replace(tmp_path):
+    """THE RULE Option B introduces, and the one the cadence split made urgent.
+
+    Per (endpoint, metric), current holds the newest real MEASUREMENT if there
+    is one, and a decline only where no measurement has ever been made. This is
+    the sample pointer's rule, applied to measurements: `sw:sampleRunIs` has
+    always named the newest run that actually published a sample, and a later
+    run that sampled nothing has never been able to erase it.
+
+    Measurements had the opposite rule -- a later run replaced an endpoint's
+    facts wholesale -- and the cost/cadence split of 2026-09-18 turned that from
+    a corner case into the steady state. Five metrics moved to a daily cadence,
+    so every hourly sweep declines them with reason `cadence`, and every hourly
+    sweep was deleting the nightly profile pass's real readings. Measured on dev
+    on 2026-09-21: six of ten rows on an endpoint page read "not measured", and
+    every one of them HAD been measured the night before.
+
+    run-with-samples.nq (16:00) measures sw:metric:classes; run-declined.nq
+    (18:00) declines it. Loading them in that order used to leave current with
+    no verdict for classes at all. It must now hold 16:00's.
+    """
+    store = Store(str(tmp_path / "s"))
+    load_run(store, FIXTURE.read_bytes())
+    measured = _verdict_in_current(store, KADASTER, "classes")
+    assert measured, "the fixture must measure classes, or this proves nothing"
+
+    load_run(store, DECLINED_FIXTURE.read_bytes())
+    assert _verdict_in_current(store, KADASTER, "classes") == measured, (
+        "the 18:00 sweep declined classes; declining is not measuring, so it "
+        "may not erase the 16:00 reading it has nothing to put in its place"
+    )
+
+
+def test_a_measurement_still_replaces_an_older_measurement(tmp_path):
+    """The other half, and the one that keeps the rule above from being
+    "current never forgets anything".
+
+    A newer run that actually MEASURED the metric replaces the older reading,
+    exactly as before. Without this, the rule above could be implemented as
+    "never delete" and the page would show the first verdict an endpoint ever
+    got, forever.
+    """
+    store = Store(str(tmp_path / "s"))
+    original = FIXTURE.read_text()
+    assert '"verified"' in original, "the fixture must carry a verdict to change"
+    load_run(store, original.encode())
+    before = _verdict_in_current(store, KADASTER, "classes")
+
+    # The same sweep an hour later, with a different answer for every metric.
+    newer = original.replace("2026-08-22T16:00:00Z", "2026-08-22T17:00:00Z")
+    newer = newer.replace('"verified"', '"indeterminate"')
+    load_run(store, newer.encode())
+
+    after = _verdict_in_current(store, KADASTER, "classes")
+    assert after != before or "verified" not in before, (
+        f"a newer measurement must win: was {before}, still {after}"
+    )
