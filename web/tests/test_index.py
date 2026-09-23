@@ -3478,3 +3478,118 @@ def test_every_verdict_the_encoding_has_maps_to_one_answer_and_the_right_one():
     unrecognised = dot_for("hibernating-2027")
     assert unrecognised["state"] == "unresponsive"
     assert verdict_encoding.UNRECOGNISED.label in unrecognised["title"]
+
+
+def test_four_metrics_are_left_off_the_row_chips_but_not_out_of_the_matrix():
+    """Removed from the chips on 2026-09-23 at the owner's request: TC, GC, CC
+    and VD.
+
+    MARKED, NOT DROPPED. `_metric_state_matrix` counts out of `row["cells"]`, so
+    building a row without these four would leave the grid under the search box
+    reading zero for them -- a panel whose whole job is to say what has and has
+    not been measured, silently reporting that nothing was. Every cell is still
+    built and still counted; only the chip is skipped, by the template, on the
+    `chip` flag this asserts.
+
+    Asserted on the cells rather than on the rendered page because no committed
+    fixture carries these four metrics: run-registry-sample.nq predates them and
+    still holds `classes` and `has-classes`. A page-level test would pass on a
+    build that ignored the flag entirely.
+    """
+    from app import CHIPLESS_METRICS, _index_chips, _METRIC_PREFIX
+    from endpoint_measurements import EndpointMeasurements, MetricVerdict
+
+    names = [
+        "availability", "triple-count", "graph-count",
+        "class-count", "vocabulary-described", "cors",
+    ]
+    metrics = [
+        {"metric": _METRIC_PREFIX + n, "name": n, "abbr": n[:2].upper(),
+         "description": None}
+        for n in names
+    ]
+    entry = EndpointMeasurements(
+        endpoint="https://e.example/sparql",
+        assessed=True,
+        run="urn:sparqlwatch:run:x",
+        generated_at="2026-09-23T00:00:00Z",
+        verdicts=[
+            MetricVerdict(metric=_METRIC_PREFIX + n, verdict="verified")
+            for n in names
+        ],
+    )
+
+    cells = _index_chips(entry, metrics)
+    assert len(cells) == len(names), (
+        "every metric must still get a cell, or the matrix stops counting it"
+    )
+    chipped = {c["name"] for c in cells if c["chip"]}
+    assert chipped == {"availability", "cors"}
+    assert {c["name"] for c in cells if not c["chip"]} == {
+        "triple-count", "graph-count", "class-count", "vocabulary-described"
+    }
+
+    # And the list is the one constant, not a second spelling of it.
+    assert CHIPLESS_METRICS == {
+        _METRIC_PREFIX + n
+        for n in ("triple-count", "graph-count", "class-count", "vocabulary-described")
+    }
+
+
+def test_a_chipless_metric_draws_no_chip_on_the_rendered_page(client_for, tmp_path):
+    """The other half, and the one that catches a template ignoring the flag.
+
+    The test above asserts what `_index_chips` marks; a template that rendered
+    every cell regardless would pass it, and did -- deleting the `{% if
+    cell.chip %}` guard changed no test until this one existed. No committed
+    fixture carries any of the four metrics, so the page could not be asserted
+    against directly.
+
+    So the fixture is made here: run-registry-sample.nq with `metric:classes`
+    renamed to `metric:triple-count`, which is a chipless metric. The rows must
+    draw no chip for it, while the matrix under the search box still counts it.
+    """
+    from pyoxigraph import Store
+    import load_run
+
+    source = (
+        Path(__file__).parent / "fixtures" / "run-registry-sample.nq"
+    ).read_text()
+    assert "metric:classes" in source, "the fixture must carry the metric being renamed"
+    renamed = source.replace("metric:classes", "metric:triple-count")
+
+    store = Store(str(tmp_path / "chipless"))
+    load_run.load_run(store, renamed.encode())
+    load_run.rebuild_current(store)
+
+    body = client_for(store).get("/?facet=all", headers={"accept": "text/html"}).text
+
+    abbreviations = set()
+    for row in re.findall(r'data-endpoint="[^"]*".*?</li>', body, re.S):
+        abbreviations |= set(re.findall(r">([A-Z]{2,3})</span>", row))
+    assert abbreviations, "no chips on the page at all, so this proves nothing"
+    assert "TC" not in abbreviations, (
+        f"triple-count drew a chip; the template is ignoring cell.chip: "
+        f"{sorted(abbreviations)}"
+    )
+
+    # The matrix keeps COUNTING it, which is the whole reason the cell is marked
+    # rather than dropped. Asserted on the count and not on the label: the row
+    # label comes from the metric list and survives even when every cell in the
+    # row is empty, so a build that dropped the cells renders a row of dots and
+    # a name. That is the failure this is for, and checking the name alone
+    # passed on exactly that build.
+    matrix = re.search(r'<table class="matrix">.*?</table>', body, re.S)
+    assert matrix, "the page renders no matrix, so this half proves nothing"
+    row = re.search(
+        r"<tr[^>]*>(?:(?!</tr>).)*?triple-count.*?</tr>", matrix.group(0), re.S
+    )
+    assert row, "the matrix lost the triple-count row entirely"
+    counts = [
+        int(n) for n in re.findall(r">(\d+)<", re.sub(r"<td[^>]*>\s*&#183;", "><", row.group(0)))
+    ]
+    assert counts and max(counts) == REGISTRY_SAMPLE_ENDPOINTS, (
+        f"the matrix counts {counts} for triple-count; every one of the "
+        f"{REGISTRY_SAMPLE_ENDPOINTS} endpoints has a reading for it, so a row "
+        f"of dots means the cells were dropped rather than marked"
+    )
