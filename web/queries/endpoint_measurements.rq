@@ -109,7 +109,7 @@ PREFIX dqv: <http://www.w3.org/ns/dqv#>
 PREFIX prov: <http://www.w3.org/ns/prov#>
 PREFIX sw: <urn:sparqlwatch:>
 
-SELECT ?endpoint ?run ?generatedAt ?metric ?verdict ?level ?elapsedMs ?reason
+SELECT ?endpoint ?run ?generatedAt ?measuredAt ?metric ?verdict ?level ?elapsedMs ?reason
        ?declaredCount ?observedCount
        ?emission ?finalised
        ?newestRun ?newestGeneratedAt ?newestEmission ?newestFinalised
@@ -196,18 +196,50 @@ WHERE {
   # web/load_run.py's --check names it) is dropped exactly as before, so an
   # endpoint whose pointer names a vanished run still reads as not assessed
   # rather than as assessed with no timestamp.
+  # ?runActivity, NOT ?activity, since 2026-09-23, and the rename is the whole
+  # of a bug fix. ?activity is bound per ROW, by the measurement's own
+  # prov:wasGeneratedBy; this block looks an activity up inside the graph of the
+  # run current names for the ENDPOINT. While every row came from that one run
+  # the two were the same node, and sharing one variable was free.
+  #
+  # They are no longer the same. web/load_run.py stopped letting a decline erase
+  # an older measurement, so an endpoint's rows can come from several sweeps --
+  # and a row from an older sweep has its activity in THAT sweep's graph, where
+  # this lookup does not reach. The OPTIONAL then bound nothing, FILTER
+  # (BOUND(?generatedAt)) dropped the row, and the reading vanished from the
+  # page while sitting in the store. store_stale_sample showed it: kadaster's
+  # `classes` came back neither measured nor declined, out of a store that holds
+  # a verdict for it.
   OPTIONAL {
     GRAPH ?run {
-      ?activity a prov:Activity ;
-                prov:generatedAtTime ?generatedAt .
+      ?runActivity a prov:Activity ;
+                   prov:generatedAtTime ?generatedAt .
       # This run's own account of how it was written and whether it finished.
       # Both OPTIONAL, because a run from before stage 1c-b4 carries neither and
       # its verdicts are still the answer to the question that was asked.
-      OPTIONAL { ?activity sw:emission ?emission }
-      OPTIONAL { ?activity sw:finalised ?finalised }
+      OPTIONAL { ?runActivity sw:emission ?emission }
+      OPTIONAL { ?runActivity sw:finalised ?finalised }
     }
   }
   FILTER (BOUND(?generatedAt))
+
+  # THIS ROW'S OWN SWEEP, wherever it lives. ?activity comes from the
+  # measurement itself, so this hop finds the graph holding it rather than
+  # assuming which one that is. ?measuredAt is the instant of the sweep that
+  # took THIS reading: equal to ?generatedAt for every row the current sweep
+  # retook, and older for one it did not.
+  #
+  # No FILTER (BOUND(...)) on it, which is the opposite call from the block
+  # above and deliberately so: a row whose own run graph has been dropped still
+  # has a verdict worth showing, so the reader reports no instant for it rather
+  # than dropping it. Up there, an endpoint with no datable current run reads as
+  # not assessed at all, because nothing about it can be dated.
+  OPTIONAL {
+    GRAPH ?measurementRun {
+      ?activity a prov:Activity ;
+                prov:generatedAtTime ?measuredAt .
+    }
+  }
 
   # The newest run in the store. See this query's header: this is the one
   # selection here that is not scoped to ?endpoint, and the per-endpoint

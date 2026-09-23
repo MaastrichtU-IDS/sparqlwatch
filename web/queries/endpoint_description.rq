@@ -116,20 +116,33 @@ CONSTRUCT {
                sw:notMeasuredMetric ?declinedMetric ;
                sw:notMeasuredReason ?reason ;
                prov:wasGeneratedBy ?declineActivity .
+  # TWO ACTIVITIES PER SOLUTION SINCE 2026-09-23, where there used to be one.
+  # ?activity is the sweep that took THIS row's reading; ?runActivity is the
+  # endpoint's current run. They were the same node until a decline stopped
+  # erasing an older measurement, and the template still paired them: it
+  # emitted the ROW's activity carrying the CURRENT RUN's instant, so a
+  # consumer reading a 16:00 activity was told it ran at 18:00. The RDF said
+  # something the store does not hold, which is the one thing a CONSTRUCT over
+  # this data may never do.
   ?activity a prov:Activity ;
-            prov:generatedAtTime ?generatedAt .
+            prov:generatedAtTime ?measuredAt .
   ?declineActivity a prov:Activity ;
-                   prov:generatedAtTime ?generatedAt .
+                   prov:generatedAtTime ?declineMeasuredAt .
+  ?runActivity a prov:Activity ;
+               prov:generatedAtTime ?generatedAt .
+  ?declineRunActivity a prov:Activity ;
+                      prov:generatedAtTime ?generatedAt .
   # Whether the run these facts came from said how it was written, and whether
-  # it said it finished. Written against both activity variables because
-  # exactly one of them is bound per solution, the same way ?generatedAt is
-  # already shared above, and an unbound subject drops its triple.
-  ?activity sw:emission ?emission ;
-            sw:finalised ?finalised ;
-            sw:completedEndpoint ?completedEndpoint .
-  ?declineActivity sw:emission ?emission ;
-                   sw:finalised ?finalised ;
-                   sw:completedEndpoint ?completedEndpoint .
+  # it said it finished. These belong to the RUN, so they hang off the run's
+  # activity and never off the row's. Written against both run variables
+  # because exactly one of them is bound per solution, and an unbound subject
+  # drops its triple.
+  ?runActivity sw:emission ?emission ;
+               sw:finalised ?finalised ;
+               sw:completedEndpoint ?completedEndpoint .
+  ?declineRunActivity sw:emission ?emission ;
+                      sw:finalised ?finalised ;
+                      sw:completedEndpoint ?completedEndpoint .
   # The newest activity in the store, which is routinely not the one above.
   # Its prov:generatedAtTime is what lets a consumer tell it apart from the
   # activity the measurements hang off, so it is emitted even when the two are
@@ -208,18 +221,39 @@ WHERE {
     # binds, for the measured reason endpoint_measurements.rq's hop states: the
     # plain GRAPH form costs 151 ms at 30 runs against 0.40 ms, and the two
     # together mean the same thing.
+    # ?runActivity, NOT ?activity, since 2026-09-23. ?activity is bound per
+    # MEASUREMENT by its own prov:wasGeneratedBy; this hop looks an activity up
+    # inside the graph of the run current names for the ENDPOINT. Those were the
+    # same node while every row came from one run, and stopped being so when
+    # load_run.py stopped letting a decline erase an older measurement.
+    #
+    # Sharing one variable made this branch bind nothing for a row from an older
+    # sweep, and the FILTER (BOUND(?generatedAt)) below then dropped it: the HTML
+    # showed a verdict the RDF did not carry, for ONE URL. The golden capture is
+    # what surfaced it -- seven stores' descriptions each lost five triples,
+    # which is the decline leaving and the measurement never arriving. The
+    # decline branch below is renamed on the same day for the same reason.
     OPTIONAL {
       GRAPH ?run {
-        ?activity a prov:Activity ;
+        ?runActivity a prov:Activity ;
                   prov:generatedAtTime ?generatedAt .
         # OPTIONAL because a run captured before stage 1c-b4 carries none of the
         # three, and its measurements are still this endpoint's answer.
-        OPTIONAL { ?activity sw:emission ?emission }
-        OPTIONAL { ?activity sw:finalised ?finalised }
+        OPTIONAL { ?runActivity sw:emission ?emission }
+        OPTIONAL { ?runActivity sw:finalised ?finalised }
         OPTIONAL {
-          ?activity sw:completedEndpoint ?endpoint .
+          ?runActivity sw:completedEndpoint ?endpoint .
           BIND (?endpoint AS ?completedEndpoint)
         }
+      }
+    }
+    # THIS ROW'S OWN SWEEP, wherever it lives -- the RDF's half of the same
+    # fact the HTML shows as "measured by the sweep at". No FILTER: a row whose
+    # run graph has been dropped keeps its verdict and simply carries no date.
+    OPTIONAL {
+      GRAPH ?measurementRun {
+        ?activity a prov:Activity ;
+                  prov:generatedAtTime ?measuredAt .
       }
     }
     FILTER (BOUND(?generatedAt))
@@ -241,17 +275,24 @@ WHERE {
     # the same measured reason.
     OPTIONAL {
       GRAPH ?declineRun {
-        ?declineActivity a prov:Activity ;
+        ?declineRunActivity a prov:Activity ;
                          prov:generatedAtTime ?generatedAt .
         # The same three facts as the measurement branch, on this branch's own
         # activity: a run that declined every metric it applied to an endpoint
         # can equally have stopped before finishing.
-        OPTIONAL { ?declineActivity sw:emission ?emission }
-        OPTIONAL { ?declineActivity sw:finalised ?finalised }
+        OPTIONAL { ?declineRunActivity sw:emission ?emission }
+        OPTIONAL { ?declineRunActivity sw:finalised ?finalised }
         OPTIONAL {
-          ?declineActivity sw:completedEndpoint ?endpoint .
+          ?declineRunActivity sw:completedEndpoint ?endpoint .
           BIND (?endpoint AS ?completedEndpoint)
         }
+      }
+    }
+    # The decline's own sweep, on the same terms as the measurement arm's.
+    OPTIONAL {
+      GRAPH ?declineMeasurementRun {
+        ?declineActivity a prov:Activity ;
+                         prov:generatedAtTime ?declineMeasuredAt .
       }
     }
     FILTER (BOUND(?generatedAt))

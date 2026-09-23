@@ -49,7 +49,7 @@ PREFIX dqv: <http://www.w3.org/ns/dqv#>
 PREFIX prov: <http://www.w3.org/ns/prov#>
 PREFIX sw: <urn:sparqlwatch:>
 
-SELECT ?endpoint ?run ?generatedAt ?metric ?verdict ?level ?elapsedMs ?reason
+SELECT ?endpoint ?run ?generatedAt ?measuredAt ?metric ?verdict ?level ?elapsedMs ?reason
        ?declaredCount ?observedCount
        ?emission ?finalised
        ?newestRun ?newestGeneratedAt ?newestEmission ?newestFinalised
@@ -81,6 +81,7 @@ WHERE {
       ?measurement dqv:computedOn ?endpoint ;
                    dqv:isMeasurementOf ?metric ;
                    dqv:value ?verdict ;
+                   prov:wasGeneratedBy ?activity ;
                    a ?measurementType .
       FILTER (?measurementType = dqv:QualityMeasurement)
       # OPTIONAL because only sw:metric:service-description carries a
@@ -103,6 +104,7 @@ WHERE {
       ?notMeasured sw:notMeasuredOn ?endpoint ;
                    sw:notMeasuredMetric ?metric ;
                    sw:notMeasuredReason ?reason ;
+                   prov:wasGeneratedBy ?activity ;
                    a ?notMeasuredType .
       FILTER (?notMeasuredType = sw:NotMeasured)
     }
@@ -116,17 +118,47 @@ WHERE {
   # A solution whose run graph is gone is dropped, so an endpoint whose pointer
   # names a vanished run is left out of the index rather than listed with no
   # sweep behind it. That is drift, and web/load_run.py's --check names it.
+  # ?runActivity, NOT ?activity, since 2026-09-23 -- the third query to need
+  # this rename and the one a test caught rather than a reading. ?activity is
+  # bound per ROW by the measurement's own prov:wasGeneratedBy; this hop looks
+  # an activity up in the graph of the run current names for the ENDPOINT.
+  #
+  # endpoint_measurements.rq and endpoint_description.rq carry the same note.
+  # What is worth recording HERE is how this one surfaced: the index and the
+  # endpoint page read different queries over the same store, and
+  # test_the_index_and_the_endpoint_page_agree_about_dormancy compares them row
+  # for row. Fixing the other two and not this one made the two disagree about
+  # kadaster, which is exactly what that test exists to refuse.
   OPTIONAL {
     GRAPH ?run {
-      ?activity a prov:Activity ;
+      ?runActivity a prov:Activity ;
                 prov:generatedAtTime ?generatedAt .
       # Both OPTIONAL, because a run from before stage 1c-b4 carries neither and
       # its verdicts are still the answer to the question that was asked.
-      OPTIONAL { ?activity sw:emission ?emission }
-      OPTIONAL { ?activity sw:finalised ?finalised }
+      OPTIONAL { ?runActivity sw:emission ?emission }
+      OPTIONAL { ?runActivity sw:finalised ?finalised }
     }
   }
   FILTER (BOUND(?generatedAt))
+
+  # THIS ROW'S OWN SWEEP, wherever it lives, on the same terms as
+  # endpoint_measurements.rq's block of the same name: ?activity comes from the
+  # measurement itself, so this finds the graph holding it rather than assuming
+  # which. No FILTER, so a row whose run graph is gone keeps its verdict and
+  # reports no instant.
+  #
+  # BOTH ARMS ABOVE BIND ?activity for this, and they did not before today --
+  # this query never needed a row's own activity while every row came from one
+  # run. Adding the hop without adding the bindings left ?activity free, and a
+  # free variable here does not fail: it matches every prov:Activity in every
+  # graph, so the index dated kadaster's older `classes` reading to the wrong
+  # sweep. Comparing the index against the endpoint page is what showed it.
+  OPTIONAL {
+    GRAPH ?measurementRun {
+      ?activity a prov:Activity ;
+                prov:generatedAtTime ?measuredAt .
+    }
+  }
 
   # The newest run in the store, which is routinely not ?run. This is the one
   # selection here that is not per-endpoint, and it is the only way to see the

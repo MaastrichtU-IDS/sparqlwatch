@@ -1389,12 +1389,44 @@ def test_an_older_samples_own_sweep_is_named_beside_it(
     assert "Everything below is what one probe sweep observed" not in text
     assert "Every verdict below is what one probe sweep observed" not in text
 
-    # Both facts survive. The decline is still drawn as a decline...
-    declined = row_for(text, M + "classes")
-    assert declined["data-declined"] == "cost-ceiling"
-    this_run = texts_with(text, "data-this-run-sample")
-    assert len(this_run) == 1
-    assert "cost-ceiling" in this_run[0]
+    # Both facts survive -- and since 2026-09-23 the VERDICT survives too, which
+    # is the reversal this assertion records. The row read `not measured
+    # (cost-ceiling)` until then: the 18:00 sweep declined classes and, in
+    # declining, deleted the 16:00 sweep's real reading from the derived graph.
+    # A decline no longer replaces a measurement it has nothing to put in place
+    # of (load_run.py's _REPLACE_MEASURED), so the row now carries 16:00's
+    # verdict and names 16:00 beside it.
+    classes = row_for(text, M + "classes")
+    assert classes["data-verdict"] == "verified"
+    assert classes["data-measured-at"] == SAMPLING_SWEEP
+    assert classes["data-older-sweep"] == "true", (
+        "a row from a sweep the header does not name must say so, or the page "
+        "dates a 16:00 reading to the 18:00 sweep that declined to take it"
+    )
+    assert "data-declined" not in classes
+
+    # The endpoint's own run is still the 18:00 one, and rows that sweep DID
+    # retake carry no qualifier -- the marker is per row, not per page.
+    availability = row_for(text, M + "availability")
+    assert availability["data-measured-at"] == DECLINING_SWEEP
+    assert "data-older-sweep" not in availability
+
+    # AND THE "this run did not look" SENTENCE IS GONE, which is a consequence
+    # worth stating rather than a regression. It fired off
+    # `_declined_classes`, reading the decline out of the endpoint's own facts;
+    # the 18:00 decline is no longer among them, because a measurement stands
+    # for that metric and current holds one fact per (endpoint, metric).
+    #
+    # `_sample`'s second branch takes over, and its own comment is the argument
+    # for why that is right: "the verdict is already on the page in its own row,
+    # and the sample says which sweep took it". Both are asserted above -- the
+    # row reads `verified ... measured by the sweep at 16:00`, and the
+    # provenance line names both sweeps. Nothing the sentence carried is lost;
+    # it is said by the two things it used to sit between.
+    assert texts_with(text, "data-this-run-sample") == [], (
+        "this run is no longer the source of the classes fact, so it has no "
+        "account of it to give"
+    )
     # ...and the older sweep's 59 classes are still published, not discarded.
     assert len(with_attribute(text, "data-term")) == KADASTER_CLASS_COUNT
     assert f"{KADASTER_CLASS_COUNT} terms" in text

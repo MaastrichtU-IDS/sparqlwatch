@@ -552,13 +552,29 @@ def test_the_rdf_dates_the_sample_by_the_sweep_that_took_it(
         )
     }
 
-    declines = subjects_with(
-        graph, NamedNode(SW + "notMeasuredMetric"), NamedNode(M + "classes")
+    # A MEASUREMENT, NOT A DECLINE, since 2026-09-23. The 18:00 sweep declined
+    # classes, and declining no longer erases the 16:00 sweep's reading of it,
+    # so what the document carries for this metric is 16:00's verdict hanging
+    # off 16:00's activity. That is the same pairing this test was written to
+    # protect -- every fact on the activity that observed it -- arriving at the
+    # verdict now that the verdict survives.
+    assert (
+        subjects_with(
+            graph, NamedNode(SW + "notMeasuredMetric"), NamedNode(M + "classes")
+        )
+        == set()
+    ), "a measurement stands for classes, so no decline is published for it"
+
+    measurements = subjects_with(
+        graph, NamedNode(DQV + "isMeasurementOf"), NamedNode(M + "classes")
     )
-    assert len(declines) == 1
+    assert len(measurements) == 1
     assert objects_of(
-        graph, declines.pop(), NamedNode(PROV + "wasGeneratedBy")
-    ) == {NamedNode(ACTIVITY + DECLINING_SWEEP)}
+        graph, measurements.pop(), NamedNode(PROV + "wasGeneratedBy")
+    ) == {NamedNode(ACTIVITY + SAMPLING_SWEEP)}, (
+        "the classes verdict must hang off the sweep that took it, not off the "
+        "sweep that declined to"
+    )
 
     stamps = {
         quad.object.value
@@ -850,16 +866,17 @@ def test_a_rebuild_returns_a_store_whose_run_was_dropped_to_service(
         assert response.status_code == 200, response.text
         # Read back off the page's own attributes rather than out of the store,
         # so this is a claim about what a reader is served. The 18:00 sweep is
-        # the newest that survives the drop, and it declined sw:metric:classes,
-        # so seven verdicts and one decline is its answer and not the 16:00
-        # sweep's eight verdicts.
+        # the newest that survives the drop and it is the run the page names.
         assert DECLINING_SWEEP in response.text, (
             "the newest surviving run is the one shown"
         )
-        assert len(html_verdicts(response)) == 7, html_verdicts(response)
-        assert list(html_declined(response)) == [M + "classes"], html_declined(
-            response
-        )
+        # EIGHT VERDICTS AND NO DECLINE since 2026-09-23, where it was seven and
+        # one. The 18:00 sweep declined sw:metric:classes, and a decline no
+        # longer erases the 16:00 sweep's reading of it, so the page carries
+        # that reading -- dated to 16:00, beside seven rows dated 18:00. The old
+        # numbers recorded the loss this change exists to end.
+        assert len(html_verdicts(response)) == 8, html_verdicts(response)
+        assert list(html_declined(response)) == [], html_declined(response)
     finally:
         client.close()
 
