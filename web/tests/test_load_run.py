@@ -2068,3 +2068,163 @@ def test_a_measurement_still_replaces_an_older_measurement(tmp_path):
     assert after != before or "verified" not in before, (
         f"a newer measurement must win: was {before}, still {after}"
     )
+
+
+def _decline_in_current(store: Store, endpoint: str, metric: str) -> list[str]:
+    """``endpoint``'s decline reason for ``metric``, read out of current alone."""
+    return sorted(
+        row["r"].value
+        for row in store.query(
+            f"""
+            SELECT ?r WHERE {{ GRAPH <{SW}current> {{
+              ?n <{SW}notMeasuredOn> <{endpoint}> ;
+                 <{SW}notMeasuredMetric> <{SW}metric:{metric}> ;
+                 <{SW}notMeasuredReason> ?r .
+            }} }}"""
+        )
+    )
+
+
+def test_a_decline_we_chose_does_not_erase_one_we_observed(tmp_path):
+    """`cost-ceiling` and `cadence` say what THIS SERVICE decided not to ask.
+    Every other reason says what happened when it did ask. The second is a fact
+    about the endpoint; the first is not, so the first may not replace it.
+
+    FOUND BY CHASING A VERDICT. `vocabulary-described` read `indeterminate` for
+    54 of 74 endpoints on 2026-09-24. That verdict means the class enumeration
+    returned nothing readable -- and when it does, the prober records
+    `enumeration-failed` on class-profiles, so 54 of those should have been in
+    the store. There were none. The 03:30 profile pass wrote them and the 04:00
+    hourly sweep replaced every one with `cost-ceiling`, because at that point a
+    decline replaced a decline unconditionally. The evidence for a verdict the
+    page was showing lasted under an hour, and nobody could answer "why
+    indeterminate?" from published data.
+
+    Built rather than read from a fixture: no committed run declines the same
+    metric for two different reasons, which is the shape this is about.
+    """
+    store = Store(str(tmp_path / "s"))
+    observed = _run_declining(
+        "2026-08-22T16:00:00Z", KADASTER, "class-profiles", "enumeration-failed"
+    )
+    policy = _run_declining(
+        "2026-08-22T18:00:00Z", KADASTER, "class-profiles", "cost-ceiling"
+    )
+    load_run(store, observed.encode())
+    assert _decline_in_current(store, KADASTER, "class-profiles") == [
+        "enumeration-failed"
+    ]
+
+    load_run(store, policy.encode())
+    assert _decline_in_current(store, KADASTER, "class-profiles") == [
+        "enumeration-failed"
+    ], (
+        "a later sweep that declined on its own cost ceiling must not erase the "
+        "earlier sweep's record of what happened when it actually looked"
+    )
+
+
+def test_an_observation_does_replace_an_earlier_choice(tmp_path):
+    """The other direction, and the one that keeps the rule above from being
+    "the first decline wins forever".
+
+    A sweep that ASKED and found out something supersedes an earlier sweep that
+    chose not to ask. Without this, an endpoint declined on cost once would
+    carry that reason even after a later pass observed a real failure.
+    """
+    store = Store(str(tmp_path / "s"))
+    load_run(
+        store,
+        _run_declining(
+            "2026-08-22T16:00:00Z", KADASTER, "class-profiles", "cost-ceiling"
+        ).encode(),
+    )
+    load_run(
+        store,
+        _run_declining(
+            "2026-08-22T18:00:00Z", KADASTER, "class-profiles", "enumeration-failed"
+        ).encode(),
+    )
+    assert _decline_in_current(store, KADASTER, "class-profiles") == [
+        "enumeration-failed"
+    ]
+
+
+def test_one_choice_still_replaces_another(tmp_path):
+    """And two policy declines still replace each other, newest winning, so an
+    endpoint's row says which sweep last passed it over."""
+    store = Store(str(tmp_path / "s"))
+    load_run(
+        store,
+        _run_declining(
+            "2026-08-22T16:00:00Z", KADASTER, "class-profiles", "cadence"
+        ).encode(),
+    )
+    load_run(
+        store,
+        _run_declining(
+            "2026-08-22T18:00:00Z", KADASTER, "class-profiles", "cost-ceiling"
+        ).encode(),
+    )
+    assert _decline_in_current(store, KADASTER, "class-profiles") == ["cost-ceiling"]
+
+
+def _run_declining(instant: str, endpoint: str, metric: str, reason: str) -> str:
+    """One run graph whose only content is a decline, in N-Quads.
+
+    Hand-built because the shape it needs -- the same metric declined for two
+    different reasons by two sweeps -- is one no committed fixture has.
+    """
+    run = f"<{SW}run:{instant}>"
+    node = f"<{SW}not-measured:{instant}:{metric}>"
+    activity = f"<{SW}activity:{instant}>"
+    return "\n".join(
+        [
+            f"{activity} <{PROV}generatedAtTime> "
+            f'"{instant}"^^<http://www.w3.org/2001/XMLSchema#dateTime> {run} .',
+            f"{activity} <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <{PROV}Activity> {run} .",
+            f"{node} <{SW}notMeasuredOn> <{endpoint}> {run} .",
+            f"{node} <{SW}notMeasuredMetric> <{SW}metric:{metric}> {run} .",
+            f'{node} <{SW}notMeasuredReason> "{reason}" {run} .',
+            f"{node} <{PROV}wasGeneratedBy> {activity} {run} .",
+            f"{node} <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <{SW}NotMeasured> {run} .",
+            "",
+        ]
+    )
+
+
+def test_a_rebuild_keeps_the_observed_decline_the_load_path_kept(tmp_path):
+    """The repair path must reach the same answer as the load path, on the rule
+    above too.
+
+    `rebuild_current` selects, per (endpoint, metric), the newest run holding a
+    fact -- in Python, not in SPARQL, so the FILTER that protects an observed
+    decline on the load path does not apply to it. Ranked on recency alone it
+    picked the 18:00 `cost-ceiling` over the 16:00 `enumeration-failed`, and
+    rebuilding a store silently rewrote the answer the page had been serving.
+
+    `test_a_rebuild_from_the_run_graphs_alone_reproduces_current` could not see
+    this: no committed fixture declines one metric for two different reasons,
+    so that test compares two derivations that never disagree here.
+    """
+    store = Store(str(tmp_path / "s"))
+    load_run(
+        store,
+        _run_declining(
+            "2026-08-22T16:00:00Z", KADASTER, "class-profiles", "enumeration-failed"
+        ).encode(),
+    )
+    load_run(
+        store,
+        _run_declining(
+            "2026-08-22T18:00:00Z", KADASTER, "class-profiles", "cost-ceiling"
+        ).encode(),
+    )
+    loaded = _decline_in_current(store, KADASTER, "class-profiles")
+    assert loaded == ["enumeration-failed"], loaded
+
+    rebuild_current(store)
+    assert _decline_in_current(store, KADASTER, "class-profiles") == loaded, (
+        "a rebuild derived a different answer from the one the load path "
+        "derived, so repairing a store would change what it reports"
+    )
