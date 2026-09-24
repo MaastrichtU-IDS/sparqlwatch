@@ -117,16 +117,30 @@ CONSTRUCT {
   # Whether the run a row's facts came from said how it was written, and whether
   # it said it finished. Written against both activity variables because exactly
   # one of them is bound per solution, and an unbound subject drops its triple.
+  # TWO ACTIVITIES PER SOLUTION, as in endpoint_description.rq and for the same
+  # reason: ?activity is the sweep that took THIS row's reading, ?runActivity is
+  # the endpoint's current run. They were one node until a decline stopped
+  # erasing an older measurement.
+  #
+  # This file was the FOURTH with the same fault and the last to be found,
+  # because its symptom was not a wrong triple but a missing one: a reading from
+  # an older sweep bound no ?generatedAt here, the FILTER dropped it, and the
+  # index's RDF quietly omitted a verdict the index's HTML was showing. One
+  # resource, two representations, and only one of them told the truth.
   ?activity a prov:Activity ;
-            prov:generatedAtTime ?generatedAt ;
-            sw:emission ?emission ;
-            sw:finalised ?finalised ;
-            sw:completedEndpoint ?completedEndpoint .
+            prov:generatedAtTime ?measuredAt .
   ?declineActivity a prov:Activity ;
-                   prov:generatedAtTime ?generatedAt ;
-                   sw:emission ?emission ;
-                   sw:finalised ?finalised ;
-                   sw:completedEndpoint ?completedEndpoint .
+                   prov:generatedAtTime ?declineMeasuredAt .
+  ?runActivity a prov:Activity ;
+               prov:generatedAtTime ?generatedAt ;
+               sw:emission ?emission ;
+               sw:finalised ?finalised ;
+               sw:completedEndpoint ?completedEndpoint .
+  ?declineRunActivity a prov:Activity ;
+                      prov:generatedAtTime ?generatedAt ;
+                      sw:emission ?emission ;
+                      sw:finalised ?finalised ;
+                      sw:completedEndpoint ?completedEndpoint .
   # The newest activity in the store, with the three run-level facts stage
   # 1c-b4 writes. What is emitted is the INPUTS to "a newer run stopped before
   # it reached this endpoint" and never that conclusion: both conclusions rest
@@ -163,10 +177,16 @@ WHERE {
     }
     OPTIONAL {
       GRAPH ?run {
-        ?activity a prov:Activity ;
+        ?runActivity a prov:Activity ;
                   prov:generatedAtTime ?generatedAt .
-        OPTIONAL { ?activity sw:emission ?emission }
-        OPTIONAL { ?activity sw:finalised ?finalised }
+        OPTIONAL { ?runActivity sw:emission ?emission }
+        OPTIONAL { ?runActivity sw:finalised ?finalised }
+      }
+    }
+    # This row's own sweep, wherever it lives. See endpoint_measurements.rq.
+    OPTIONAL {
+      GRAPH ?measurementRun {
+        ?activity a prov:Activity ; prov:generatedAtTime ?measuredAt .
       }
     }
     FILTER (BOUND(?generatedAt))
@@ -179,7 +199,7 @@ WHERE {
     # silently omit an endpoint from the document rather than mis-state a fact
     # about it, which is harder to notice and no better.
     OPTIONAL {
-      GRAPH ?run { ?activity sw:completedEndpoint ?endpoint }
+      GRAPH ?run { ?runActivity sw:completedEndpoint ?endpoint }
       BIND (?endpoint AS ?completedEndpoint)
     }
   }
@@ -196,10 +216,15 @@ WHERE {
     }
     OPTIONAL {
       GRAPH ?declineRun {
-        ?declineActivity a prov:Activity ;
+        ?declineRunActivity a prov:Activity ;
                          prov:generatedAtTime ?generatedAt .
-        OPTIONAL { ?declineActivity sw:emission ?emission }
-        OPTIONAL { ?declineActivity sw:finalised ?finalised }
+        OPTIONAL { ?declineRunActivity sw:emission ?emission }
+        OPTIONAL { ?declineRunActivity sw:finalised ?finalised }
+      }
+    }
+    OPTIONAL {
+      GRAPH ?declineMeasurementRun {
+        ?declineActivity a prov:Activity ; prov:generatedAtTime ?declineMeasuredAt .
       }
     }
     FILTER (BOUND(?generatedAt))
@@ -212,7 +237,7 @@ WHERE {
     # silently omit an endpoint from the document rather than mis-state a fact
     # about it, which is harder to notice and no better.
     OPTIONAL {
-      GRAPH ?declineRun { ?declineActivity sw:completedEndpoint ?endpoint }
+      GRAPH ?declineRun { ?declineRunActivity sw:completedEndpoint ?endpoint }
       BIND (?endpoint AS ?completedEndpoint)
     }
   }
