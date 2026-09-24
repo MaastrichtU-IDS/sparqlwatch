@@ -1224,6 +1224,33 @@ async fn probe_endpoint(
     // observation says so, and `resolve` reads `indeterminate` rather than
     // claiming the endpoint describes nothing.
     for def in defs.iter().filter(|d| d.kind == ProbeKind::VocabularyDescribed) {
+        // THE PASS THIS METRIC GRADES DID NOT RUN, so there is nothing to
+        // grade and this publishes no verdict.
+        //
+        // Without this it published `indeterminate`, which is the verdict for
+        // "we could not determine it" -- and the reason we could not is that we
+        // deliberately chose not to re-derive it. That is the false negative
+        // this project argues against everywhere else: `declared-but-wrong` is
+        // withheld a few lines up in resolve.rs precisely because a capped,
+        // sampled pass cannot support the harsh reading, and this was making
+        // the harsh reading about ourselves instead.
+        //
+        // Measured on dev 2026-09-24: 54 of 74 endpoints read `indeterminate`
+        // for this metric, every one of them carrying `class-profiles` declined
+        // `unchanged` from the same sweep. None of them had failed at anything.
+        //
+        // A decline instead, with the SAME reason the pass gave, so the two
+        // facts agree about why. The previous real verdict then survives in the
+        // derived graph under the per-metric rule and is shown with its own
+        // date, which is exactly what that rule is for.
+        if !reprofile {
+            acc.not_measured.push(NotMeasured {
+                endpoint: ep.to_string(),
+                metric_id: def.id.clone(),
+                reason: NotMeasuredReason::Unchanged,
+            });
+            continue;
+        }
         // The observation is synthesised rather than fetched. `bindings` is
         // what the pass FOUND; the status is 200 only when a pass actually
         // produced a class list, which is what tells "found nothing" apart

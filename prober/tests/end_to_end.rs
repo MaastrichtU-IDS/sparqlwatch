@@ -4140,3 +4140,101 @@ async fn a_daily_sweep_carries_the_hourly_metrics_too() {
     assert_eq!(run.len(), defs.len());
     assert_eq!(Cadence::default(), Cadence::Daily, "the safe default is the quiet one");
 }
+
+/// THE FALSE NEGATIVE THIS METRIC WAS PUBLISHING, and the reason it took a
+/// reading of the deployed site to notice.
+///
+/// `vocabulary-described` sends no request. It grades what the class profile
+/// pass found, and `resolve` reads `indeterminate` when the pass produced no
+/// readable class list -- correct when the pass ran and failed.
+///
+/// But the pass has a gate before it: `ContentMemory::worth_reprofiling`. An
+/// endpoint whose triple and class counts have not moved since the last pass is
+/// SKIPPED, on purpose, to save up to 200 queries against it. That skip left
+/// `profile_pass_enumerated` false, and this metric then published "we could not
+/// determine it" -- when the reason we could not is that we deliberately chose
+/// not to look.
+///
+/// Measured on dev 2026-09-24: 54 of 74 endpoints read `indeterminate` for this
+/// metric, every one of them carrying `class-profiles` declined `unchanged` from
+/// the same sweep. Not one of them had failed at anything. The verdict was a
+/// statement about our own scheduling, dressed as a finding about the endpoint.
+///
+/// So a skipped pass now declines this metric with the SAME reason the pass
+/// gave, and publishes no verdict at all.
+#[tokio::test]
+async fn a_profile_pass_skipped_as_unchanged_declines_the_content_verdict() {
+    use sparqlwatch_prober::profile::{ContentMemory, LastSeen};
+
+    let server = an_endpoint_describing(&description_naming(&[C1]), &[C1]).await;
+    let url = format!("{}/sparql", server.uri());
+    let defs = load_shipped_metrics();
+    let client =
+        std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
+
+    // A first sweep with no memory profiles the endpoint, so the metric has a
+    // real verdict to lose. Without this the test could pass on a build that
+    // never published the metric at all.
+    let fresh = without_deadlocking(run_sweep(
+        std::slice::from_ref(&url), &defs, &[], &client,
+        Budget::default(), NonZeroUsize::new(1).unwrap(), &Default::default(),
+        &mut common::discarding(),
+    )).await.unwrap();
+    let vd = "vocabulary-described";
+    assert!(
+        fresh.rows.iter().any(|r| r.metric_id == vd),
+        "an unremembered endpoint must be profiled, or this test proves nothing"
+    );
+    assert!(
+        !fresh.not_measured.iter().any(|n| n.metric_id == vd),
+        "and must not decline the metric it just derived"
+    );
+
+    // Now a memory that says nothing has moved: same counts, already profiled.
+    let counted = |id: &str| fresh.rows.iter().find(|r| r.metric_id == id)
+        .and_then(|r| r.observed_count);
+    let mut memory = ContentMemory::new("2026-09-24T09:00:00Z");
+    memory.remember(
+        url.clone(),
+        // `.or(Some(0))` because this mock answers no COUNT query, so the
+        // sweep observes None for both. The gate needs all three remembered
+        // fields present to compare at all, and with the counts unreadable
+        // both now and then it falls through to the age backstop -- which an
+        // hour is well inside. Either way the pass is skipped, which is the
+        // branch this test is about.
+        LastSeen {
+            triples: counted("triple-count").or(Some(0)),
+            classes: counted("class-count").or(Some(0)),
+            profiled_at: Some("2026-09-24T08:00:00Z".to_string()),
+        },
+    );
+
+    let again = without_deadlocking(run_sweep(
+        std::slice::from_ref(&url), &defs, &[], &client,
+        Budget::default(), NonZeroUsize::new(1).unwrap(), &memory,
+        &mut common::discarding(),
+    )).await.unwrap();
+
+    // The pass was skipped, and said so.
+    let profiles_declined = again.not_measured.iter()
+        .find(|n| n.metric_id == "class-profiles")
+        .map(|n| n.reason.slug());
+    assert_eq!(
+        profiles_declined, Some("unchanged"),
+        "the gate must have fired, or this test is measuring the other branch"
+    );
+
+    // AND THE CONTENT VERDICT FOLLOWS IT rather than grading an empty pass.
+    assert!(
+        !again.rows.iter().any(|r| r.metric_id == vd),
+        "a skipped pass must publish no verdict for the metric that grades it; \
+         it published {:?}",
+        again.rows.iter().find(|r| r.metric_id == vd).map(|r| r.verdict),
+    );
+    assert_eq!(
+        again.not_measured.iter().find(|n| n.metric_id == vd).map(|n| n.reason.slug()),
+        Some("unchanged"),
+        "and must decline with the same reason the pass gave, so the two facts \
+         agree about why"
+    );
+}
