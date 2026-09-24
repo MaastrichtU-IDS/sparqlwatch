@@ -1496,3 +1496,62 @@ def test_the_default_facet_narrows_both_representations_of_the_bare_url(
         )
     for listed in default_html:
         assert listed in named, f"the Turtle drops {listed}, which the HTML lists"
+
+
+def test_the_index_rdf_carries_every_verdict_the_index_html_shows(
+    client_for, store_stale_sample
+):
+    """The single-predicate invariant, at the level of FACTS rather than
+    endpoints.
+
+    `test_each_facet_names_the_same_endpoints_in_html_and_in_rdf` and its
+    siblings hold the two representations to the same endpoint SET. That is not
+    enough: index_description.rq dropped a verdict from the document while
+    index.rq went on rendering it, so both representations named kadaster and
+    only one of them said what had been measured. 596 tests passed over it.
+
+    The shape that exposes it is a reading from a sweep that is not the
+    endpoint's newest -- store_stale_sample, where classes was measured at 16:00
+    and the 18:00 sweep declined it. Before 2026-09-24 the reading was erased
+    entirely; now it survives, and this is the assertion that it survives into
+    BOTH documents.
+    """
+    client = client_for(store_stale_sample)
+    url = "/?facet=all"
+
+    import re
+
+    html = client.get(url, headers={"accept": "text/html"}).text
+    # Read off the chips' own title attributes, which name the metric: the
+    # index's row chips carry no data-metric (74 rows times thirteen chips is
+    # where this page draws the line on markup), so the metric is identified the
+    # way test_index.py identifies it.
+    assert "classes" in html, "the HTML must mention the metric being compared"
+    assert re.search(r'data-verdict="[a-z-]+"', html), (
+        "the HTML must show some verdict, or this comparison has no subject"
+    )
+
+    graph = graph_of(client.get(url, headers={"accept": "text/turtle"}))
+    measured = {
+        str(quad.object.value)
+        for quad in graph.quads_for_pattern(
+            None, NamedNode(DQV + "isMeasurementOf"), None
+        )
+    }
+    assert M + "classes" in measured, (
+        "the index's HTML shows a classes verdict and its RDF does not carry "
+        "one: one resource, two representations, and only one telling the truth"
+    )
+
+    # And it is dated by the sweep that took it, not by the endpoint's newest.
+    stamps = {
+        quad.object.value
+        for quad in graph.quads_for_pattern(
+            NamedNode(ACTIVITY + SAMPLING_SWEEP),
+            NamedNode(PROV + "generatedAtTime"),
+            None,
+        )
+    }
+    assert stamps == {SAMPLING_SWEEP}, (
+        f"the 16:00 activity must carry its own instant, got {stamps}"
+    )
