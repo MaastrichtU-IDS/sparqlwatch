@@ -352,10 +352,21 @@ SELECT DISTINCT ?endpoint ?metric WHERE {
 """
 
 _DECLINED_PAIRS = _PREAMBLE + """
-SELECT DISTINCT ?endpoint ?metric WHERE {
-  GRAPH run: { ?thing sw:notMeasuredOn ?endpoint ; sw:notMeasuredMetric ?metric }
+SELECT DISTINCT ?endpoint ?metric ?reason WHERE {
+  GRAPH run: {
+    ?thing sw:notMeasuredOn ?endpoint ;
+           sw:notMeasuredMetric ?metric ;
+           sw:notMeasuredReason ?reason .
+  }
 }
 """
+
+# The two reasons that say what THIS SERVICE chose, as opposed to what it found
+# when it looked. _REPLACE_MEASURED states the rule they exist for: a decline we
+# chose may not erase one we observed. Spelled here as well because the rebuild
+# path has to reach the same answer as the load path, and it selects runs in
+# Python rather than in SPARQL.
+POLICY_DECLINE_REASONS = frozenset({"cost-ceiling", "cadence"})
 
 _MEASURED_ENDPOINTS = _PREAMBLE + """
 SELECT DISTINCT ?endpoint WHERE {
@@ -528,11 +539,31 @@ WHERE  {
 } ;
 DELETE { GRAPH sw:current { ?old ?p ?o } }
 WHERE  {
-  GRAPH run: { ?new sw:notMeasuredOn endpoint: ; sw:notMeasuredMetric ?metric }
+  GRAPH run: {
+    ?new sw:notMeasuredOn endpoint: ;
+         sw:notMeasuredMetric ?metric ;
+         sw:notMeasuredReason ?newReason .
+  }
   GRAPH sw:current {
-    ?old sw:notMeasuredOn endpoint: ; sw:notMeasuredMetric ?metric .
+    ?old sw:notMeasuredOn endpoint: ;
+         sw:notMeasuredMetric ?metric ;
+         sw:notMeasuredReason ?oldReason .
     ?old ?p ?o
   }
+  # A DECLINE WE CHOSE MAY NOT ERASE ONE WE OBSERVED. `cost-ceiling` and
+  # `cadence` say what THIS SERVICE decided not to ask; every other reason says
+  # what happened when it did ask. The second is a fact about the endpoint and
+  # the first is not, so the first waits its turn.
+  #
+  # Found 2026-09-24, chasing why `vocabulary-described` read `indeterminate`
+  # for 54 of 74 endpoints. That verdict means the class enumeration returned
+  # nothing readable, and when it does the prober records `enumeration-failed`
+  # on class-profiles -- so 54 of those should have been in the store. There
+  # were none: the 03:30 profile pass wrote them and the 04:00 hourly sweep
+  # replaced every one with `cost-ceiling`, because a decline replaced a
+  # decline. The evidence for a verdict the page was showing had a lifetime of
+  # under an hour.
+  FILTER (!(?newReason IN ("cost-ceiling", "cadence")) || ?oldReason IN ("cost-ceiling", "cadence"))
 } ;
 DELETE WHERE { GRAPH sw:current { endpoint: sw:declarationsRead ?read } } ;
 DELETE WHERE { GRAPH sw:current { endpoint: sw:currentRun ?run } } ;
@@ -546,6 +577,13 @@ WHERE  {
   }
   FILTER NOT EXISTS {
     GRAPH sw:current { ?m dqv:computedOn endpoint: ; dqv:isMeasurementOf ?metric }
+  }
+  # Nor where a decline still stands for this metric. The delete above removed
+  # every decline this one is allowed to replace, so anything left is an
+  # observation this one may not: inserting beside it would leave the metric
+  # with two declines and no way to choose.
+  FILTER NOT EXISTS {
+    GRAPH sw:current { ?d sw:notMeasuredOn endpoint: ; sw:notMeasuredMetric ?metric }
   }
 } ;
 INSERT { GRAPH sw:current { endpoint: sw:declarationsRead ?read } }
@@ -708,10 +746,19 @@ def _run_measured_pairs(store: Store, run: str) -> set[tuple[str, str]]:
     }
 
 
-def _run_declined_pairs(store: Store, run: str) -> set[tuple[str, str]]:
-    """The (endpoint, metric) pairs ``run`` recorded a DECLINE for."""
+def _run_declined_pairs(store: Store, run: str) -> set[tuple[str, str, str]]:
+    """The (endpoint, metric, reason) triples ``run`` recorded a DECLINE for.
+
+    The reason travels because the rebuild has to tell a decline this service
+    CHOSE from one it OBSERVED, and prefer the second. See
+    POLICY_DECLINE_REASONS.
+    """
     return {
-        (str(row["endpoint"].value), str(row["metric"].value))
+        (
+            str(row["endpoint"].value),
+            str(row["metric"].value),
+            str(row["reason"].value),
+        )
         for row in store.query(_DECLINED_PAIRS, prefixes={_RUN_PREFIX: run})
     }
 
@@ -1093,7 +1140,8 @@ def _newest_per_endpoint(
     # only each endpoint's newest run would drop every reading that run did not
     # retake, and would derive a different graph from the load path.
     measured_pairs: dict[tuple[str, str], str] = {}
-    declined_pairs: dict[tuple[str, str], str] = {}
+    declined_observed: dict[tuple[str, str], str] = {}
+    declined_policy: dict[tuple[str, str], str] = {}
     instants: dict[str, str] = {}
     for run, instant in runs:
         for endpoint in _run_endpoints(store, run, _MEASURED_ENDPOINTS):
@@ -1108,15 +1156,31 @@ def _newest_per_endpoint(
                 measured_pairs, instants, (endpoint, metric), run, instant,
                 "measured\n" + metric,
             )
-        for endpoint, metric in _run_declined_pairs(store, run):
+        for endpoint, metric, reason in _run_declined_pairs(store, run):
+            # TWO BUCKETS, because they do not compete on recency alone. An
+            # observed decline outranks a policy one however much newer the
+            # policy one is, which is the rule _REPLACE_MEASURED applies on the
+            # load path; a rebuild that ranked them together would turn an
+            # `enumeration-failed` back into the `cost-ceiling` that overwrote
+            # it, and the repair path would rewrite the store's answers.
+            chosen = (
+                declined_policy
+                if reason in POLICY_DECLINE_REASONS
+                else declined_observed
+            )
             _keep_newest(
-                declined_pairs, instants, (endpoint, metric), run, instant,
-                "declined\n" + metric,
+                chosen, instants, (endpoint, metric), run, instant,
+                ("policy" if reason in POLICY_DECLINE_REASONS else "observed")
+                + "\n" + metric,
             )
         for endpoint, metric in _run_sampled_pairs(store, run):
             _keep_newest(
                 sampled, instants, (endpoint, metric), run, instant, metric
             )
+    # An observed decline wins outright; a policy one is the answer only where
+    # nothing was ever observed.
+    declined_pairs = dict(declined_policy)
+    declined_pairs.update(declined_observed)
     return measured, measured_pairs, declined_pairs, sampled
 
 
