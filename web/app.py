@@ -53,7 +53,7 @@ from collections import Counter, OrderedDict
 from datetime import date, timedelta
 from functools import lru_cache
 from pathlib import Path
-from urllib.parse import quote, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 from fastapi import Depends, FastAPI, Query, Request, Response
 from starlette.middleware.gzip import GZipMiddleware
@@ -69,6 +69,7 @@ from pyoxigraph import (
 )
 
 import charts
+import sparql_service
 import verdict_encoding
 from endpoint_content import CLASS_SAMPLING_METRICS, EndpointContent, endpoint_content
 from explore_payload import (
@@ -88,7 +89,7 @@ from endpoint_index import endpoint_index as _endpoint_index
 from endpoint_history import EndpointHistory, Reading, endpoint_history
 from fleet import FleetHistory, fleet_history as _fleet_history, fleet_stats
 from endpoint_measurements import EndpointMeasurements, endpoint_measurements
-from load_run import CURRENT_GRAPH, pointers_to_missing_runs
+from load_run import CURRENT_GRAPH, CURRENT_GRAPH_IRI, pointers_to_missing_runs
 from queries import read_query
 from registry_names import Name, display, load_names
 
@@ -156,6 +157,12 @@ VOID_PATH = "/void"
 
 ABOUT_PATH = "/about"
 HISTORY_PATH = "/history"
+
+# The read-only SPARQL endpoint. This service measures other people's
+# endpoints; publishing one of its own is the obvious move and the most
+# dangerous change here, so every guard in front of it lives in
+# sparql_service.py with the measurement that justifies it.
+SPARQL_PATH = "/sparql"
 
 # The tab icon, and the separate monochrome mask a Safari pinned tab uses.
 ICON_PATH = "/icon.svg"
@@ -4963,3 +4970,105 @@ def about_resource(request: Request) -> Response:
             media_type="text/html; charset=utf-8",
         )
     return Response(content=_about_rdf(media_type), media_type=media_type)
+
+
+@app.options(SPARQL_PATH)
+def sparql_preflight() -> Response:
+    """The CORS preflight.
+
+    Present because this service MEASURES `cors-preflight` on other endpoints
+    and reports an endpoint that answers no OPTIONS as failing it. Publishing
+    an endpoint that would fail our own check is not an option.
+    """
+    return Response(status_code=204, headers=sparql_service.CORS)
+
+
+@app.get(SPARQL_PATH)
+@app.post(SPARQL_PATH)
+async def sparql(request: Request, store: Store = Depends(get_store)) -> Response:
+    """SPARQL 1.1 Query over this service's own measurements. Read only.
+
+    Three ways in, as the protocol requires: `?query=` on a GET, a form-encoded
+    POST, and a POST whose body IS the query under
+    `application/sparql-query`. A client that follows the spec should not have
+    to discover which one we happened to implement.
+    """
+    query = request.query_params.get("query")
+    if query is None and request.method == "POST":
+        content_type = request.headers.get("content-type", "").split(";")[0].strip()
+        body = await request.body()
+        if content_type == "application/sparql-query":
+            query = body.decode("utf-8", errors="replace")
+        elif content_type == "application/x-www-form-urlencoded":
+            # Parsed here rather than through request.form(), which pulls in
+            # python-multipart for a multipart encoding the SPARQL protocol
+            # does not define. The protocol names exactly these two POST
+            # bodies, and a dependency earns its place by being needed.
+            fields = parse_qs(body.decode("utf-8", errors="replace"))
+            query = fields.get("query", [None])[0]
+
+    if not query:
+        # No query is not an error: it is a request for the endpoint's own
+        # description, which is what SPARQL 1.1 Service Description is for and
+        # what a client dereferencing this URL expects to find.
+        return Response(
+            content=_service_description(request),
+            media_type="text/turtle; charset=utf-8",
+            headers=sparql_service.CORS,
+        )
+
+    answer = sparql_service.execute(
+        store,
+        query,
+        default_graph=CURRENT_GRAPH,
+        accept=request.headers.get("accept", ""),
+    )
+    headers = dict(sparql_service.CORS)
+    if not answer.complete and answer.status == 200:
+        # A truncated answer says so in the result document AND in a header, so
+        # a client that streams the body past the head still learns of it.
+        headers["X-SPARQLWatch-Incomplete"] = "true"
+    return Response(
+        content=answer.body,
+        media_type=answer.media_type,
+        status_code=answer.status,
+        headers=headers,
+    )
+
+
+def _service_description(request: Request) -> bytes:
+    """SPARQL 1.1 Service Description, served when no query is given.
+
+    Written out rather than generated from the store, because it describes the
+    SERVICE -- what it speaks, what it will return, what it will not do -- and
+    none of that is a fact the store holds. The limits are named with this
+    project's own predicates: SPARQL Service Description has no vocabulary for
+    a row cap or a deadline, and inventing a meaning for one of its terms would
+    be worse than a clearly-local predicate a reader can look up.
+    """
+    here = str(request.url).split("?")[0]
+    sd = "http://www.w3.org/ns/sparql-service-description#"
+    return f"""@prefix sd: <{sd}> .
+@prefix void: <http://rdfs.org/ns/void#> .
+@prefix sw: <urn:sparqlwatch:> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+<{here}> a sd:Service ;
+    sd:endpoint <{here}> ;
+    sd:supportedLanguage sd:SPARQL11Query ;
+    sd:resultFormat
+        <http://www.w3.org/ns/formats/SPARQL_Results_JSON> ,
+        <http://www.w3.org/ns/formats/SPARQL_Results_XML> ,
+        <http://www.w3.org/ns/formats/SPARQL_Results_CSV> ,
+        <http://www.w3.org/ns/formats/SPARQL_Results_TSV> ,
+        <http://www.w3.org/ns/formats/Turtle> ,
+        <http://www.w3.org/ns/formats/N-Triples> ;
+    sd:defaultDataset [
+        a sd:Dataset ;
+        sd:defaultGraph [ a sd:Graph ; sd:name <{CURRENT_GRAPH_IRI}> ]
+    ] ;
+    sw:queryTimeoutSeconds "{sparql_service.TIMEOUT_SECONDS:g}"^^xsd:decimal ;
+    sw:maxResultRows "{sparql_service.MAX_ROWS}"^^xsd:integer ;
+    sw:maxQueryBytes "{sparql_service.MAX_QUERY_BYTES}"^^xsd:integer ;
+    sw:federationAvailable false .
+""".encode("utf-8")
