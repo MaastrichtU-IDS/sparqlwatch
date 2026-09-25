@@ -40,15 +40,32 @@ half-written one that parses as neither.
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import json
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # Beside the store directory rather than inside it. Inside, it would be a
 # stray file in a RocksDB directory, where every other name belongs to RocksDB
 # and a future version is entitled to sweep what it does not recognise.
 MANIFEST_SUFFIX = ".loaded.json"
+
+# HOW OFTEN THE STORE IS COMPACTED, and why it is not every restart.
+#
+# Nothing compacts an Oxigraph store on its own here: the init container exits
+# the moment loading finishes, so RocksDB's background compaction never gets to
+# run, and the store sits at its post-write size. Measured 2026-09-25: 1,292
+# bytes per quad uncompacted against 317 compacted, a factor of four, which is
+# the difference between filling 20Gi in five months and in seventeen.
+#
+# But compaction is not free and it happens on the RESTART path, which is
+# downtime -- ~2.5s on a 35 MiB store, so ~30s on the deployed one. Paying that
+# every hour costs twelve minutes of downtime a day to avoid a day's worth of
+# slack, which is about 110 MB against a 20Gi volume. Once a day is the trade
+# that takes the space win and leaves the downtime where it was.
+OPTIMIZE_EVERY = timedelta(days=1)
 
 # Bumped if the meaning of an entry ever changes. An unrecognised version is
 # treated as no manifest at all, which costs one full rebuild and is always
@@ -63,6 +80,25 @@ def manifest_path(store_path: str | Path) -> Path:
 
 def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+# A gzip member starts with these two bytes. Sniffed rather than trusted to the
+# filename, because the question being asked is "are these bytes compressed",
+# and a `.nq` that is in fact gzipped should load rather than fail on a parse
+# error thirty lines into a binary blob.
+GZIP_MAGIC = b"\x1f\x8b"
+
+
+def decompress(data: bytes) -> bytes:
+    """The run's N-Quads, whether or not the file on disk was compressed.
+
+    Run files are ~96% redundant -- 65% of a run is its subject and graph IRIs
+    written out longhand, because N-Quads has no prefixes -- so they gzip to
+    about 4%. The digest above is taken over the DECOMPRESSED bytes, so a run
+    keeps its identity across being compressed: compressing the archive must
+    not look like every run changing at once.
+    """
+    return gzip.decompress(data) if data[:2] == GZIP_MAGIC else data
 
 
 def read(store_path: str | Path) -> dict[str, str]:
@@ -86,12 +122,51 @@ def read(store_path: str | Path) -> dict[str, str]:
     return {k: v for k, v in files.items() if isinstance(k, str) and isinstance(v, str)}
 
 
-def write(store_path: str | Path, files: dict[str, str]) -> None:
+def optimized_at(store_path: str | Path) -> datetime | None:
+    """When the store was last compacted, as this manifest records it."""
+    path = manifest_path(store_path)
+    try:
+        raw = json.loads(path.read_text())
+        return datetime.fromisoformat(raw["optimized"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def due_for_optimize(store_path: str | Path, now: datetime | None = None) -> bool:
+    """Whether a compaction is owed.
+
+    An unreadable or missing timestamp means yes, for the same reason an
+    unreadable manifest means "nothing is loaded": the cost of being wrong that
+    way is one slow start, and the cost of the other way is a store that
+    silently never compacts again.
+    """
+    last = optimized_at(store_path)
+    if last is None:
+        return True
+    now = now or datetime.now(timezone.utc)
+    if last.tzinfo is None:
+        last = last.replace(tzinfo=timezone.utc)
+    # A timestamp in the future is a clock that moved backwards, not a
+    # compaction that has not happened yet. Treated as due, so a bad clock
+    # cannot switch compaction off until it catches up.
+    return not (timedelta(0) <= now - last < OPTIMIZE_EVERY)
+
+
+def write(
+    store_path: str | Path, files: dict[str, str], optimized: datetime | None = None
+) -> None:
     """Replace the manifest atomically."""
     path = manifest_path(store_path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    body: dict = {"version": VERSION, "files": files}
+    # Carried forward when this write is not itself recording a compaction, so
+    # an ordinary hourly load does not erase the clock and make every restart
+    # think a compaction is owed.
+    keep = optimized or optimized_at(store_path)
+    if keep is not None:
+        body["optimized"] = keep.isoformat()
     temp = path.with_name(path.name + ".tmp")
-    temp.write_text(json.dumps({"version": VERSION, "files": files}, indent=1, sort_keys=True))
+    temp.write_text(json.dumps(body, indent=1, sort_keys=True))
     # flush to disk before the rename, so a power loss cannot leave the rename
     # visible while the bytes behind it are not.
     with open(temp, "rb") as handle:
@@ -99,18 +174,30 @@ def write(store_path: str | Path, files: dict[str, str]) -> None:
     temp.replace(path)
 
 
+def key_for(path: str | Path) -> str:
+    """The manifest key for a run file: its name, without any `.gz`.
+
+    COMPRESSING THE ARCHIVE MUST NOT LOOK LIKE NEW RUNS. `run-X.nq` becoming
+    `run-X.nq.gz` is the same run in a smaller box, and a key that included the
+    suffix would make the whole archive load again on the restart after it was
+    compressed -- which is precisely the full rebuild this module exists to
+    stop. The digest is taken over the decompressed bytes for the same reason;
+    together they make compression invisible here.
+    """
+    name = Path(path).name
+    return name[:-3] if name.endswith(".gz") else name
+
+
 def partition(
     run_paths: list[str], contents: list[bytes], loaded: dict[str, str]
 ) -> tuple[list[int], list[int]]:
     """Split the run files into (skip, load) index lists.
 
-    A file is skipped only when the manifest records THIS path with THIS
-    file's digest. A path whose bytes have changed is loaded again, which is
-    what makes a re-run of one instant reach the store instead of being
-    silently dropped.
+    A file is skipped only when the manifest records THIS run with THESE
+    contents. Bytes that have changed are loaded again, which is what makes a
+    re-run of one instant reach the store instead of being silently dropped.
     """
     skip, load = [], []
     for i, (path, data) in enumerate(zip(run_paths, contents)):
-        key = str(Path(path).name)
-        (skip if loaded.get(key) == digest(data) else load).append(i)
+        (skip if loaded.get(key_for(path)) == digest(data) else load).append(i)
     return skip, load

@@ -212,7 +212,7 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
 
@@ -2070,7 +2070,12 @@ def main(argv: list[str] | None = None) -> int:
     # existed before this invocation.
     contents = []
     for path in run_paths:
-        data = Path(path).read_bytes()
+        # Decompressed before anything looks at it, so every path below --
+        # validation, the digest the manifest records, the load itself -- sees
+        # the same bytes whether or not the archive has been compressed. A run
+        # must keep its identity across compression, or compressing the archive
+        # would read as every run changing at once.
+        data = loaded_manifest.decompress(Path(path).read_bytes())
         _parsed_graphs(data)
         contents.append(data)
 
@@ -2111,7 +2116,7 @@ def main(argv: list[str] | None = None) -> int:
             # RECORDED AFTER THE LOAD, one file at a time. A manifest naming a
             # file the store does not hold would skip that run forever and say
             # nothing, so the entry never runs ahead of the fact it asserts.
-            manifest[Path(path).name] = loaded_manifest.digest(data)
+            manifest[loaded_manifest.key_for(path)] = loaded_manifest.digest(data)
             loaded_manifest.write(args[0], manifest)
         # Reported from the result of the load, not from the validation pass
         # above, which parses every file a second time: one file, one line
@@ -2163,6 +2168,21 @@ def main(argv: list[str] | None = None) -> int:
             # left it in a log nobody reads.
             drifted = True
             print(f"{path}: {_drift_advice(result.drifted, args[0])}", file=sys.stderr)
+
+    if skip_loaded and loaded_manifest.due_for_optimize(args[0]):
+        # ONLY UNDER --skip-loaded, which is the deployment's restart path and
+        # the only caller that owns the store's long-term shape. A person
+        # loading one run by hand should not be made to wait on a full
+        # compaction of somebody else's store.
+        #
+        # RocksDB does not compact on its own here: this process exits as soon
+        # as the load finishes, so its background threads never get the chance.
+        # Without this the store keeps its post-write size -- measured at four
+        # times the compacted one.
+        started = datetime.now(timezone.utc)
+        store.optimize()
+        print(f"compacted the store in {(datetime.now(timezone.utc) - started).total_seconds():.1f}s")
+        loaded_manifest.write(args[0], manifest, optimized=started)
     return 1 if drifted else 0
 
 
