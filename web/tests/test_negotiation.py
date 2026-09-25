@@ -1555,3 +1555,59 @@ def test_the_index_rdf_carries_every_verdict_the_index_html_shows(
     assert stamps == {SAMPLING_SWEEP}, (
         f"the 16:00 activity must carry its own instant, got {stamps}"
     )
+
+
+def test_a_dormant_endpoint_publishes_when_it_was_last_probed(
+    client_for, store_dormant_newest
+):
+    """`sw:lastProbed`, added 2026-09-25 beside `sw:dormantSince`.
+
+    `dormantSince` says when this service STOPPED asking an endpoint. On its own
+    that leaves the question a dormant endpoint's operator actually has --
+    "when will you ask again?" -- unanswerable from the graph, because the
+    answer is the last probe plus the dormant cadence and only the cadence was
+    published (/about states it).
+
+    It took a privileged one-off pod to read that instant out of the prober's
+    state file on 2026-09-24, to answer whether sixteen relegations were
+    correct. They were. But the reading should not have needed cluster access,
+    and this is the half that was missing.
+
+    THE QUAD IS INJECTED HERE because every committed fixture predates the
+    predicate. Asserting against them would pass on a build that emits nothing:
+    the CONSTRUCT's OPTIONAL simply binds nothing and the document is silent
+    either way, which is exactly how a widening gets shipped untested.
+    """
+    from pyoxigraph import Quad, NamedNode as NN, Literal as Lit
+
+    run = NN(SW + "run:" + DORMANT_SWEEP)
+    probed = "2026-08-22T18:00:00Z"
+    store_dormant_newest.add(
+        Quad(
+            NN(KADASTER),
+            NN(SW + "lastProbed"),
+            Lit(probed, datatype=NN("http://www.w3.org/2001/XMLSchema#dateTime")),
+            run,
+        )
+    )
+
+    graph = graph_of(
+        get(client_for(store_dormant_newest), KADASTER, accept="text/turtle")
+    )
+    published = {
+        quad.object.value
+        for quad in graph.quads_for_pattern(
+            NN(KADASTER), NN(SW + "lastProbed"), None
+        )
+    }
+    assert published == {probed}, (
+        f"a dormant endpoint's document must say when it was last probed, got "
+        f"{published}"
+    )
+
+    # And the fact it sits beside is still there, so this is a widening rather
+    # than a replacement.
+    assert {
+        q.object.value
+        for q in graph.quads_for_pattern(NN(KADASTER), NN(SW + "dormantSince"), None)
+    }, "dormantSince must survive alongside it"

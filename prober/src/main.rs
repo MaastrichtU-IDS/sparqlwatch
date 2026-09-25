@@ -563,6 +563,7 @@ async fn main() -> anyhow::Result<()> {
         .map(|skipped| DormancyFact {
             endpoint: skipped.url.clone(),
             dormant_since: skipped.dormant_since.clone(),
+            last_probed: skipped.last_probed.clone(),
             reason: skipped.reason,
         })
         .collect();

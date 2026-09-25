@@ -165,8 +165,14 @@ CONSTRUCT {
   # keeps is that the RDF must never be able to claim LESS than the HTML, not
   # that it must claim exactly as much. The document already carries more than
   # the page in the same way for the run-level facts.
+  # sw:lastProbed joins it on 2026-09-25, on the same argument. It is when a
+  # sweep last actually asked this endpoint anything, which with the dormant
+  # cadence /about states is what lets a reader answer "when will you ask me
+  # again?" -- a question `dormantSince` alone cannot, since that says only when
+  # this service stopped asking.
   ?newestDormant sw:dormancyReason ?newestDormancyReason ;
-                 sw:dormantSince ?newestDormantSince .
+                 sw:dormantSince ?newestDormantSince ;
+                 sw:lastProbed ?newestLastProbed .
   # No rdf:type triple for the sample, even though every committed run
   # carries one: this branch's WHERE clause matches exactly what
   # endpoint_content.rq matches, so that a sample the HTML representation
@@ -408,6 +414,7 @@ WHERE {
         BIND (?endpoint AS ?newestDormant)
         OPTIONAL { ?endpoint sw:dormancyReason ?newestDormancyReason }
         OPTIONAL { ?endpoint sw:dormantSince ?newestDormantSince }
+        OPTIONAL { ?endpoint sw:lastProbed ?newestLastProbed }
       }
       GRAPH sw:current { ?endpoint sw:currentRun ?dormantEndpointIsKnown }
     }

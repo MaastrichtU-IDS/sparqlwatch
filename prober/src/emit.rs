@@ -599,6 +599,11 @@ pub struct DormancyFact {
     /// entry a hand edit left without one; no quad is then written, because a
     /// zero or an empty literal would be a claim about a date nobody recorded.
     pub dormant_since: Option<String>,
+    /// When a sweep last asked this endpoint anything, from the state and not
+    /// from this run. See `dormancy::Skipped::last_probed` for why it is
+    /// published: `dormant_since` says when we stopped asking, and this is what
+    /// lets a reader work out when we will ask again.
+    pub last_probed: Option<String>,
     pub reason: SkipReason,
 }
 
@@ -621,6 +626,7 @@ const DORMANT_ENDPOINT: &str = "urn:sparqlwatch:dormantEndpoint";
 const DORMANCY_REASON: &str = "urn:sparqlwatch:dormancyReason";
 /// When, typed as `xsd:dateTime`. Omitted when the fact carries no instant.
 const DORMANT_SINCE: &str = "urn:sparqlwatch:dormantSince";
+const LAST_PROBED: &str = "urn:sparqlwatch:lastProbed";
 
 /// One declined endpoint's quads: the naming quad on the activity, the type, the
 /// reason, and the instant when there is one.
@@ -670,9 +676,17 @@ pub fn dormancy_quads(fact: &DormancyFact, run: &RunId) -> anyhow::Result<Vec<Qu
     ];
     if let Some(since) = &fact.dormant_since {
         quads.push(Quad::new(
-            NamedOrBlankNode::NamedNode(endpoint),
+            NamedOrBlankNode::NamedNode(endpoint.clone()),
             nn(DORMANT_SINCE)?,
             Term::Literal(Literal::new_typed_literal(since.as_str(), xsd::DATE_TIME)),
+            graph.clone(),
+        ));
+    }
+    if let Some(probed) = &fact.last_probed {
+        quads.push(Quad::new(
+            NamedOrBlankNode::NamedNode(endpoint),
+            nn(LAST_PROBED)?,
+            Term::Literal(Literal::new_typed_literal(probed.as_str(), xsd::DATE_TIME)),
             graph,
         ));
     }
@@ -2437,6 +2451,7 @@ mod tests {
             &[DormancyFact {
                 endpoint: "https://slow.example/sparql".into(),
                 dormant_since: Some("2026-08-13T08:00:00Z".into()),
+                last_probed: None,
                 reason: SkipReason::Automatic,
             }],
         )
@@ -2471,11 +2486,13 @@ mod tests {
             DormancyFact {
                 endpoint: "https://slow.example/sparql".into(),
                 dormant_since: Some("2026-08-13T08:00:00Z".into()),
+                last_probed: None,
                 reason: SkipReason::Automatic,
             },
             DormancyFact {
                 endpoint: "https://held.example/sparql".into(),
                 dormant_since: None,
+                last_probed: None,
                 reason: SkipReason::OperatorHold,
             },
         ]
@@ -2604,6 +2621,7 @@ mod tests {
             &[DormancyFact {
                 endpoint: "https://held.example/sparql".into(),
                 dormant_since: None,
+                last_probed: None,
                 reason: SkipReason::OperatorHold,
             }],
         )
@@ -4577,4 +4595,72 @@ mod tests {
         );
     }
 
+}
+
+#[cfg(test)]
+mod last_probed_tests {
+    use super::*;
+
+    /// A dormant endpoint publishes when a sweep last asked it anything.
+    ///
+    /// `dormant_since` says when this service STOPPED asking. On its own that
+    /// leaves the question a dormant endpoint's operator actually has -- when
+    /// will you ask again? -- unanswerable from the graph, because the answer is
+    /// the last probe plus the dormant cadence and only one of those was
+    /// published. /about states the cadence; this is the other half.
+    ///
+    /// It is the STATE's instant, not this run's. A sweep that declines to ask
+    /// an endpoint has not probed it, so publishing its own instant here would
+    /// date a probe that did not happen -- the same rule `dormant_since` follows.
+    #[test]
+    fn a_dormant_endpoint_publishes_when_it_was_last_probed() {
+        let quads = dormancy_quads(
+            &DormancyFact {
+                endpoint: "https://slow.example/sparql".into(),
+                dormant_since: Some("2026-09-19T16:00:04Z".into()),
+                last_probed: Some("2026-09-19T16:00:04Z".into()),
+                reason: SkipReason::Automatic,
+            },
+            &RunId("2026-09-24T22:00:11Z".into()),
+        )
+        .unwrap();
+
+        let probed: Vec<&str> = quads
+            .iter()
+            .filter(|q| q.predicate.as_str() == LAST_PROBED)
+            .map(|q| match &q.object {
+                Term::Literal(l) => l.value(),
+                other => panic!("lastProbed must be a literal, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            probed,
+            vec!["2026-09-19T16:00:04Z"],
+            "the state's instant, not this run's 2026-09-24 one"
+        );
+    }
+
+    /// An entry no sweep has ever probed writes no quad at all, rather than an
+    /// empty literal claiming a date nobody recorded.
+    #[test]
+    fn an_endpoint_never_probed_publishes_no_instant() {
+        let quads = dormancy_quads(
+            &DormancyFact {
+                endpoint: "https://never.example/sparql".into(),
+                dormant_since: None,
+                last_probed: None,
+                reason: SkipReason::OperatorHold,
+            },
+            &RunId("2026-09-24T22:00:11Z".into()),
+        )
+        .unwrap();
+        assert!(
+            !quads.iter().any(|q| q.predicate.as_str() == LAST_PROBED),
+            "no instant was recorded, so none may be published"
+        );
+        assert!(
+            quads.iter().any(|q| q.predicate.as_str() == DORMANCY_REASON),
+            "the reason is still published, or this test would pass on no quads at all"
+        );
+    }
 }

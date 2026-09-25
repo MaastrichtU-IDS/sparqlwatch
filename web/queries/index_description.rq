@@ -157,7 +157,13 @@ CONSTRUCT {
   # bound only in the arm below, so they drop everywhere else. See that arm on
   # why the variable is a fresh one rather than ?endpoint.
   ?newestDormant sw:dormancyReason ?newestDormancyReason ;
-                 sw:dormantSince ?newestDormantSince .
+  # sw:lastProbed joins it on 2026-09-25, on the same argument. It is when a
+  # sweep last actually asked this endpoint anything, which with the dormant
+  # cadence /about states is what lets a reader answer "when will you ask me
+  # again?" -- a question `dormantSince` alone cannot, since that says only when
+  # this service stopped asking.
+                 sw:dormantSince ?newestDormantSince ;
+                 sw:lastProbed ?newestLastProbed .
 }
 WHERE {
   {
@@ -320,6 +326,7 @@ WHERE {
         ?newestActivity sw:dormantEndpoint ?newestDormant .
         OPTIONAL { ?newestDormant sw:dormancyReason ?newestDormancyReason }
         OPTIONAL { ?newestDormant sw:dormantSince ?newestDormantSince }
+        OPTIONAL { ?newestDormant sw:lastProbed ?newestLastProbed }
       }
       GRAPH sw:current { ?newestDormant sw:currentRun ?dormantEndpointIsListed }
     }
