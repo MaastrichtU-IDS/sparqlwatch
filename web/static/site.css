@@ -10,6 +10,14 @@
   --border: #e3e2de; --text: #1b1b1a; --text-bright: #000000; --text-muted: #5d5d59;
   --text-dim: #8a8a85; --accent: #0b5cad; --on-accent: #ffffff; --accent-blue: #1a6fc4;
   --good: #0ca30c; --warn: #fab219; --crit: #d03b3b; --overlay: rgba(0,0,0,0.04);
+  /* THE SERIES HUE, for chart marks only, and deliberately not --good/--warn/
+     --crit: those four mean STATE everywhere on this site, and a chart that
+     borrowed one would read as a verdict about the thing it drew. It equals
+     --accent here and does NOT in dark mode -- see the dark block -- because a
+     data mark and a link have different jobs against their surface. Both steps
+     were run through the lightness/chroma/contrast checks, not eyeballed:
+     #0b5cad is OKLCH L 0.47, inside the 0.43-0.77 light band, >= 3:1 on #fcfcfb. */
+  --series: #0b5cad;
   /* The verdict fill. 20% black measures 1.598:1 against --bg, matching what
      16% white achieves on the dark surface (1.627:1). A lighter value was
      measured at 1.173:1, against 1.139:1 for a fill already proven invisible
@@ -25,6 +33,11 @@
     --border: #33333a; --text: #e8e8e4; --text-bright: #ffffff; --text-muted: #a8a8a2;
     --text-dim: #7a7a75; --accent: #4fc3f7; --on-accent: #0a1929; --accent-blue: #81d4fa;
     --good: #22a532; --warn: #ffc94d; --crit: #ef5350; --overlay: rgba(255,255,255,0.05);
+    /* NOT --accent, which is #4fc3f7 at OKLCH L 0.773 -- above the 0.48-0.67
+       band a mark needs on this surface, so it glares as a fill and washes out
+       as a hairline. #2e9ad9 is L 0.64 and clears 3:1 on #17171a. Dark mode is
+       chosen from the ramp, never an automatic flip of the light value. */
+    --series: #2e9ad9;
     --fill: rgba(255, 255, 255, 0.16);
   }
 }

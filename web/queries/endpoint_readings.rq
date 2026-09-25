@@ -39,13 +39,25 @@
 PREFIX dqv: <http://www.w3.org/ns/dqv#>
 PREFIX sw: <urn:sparqlwatch:>
 
-SELECT ?endpoint ?run ?metric ?verdict ?reason
+SELECT ?endpoint ?run ?metric ?verdict ?reason ?elapsedMs
 WHERE {
   GRAPH ?run {
     {
       ?measurement dqv:computedOn ?endpoint ;
                    dqv:isMeasurementOf ?metric ;
                    dqv:value ?verdict .
+      # HOW LONG IT TOOK, added 2026-09-25 for the response-time chart.
+      #
+      # OPTIONAL on the SAME node the pattern above already bound, so it costs a
+      # lookup on a subject in hand rather than a join: the header's 2.25s
+      # measurement was a match against ?run's activity, a different resource
+      # reached through a different pattern, and nothing here repeats that shape.
+      #
+      # Optional because it is genuinely absent: an expired budget measured no
+      # time, and `emit` writes no sw:elapsedMs rather than a zero, because a
+      # zero would read as the fastest measurement in the dataset. The chart
+      # treats an unbound value as no observation, not as 0 ms.
+      OPTIONAL { ?measurement sw:elapsedMs ?elapsedMs }
     }
     UNION
     {

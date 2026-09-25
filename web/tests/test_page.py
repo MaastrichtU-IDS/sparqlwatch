@@ -33,6 +33,7 @@ import pytest
 from conftest import requires_repo_sources
 from starlette.testclient import TestClient
 
+import charts
 import verdict_encoding
 from app import (
     EXPLORE_PATH,
@@ -2308,57 +2309,6 @@ def test_a_conformance_level_still_wins_the_clause():
 # ---------------------------------------------------------------------------
 
 
-def test_a_single_run_store_draws_no_timeline(client_for, store):
-    """One run is not a history, and a one-cell timeline would imply a trend
-    from one observation. Every committed fixture is one or two runs, so this is
-    the state most of this suite is in."""
-    body = page(client_for(store), KADASTER)
-    assert 'data-section="history"' not in body, "a single run must draw no timeline"
-
-
-def test_the_timeline_draws_in_the_sites_own_encoding(client_for, store_two_sweeps):
-    """A reading in a timeline is the same fact as a reading in a cell. A second
-    visual language for it would be a second thing to learn, and /docs/states
-    would stop describing half of them."""
-    import verdict_encoding
-
-    body = page(client_for(store_two_sweeps), KADASTER)
-    assert 'data-section="history"' in body, "two runs is a history"
-    drawn = set(re.findall(r'class="hcell (enc-[a-z-]+)"', body))
-    assert drawn, "the timeline draws cells"
-    known = {"enc-" + s.slug for s in verdict_encoding.STATES}
-    known.add("enc-" + verdict_encoding.NOT_MEASURED)
-    assert drawn <= known, f"{drawn - known} is not a state this site defines"
-
-
-def test_every_timeline_cell_names_its_run_and_reading(client_for, store_two_sweeps):
-    """A row of coloured boxes is unreadable without them: the encoding says
-    WHAT was read and only the tooltip says when, and which."""
-    body = page(client_for(store_two_sweeps), KADASTER)
-    # Matched across the whole tag rather than requiring `title` to follow
-    # `class`: attribute ORDER is not a contract, and the first version of this
-    # broke when the cell gained data-at and data-reading between the two.
-    cells = [
-        re.search(r'title="([^"]*)"', tag).group(1)
-        for tag in re.findall(r'<span class="hcell[^>]*>', body)
-        if 'title="' in tag
-    ]
-    assert cells, "the timeline draws cells"
-    for title in cells:
-        assert re.match(r"^\d{4}-\d{2}-\d{2}T", title), f"no run instant in {title!r}"
-        assert ": " in title, f"no reading in {title!r}"
-
-
-def test_a_run_that_said_nothing_is_a_gap_and_says_so(client_for, store_two_sweeps):
-    """The reading a gap must carry, in words, because "this run recorded
-    nothing" is not a verdict about the endpoint and an empty box in a row of
-    boxes reads as one."""
-    body = page(client_for(store_two_sweeps), KADASTER)
-    gaps = re.findall(r'class="hcell hgap" title="([^"]*)"', body)
-    for title in gaps:
-        assert "recorded nothing" in title, title
-
-
 def test_the_endpoint_page_lists_metrics_in_the_index_order(client_for, store):
     """One order for both pages.
 
@@ -2411,22 +2361,6 @@ def test_a_metric_with_no_verdict_gets_no_row_either(client_for, store_declined)
 # by the template. A script reading an attribute the template stopped writing
 # fails silently in a browser and passes every test here, so the attributes are
 # asserted by name.
-
-
-def test_every_timeline_cell_carries_the_column_and_instant_the_script_reads(
-    client_for, store_two_sweeps
-):
-    body = page(client_for(store_two_sweeps), KADASTER)
-    cells = re.findall(r"<span class=\"hcell[^>]*>", body)
-    assert cells, "the timeline draws cells"
-    for tag in cells:
-        assert 'data-at="' in tag, tag
-        assert 'data-reading="' in tag, tag
-    # The crosshair groups by column, so every cell and header needs one.
-    assert re.search(r'<td data-col="\d+">', body), "cells carry their column"
-    assert re.search(r'class="h-run" data-col="\d+"', body), "headers carry theirs"
-    assert 'id="h-readout"' in body, "the readout the script writes into"
-    assert 'data-empty="' in body, "and what it says before anything is pointed at"
 
 
 def test_every_vocabulary_row_carries_a_prebuilt_haystack(
@@ -2610,36 +2544,6 @@ def test_the_legend_sits_beside_the_marks(client_for, store_content_profiles):
     )
 
 
-def test_the_history_dates_are_rotated_about_an_origin_that_keeps_them_in_column(
-    client_for, store_two_sweeps
-):
-    """The sweep dates stood a column and a half left of the cells they name.
-
-    Reported by the owner on 2026-09-17 and measured in a browser: the label is
-    a 14x74 block rotated -90deg, and about the default `50% 50%` origin the
-    text's line box lands (74 - 14) / 2 = 30px to the LEFT of its own column --
-    1.6 columns at this pitch. An origin at half the HEIGHT in both axes maps it
-    back onto the column exactly; measured again at offset 0 for every column.
-
-    Pinned as the declaration rather than as a rendered position because the
-    suite has no browser, and the default origin is what the bug WAS: a rule
-    with no `transform-origin` beside that rotate is the regression, whatever
-    else changes around it.
-    """
-    body = page(client_for(store_two_sweeps), KADASTER)
-    assert 'data-section="history"' in body, "this fixture draws no history"
-    rule = body[body.index(".h-run span {"):]
-    rule = rule[: rule.index("}")]
-    assert "rotate(-90deg)" in rule, rule
-    assert "transform-origin: 37px 37px" in rule, (
-        "the rotated dates have no explicit origin, so they paint 30px left of "
-        f"their column: {rule}"
-    )
-    # 37 is half of the 74 the same rule sets. If one moves and the other does
-    # not, the offset comes back silently.
-    assert "height: 74px" in rule, rule
-
-
 def test_the_footer_names_the_build_and_not_only_the_version():
     """"Is my change deployed?" has to be answerable from the page.
 
@@ -2741,3 +2645,361 @@ def test_the_endpoint_page_carries_no_stylesheet_of_its_own(client_for, store):
         "design tokens belong in web/static/site.css, not in this template"
     )
     assert STYLESHEET_PATH in text, "the page must link the one stylesheet"
+
+
+# ---------------------------------------------------------------------------
+# The two daily series
+# ---------------------------------------------------------------------------
+
+
+def _series_from(tmp_path, days):
+    """A store of hourly sweeps over several days, and the series read off it.
+
+    `days` maps a date to (sweeps, verdict, elapsed_ms). Built rather than taken
+    from a fixture because no committed run file spans days, which is the whole
+    subject here.
+    """
+    from pyoxigraph import Store
+    import load_run
+    from app import _daily_series
+    from endpoint_history import endpoint_history
+
+    source = (Path(__file__).parent / "fixtures" / "run-with-samples.nq").read_text()
+    store = Store(str(tmp_path / "series"))
+    for day, (sweeps, verdict, ms) in days.items():
+        for hour in range(sweeps):
+            run = source.replace("2026-08-22T16:00:00Z", f"{day}T{hour:02d}:00:00Z")
+            run = run.replace('"verified"', f'"{verdict}"').replace('"77"', f'"{ms}"')
+            load_run.load_run(store, run.encode())
+    load_run.rebuild_current(store)
+    return _daily_series(endpoint_history(store, KADASTER))
+
+
+def test_a_day_of_timeouts_contributes_no_response_time(tmp_path):
+    """THE decision that keeps the two charts from saying one thing twice.
+
+    A probe that times out records its whole budget -- 30,000 ms -- so a median
+    over every sweep would spike to thirty seconds on exactly the days uptime
+    drops, and would report as "typical" a duration no working request ever
+    took. Only sweeps that answered contribute a timing.
+
+    The uptime series still reports the day, because 0% IS the finding there.
+    """
+    series = _series_from(
+        tmp_path,
+        {
+            "2026-09-01": (4, "verified", "77"),
+            "2026-09-02": (4, "indeterminate", "30000"),
+        },
+    )
+    by_day = {d["day"]: d for d in series["days"]}
+
+    assert by_day["2026-09-01"]["uptime"] == 100.0
+    assert by_day["2026-09-01"]["median_ms"] == 77
+
+    assert by_day["2026-09-02"]["uptime"] == 0.0, "the outage is the finding"
+    assert by_day["2026-09-02"]["median_ms"] is None, (
+        "a timeout is not a response time; a 30,000 ms median would report a "
+        "duration no answered request ever took"
+    )
+    assert by_day["2026-09-02"]["p95_ms"] is None
+
+
+def test_a_day_nobody_asked_is_a_gap_and_never_zero_percent(tmp_path):
+    """A day with no sweeps draws nothing, rather than an outage.
+
+    Two things produce one and neither is the endpoint's fault: this service
+    published nothing that day, or the endpoint was dormant and nobody asked.
+    Drawing either as 0% uptime reports a fact about our own rotation as a
+    finding about somebody's server.
+    """
+    series = _series_from(
+        tmp_path,
+        {"2026-09-01": (4, "verified", "77"), "2026-09-03": (4, "verified", "88")},
+    )
+    missing = next(d for d in series["days"] if d["day"] == "2026-09-02")
+    # PRESENT AND EMPTY, not absent. Absence was the first spelling of this rule
+    # and it was wrong for the same reason a zero is: dropping the day closes
+    # the hole, and an axis of dates that skips one reports three consecutive
+    # days of observation where there were two.
+    assert missing["uptime"] is None, "a day nobody swept drew as an outage"
+    assert missing["median_ms"] is None and missing["p95_ms"] is None
+    # And the days that WERE swept still carry their readings: the calendar
+    # fill must add holes, not blank the series it is filling around.
+    swept = [d for d in series["days"] if d["day"] != "2026-09-02"]
+    assert [d["uptime"] for d in swept] == [100.0, 100.0]
+
+
+def test_uptime_is_the_share_of_sweeps_that_answered(tmp_path):
+    """Half the sweeps answering is 50%, which is what makes a day a rate rather
+    than a yes or no. Per sweep this figure is binary, which is why the series
+    is daily at all."""
+    from pyoxigraph import Store
+    import load_run
+    from app import _daily_series
+    from endpoint_history import endpoint_history
+
+    source = (Path(__file__).parent / "fixtures" / "run-with-samples.nq").read_text()
+    store = Store(str(tmp_path / "half"))
+    for hour, verdict in enumerate(["verified", "verified", "indeterminate", "absent"]):
+        run = source.replace("2026-08-22T16:00:00Z", f"2026-09-01T{hour:02d}:00:00Z")
+        load_run.load_run(store, run.replace('"verified"', f'"{verdict}"').encode())
+    load_run.rebuild_current(store)
+
+    day = _daily_series(endpoint_history(store, KADASTER))["days"][0]
+    assert day["uptime"] == 50.0, day
+    assert day["sweeps"] == 4
+
+
+def test_one_day_is_not_a_series(tmp_path):
+    """A chart drawn from a single point implies a trend from one observation.
+    The matrix this replaces refused the same thing through `has_history`."""
+    assert not _series_from(tmp_path, {"2026-09-01": (4, "verified", "77")})["has_series"]
+    assert _series_from(
+        tmp_path,
+        {"2026-09-01": (4, "verified", "77"), "2026-09-02": (4, "verified", "88")},
+    )["has_series"]
+
+
+def test_up_is_the_same_word_the_rest_of_the_page_uses(tmp_path):
+    """`_POSITIVE_VERDICTS`, not a third reading of it.
+
+    `undeclared-but-verified` means the fact holds without being declared, which
+    the availability facet and the row dot both count as available. A series
+    that counted only `verified` would draw an endpoint as half down while the
+    dot beside it showed green.
+    """
+    series = _series_from(
+        tmp_path, {"2026-09-01": (2, "undeclared-but-verified", "77"),
+                   "2026-09-02": (2, "verified", "77")}
+    )
+    assert [d["uptime"] for d in series["days"]] == [100.0, 100.0]
+
+
+# ---------------------------------------------------------------------------
+# What the two charts draw
+#
+# The geometry is numbers, so these assert numbers. Each one pins a judgement
+# that is invisible in a picture and wrong in a way a reader would believe.
+# ---------------------------------------------------------------------------
+def _days(*rows):
+    """(day, uptime, sweeps, median, p95) tuples as _daily_series emits them."""
+    return [
+        {"day": d, "uptime": u, "sweeps": s, "median_ms": m, "p95_ms": p}
+        for d, u, s, m, p in rows
+    ]
+
+
+def test_a_day_nobody_asked_draws_no_bar_and_is_not_a_zero():
+    """The whole point of the gap rule, at the pixel.
+
+    A missing day rendered as a zero-height bar reports an outage this service
+    never observed. It gets a dim marker instead, which is what the matrix that
+    stood here used for the same fact.
+    """
+    g = charts.daily_charts(_days(
+        ("2026-09-01", 100.0, 4, 80, 90),
+        ("2026-09-02", None, 0, None, None),
+    ))
+    assert [b["day"] for b in g["bars"]] == ["2026-09-01"], "the gap grew a bar"
+    assert [x["day"] for x in g["gaps"]] == ["2026-09-02"]
+
+
+def test_a_day_that_answered_nothing_is_a_visible_mark_not_a_blank():
+    """0% and "not measured" are different facts and must not draw the same.
+
+    Zero length is the honest encoding of zero and it is also invisible, which
+    makes it identical to the gap beside it. The stub is the difference.
+    """
+    g = charts.daily_charts(_days(("2026-09-01", 0.0, 3, None, None)))
+    assert len(g["bars"]) == 1
+    assert g["bars"][0]["h"] >= 2, "0% drew nothing at all"
+    assert g["bars"][0]["y"] + g["bars"][0]["h"] == g["uptime_baseline"], "not on the floor"
+    assert g["gaps"] == [], "a measured day was recorded as unmeasured"
+
+
+def test_the_line_breaks_across_a_gap_rather_than_spanning_it():
+    """A line drawn straight over a week nobody measured asserts that week."""
+    g = charts.daily_charts(_days(
+        ("2026-09-01", 100.0, 4, 80, 90),
+        ("2026-09-02", 100.0, 4, 90, 99),
+        ("2026-09-03", None, 0, None, None),
+        ("2026-09-04", 100.0, 4, 70, 80),
+        ("2026-09-05", 100.0, 4, 60, 70),
+    ))
+    assert len(g["lines"]) == 2, f"one path spans the gap: {g['lines']}"
+    assert g["dots"] == [], "neither run is a singleton"
+
+
+def test_a_lone_measured_day_between_gaps_is_drawn_as_a_point():
+    """Two points make a line and one does not, but one is still a measurement.
+
+    Dropping it would hide a reading that exists, which is the same failure as
+    inventing one.
+    """
+    g = charts.daily_charts(_days(
+        ("2026-09-01", None, 0, None, None),
+        ("2026-09-02", 100.0, 4, 80, 90),
+        ("2026-09-03", None, 0, None, None),
+    ))
+    assert g["lines"] == []
+    assert [d["index"] for d in g["dots"]] == [1]
+
+
+def test_the_uptime_axis_is_pinned_to_a_hundred_whatever_the_data_does():
+    """A 98-100 zoom is how an ordinary week is made to look like a cliff.
+
+    Bars carry their value in their length, so the axis starts at zero, and the
+    top is the top of the scale rather than the best day observed.
+    """
+    flat = charts.daily_charts(_days(
+        ("2026-09-01", 99.8, 500, 80, 90), ("2026-09-02", 99.9, 500, 80, 90),
+    ))
+    assert [t["value"] for t in flat["uptime_ticks"]] == [0, 50, 100]
+    # 99.8% must not reach the top of a frame it did not fill.
+    top = min(t["y"] for t in flat["uptime_ticks"])
+    assert flat["bars"][0]["y"] > top, "99.8% drew as a full bar"
+
+
+def test_the_response_axis_is_scaled_to_the_tail_not_the_median():
+    """A ceiling chosen from p50 puts every p95 outside the frame."""
+    g = charts.daily_charts(_days(
+        ("2026-09-01", 100.0, 4, 100, 1800), ("2026-09-02", 100.0, 4, 110, 1700),
+    ))
+    assert g["ceiling"] >= 1800, g["ceiling"]
+    for band in g["bands"]:
+        assert "-" not in band, f"a p95 was plotted above the frame: {band}"
+
+
+def test_every_day_is_answerable_including_the_ones_with_no_mark():
+    """The hit target is the column, not the mark.
+
+    A day at 2% must not require hitting a two-pixel stub, and a day with
+    nothing drawn at all must still say so when pointed at.
+    """
+    g = charts.daily_charts(_days(
+        ("2026-09-01", None, 0, None, None), ("2026-09-02", 2.0, 50, 80, 90),
+    ))
+    assert len(g["slots"]) == 2
+    assert "not measured" in g["slots"][0]["readout"]
+    assert g["slots"][1]["w"] > 8, "a column narrower than a finger"
+
+
+def test_the_charts_replace_the_matrix_and_keep_the_metrics_table(
+    client_for, store_two_sweeps
+):
+    """The trade the page made: per-metric history goes, per-metric state stays.
+
+    The metrics table above already answers "what is CORS doing", which is what
+    readers used the matrix for. What the matrix could not answer -- a rate, and
+    how long an answer took -- is what replaced it.
+    """
+    body = page(client_for(store_two_sweeps), KADASTER)
+    assert "hcell" not in body, "the matrix is still drawn"
+    assert 'class="metrics"' in body or "metric-row" in body, "the state table went too"
+
+
+def test_the_series_hue_is_never_a_status_colour():
+    """--good/--warn/--crit mean STATE everywhere on this site.
+
+    A chart that borrowed one would read as a verdict about the thing it drew,
+    and the legend for that verdict is on a different page.
+    """
+    css = (Path(__file__).resolve().parents[1] / "static" / "site.css").read_text()
+    assert "--series:" in css
+    for reserved in ("var(--good)", "var(--warn)", "var(--crit)"):
+        assert reserved not in _chart_rules(), f"{reserved} used as a series colour"
+
+
+def _chart_rules() -> str:
+    markup = (Path(__file__).resolve().parents[1] / "templates" / "endpoint.html").read_text()
+    return markup[markup.index("-- The two daily series"):markup.index(".h-readout {")]
+
+
+def test_dark_mode_picks_its_own_step_rather_than_reusing_the_light_one():
+    """A mark that works on paper glares on a dark surface.
+
+    --accent's dark step is too light to be a fill here, which is why --series
+    is not simply --accent. If the two ever collapse to one value, the dark
+    chart is wrong and nothing else says so.
+    """
+    css = (Path(__file__).resolve().parents[1] / "static" / "site.css").read_text()
+    values = re.findall(r"--series:\s*(#[0-9a-fA-F]{6})", css)
+    assert len(values) == 2, f"light and dark must each name one: {values}"
+    assert values[0] != values[1], "dark mode is a flip of light, not a choice"
+
+
+def test_a_store_with_one_day_draws_no_charts(client_for, store):
+    """One day is a reading, not a trend, and two charts around it imply one.
+
+    The same rule the matrix followed: a single-column timeline asserts a shape
+    that one observation cannot have.
+    """
+    body = page(client_for(store), KADASTER)
+    assert '<section class="panel" data-section="history"' not in body, (
+        "one day drew a series"
+    )
+    assert "class=\"plot\"" not in body, "a chart was drawn from one observation"
+
+
+def test_a_day_this_service_never_swept_is_still_a_day_on_the_axis(tmp_path):
+    """The axis is time, so a day with no sweep at all has to occupy its place.
+
+    Iterating only the days that have runs closes the hole instead of drawing
+    it: 09-10 would sit beside 09-13 at one day's spacing, and the charts would
+    claim a week of daily observations for a week holding four. This is the
+    distinction the per-run matrix never had to make, because its axis was
+    sweeps rather than dates.
+    """
+    series = _series_from(tmp_path, {
+        "2026-09-01": (2, "verified", "77"),
+        # 09-02 and 09-03 never swept at all -- no runs, not even declines.
+        "2026-09-04": (2, "verified", "88"),
+    })
+    assert [d["day"] for d in series["days"]] == [
+        "2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04",
+    ]
+    assert [d["uptime"] for d in series["days"]] == [100.0, None, None, 100.0]
+
+
+def test_the_unswept_days_reach_the_drawing_as_gaps(tmp_path):
+    """And the geometry draws them, rather than the series quietly closing up."""
+    series = _series_from(tmp_path, {
+        "2026-09-01": (2, "verified", "77"),
+        "2026-09-03": (2, "verified", "88"),
+    })
+    g = charts.daily_charts(series["days"])
+    assert [x["day"] for x in g["gaps"]] == ["2026-09-02"]
+    assert g["lines"] == [], "the line spanned a day nobody swept"
+    assert len(g["dots"]) == 2, "two isolated days should be two points"
+
+
+def test_an_endpoint_that_never_answered_gets_no_response_chart():
+    """An empty frame asserts that there was something to plot.
+
+    This fleet holds endpoints that are dormant, unreachable, or down for a
+    whole window. For those the response axis has no peak to scale to, and
+    drawing the frame anyway produces a blank plot under two gridlines both
+    labelled 0. The uptime chart alone says the true thing -- so the date strip
+    has to follow it, because an axis has to be labelled where it ends.
+    """
+    g = charts.daily_charts([
+        {"day": f"2026-09-0{i}", "uptime": 0.0, "sweeps": 3,
+         "median_ms": None, "p95_ms": None}
+        for i in (1, 2, 3)
+    ])
+    assert g["has_response"] is False
+    assert g["uptime_h"] > charts.PLOT_TOP + charts.UPTIME_H + charts.PLOT_TOP, (
+        "no room was made for the dates the uptime chart now has to carry"
+    )
+    assert g["dates"], "the only remaining axis lost its labels"
+
+
+def test_the_response_ticks_never_repeat_a_value():
+    """Two gridlines labelled 0 read as a drawing error, and are one."""
+    g = charts.daily_charts([
+        {"day": "2026-09-01", "uptime": 100.0, "sweeps": 2, "median_ms": 1, "p95_ms": 1},
+        {"day": "2026-09-02", "uptime": 100.0, "sweeps": 2, "median_ms": 1, "p95_ms": 1},
+    ])
+    values = [t["value"] for t in g["response_ticks"]]
+    assert len(values) == len(set(values)), values

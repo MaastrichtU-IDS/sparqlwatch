@@ -48,6 +48,15 @@ class Reading:
 
     verdict: str | None = None
     reason: str | None = None
+    # HOW LONG THE PROBE TOOK, in milliseconds, for the response-time chart.
+    #
+    # `None` is not zero and the two must not be conflated. A measurement whose
+    # budget expired carries no sw:elapsedMs at all -- the prober writes none
+    # rather than a zero, because a zero would read as the fastest measurement
+    # in the dataset -- and a decline never had a duration to report. So an
+    # unbound value is "no observation of how long", which the chart draws as no
+    # point rather than as a fast one.
+    elapsed_ms: int | None = None
 
 
 @dataclass
@@ -130,6 +139,11 @@ def endpoint_history(store: Store, endpoint: str, limit: int = 30) -> EndpointHi
         readings[slot] = Reading(
             verdict=row["verdict"].value if row["verdict"] is not None else None,
             reason=row["reason"].value if row["reason"] is not None else None,
+            elapsed_ms=(
+                int(row["elapsedMs"].value)
+                if row["elapsedMs"] is not None
+                else None
+            ),
         )
 
     return EndpointHistory(

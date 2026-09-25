@@ -804,6 +804,52 @@ the endpoint at all. It can hold others: `endpoint_content.rq` asks only about
 store describes it (`tests/fixtures/run-properties-sample.nq` is that shape). A knownness test
 that is not tied to one metric belongs to spec stage 2b, where properties sampling lands.
 
+### The two daily charts
+
+The endpoint page draws uptime and response time as two stacked charts over the
+last 30 days. They replaced a matrix of one cell per metric per sweep on
+2026-09-25. The matrix's job — *what is CORS doing, what is the triple count* —
+is done by the metrics table above them, which carries each metric's current
+state and the sweep that measured it; what the matrix could not show is a rate,
+or how long an answer took.
+
+Five decisions are worth knowing before reading either chart:
+
+- **Two charts, never one.** Uptime is a percentage and response time is
+  milliseconds. A single plot would need two y-axes, and the point where two
+  such lines cross records only the scales someone picked. They stack on one
+  shared x-axis instead, so day *i* is at the same x in both.
+- **A day, not a sweep.** Per-sweep uptime is 0 or 100, which is not a rate. A
+  day holds up to about twenty-five observations, which makes a percentage mean
+  something.
+- **Response time counts only sweeps that answered.** A probe that times out
+  records its full budget — 30,000 ms — so a median over all sweeps spikes to
+  thirty seconds on exactly the days uptime drops, and reports as typical a
+  duration no working request ever took. The line is the median of the
+  successful sweeps and the band around it reaches p95.
+- **A day with no sweeps is a hole, never a zero.** Two things produce one and
+  neither is an outage: this service published nothing that day, or the endpoint
+  was dormant and nobody asked it. Such a day keeps its place on the axis and
+  draws a dim dot at the baseline. A day that *was* swept and answered nothing
+  is a different fact and draws a short stub at 0%.
+- **The uptime axis is pinned 0–100.** Bars carry their value in their length,
+  so the axis starts at zero, and the top is the top of the scale rather than
+  the best day observed. A 98–100 zoom is how an ordinary week is made to look
+  like a cliff.
+
+The numbers behind both charts are also published as a table in the page markup
+for screen readers, and the drawings themselves are `aria-hidden`: the
+accessible view is the data, not a description of a picture.
+
+Two implementation notes. `charts.py` computes coordinates and the template
+draws them, so a bar at the wrong height is a wrong number a test can catch.
+And the window is 30 **days**, which is why `app.py` passes an explicit `limit`
+to `endpoint_history()` — that function's own default keeps the newest 30
+**runs**, which was right when this section was a matrix with one column per
+sweep and is about a day and a quarter under the hourly sweep. Reading further
+back is free: `endpoint_readings.rq` carries no `LIMIT`, so the store is scanned
+identically either way and the cap only decides how much of the answer is kept.
+
 ### Which sweep saw what
 
 The two questions this resource answers are answered by two independent run selections:
