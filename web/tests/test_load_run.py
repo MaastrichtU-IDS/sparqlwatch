@@ -2228,3 +2228,164 @@ def test_a_rebuild_keeps_the_observed_decline_the_load_path_kept(tmp_path):
         "a rebuild derived a different answer from the one the load path "
         "derived, so repairing a store would change what it reports"
     )
+
+
+# ---------------------------------------------------------------------------
+# --skip-loaded: a restart that costs one file rather than the whole archive
+#
+# The site publishes by restarting, and the prober restarts it hourly. While
+# the store lived on an emptyDir every restart replayed the archive from
+# nothing -- 294 files and 1.4M quads, ten minutes, 503 throughout -- and the
+# replay grew with the archive. These pin the behaviour that makes a restart
+# proportional to what actually arrived.
+# ---------------------------------------------------------------------------
+def _run_file(tmp_path, name, instant, verdict="verified"):
+    source = (Path(__file__).parent / "fixtures" / "run-with-samples.nq").read_text()
+    body = source.replace("2026-08-22T16:00:00Z", instant)
+    if verdict != "verified":
+        body = body.replace('"verified"', f'"{verdict}"')
+    path = tmp_path / "runs" / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body)
+    return str(path)
+
+
+def test_the_second_start_loads_nothing(tmp_path, capsys):
+    """The whole point: an unchanged archive costs no store work at all."""
+    store = str(tmp_path / "store")
+    runs = [
+        _run_file(tmp_path, f"run-2026-09-0{d}T12-00-00Z.nq", f"2026-09-0{d}T12:00:00Z")
+        for d in (1, 2, 3)
+    ]
+    assert main(["--skip-loaded", store, *runs]) == 0
+    assert "0 run file(s) already in the store, 3 to load" in capsys.readouterr().out
+
+    assert main(["--skip-loaded", store, *runs]) == 0
+    out = capsys.readouterr().out
+    assert "3 run file(s) already in the store, 0 to load" in out
+    # Not merely "fast": nothing was loaded, so no per-file line was printed.
+    assert "loaded" not in out.replace("already in the store", "")
+
+
+def test_only_the_new_file_is_loaded(tmp_path, capsys):
+    store = str(tmp_path / "store")
+    runs = [
+        _run_file(tmp_path, f"run-2026-09-0{d}T12-00-00Z.nq", f"2026-09-0{d}T12:00:00Z")
+        for d in (1, 2)
+    ]
+    main(["--skip-loaded", store, *runs])
+    capsys.readouterr()
+
+    fresh = _run_file(tmp_path, "run-2026-09-03T12-00-00Z.nq", "2026-09-03T12:00:00Z")
+    assert main(["--skip-loaded", store, *runs, fresh]) == 0
+    out = capsys.readouterr().out
+    assert "2 run file(s) already in the store, 1 to load" in out
+    assert "run-2026-09-03T12-00-00Z.nq" in out
+    assert "run-2026-09-01T12-00-00Z.nq" not in out
+
+
+def test_a_rewritten_run_is_not_skipped(tmp_path, capsys):
+    """THE reason the manifest is keyed by content and not by name.
+
+    load_run exists to stop the same run IRI seen again with changed content
+    from merging into the old graph -- a case this project's own history
+    records as having happened. A manifest keyed by filename would skip exactly
+    that file, and the store would keep the superseded answer forever with
+    nothing reporting it.
+    """
+    store = str(tmp_path / "store")
+    run = _run_file(tmp_path, "run-2026-09-01T12-00-00Z.nq", "2026-09-01T12:00:00Z")
+    main(["--skip-loaded", store, run])
+    capsys.readouterr()
+
+    # Same instant, same filename, different verdict -- the prober re-run.
+    _run_file(
+        tmp_path, "run-2026-09-01T12-00-00Z.nq", "2026-09-01T12:00:00Z",
+        verdict="indeterminate",
+    )
+    assert main(["--skip-loaded", store, run]) == 0
+    out = capsys.readouterr().out
+    assert "0 run file(s) already in the store, 1 to load" in out
+
+    # And it REPLACED rather than merged: one verdict per endpoint, none stale.
+    rows = [
+        (r["e"].value, r["v"].value)
+        for r in Store.read_only(store).query(
+            "SELECT ?e ?v WHERE { GRAPH <urn:sparqlwatch:run:2026-09-01T12:00:00Z> {"
+            " ?m <http://www.w3.org/ns/dqv#computedOn> ?e ;"
+            "    <http://www.w3.org/ns/dqv#isMeasurementOf>"
+            "      <urn:sparqlwatch:metric:availability> ;"
+            "    <http://www.w3.org/ns/dqv#value> ?v } }"
+        )
+    ]
+    assert rows, "the run graph vanished"
+    assert len(rows) == len({e for e, _ in rows}), "an endpoint carries two verdicts"
+    assert not any(v == "verified" for _, v in rows), "the superseded verdict survived"
+
+
+def test_a_corrupt_manifest_costs_a_rebuild_and_never_a_missing_run(tmp_path, capsys):
+    """Every manifest failure has to mean "nothing is known to be loaded".
+
+    Read optimistically, a damaged manifest drops a run from the site silently.
+    Read pessimistically, it costs one slow start. Only one of those is
+    recoverable by noticing.
+    """
+    import loaded_manifest
+
+    store = str(tmp_path / "store")
+    run = _run_file(tmp_path, "run-2026-09-01T12-00-00Z.nq", "2026-09-01T12:00:00Z")
+    main(["--skip-loaded", store, run])
+    capsys.readouterr()
+
+    loaded_manifest.manifest_path(store).write_text("{ this is not json")
+    assert main(["--skip-loaded", store, run]) == 0
+    assert "0 run file(s) already in the store, 1 to load" in capsys.readouterr().out
+
+
+def test_a_manifest_from_a_future_version_is_ignored(tmp_path, capsys):
+    import json
+
+    import loaded_manifest
+
+    store = str(tmp_path / "store")
+    run = _run_file(tmp_path, "run-2026-09-01T12-00-00Z.nq", "2026-09-01T12:00:00Z")
+    main(["--skip-loaded", store, run])
+    capsys.readouterr()
+
+    path = loaded_manifest.manifest_path(store)
+    body = json.loads(path.read_text())
+    body["version"] = loaded_manifest.VERSION + 1
+    path.write_text(json.dumps(body))
+    assert main(["--skip-loaded", store, run]) == 0
+    assert "1 to load" in capsys.readouterr().out
+
+
+def test_without_the_flag_nothing_is_skipped_and_no_manifest_is_written(tmp_path):
+    """The default is unchanged, because every other caller means "load this"."""
+    import loaded_manifest
+
+    store = str(tmp_path / "store")
+    run = _run_file(tmp_path, "run-2026-09-01T12-00-00Z.nq", "2026-09-01T12:00:00Z")
+    assert main([store, run]) == 0
+    assert main([store, run]) == 0
+    assert not loaded_manifest.manifest_path(store).exists()
+
+
+def test_the_manifest_never_names_a_file_the_store_does_not_hold(tmp_path):
+    """Written after the load, one file at a time.
+
+    A manifest that runs ahead of the store skips that run forever and reports
+    nothing, which is strictly worse than having no manifest at all.
+    """
+    import loaded_manifest
+
+    store = str(tmp_path / "store")
+    good = _run_file(tmp_path, "run-2026-09-01T12-00-00Z.nq", "2026-09-01T12:00:00Z")
+    bad = tmp_path / "runs" / "run-2026-09-02T12-00-00Z.nq"
+    bad.write_text("this is not n-quads at all\n")
+
+    with pytest.raises(Exception):
+        main(["--skip-loaded", store, good, str(bad)])
+    # The validation pass refuses the batch before the store is created, so
+    # neither file is recorded -- the manifest must not claim the good one.
+    assert loaded_manifest.read(store) == {}
