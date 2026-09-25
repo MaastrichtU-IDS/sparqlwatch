@@ -47,9 +47,12 @@ import re
 import time
 from dataclasses import dataclass
 
-# Wall clock, per query. Generous for anything answerable and short enough that
-# a pathological one does not hold a worker for long.
-TIMEOUT_SECONDS = 30.0
+# Wall clock, per query, for queries that STREAM -- the ones this module can
+# see. Lowered from 30s on 2026-09-26: thirty seconds is a long time to hold
+# one of a small number of workers, and the budget in sparql_pool is what
+# actually bounds the rest. This one should fire first and more gently, so a
+# streaming query gets a truncated answer rather than a killed worker.
+TIMEOUT_SECONDS = 10.0
 
 # Rows returned before the endpoint stops and says so. A truncated answer that
 # announces itself is honest; an OOM is not.

@@ -49,6 +49,7 @@ import html
 import json
 import os
 import re
+import threading
 from collections import Counter, OrderedDict
 from datetime import date, timedelta
 from functools import lru_cache
@@ -69,6 +70,7 @@ from pyoxigraph import (
 )
 
 import charts
+import sparql_pool
 import sparql_service
 import verdict_encoding
 from endpoint_content import CLASS_SAMPLING_METRICS, EndpointContent, endpoint_content
@@ -480,6 +482,22 @@ def _opened_store(path: str) -> Store:
     return store
 
 
+def _store_path() -> str:
+    """The configured store path, or a refusal naming the variable.
+
+    Shared by get_store and the SPARQL workers: a worker opens the same store
+    by path rather than receiving a handle, because it runs in its own
+    interpreter and a RocksDB handle does not cross that boundary.
+    """
+    path = os.environ.get(STORE_PATH_VARIABLE)
+    if not path:
+        raise RuntimeError(
+            f"no store to read: set {STORE_PATH_VARIABLE} to the path of a "
+            "store built by web/load_run.py"
+        )
+    return path
+
+
 def get_store() -> Store:
     """The store dependency.
 
@@ -488,13 +506,7 @@ def get_store() -> Store:
     store: a module-level open would make every test share one, and then the
     order they ran in would start to change their results.
     """
-    path = os.environ.get(STORE_PATH_VARIABLE)
-    if not path:
-        raise RuntimeError(
-            f"no store to read: set {STORE_PATH_VARIABLE} to the path of a "
-            "store built by web/load_run.py"
-        )
-    return _opened_store(path)
+    return _opened_store(_store_path())
 
 
 # ---------------------------------------------------------------------------
@@ -4972,6 +4984,37 @@ def about_resource(request: Request) -> Response:
     return Response(content=_about_rdf(media_type), media_type=media_type)
 
 
+# The query workers, made once and shared. Built lazily rather than at import,
+# so a process that never serves a query -- a test, a `--check` run -- never
+# pays for two spawned interpreters opening the store.
+_POOL: sparql_pool.Pool | None = None
+_POOL_LOCK = threading.Lock()
+
+
+def get_sparql_pool():
+    """The pool the /sparql route runs queries in.
+
+    A FastAPI dependency so tests can override it exactly as they override
+    get_store. What they substitute is a DirectPool over their own store; see
+    its docstring for why that tests the guards honestly and does not test the
+    isolation, which has its own tests.
+    """
+    global _POOL
+    if _POOL is None:
+        with _POOL_LOCK:
+            if _POOL is None:
+                pool = sparql_pool.Pool(_store_path())
+                pool.start()
+                _POOL = pool
+    return _POOL
+
+
+@app.on_event("shutdown")
+def _stop_sparql_pool() -> None:
+    if _POOL is not None:
+        _POOL.stop()
+
+
 @app.options(SPARQL_PATH)
 def sparql_preflight() -> Response:
     """The CORS preflight.
@@ -4985,7 +5028,9 @@ def sparql_preflight() -> Response:
 
 @app.get(SPARQL_PATH)
 @app.post(SPARQL_PATH)
-async def sparql(request: Request, store: Store = Depends(get_store)) -> Response:
+async def sparql(
+    request: Request, pool=Depends(get_sparql_pool)
+) -> Response:
     """SPARQL 1.1 Query over this service's own measurements. Read only.
 
     Three ways in, as the protocol requires: `?query=` on a GET, a form-encoded
@@ -5017,12 +5062,15 @@ async def sparql(request: Request, store: Store = Depends(get_store)) -> Respons
             headers=sparql_service.CORS,
         )
 
-    answer = sparql_service.execute(
-        store,
-        query,
-        default_graph=CURRENT_GRAPH,
-        accept=request.headers.get("accept", ""),
+    # THROUGH A WORKER, not in this process. A query that blocks inside the
+    # engine -- ORDER BY over the store, a cross join, a property path --
+    # yields no rows, so the deadline and row cap in sparql_service never get
+    # a turn. The only thing that stops those is killing the process running
+    # them, and the process running them must therefore not be this one.
+    body, media_type, status, complete = pool.execute(
+        query, accept=request.headers.get("accept", "")
     )
+    answer = sparql_service.Answer(body, media_type, status, complete)
     headers = dict(sparql_service.CORS)
     if not answer.complete and answer.status == 200:
         # A truncated answer says so in the result document AND in a header, so

@@ -12,8 +12,9 @@ import json
 import pytest
 from pyoxigraph import RdfFormat, parse
 
+import sparql_pool
 import sparql_service
-from app import SPARQL_PATH, app, get_store
+from app import SPARQL_PATH, app, get_sparql_pool, get_store
 from starlette.testclient import TestClient
 
 
@@ -29,6 +30,11 @@ def client_for():
 
     def build(store):
         app.dependency_overrides[get_store] = lambda: store
+        # A DirectPool, not the process pool: these tests are about the guards,
+        # and the worker runs the very same sparql_service.execute. The
+        # isolation the process pool adds is tested in its own file, against
+        # queries that block inside the engine.
+        app.dependency_overrides[get_sparql_pool] = lambda: sparql_pool.DirectPool(store)
         client = TestClient(app)
         clients.append(client)
         return client
