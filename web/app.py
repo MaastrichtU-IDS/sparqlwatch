@@ -50,6 +50,7 @@ import json
 import os
 import re
 from collections import Counter, OrderedDict
+from datetime import date, timedelta
 from functools import lru_cache
 from pathlib import Path
 from urllib.parse import quote, urlparse
@@ -67,6 +68,7 @@ from pyoxigraph import (
     serialize,
 )
 
+import charts
 import verdict_encoding
 from endpoint_content import CLASS_SAMPLING_METRICS, EndpointContent, endpoint_content
 from explore_payload import (
@@ -83,7 +85,7 @@ from void_document import (
     void_triples,
 )
 from endpoint_index import endpoint_index as _endpoint_index
-from endpoint_history import EndpointHistory, endpoint_history
+from endpoint_history import EndpointHistory, Reading, endpoint_history
 from fleet import FleetHistory, fleet_history as _fleet_history, fleet_stats
 from endpoint_measurements import EndpointMeasurements, endpoint_measurements
 from load_run import CURRENT_GRAPH, pointers_to_missing_runs
@@ -1039,66 +1041,123 @@ def _rows(measurements: EndpointMeasurements) -> list[dict]:
     return sorted(rows, key=lambda row: _column_rank(row["metric"]))
 
 
-def _history_view(history: EndpointHistory, rows: list[dict]) -> dict:
-    """The interactive timeline: metrics down, sweeps across.
+# The two daily series the endpoint page charts, replacing the per-sweep matrix
+# on 2026-09-25 at the owner's request: "one series for % uptime and one for
+# response time".
+#
+# TWO CHARTS AND NOT ONE, which is the only part of that request this does not
+# follow literally. Uptime is 0-100% and response time is milliseconds, so one
+# plot would need two y-axes -- the reader cannot tell which line belongs to
+# which scale, and a crossing means nothing. They are drawn stacked on one
+# shared x-axis instead, so a latency spike still lines up with an uptime dip.
+# It also means one series each, which is why neither chart needs a legend.
+#
+# DAILY, not per sweep. Thirty days of hourly sweeps is ~720 points, and
+# per-sweep "uptime" is binary -- 0 or 100 -- which is not a rate. A day holds
+# about twenty-four observations, which makes a percentage mean something.
+_UPTIME_WINDOW_DAYS = 30
 
-    Ordered by `rows`, so the chart and the list above it name the metrics in
-    the same order. A chart that sorted itself would make a reader match ten
-    labels twice.
+# HOW MANY RUNS THAT WINDOW COSTS, which is not 30. endpoint_history's own
+# default keeps the newest 30 RUNS -- the right number when this section was a
+# matrix with one column per sweep, and about a day and a quarter once the
+# hourly sweep landed. Thirty days of hourly sweeps plus a nightly profile pass
+# is ~750 runs, and reading them is free: endpoint_readings.rq carries no LIMIT,
+# so the store is scanned identically either way and the cap only decides how
+# much of the answer is kept. Found by rendering the page, not by reading this
+# file -- at the default the "30-day" chart drew eight days.
+_HISTORY_RUNS = _UPTIME_WINDOW_DAYS * 25
+
+
+def _daily_series(history: EndpointHistory) -> dict:
+    """Uptime and response time per day, oldest first, gaps preserved.
+
+    WHAT COUNTS AS UP is `_POSITIVE_VERDICTS`, the same table the availability
+    facet and the row dot read. A third reading of that word on one page is how
+    a page comes to contradict itself.
+
+    RESPONSE TIME IS CONDITIONAL ON SUCCESS, and this is the decision that keeps
+    the two charts from saying one thing twice. A probe that timed out records
+    its full budget -- 30,000 ms -- so a median over all sweeps spikes to thirty
+    seconds on exactly the days uptime drops, and reports as "typical" a
+    duration no working request ever took. Only sweeps that answered contribute.
+
+    MEDIAN, NOT MEAN, for the same reason one slow sweep should not move the
+    line: the p95 beside it is where that shows up, which is what a tail is for.
+
+    A DAY WITH NO SWEEPS IS A GAP, never a zero. Two things produce one and
+    neither is an outage: this service published nothing that day, or the
+    endpoint was dormant and nobody asked it. Drawing either as 0% uptime would
+    report a fact about our own rotation as a finding about somebody's server,
+    which is the error this whole codebase is arranged to avoid.
     """
-    names = {r["metric"]: r["name"] for r in rows}
-    return {
-        "has_history": history.has_history,
-        "runs": history.runs,
-        "metrics": [
+    by_day: dict[str, list[Reading | None]] = {}
+    availability = next(
+        (m for m in history.metrics if m.metric == _AVAILABILITY_METRIC), None
+    )
+    if availability is None:
+        return {"days": [], "has_series": False}
+
+    for at, reading in zip(history.runs, availability.readings):
+        by_day.setdefault(at[:10], []).append(reading)
+    if not by_day:
+        return {"days": [], "has_series": False}
+
+    days = []
+    # EVERY CALENDAR DAY BETWEEN THE FIRST AND THE LAST, not just the days that
+    # have runs. A day this service never swept is absent from `by_day`
+    # entirely, and iterating the keys would close the hole rather than draw it:
+    # the axis would put 09-10 next to 09-13 at one day's spacing and the charts
+    # would claim a week of daily observations for a week that has four. The
+    # window is time, so the axis has to be time.
+    for day in _calendar(min(by_day), max(by_day)):
+        asked = [r for r in by_day.get(day, []) if r is not None and r.verdict is not None]
+        if not asked:
+            # Declines and absent readings alike: nobody got an answer out of
+            # this endpoint that day because nobody asked it a question that
+            # produced one. No point, no zero.
+            days.append({"day": day, "uptime": None, "median_ms": None, "p95_ms": None})
+            continue
+        up = [r for r in asked if r.verdict in _POSITIVE_VERDICTS]
+        timings = sorted(r.elapsed_ms for r in up if r.elapsed_ms is not None)
+        days.append(
             {
-                "metric": r["metric"],
-                "name": r["name"],
-                "cells": _history_cells(history, r["metric"]),
+                "day": day,
+                "uptime": round(100.0 * len(up) / len(asked), 1),
+                "sweeps": len(asked),
+                "median_ms": _quantile(timings, 0.5),
+                "p95_ms": _quantile(timings, 0.95),
             }
-            for r in rows
-            if any(c["present"] for c in _history_cells(history, r["metric"]))
-        ],
+        )
+    return {
+        "days": days[-_UPTIME_WINDOW_DAYS:],
+        # One day is not a series. A chart drawn from a single point implies a
+        # trend from one observation, which is what has_history already refuses
+        # for the matrix this replaces.
+        "has_series": len([d for d in days if d["uptime"] is not None]) > 1,
     }
 
 
-def _history_cells(history: EndpointHistory, metric: str) -> list[dict]:
-    """One cell per run for `metric`, oldest first, aligned to the run list.
+def _calendar(first: str, last: str) -> list[str]:
+    """Every ISO date from `first` to `last` inclusive."""
+    start, stop = date.fromisoformat(first), date.fromisoformat(last)
+    out, day = [], start
+    while day <= stop:
+        out.append(day.isoformat())
+        day += timedelta(days=1)
+    return out
 
-    Drawn with the SAME encoding the grid uses, because a reading in a timeline
-    is the same fact as a reading in a cell and a second visual language for it
-    would be a second thing to learn. A run that said nothing is a gap, exactly
-    as an empty cell on the index is: this run recorded nothing about that
-    metric, which is not a verdict about the endpoint.
+
+def _quantile(values: list[int], q: float) -> int | None:
+    """The q-quantile of a sorted list, or None when there is nothing to take.
+
+    Nearest-rank rather than interpolated: these are observed durations, and an
+    interpolated 1,847 ms is a number no request took. The nearest rank is
+    always a measurement that actually happened.
     """
-    for m in history.metrics:
-        if m.metric != metric:
-            continue
-        cells = []
-        for at, reading in zip(history.runs, m.readings):
-            if reading is None:
-                cells.append({"present": False, "at": at})
-                continue
-            slug = reading.verdict or verdict_encoding.NOT_MEASURED
-            state = verdict_encoding.presentation(slug)
-            # `presentation` returns UNRECOGNISED rather than None for a slug
-            # this build does not know, so the check is against that object and
-            # not against None.
-            recognised = state is not verdict_encoding.UNRECOGNISED
-            cells.append(
-                {
-                    "present": True,
-                    "at": at,
-                    "verdict": reading.verdict,
-                    "reason": reading.reason,
-                    "css_class": verdict_encoding.css_class(state.slug),
-                    # The store's own word where this build does not know it,
-                    # the same way a row's state text does.
-                    "label": state.label if recognised else (reading.verdict or ""),
-                }
-            )
-        return cells
-    return []
+    if not values:
+        return None
+    index = min(len(values) - 1, int(round(q * (len(values) - 1))))
+    return values[index]
 
 
 def _detail(verdict, recognised: bool) -> str | None:
@@ -1577,13 +1636,20 @@ def _page_context(
     # reads it too: the class sample is that list's source when no profile pass
     # exists, and carries the sentences that explain an absent one.
     sample = _sample(measurements, content)
+    series = _daily_series(history)
     return {
         **_nav_context(),
         # The timeline is its OWN section rather than a span on each row. The
         # rows answer "what is true now" and the history answers "what has
         # changed", which is the same split the index makes, and a sparkline
         # squeezed onto a row cannot carry an axis, a hover readout, or dates.
-        "history": _history_view(history, rows),
+        # The two daily series, replacing the per-sweep matrix that stood here
+        # until 2026-09-25. The matrix showed every metric's history; the
+        # metrics table above it already carries each metric's current state,
+        # which is the part readers used it for. What the matrix could not show
+        # -- a rate, and how long an answer took -- is what these two draw.
+        "series": series,
+        "charts": charts.daily_charts(series["days"]),
         # The vocabulary this endpoint holds, searchable in the page. Passed as
         # data rather than pre-filtered markup because the search is the point:
         # a reader types a name and the list narrows without a round trip.
@@ -1603,9 +1669,6 @@ def _page_context(
         # so the table cannot show a partition the document does not have.
         "void_partitions": partitions,
         "void_path": VOID_PATH,
-        # Oldest first, and only where there is more than one: a single-cell
-        # timeline implies a trend from one observation.
-        "history_runs": history.runs if history.has_history else [],
         "endpoint": endpoint,
         # The MEASURING sweep, and only that one. The class sample carries
         # its own run and timestamp (see _sample), because the two are
@@ -1805,7 +1868,7 @@ def endpoint_resource(
                 url,
                 measurements,
                 content,
-                endpoint_history(store, url),
+                endpoint_history(store, url, limit=_HISTORY_RUNS),
                 endpoint_vocabulary(store, url),
                 void_summary(store, url),
                 void_partitions(store, url),

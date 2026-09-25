@@ -5,7 +5,7 @@
    its .site-foot went the way index.html's and about.html's did: the tokens,
    the chrome and the page-body/rail shell are site.css's now, and this
    block carries only what is genuinely this page's own -- the metric list,
-   the offer, the history matrix, the vocabulary grid and the sample panel.
+   the offer, the two daily charts, the vocabulary grid and the sample panel.
 
    THE REGRESSION THIS TASK CLOSES. Between Task 5 (2026-09-16, earlier) and
    this commit, this page still declared its own :root with no --fill and a
@@ -16,7 +16,7 @@
    again, from --fill in the shared sheet.
 
    THE RAIL. Six sections stood in one column before this: conformance, the
-   VoID offer, the history timeline, vocabulary, the legend, and the class
+   VoID offer, the two daily charts, vocabulary, the legend, and the class
    sample. What moved is the legend (into a rail, beside the marks it
    explains) and a handful of identity facts that used to live only in
    prose (in the header's "run ..." span, and in the sub paragraph below the
@@ -72,7 +72,7 @@
      table that simply overflows drags the whole document sideways -- measured
      at 390px: a 507px table and 131px of body overflow. `display: block` is
      what lets a table take overflow-x at all, and it is the same treatment
-     table.history below already gets for the same reason. The site's rule is
+     .plot-scroll below already gets for the same reason. The site's rule is
      that the body never scrolls horizontally and that a table may, inside its
      own box. */
   table.metrics { width: 100%; border-collapse: collapse; margin: 4px 0 0;
@@ -125,58 +125,47 @@
   .void .get { margin: 10px 0 0; font-family: var(--mono); font-size: 12.5px;
                overflow-wrap: anywhere; }
 
-  /* -- The timeline: one cell per run, in the same encoding as the chip
-     beside it -- this page's analogue of the index's .fleet. -------------- */
-  .history { border-collapse: separate; border-spacing: 3px; display: block;
-             overflow-x: auto; max-width: 100%; margin-top: 4px; }
-  .history th { font-weight: 400; text-align: left; }
-  .h-metric { font-family: var(--mono); font-size: 11.5px; color: var(--text-dim);
-              white-space: nowrap; padding-right: 12px; }
-  /* THE ORIGIN IS NOT THE DEFAULT, and the default is why these dates stood a
-     column and a half to the left of the cells they name until 2026-09-17.
-     The span is 14 wide and 74 tall -- a column's width, and the room the
-     rotated date needs. rotate(-90deg) about the default 50% 50% maps the text's
-     line box to a strip offset by (74 - 14) / 2 = 30px to the LEFT of the box,
-     measured in a browser, which is 1.6 columns at this pitch. An origin at
-     (h/2, h/2) instead maps it onto the box exactly: py in [0,14] becomes x in
-     [0,14], and px = 0 becomes y = 74, so the date reads bottom-to-top from the
-     cells upward, as it did before. Both numbers are half the HEIGHT; changing
-     the 74 means changing all three. */
-  .h-run span { display: block; font-family: var(--mono); font-size: 10px;
-                color: var(--text-muted); transform: rotate(-90deg);
-                transform-origin: 37px 37px;
-                width: 14px; height: 74px; line-height: 14px; white-space: nowrap; }
-  /* The hit target is the CELL, wider than the mark it holds, so pointing at
-     a column does not require hitting a 14px box. */
-  .history td { padding: 0; }
-  .history td, .history th.h-run { cursor: default; }
-  .history .hcell { display: block; width: 14px; height: 16px; border-radius: 2px; }
-  .hgap { position: relative; }
-  .hgap::after { content: ""; position: absolute; left: 5px; bottom: 7px;
-                 width: 3px; height: 3px; border-radius: 50%;
-                 background: var(--text-muted); }
-  /* The crosshair: the whole sweep lifts, so a reader comparing metrics
-     within one sweep can see which cells belong to it. */
-  .history [data-col].col-on { outline: 1px solid var(--accent); outline-offset: 1px; }
-  .h-run.col-on span { color: var(--text-bright); }
+  /* -- The two daily series ---------------------------------------------- */
+  .chart { margin: 0 0 10px; }
+  .chart figcaption { font-family: var(--mono); font-size: 11.5px;
+                      color: var(--text-dim); margin: 0 0 3px; }
+  /* SCROLL RATHER THAN SHRINK, the same rule the matrix followed here: thirty
+     days squeezed into a phone column is thirty days nobody can read, and an
+     SVG scaled below its viewBox takes its tick labels down with it -- 10px
+     type at 52% is 5px type. The floor is the authored width exactly, so the
+     drawing never renders smaller than it was laid out: at 720 a day column is
+     22px wide and 116 tall, which is a target a thumb can hit, and at 520 it
+     was 16. Wider than its column, it scrolls, inside its own box. */
+  .plot-scroll { overflow-x: auto; max-width: 100%; }
+  .plot { display: block; width: 100%; min-width: 720px; height: auto; }
+  /* THE SERIES HUE IS NOT --accent, and dark mode is not a flip of light.
+     --accent's dark step (#4fc3f7) sits at OKLCH L 0.773, outside the
+     0.48-0.67 band a data mark needs against this page's #17171a, so the dark
+     series is its own chosen step. Both were run through the palette checks
+     rather than eyeballed. --good/--warn/--crit stay reserved for state: a
+     series that borrowed them would make every chart look like a verdict. */
+  .plot .bar { fill: var(--series); }
+  .plot .line { fill: none; stroke: var(--series); stroke-width: 2;
+                stroke-linejoin: round; stroke-linecap: round; }
+  .plot .dot { fill: var(--series); }
+  /* The spread is the same hue at low opacity, not a second colour, because it
+     is the same series -- median to p95, not another measure. */
+  .plot .band { fill: var(--series); opacity: 0.20; }
+  /* A day nobody asked, in the same dim dot the matrix used for a sweep that
+     recorded nothing. It sits at the baseline where a bar would start, so it
+     reads as "no bar here" rather than as a very small bar. */
+  .plot .gapdot { fill: var(--text-muted); }
+  .plot .grid { stroke: var(--border); stroke-width: 1; }
+  .plot .tick { fill: var(--text-muted); font-family: var(--mono); font-size: 10px; }
+  /* The hit target is the whole day column in both charts, wider and taller
+     than any mark in it: a day at 2% must not need a two-pixel stub hit, and a
+     day with no mark at all must still answer when pointed at. */
+  .plot .slot { fill: transparent; }
+  .plot .slot.col-on { fill: var(--border); opacity: 0.5; }
   .h-readout { font-family: var(--mono); font-size: 11.5px; color: var(--text-dim);
-               min-height: 1.5em; margin: 10px 0 0; }
+               min-height: 1.5em; margin: 8px 0 0; }
   .h-readout:empty::before { content: attr(data-empty); color: var(--text-muted); }
-  /* One column narrow enough to fit forty sweeps is a column nobody can
-     read, so this scrolls sideways at every width rather than shrinking. */
-  table.history { display: block; overflow-x: auto; max-width: 100%; }
 
-  /* `absent` IS A VERDICT, drawn with no border, which reads right beside its
-     own label everywhere else on this page. A GRID HAS NO LABEL BESIDE THE
-     CELL, so there and only there the slot itself is drawn in the structural
-     border colour: the frame of an empty box, not a state colour, done on
-     the cell rather than on the state's own generated class, so the state
-     table stays untouched and this page carries no second copy of the
-     encoding. See verdict_encoding.py and
-     test_page.py::test_the_page_carries_the_generated_rules_and_no_others. */
-  .history td > .hcell { position: relative; }
-  .history td { background: var(--slot, rgba(255,255,255,0.045)); border-radius: 2px;
-                background-clip: padding-box; }
 
   /* -- The VoID document, as a table ---------------------------------------- */
   .void-detail { margin-top: 14px; }
@@ -184,7 +173,7 @@
   .void-detail summary::marker { color: var(--text-dim); }
   .vt-count { font-family: var(--mono); color: var(--text); }
   /* Scrolls itself, never the page: five columns of IRIs do not fit a phone.
-     Same treatment as table.metrics and table.history above. */
+     Same treatment as table.metrics and .plot-scroll above. */
   table.vtable { width: 100%; border-collapse: collapse; margin: 10px 0 0;
       display: block; overflow-x: auto; max-width: 100%; font-size: 12px; }
   table.vtable th { font-weight: 400; text-align: left; }
@@ -294,8 +283,8 @@
   /* ---- NARROW SCREENS ----------------------------------------------------
      Measured with web/tests/mobile/probe_mobile.py, which reported +103px at
      375px on this page before the rail existed. The offenders it named were
-     .m-time, .m-detail and the vocabulary grid; the history matrix scrolls
-     rather than shrinks at every width already, above. The page-body grid
+     .m-time, .m-detail and the vocabulary grid; the charts scroll rather
+     than shrink at every width already, above. The page-body grid
      itself drops the rail below the column at 900px -- see site.css. */
   @media (max-width: 640px) {
     /* .metric-row's flex-wrap, .m-time's margin and .m-detail's flex-basis
@@ -551,44 +540,91 @@
       </section>
       {% endif %}
 
-      {% if history.has_history %}
+      {% if charts and series.has_series %}
       <section class="panel" data-section="history">
         <h2>History</h2>
 
-        <!-- A real table: the rows and columns ARE rows and columns, so a screen
-             reader gets the structure and the accessible view is the view. The
-             readout below is an enhancement over it, not a replacement for it. -->
-        <table class="history" id="history">
-          <caption class="visually-hidden">Each metric's reading in each sweep,
-            oldest sweep first.</caption>
-          <thead>
-            <tr><th scope="col">metric</th>
-              {% for at in history.runs %}<th scope="col" class="h-run" data-col="{{ loop.index0 }}"><span>{{ at[5:16] | replace("T", " ") }}</span></th>{% endfor %}
-            </tr>
-          </thead>
+        <!-- TWO CHARTS, ONE X-AXIS, NEVER TWO Y-AXES. A share and a duration
+             drawn against two scales in one frame make their crossings look
+             like events, when a crossing only records the scales somebody
+             picked. Stacked, day i sits at the same x in both, so a reader
+             still carries a date from the dip down to the spike. -->
+        <figure class="chart">
+          <figcaption>% uptime</figcaption>
+          <div class="plot-scroll">
+            <svg class="plot" viewBox="0 0 {{ charts.view_w }} {{ charts.uptime_h }}"
+                 aria-hidden="true" focusable="false">
+              {%- for s in charts.slots %}<rect class="slot" data-col="{{ s.index }}"
+                data-readout="{{ s.readout }}" x="{{ s.x }}" y="0"
+                width="{{ s.w }}" height="{{ charts.uptime_h }}"><title>{{ s.readout }}</title></rect>{% endfor %}
+              {%- for t in charts.uptime_ticks %}<line class="grid" x1="{{ charts.x_left }}" y1="{{ t.y }}"
+                x2="{{ charts.x_right }}" y2="{{ t.y }}" shape-rendering="crispEdges"></line><text class="tick"
+                x="{{ charts.tick_x }}" y="{{ t.y + 3.5 }}" text-anchor="end">{{ t.value }}</text>{% endfor %}
+              {%- for b in charts.bars %}<rect class="bar" data-col="{{ b.index }}" x="{{ b.x }}" y="{{ b.y }}"
+                width="{{ b.w }}" height="{{ b.h }}" rx="1.5"></rect>{% endfor %}
+              {%- for g in charts.gaps %}<circle class="gapdot" cx="{{ g.x }}"
+                cy="{{ charts.uptime_baseline - 3 }}" r="1.6"></circle>{% endfor %}
+              {#- The date strip belongs under the LOWER chart, which is normally
+                  the response one. When this endpoint never answered there is no
+                  lower chart, and the dates come here instead -- an x-axis has to
+                  be labelled wherever it ends. #}
+              {%- if not charts.has_response %}{% for d in charts.dates %}<text class="tick"
+                x="{{ d.x }}" y="{{ charts.uptime_date_y }}" text-anchor="middle">{{ d.text }}</text>{% endfor %}{% endif %}
+            </svg>
+          </div>
+        </figure>
+
+        {% if charts.has_response %}
+        <figure class="chart">
+          <figcaption>response time</figcaption>
+          <div class="plot-scroll">
+            <svg class="plot" viewBox="0 0 {{ charts.view_w }} {{ charts.response_h }}"
+                 aria-hidden="true" focusable="false">
+              {%- for s in charts.slots %}<rect class="slot" data-col="{{ s.index }}"
+                x="{{ s.x }}" y="0" width="{{ s.w }}" height="{{ charts.response_baseline }}"></rect>{% endfor %}
+              {%- for t in charts.response_ticks %}<line class="grid" x1="{{ charts.x_left }}" y1="{{ t.y }}"
+                x2="{{ charts.x_right }}" y2="{{ t.y }}" shape-rendering="crispEdges"></line><text class="tick"
+                x="{{ charts.tick_x }}" y="{{ t.y + 3.5 }}" text-anchor="end">{{ t.value }}</text>{% endfor %}
+              {#- The band is median-to-p95. It is drawn UNDER the line so the
+                  line stays the thing being read, and it is the same hue at low
+                  opacity rather than a second colour, because it is the same
+                  series -- a spread, not another measure. #}
+              {%- for d in charts.bands %}<path class="band" d="{{ d }}"></path>{% endfor %}
+              {%- for d in charts.lines %}<path class="line" d="{{ d }}"></path>{% endfor %}
+              {#- r=4 is an 8px mark at the authored width, which is the floor for a
+                  marker somebody has to see and point at. #}
+              {%- for p in charts.dots %}<circle class="dot" cx="{{ p.x }}" cy="{{ p.p50 }}" r="4"></circle>{% endfor %}
+              {%- for d in charts.dates %}<text class="tick" x="{{ d.x }}" y="{{ charts.date_y }}"
+                text-anchor="middle">{{ d.text }}</text>{% endfor %}
+            </svg>
+          </div>
+        </figure>
+        {% endif %}
+
+        <!-- The readout. Empty until something is pointed at, and it says so:
+             a blank strip under a chart reads as a chart with nothing in it. -->
+        <p class="h-readout" id="h-readout" aria-live="polite"
+           data-empty="point at a day to read it"></p>
+
+        <!-- THE ACCESSIBLE VIEW IS A TABLE, not a description of a picture.
+             The matrix that stood here until 2026-09-25 was already a real
+             table, and dropping to SVG would have cost screen readers the
+             structure -- so the numbers behind both charts stay a table, and
+             the drawings are aria-hidden rather than narrated twice. -->
+        <table class="visually-hidden">
+          <caption>Uptime and response time per day, oldest day first.</caption>
+          <thead><tr><th scope="col">day</th><th scope="col">uptime</th>
+            <th scope="col">sweeps</th><th scope="col">median</th><th scope="col">p95</th></tr></thead>
           <tbody>
-            {% for m in history.metrics %}
-            <tr data-history-metric="{{ m.metric }}">
-              <th scope="row" class="h-metric">{{ m.name }}</th>
-              {% for c in m.cells %}
-              <td data-col="{{ loop.index0 }}">
-                {%- if c.present %}<span class="hcell {{ c.css_class }}"
-                  data-at="{{ c.at }}" data-reading="{{ c.label }}{% if c.reason %} ({{ c.reason }}){% endif %}"
-                  title="{{ c.at }}: {{ c.label }}{% if c.reason %} ({{ c.reason }}){% endif %}"></span>
-                {%- else %}<span class="hcell hgap" data-at="{{ c.at }}"
-                  data-reading="nothing recorded"
-                  title="{{ c.at }}: this sweep recorded nothing about this metric"></span>{% endif %}
-              </td>
-              {% endfor %}
-            </tr>
+            {% for d in series.days %}
+            <tr><th scope="row">{{ d.day }}</th>
+              <td>{% if d.uptime is none %}not measured{% else %}{{ d.uptime }}%{% endif %}</td>
+              <td>{{ d.sweeps if d.uptime is not none else "" }}</td>
+              <td>{% if d.median_ms is not none %}{{ d.median_ms }} ms{% endif %}</td>
+              <td>{% if d.p95_ms is not none %}{{ d.p95_ms }} ms{% endif %}</td></tr>
             {% endfor %}
           </tbody>
         </table>
-
-        <!-- The readout. Empty until something is pointed at, and it says so:
-             a blank strip beside a chart reads as a chart with nothing in it. -->
-        <p class="h-readout" id="h-readout" aria-live="polite"
-           data-empty="point at a cell or a column to read it"></p>
       </section>
       {% endif %}
 
@@ -691,7 +727,7 @@
          on 2026-09-17. Every one of those facts is still on the page in the
          section that measured it: the VoID panel states described, reported,
          complete and sampling in a sentence, the sample panel states its own
-         size, and the history's last column is the sweep. The rail was a second
+         size, and the metrics table dates every reading. The rail was a second
          copy of all of them, which is the thing this page has been losing one
          piece at a time. #}
       <div class="legend" data-rail="legend">
@@ -719,64 +755,46 @@
 // what it is for. What script adds is the crosshair and a sentence naming the
 // whole sweep, which a title attribute per cell cannot give.
 (function () {
-  var table = document.getElementById("history");
+  // The charts' interaction, and nothing else on this page needs script.
+  //
+  // PROGRESSIVE, not required: both charts are complete drawings without it,
+  // every day's slot carries an SVG <title> the browser shows on hover, and
+  // the numbers behind them are a real table for anything that cannot see a
+  // drawing at all. What script adds is the crosshair across BOTH charts at
+  // once -- the thing a per-slot tooltip cannot do, and the reason a reader
+  // gets two stacked charts instead of two unrelated ones.
+  var section = document.querySelector('[data-section="history"]');
   var out = document.getElementById("h-readout");
-  if (!table || !out) return;
+  if (!section || !out) return;
 
-  function cells(col) {
-    return [].slice.call(table.querySelectorAll('[data-col="' + col + '"]'));
-  }
   function clear() {
-    [].slice.call(table.querySelectorAll(".col-on")).forEach(function (el) {
+    [].slice.call(section.querySelectorAll(".col-on")).forEach(function (el) {
       el.classList.remove("col-on");
     });
   }
 
-  // One sweep, read across every metric. The sentence a per-cell tooltip
-  // cannot give, which is the reason this is here at all.
-  function readSweep(col) {
-    var at = null;
-    var parts = [];
-    [].slice.call(table.querySelectorAll("tbody tr")).forEach(function (tr) {
-      var td = tr.querySelector('[data-col="' + col + '"]');
-      if (!td) return;
-      var mark = td.querySelector(".hcell");
-      var name = tr.querySelector(".h-metric").textContent.trim();
-      if (!mark) return;
-      at = at || mark.getAttribute("data-at");
-      var reading = mark.getAttribute("data-reading");
-      // A sweep that recorded nothing about a metric is left out of the
-      // sentence rather than listed as "nothing": naming ten metrics to say
-      // nine of them were silent buries the one that was not.
-      if (reading !== "nothing recorded") parts.push(name + " " + reading);
-    });
-    if (!at) return "";
-    return at + " — " + (parts.length ? parts.join(", ") : "recorded nothing about any metric");
-  }
-
   function show(col) {
     clear();
-    cells(col).forEach(function (el) { el.classList.add("col-on"); });
-    out.textContent = readSweep(col);
+    var slots = section.querySelectorAll('.slot[data-col="' + col + '"]');
+    [].slice.call(slots).forEach(function (el) { el.classList.add("col-on"); });
+    // Read off the upper chart, which is the one that carries the sentence.
+    // A day whose slot is missing there is a day that does not exist, so an
+    // absent readout is left blank rather than invented.
+    var source = section.querySelector('.slot[data-readout][data-col="' + col + '"]');
+    out.textContent = source ? source.getAttribute("data-readout") : "";
   }
 
-  table.addEventListener("mouseover", function (e) {
-    var host = e.target.closest("[data-col]");
+  section.addEventListener("mouseover", function (e) {
+    var host = e.target.closest(".slot");
     if (host) show(host.getAttribute("data-col"));
   });
-  table.addEventListener("mouseleave", function () {
+  section.addEventListener("mouseleave", function () {
     clear();
     out.textContent = "";
   });
-  // Keyboard and touch reach it through the same path: a tap or a focus is a
-  // point, and a table nobody can read without a mouse is a table half the
-  // readers cannot read.
-  table.addEventListener("focusin", function (e) {
-    var host = e.target.closest("[data-col]");
-    if (host) show(host.getAttribute("data-col"));
-  });
-  table.addEventListener("click", function (e) {
-    var host = e.target.closest("[data-col]");
+  // Touch reaches it through the same path: a tap is a point.
+  section.addEventListener("click", function (e) {
+    var host = e.target.closest(".slot");
     if (host) show(host.getAttribute("data-col"));
   });
 })();
