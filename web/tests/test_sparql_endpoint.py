@@ -213,3 +213,50 @@ def test_a_literal_keeps_its_datatype_and_language(client_for, store):
     assert "datatype" not in row["a"], row["a"]
     assert row["b"]["xml:lang"] == "en"
     assert row["c"]["datatype"].endswith("integer")
+
+
+# ---------------------------------------------------------------------------
+# One string model
+#
+# The scan began as two functions -- a comment stripper and the scanner -- and
+# they disagreed about what a literal is. The stripper understood only
+# single-character quotes, so a `#` inside a long literal was treated as a
+# comment and a quote character was deleted, shifting every string boundary
+# after it. Oxigraph was a third opinion. None of the desyncs produced a live
+# SERVICE reaching the engine, because an unbalanced literal makes the scan
+# refuse -- but that put the whole guarantee on the failure branch rather than
+# on the scan being right. These pin the single pass that replaced it.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "query,allowed",
+    [
+        # A hash inside a long literal is CONTENT. Two passes deleted the rest
+        # of the line here, destroying the closing quote.
+        ('SELECT * WHERE { ?s ?p """has a # hash""" }', True),
+        ('SELECT * WHERE { ?s ?p """a # and SERVICE""" }', True),
+        # A hash inside a short literal is content too.
+        ('SELECT * WHERE { ?s ?p "# not a comment" }', True),
+        # ... and a real SERVICE after one is still caught.
+        (
+            'SELECT * WHERE { ?s ?p "# not a comment" . '
+            "SERVICE <http://x/> {?a ?b ?c} }",
+            False,
+        ),
+        # An escaped quote does not end the literal.
+        ('SELECT * WHERE { ?s ?p "a\\"b # SERVICE" }', True),
+        # A comment on the first line must not hide what follows it.
+        ("#\nSELECT * WHERE { SERVICE <http://x/> {?s ?p ?o} }", False),
+        # An unterminated LONG literal fails closed, like a short one.
+        ('SELECT * WHERE { ?s ?p """unterminated # SERVICE <http://x/>', False),
+        # THE CASE THAT SEPARATES THE TWO MODELS. A long literal containing a
+        # single quote parses one way as `"""..."..."""` and another as
+        # `""` + `"a "` + loose text. Read the short way, the word after the
+        # inner quote falls outside any literal and reads as federation; read
+        # correctly, the whole thing is one literal and means nothing. Without
+        # this, dropping long-quote support changes no test.
+        ('SELECT * WHERE { ?s ?p """a " b SERVICE""" }', True),
+    ],
+)
+def test_comments_and_literals_share_one_model(client_for, store, query, allowed):
+    status = _q(client_for(store), query).status_code
+    assert (status == 200) is allowed, f"{status} for {query!r}"

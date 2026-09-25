@@ -58,70 +58,49 @@ MAX_ROWS = 100_000
 # Bytes of query text accepted. A megabyte of SPARQL is not a question.
 MAX_QUERY_BYTES = 16_384
 
-# SPARQL comments run from an unquoted # to end of line. Stripped before the
-# federation check so a commented-out SERVICE does not trip it and, more to the
-# point, so `SER#\nVICE`-style games have less room. The quote tracking keeps a
-# # inside a literal -- common in IRIs and fragments -- from eating the rest of
-# the line.
-def strip_comments(query: str) -> str:
-    out, quote, i = [], None, 0
-    while i < len(query):
-        c = query[i]
-        if quote:
-            out.append(c)
-            if c == "\\" and i + 1 < len(query):
-                out.append(query[i + 1])
-                i += 2
-                continue
-            if c == quote:
-                quote = None
-        elif c in "'\"":
-            quote = c
-            out.append(c)
-        elif c == "<":
-            # An IRI: copied whole, because a # inside one is a fragment.
-            end = query.find(">", i)
-            if end == -1:
-                out.append(c)
-            else:
-                out.append(query[i : end + 1])
-                i = end + 1
-                continue
-        elif c == "#":
-            while i < len(query) and query[i] != "\n":
-                i += 1
-            continue
-        else:
-            out.append(c)
-        i += 1
-    return "".join(out)
-
-
 _FEDERATION = re.compile(r"\bSERVICE\b", re.IGNORECASE)
 
 _LONG_QUOTES = ("'''", '"""')
 
 
 def scannable(query: str) -> str | None:
-    """`query` with literals and IRIs blanked out, or None if it cannot be read.
+    """`query` with comments, literals and IRIs blanked out, or None.
 
-    Only keyword positions survive, so `?s ?p "a SERVICE outage"` and
+    ONE PASS, AND ONE STRING MODEL. This began as two functions -- a comment
+    stripper and this -- and they disagreed: the stripper understood only
+    single-character quotes, so a `#` inside a `\"\"\"long literal\"\"\"` was treated
+    as a comment, deleting a quote character and shifting every string boundary
+    after it. Three parsers then had to agree about where literals start and
+    end -- the stripper, this, and Oxigraph itself -- and any disagreement
+    moves the window the SERVICE check looks at. None of the desyncs that were
+    constructed produced a live SERVICE reaching the engine, because an
+    unbalanced literal makes this return None and None is refused. But that
+    means the safety rested entirely on the failure branch rather than on the
+    scan being right, which is one deleted line away from a hole. So there is
+    now one pass and one model of what a literal is.
+
+    What survives is the keyword positions, so `?s ?p "a SERVICE outage"` and
     `<http://example.test/ns#SERVICE>` stop reading as federation. Both were
-    refused before this existed, which is safe but wrong: an endpoint that
-    rejects a legitimate query with a security message teaches people to
-    distrust the message.
+    refused before that distinction existed, which is safe but wrong: an
+    endpoint that rejects a legitimate query with a security message teaches
+    people to distrust the message.
 
     None means the text could not be scanned -- an unterminated literal. The
-    caller must treat that as a refusal. Returning the partial scan instead
-    would let an unclosed quote swallow a SERVICE clause, turning a parse
+    caller MUST treat that as a refusal. Returning the partial scan instead
+    would let an unclosed quote swallow a SERVICE clause and turn a parse
     oddity into a way through.
     """
     out: list[str] = []
     i = 0
     while i < len(query):
         c = query[i]
-        if c in "'\"":
-            # Long forms first: ''' and \"\"\" may contain the short delimiter.
+        if c == "#":
+            # A comment, but only out here: inside a literal or an IRI the
+            # branches below consume it, which is the whole point of doing
+            # this in one pass.
+            while i < len(query) and query[i] != "\n":
+                i += 1
+        elif c in "'\"":
             head = query[i : i + 3]
             quote = head if head in _LONG_QUOTES else c
             j = i + len(quote)
@@ -142,7 +121,9 @@ def scannable(query: str) -> str | None:
             end = query.find(">", i)
             body = query[i + 1 : end] if end != -1 else ""
             # A bare `<` is the comparison operator, not an IRI, when what
-            # follows holds whitespace or another `<` before any `>`.
+            # follows holds whitespace or another `<` before any `>`. A SERVICE
+            # clause always contains whitespace, so it can never hide in the
+            # IRI branch.
             if end == -1 or any(ch.isspace() or ch == "<" for ch in body):
                 out.append(" ")
                 i += 1
@@ -157,7 +138,7 @@ def scannable(query: str) -> str | None:
 
 def reject_federation(query: str) -> str | None:
     """The refusal message, or None if the query names no SERVICE."""
-    text = scannable(strip_comments(query))
+    text = scannable(query)
     if text is None or _FEDERATION.search(text):
         return (
             "SERVICE is not available on this endpoint: it would let a query "
