@@ -218,6 +218,8 @@ from urllib.parse import quote
 
 from pyoxigraph import DefaultGraph, NamedNode, RdfFormat, Store, parse
 
+import loaded_manifest
+
 
 @dataclass
 class LoadResult:
@@ -1982,7 +1984,7 @@ def load_run(store: Store, nquads: bytes) -> LoadResult:
 
 
 _USAGE = (
-    "usage: load_run.py STORE_PATH RUN.nq [RUN.nq ...]\n"
+    "usage: load_run.py [--skip-loaded] STORE_PATH RUN.nq [RUN.nq ...]\n"
     "       load_run.py --rebuild STORE_PATH\n"
     "       load_run.py --check STORE_PATH"
 )
@@ -2046,6 +2048,13 @@ def main(argv: list[str] | None = None) -> int:
             if args[0] == "--rebuild"
             else _check_mode(args[1])
         )
+    # --skip-loaded is what makes an hourly restart cost one file rather than
+    # the whole archive. Off by default: a plain invocation still loads exactly
+    # what it is given, because that is what every other caller of this script
+    # -- a person republishing one run by hand, and the tests -- means by it.
+    skip_loaded = bool(args) and args[0] == "--skip-loaded"
+    if skip_loaded:
+        args = args[1:]
     if len(args) < 2 or args[0].startswith("--"):
         print(_USAGE, file=sys.stderr)
         return 2
@@ -2065,6 +2074,31 @@ def main(argv: list[str] | None = None) -> int:
         _parsed_graphs(data)
         contents.append(data)
 
+    # The manifest is consulted AFTER the validation loop above, so a corrupt
+    # run file is still refused before the store directory is created, and
+    # BEFORE Store() below, so a run already held costs no store work at all.
+    manifest = loaded_manifest.read(args[0]) if skip_loaded else {}
+    skipped, pending = (
+        loaded_manifest.partition(run_paths, contents, manifest)
+        if skip_loaded
+        else ([], list(range(len(run_paths))))
+    )
+    if skip_loaded:
+        # Said once rather than per file: 293 lines of "already loaded" is a log
+        # nobody reads, and the one number an operator wants is how much of the
+        # archive this start had to do.
+        print(
+            f"{len(skipped)} run file(s) already in the store, "
+            f"{len(pending)} to load"
+        )
+        if not pending:
+            # Nothing to load means nothing to open. Store() would create the
+            # directory if the path were wrong, and there is no work here that
+            # justifies the risk of that on the hot restart path.
+            return 0
+    run_paths = [run_paths[i] for i in pending]
+    contents = [contents[i] for i in pending]
+
     store = Store(args[0])
     # Whether any file left current attributing facts to a run that no longer
     # states them. It decides the exit status, below, and it is deliberately
@@ -2073,6 +2107,12 @@ def main(argv: list[str] | None = None) -> int:
     drifted = False
     for path, data in zip(run_paths, contents):
         result = load_run(store, data)
+        if skip_loaded:
+            # RECORDED AFTER THE LOAD, one file at a time. A manifest naming a
+            # file the store does not hold would skip that run forever and say
+            # nothing, so the entry never runs ahead of the fact it asserts.
+            manifest[Path(path).name] = loaded_manifest.digest(data)
+            loaded_manifest.write(args[0], manifest)
         # Reported from the result of the load, not from the validation pass
         # above, which parses every file a second time: one file, one line
         # about what it discarded.

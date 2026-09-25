@@ -343,6 +343,58 @@ use. A rebuild derives `current` from the run graphs alone, so it points every
 endpoint at the newest run that still measures it, which after a drop is the
 newest survivor.
 
+### Why a restart is not a rebuild
+
+The site publishes by restarting. `app.py` opens the store with
+`Store.read_only` and caches the handle for the life of the process, so new
+sweep data reaches a reader only when the process is replaced — and the prober
+CronJob does exactly that, `rollout restart`ing the `site` Deployment after
+every hourly sweep.
+
+That was cheap while the store held a few runs and ruinous once it held a few
+hundred. The store volume was an `emptyDir`, so every hourly restart rebuilt it
+from nothing. Measured on 2026-09-25: **294 run files, 1,398,190 quads, ten
+minutes**, with the site serving 503 for all of it. Seventeen percent of every
+hour, growing about fifty seconds a day as the archive grew — an arithmetic
+that ends with a rebuild longer than the hour between rebuilds.
+
+Two changes fix it. The store moved to its own volume, so it survives the pod;
+and `load_run.py` gained `--skip-loaded`, which loads only the run files the
+store does not already hold:
+
+    python load_run.py --skip-loaded /data/store/sparqlwatch.db /data/runs/run-*.nq
+
+The record of what is held is a sidecar JSON beside the store directory
+(`sparqlwatch.db.loaded.json`), written by `loaded_manifest.py`. Three
+properties of it are load-bearing:
+
+- **It is a file, not triples.** "These bytes have been loaded" is a fact about
+  this deployment's filesystem, not about a SPARQL endpoint. In the graph it
+  would be answerable by the site's own queries, would appear in the RDF this
+  service publishes about itself, and would have to be excluded by name from
+  every query that scans graphs.
+- **It is keyed by content hash, not by filename.** This sits directly on top of
+  `load_run`'s central invariant — the same run IRI seen again with *changed*
+  content must replace, never merge. A name-keyed manifest would skip exactly
+  the file that invariant exists to catch, and the store would keep a
+  superseded answer forever with nothing reporting it.
+- **An entry is written after its file loads, never before,** and the write is a
+  temp-file rename. A manifest naming a file the store does not hold would skip
+  that run permanently and say nothing, which is strictly worse than no
+  manifest. Any manifest that fails to parse, or carries an unrecognised
+  version, is read as "nothing is loaded": that costs one slow start, and the
+  optimistic reading costs a run silently missing from the site.
+
+The flag is off by default, because every other caller — a person republishing
+one run by hand, and the tests — means "load what I gave you".
+
+What this gives up is that an `emptyDir` healed itself: a damaged store was
+discarded on the next restart because every restart built a new one. Half of
+that is preserved, since a load interrupted partway leaves its file unrecorded
+and the next start retries it. RocksDB-level corruption no longer heals on its
+own; the recovery is to delete the store volume and let it rebuild from the
+runs, which live on their own retained volume and are the actual record.
+
 ### Check and rebuild
 
 ```bash
