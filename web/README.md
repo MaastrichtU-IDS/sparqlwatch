@@ -395,6 +395,54 @@ and the next start retries it. RocksDB-level corruption no longer heals on its
 own; the recovery is to delete the store volume and let it rebuild from the
 runs, which live on their own retained volume and are the actual record.
 
+### What a run costs, and what the store costs
+
+Worth knowing before reasoning about disk, because the two are not the same and
+the obvious assumption is wrong.
+
+A run file is **verbose, not information-dense**. One measurement — a verdict, a
+timing, a provenance link — is six quads, and every one of those six lines
+repeats the same 112-character subject:
+
+    <urn:sparqlwatch:measurement:2026-08-24T19:45:03Z:http%3A%2F%2Fvisualdataweb.infor.uva.es%2Fsparql:availability>
+
+That IRI carries the full instant *and* the percent-encoded endpoint URL. The
+graph IRI is repeated on every line as well. Measured on the committed excerpt
+of a real 543-endpoint sweep: **subject IRIs are 47% of the file and graph IRIs
+another 19% — two thirds of a run is repeated identifiers.** N-Quads has no
+prefixes; that is the trade it makes for being line-oriented and streamable,
+which is what `prober/src/write.rs` needs to write a run crash-safely in chunks.
+
+So runs compress extremely well — **4.0–4.1%**, on both the hourly and the
+nightly-profile shapes — and the sweep packs the archive as it goes. `load_run`
+reads either form, sniffing the gzip magic bytes rather than trusting the
+filename.
+
+The store is the expensive one. Per quad, measured 2026-09-25:
+
+| | bytes/quad | per day (~113k quads) |
+| --- | --- | --- |
+| runs, gzipped | ~7 | 0.8 MB |
+| runs, raw `.nq` | 177 | 19 MB |
+| store, compacted | 317 | 34 MB |
+| store, uncompacted | 1,292 | 139 MB |
+
+A RocksDB store costs several times the data it is built from, because every
+quad is held in more than one index. **And nothing compacts it on its own here:**
+the init container exits the moment loading finishes, so RocksDB's background
+threads never run and the store keeps its post-write size. `--skip-loaded`
+therefore calls `Store.optimize()` — but at most once a day, because compaction
+happens on the restart path, which is downtime. Measured at ~2.5s on a 35 MiB
+store; paying that hourly would spend twelve minutes of downtime a day to
+reclaim about 110 MB against a 20Gi volume.
+
+Two consequences worth remembering. Compressing the archive must not look like
+the runs changing, or the next restart would reload all of them — so the
+manifest key strips a trailing `.gz` and the digest is taken over the
+*decompressed* bytes. And the remaining unbounded cost is neither of these: it
+is the cold rebuild on a fresh store volume, which stays linear in the archive.
+That is what a retention policy would bound.
+
 ### Check and rebuild
 
 ```bash

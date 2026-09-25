@@ -2389,3 +2389,142 @@ def test_the_manifest_never_names_a_file_the_store_does_not_hold(tmp_path):
     # The validation pass refuses the batch before the store is created, so
     # neither file is recorded -- the manifest must not claim the good one.
     assert loaded_manifest.read(store) == {}
+
+
+# ---------------------------------------------------------------------------
+# Compression, and compaction
+#
+# A run is ~96% redundant -- 65% of the file is its subject and graph IRIs
+# written longhand, because N-Quads has no prefixes -- so the archive gzips to
+# about 4%. And nothing compacts an Oxigraph store here, because the init
+# container exits the moment loading finishes: measured 1,292 B/quad
+# uncompacted against 317 compacted.
+# ---------------------------------------------------------------------------
+def test_a_compressed_run_loads_exactly_like_a_plain_one(tmp_path):
+    import gzip
+
+    plain, packed = str(tmp_path / "a"), str(tmp_path / "b")
+    run = _run_file(tmp_path, "run-2026-09-01T12-00-00Z.nq", "2026-09-01T12:00:00Z")
+    gz = tmp_path / "runs" / "run-2026-09-01T12-00-00Z.nq.gz"
+    gz.write_bytes(gzip.compress(Path(run).read_bytes()))
+
+    assert main([plain, run]) == 0
+    assert main([packed, str(gz)]) == 0
+    assert run_quad_count(Store.read_only(plain)) == run_quad_count(Store.read_only(packed))
+    assert run_graph_names(Store.read_only(plain)) == run_graph_names(Store.read_only(packed))
+
+
+def test_compressing_the_archive_reloads_nothing(tmp_path, capsys):
+    """THE failure this nearly shipped with.
+
+    `run-X.nq` becoming `run-X.nq.gz` is the same run in a smaller box. A
+    manifest keyed on the full filename would see the whole archive change at
+    once and load all of it -- which is exactly the full rebuild --skip-loaded
+    exists to prevent, triggered by the very act of saving space.
+    """
+    import gzip
+
+    store = str(tmp_path / "store")
+    runs = [
+        _run_file(tmp_path, f"run-2026-09-0{d}T12-00-00Z.nq", f"2026-09-0{d}T12:00:00Z")
+        for d in (1, 2, 3)
+    ]
+    main(["--skip-loaded", store, *runs])
+    capsys.readouterr()
+
+    packed = []
+    for r in runs:
+        gz = Path(r).with_suffix(".nq.gz")
+        gz.write_bytes(gzip.compress(Path(r).read_bytes()))
+        Path(r).unlink()
+        packed.append(str(gz))
+
+    assert main(["--skip-loaded", store, *packed]) == 0
+    assert "3 run file(s) already in the store, 0 to load" in capsys.readouterr().out
+
+
+def test_a_compressed_run_whose_contents_changed_is_still_reloaded(tmp_path, capsys):
+    """Compression must hide the packaging, never a change of contents."""
+    import gzip
+
+    store = str(tmp_path / "store")
+    run = _run_file(tmp_path, "run-2026-09-01T12-00-00Z.nq", "2026-09-01T12:00:00Z")
+    gz = Path(run).with_suffix(".nq.gz")
+    gz.write_bytes(gzip.compress(Path(run).read_bytes()))
+    Path(run).unlink()
+    main(["--skip-loaded", store, str(gz)])
+    capsys.readouterr()
+
+    changed = _run_file(
+        tmp_path, "changed.nq", "2026-09-01T12:00:00Z", verdict="indeterminate"
+    )
+    gz.write_bytes(gzip.compress(Path(changed).read_bytes()))
+    assert main(["--skip-loaded", store, str(gz)]) == 0
+    assert "0 run file(s) already in the store, 1 to load" in capsys.readouterr().out
+
+
+def test_the_store_is_compacted_on_a_cold_start_and_not_every_restart(tmp_path, capsys):
+    """Compaction is the only thing that shrinks the store, and it costs downtime.
+
+    It runs on the restart path, so paying it hourly spends twelve minutes of
+    downtime a day to reclaim about 110 MB against a 20Gi volume. Once a day
+    takes the space and leaves the downtime alone.
+    """
+    import loaded_manifest
+
+    store = str(tmp_path / "store")
+    runs = [
+        _run_file(tmp_path, f"run-2026-09-0{d}T12-00-00Z.nq", f"2026-09-0{d}T12:00:00Z")
+        for d in (1, 2)
+    ]
+    assert main(["--skip-loaded", store, *runs]) == 0
+    assert "compacted the store" in capsys.readouterr().out
+    assert loaded_manifest.optimized_at(store) is not None
+
+    # A new run an hour later: loaded, but no second compaction.
+    fresh = _run_file(tmp_path, "run-2026-09-03T12-00-00Z.nq", "2026-09-03T12:00:00Z")
+    assert main(["--skip-loaded", store, *runs, fresh]) == 0
+    out = capsys.readouterr().out
+    assert "1 to load" in out
+    assert "compacted the store" not in out, "compacted again within the day"
+
+
+def test_a_compaction_falls_due_again_after_a_day(tmp_path):
+    from datetime import datetime, timedelta, timezone
+
+    import loaded_manifest
+
+    store = str(tmp_path / "store")
+    run = _run_file(tmp_path, "run-2026-09-01T12-00-00Z.nq", "2026-09-01T12:00:00Z")
+    main(["--skip-loaded", store, run])
+    then = loaded_manifest.optimized_at(store)
+
+    assert not loaded_manifest.due_for_optimize(store, now=then + timedelta(hours=23))
+    assert loaded_manifest.due_for_optimize(store, now=then + timedelta(hours=25))
+    # A clock that moved backwards is a broken clock, not a compaction that has
+    # not happened yet: it must not switch compaction off until it catches up.
+    assert loaded_manifest.due_for_optimize(store, now=then - timedelta(hours=1))
+
+
+def test_an_ordinary_load_does_not_erase_the_compaction_clock(tmp_path):
+    """Otherwise every restart believes a compaction is owed, and pays for one."""
+    import loaded_manifest
+
+    store = str(tmp_path / "store")
+    runs = [_run_file(tmp_path, "run-2026-09-01T12-00-00Z.nq", "2026-09-01T12:00:00Z")]
+    main(["--skip-loaded", store, *runs])
+    first = loaded_manifest.optimized_at(store)
+    assert first is not None
+
+    runs.append(_run_file(tmp_path, "run-2026-09-02T12-00-00Z.nq", "2026-09-02T12:00:00Z"))
+    main(["--skip-loaded", store, *runs])
+    assert loaded_manifest.optimized_at(store) == first, "the clock was reset by a load"
+
+
+def test_a_hand_load_is_never_made_to_wait_for_a_compaction(tmp_path, capsys):
+    """Without the flag this is somebody republishing one run; it is not their
+    job to compact a store they do not own."""
+    store = str(tmp_path / "store")
+    run = _run_file(tmp_path, "run-2026-09-01T12-00-00Z.nq", "2026-09-01T12:00:00Z")
+    assert main([store, run]) == 0
+    assert "compacted" not in capsys.readouterr().out
