@@ -428,6 +428,19 @@ pub struct Skipped {
     /// Carried as it stands in the state, so the run graph publishes the
     /// instant the endpoint was actually relegated rather than this run's.
     pub dormant_since: Option<String>,
+    /// When a sweep last actually asked this endpoint anything.
+    ///
+    /// Published so that "when will you ask me again?" is answerable from the
+    /// run graph. A dormant endpoint is re-probed at most one sweep in every
+    /// `cadence_days`, which /about states, so this instant plus that number is
+    /// the answer -- and without it the only published dormancy instant is
+    /// `dormant_since`, which says when we STOPPED asking and nothing about
+    /// when we will resume.
+    ///
+    /// `None` for an entry no sweep has ever probed, where no quad is written:
+    /// an empty literal would be a claim about a date nobody recorded, which is
+    /// the same rule `dormant_since` follows two fields up.
+    pub last_probed: Option<String>,
     pub reason: SkipReason,
 }
 
@@ -591,8 +604,14 @@ pub fn plan_sweep(
             None => HoldEffect::Unheld,
         };
         let dormant_since = entry.and_then(|entry| entry.dormant_since.clone());
+        let last_probed = entry.and_then(|entry| entry.last_probed.clone());
         let mut skip = |reason: SkipReason| {
-            skipped.push(Skipped { url: url.clone(), dormant_since: dormant_since.clone(), reason });
+            skipped.push(Skipped {
+                url: url.clone(),
+                dormant_since: dormant_since.clone(),
+                last_probed: last_probed.clone(),
+                reason,
+            });
         };
         // 1
         if effect == HoldEffect::Dormant {
