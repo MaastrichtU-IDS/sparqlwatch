@@ -24,17 +24,19 @@
 # error too, because a mistyped one that swept nothing would exit 0 and look
 # like a successful pass.
 #
-# USE:
+# USE. TWO placeholders, and the image is one of them -- substituting only the
+# url leaves `image: IMAGE` literal and the pod sits in ImagePullBackOff saying
+# nothing useful about why. Taking the image from the running deployment rather
+# than pasting a tag means this cannot name a build the cluster is not on:
 #
-#     sed 's|ENDPOINT_URL|https://example.org/sparql|' ops/catch-up-sweep.yaml \
+#     IMG=$(kubectl -n sparqlwatch-dev get deploy site \
+#             -o jsonpath='{.spec.template.spec.containers[0].image}')
+#     sed -e "s|IMAGE|$IMG|" \
+#         -e 's|ENDPOINT_URL|https://example.org/sparql|' \
+#         ops/catch-up-sweep.yaml \
 #       | kubectl -n sparqlwatch-dev create -f -
+#
 #     kubectl -n sparqlwatch-dev logs -f job/<the name it printed>
-#
-# The image tag must be one the cluster is running; the deployment's is the
-# safe choice:
-#
-#     kubectl -n sparqlwatch-dev get deploy site \
-#       -o jsonpath='{.spec.template.spec.containers[0].image}'
 #
 apiVersion: batch/v1
 kind: Job
