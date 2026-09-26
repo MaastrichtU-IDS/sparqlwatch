@@ -32,6 +32,8 @@ fn preflight_def() -> MetricDef {
         kind: ProbeKind::CorsPreflight,
         query: None,
         fallback_query: None,
+            overlap_probe: None,
+            overlap_query: None,
         expect: None,
         var: None,
         declared_by: None,

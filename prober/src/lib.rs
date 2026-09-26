@@ -962,7 +962,20 @@ async fn probe_endpoint(
                 // this needs no new client path. It does need the metric's own
                 // `var`: a caller passing the wrong name gets a silent empty
                 // result, which reads as "counted nothing".
-                ProbeKind::Counted => client.ask_literal(ep, &q, var.as_deref().expect(VAR_REQUIRED)).await,
+                // Asks which SHAPE of dataset this is before counting it.
+                // See MetricDef::overlap_probe: a union default graph makes
+                // the default/named UNION count everything twice, and this
+                // project published `declared-but-wrong` against an honest
+                // 335-million-triple declaration because of it.
+                ProbeKind::Counted => client
+                    .counted_by_shape(
+                        ep,
+                        &q,
+                        def.overlap_probe.as_deref(),
+                        def.overlap_query.as_deref(),
+                        var.as_deref().expect(VAR_REQUIRED),
+                    )
+                    .await,
                 // The two probes that announce an `Origin`, so the others
                 // cannot be perturbed by a server that filters on it.
                 ProbeKind::Cors => client.cors(ep, &q).await,
@@ -1336,6 +1349,8 @@ mod tests {
             kind: ProbeKind::Liveness,
             query: Some("SELECT ?s WHERE { ?s ?p ?o } LIMIT 1".into()),
             fallback_query: None,
+            overlap_probe: None,
+            overlap_query: None,
             expect: None,
             var: None,
             declared_by: None,

@@ -359,6 +359,36 @@ pub struct MetricDef {
     /// should be made knowingly rather than discovered.
     #[serde(default)]
     pub fallback_query: Option<String>,
+    /// A cheap query that decides WHICH count query to ask, for a `Counted`
+    /// metric over a dataset.
+    ///
+    /// "How many triples does this endpoint hold" has no single answer in
+    /// SPARQL, because the default graph may be storage of its own or a view
+    /// over the named graphs, and nothing in a response says which. The
+    /// default/named UNION these metrics ask is right for the first shape and
+    /// counts everything twice in the second.
+    ///
+    /// THAT IS NOT HYPOTHETICAL. data.allie.dbcls.jp declares 335,241,279
+    /// triples and a UNION count observed 675,397,120 -- ratio 2.015 -- so
+    /// this project published `declared-but-wrong` against an honest
+    /// declaration. It serves a union default graph, confirmed on 2026-09-26
+    /// with one `LIMIT 1` query.
+    ///
+    /// Taking the larger of the two counts instead was tried and is wrong: the
+    /// synthetic control holds 9 triples in its default graph and 38 in named
+    /// graphs, disjoint, and its ground truth is 47. The control exists for
+    /// exactly this and it caught it.
+    ///
+    /// So the shape is asked about rather than assumed. This query returns a
+    /// row when a default-graph triple also appears in a named graph, which
+    /// means the default graph is a view and `overlap_query` is the count to
+    /// trust; no row means the two are separate storage and the UNION in
+    /// `query` is right.
+    #[serde(default)]
+    pub overlap_probe: Option<String>,
+    /// The count to ask when `overlap_probe` returns a row. See it.
+    #[serde(default)]
+    pub overlap_query: Option<String>,
     #[serde(default)]
     pub expect: Option<bool>,
     /// The SPARQL variable the query binds, for probe kinds that read
@@ -798,6 +828,14 @@ pub fn definitions_revision(defs: &[MetricDef]) -> String {
             // `indeterminate` before, so two definition sets differing only in
             // this measure different things and must not share a revision.
             fallback_query,
+            // IN THE REVISION, both of them. They decide WHICH count query an
+            // endpoint is asked, and a union-default-graph store answers the
+            // two with numbers that differ by a factor of two -- the
+            // difference between `verified` and `declared-but-wrong` for the
+            // same endpoint on the same day. Two definition sets differing
+            // only in these measure different things.
+            overlap_probe,
+            overlap_query,
             expect,
             var,
             declared_by,
@@ -822,13 +860,18 @@ pub fn definitions_revision(defs: &[MetricDef]) -> String {
             tolerance,
         } = d;
         canonical.push_str(&format!(
-            "{}\x1f{}\x1f{}\x1f{:?}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{:?}\x1f{:?}\x1f{}\x1f{}\x1f{}\x1e",
+            "{}\x1f{}\x1f{}\x1f{:?}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{:?}\x1f{:?}\x1f{}\x1f{}\x1f{}\x1e",
             id,
             label,
             dimension,
             kind,
             query.as_deref().unwrap_or(""),
             fallback_query.as_deref().unwrap_or(""),
+            format!(
+                "{}\x1d{}",
+                overlap_probe.as_deref().unwrap_or(""),
+                overlap_query.as_deref().unwrap_or("")
+            ),
             expect.map(|b| b.to_string()).unwrap_or_default(),
             var.as_deref().unwrap_or(""),
             declared_by.as_deref().unwrap_or(""),
@@ -991,6 +1034,8 @@ query = "SELECT ?thing WHERE {{ ?s ?p ?thing }} LIMIT 1"
             kind,
             query,
             fallback_query,
+            overlap_probe,
+            overlap_query,
             expect,
             var,
             declared_by,
@@ -1027,6 +1072,30 @@ query = "SELECT ?thing WHERE {{ ?s ?p ?thing }} LIMIT 1"
             // the endpoint that refused the primary query now publishes a
             // verdict where it published `indeterminate`. `None` in the base,
             // so the variant is the one that HAS it.
+            // Both decide WHICH count query an endpoint is asked. A
+            // union-default-graph store answers the two with numbers that
+            // differ by a factor of two, which is the difference between
+            // `verified` and `declared-but-wrong` for the same endpoint on
+            // the same day. `None` in the base, so the variants are the ones
+            // that HAVE them.
+            (
+                "overlap_probe",
+                MetricDef {
+                    overlap_probe: Some(
+                        overlap_probe.unwrap_or_else(|| "SELECT (1 AS ?overlap) WHERE {} LIMIT 1".into()),
+                    ),
+                    ..d.clone()
+                },
+            ),
+            (
+                "overlap_query",
+                MetricDef {
+                    overlap_query: Some(
+                        overlap_query.unwrap_or_else(|| "SELECT (COUNT(*) AS ?n) WHERE { GRAPH ?g { ?s ?p ?o } }".into()),
+                    ),
+                    ..d.clone()
+                },
+            ),
             (
                 "fallback_query",
                 MetricDef {

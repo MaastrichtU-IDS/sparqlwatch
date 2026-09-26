@@ -313,6 +313,8 @@ async fn a_reachable_endpoint_is_asked_the_liveness_question_only_once() {
         kind: ProbeKind::Liveness,
         query: Some("SELECT ?s WHERE { ?s ?p ?o } LIMIT 1".into()),
         fallback_query: None,
+            overlap_probe: None,
+            overlap_query: None,
         expect: None,
         var: None,
         declared_by: None,
@@ -356,6 +358,8 @@ async fn a_metric_binding_a_nonstandard_variable_is_extracted_via_its_declared_v
         kind: ProbeKind::AskData,
         query: Some("SELECT ?thing WHERE { ?s ?p ?thing } LIMIT 1".into()),
         fallback_query: None,
+            overlap_probe: None,
+            overlap_query: None,
         expect: None,
         var: Some("thing".into()),
         declared_by: None,
@@ -456,6 +460,8 @@ async fn a_non_graded_fetch_metric_carries_no_level() {
         kind: ProbeKind::FetchWellKnown,
         query: None,
         fallback_query: None,
+            overlap_probe: None,
+            overlap_query: None,
         expect: None,
         var: None,
         declared_by: None,
@@ -695,6 +701,8 @@ async fn an_endpoint_budget_expiry_still_yields_one_row_per_metric() {
             kind: ProbeKind::AskFilter,
             query: Some("SELECT ?s WHERE { ?s ?p ?o } LIMIT 1".into()),
             fallback_query: None,
+            overlap_probe: None,
+            overlap_query: None,
             expect: None,
             var: None,
             declared_by: None,
@@ -772,6 +780,8 @@ async fn a_budget_expiry_after_the_fetch_still_publishes_declarations_read() {
             kind: ProbeKind::AskFilter,
             query: Some("SELECT ?s WHERE { ?s ?p ?o } LIMIT 1".into()),
             fallback_query: None,
+            overlap_probe: None,
+            overlap_query: None,
             expect: None,
             var: None,
             declared_by: None,
@@ -849,6 +859,8 @@ async fn a_partial_endpoint_keeps_the_verdicts_it_already_earned() {
         kind: ProbeKind::SelectIris,
         query: Some(FAST_QUERY.into()),
         fallback_query: None,
+            overlap_probe: None,
+            overlap_query: None,
         expect: None,
         var: Some("s".into()),
         declared_by: None,
@@ -871,6 +883,8 @@ async fn a_partial_endpoint_keeps_the_verdicts_it_already_earned() {
         kind: ProbeKind::AskFilter,
         query: Some(SLOW_QUERY.into()),
         fallback_query: None,
+            overlap_probe: None,
+            overlap_query: None,
         expect: None,
         var: None,
         declared_by: None,
@@ -973,6 +987,8 @@ async fn an_expiry_after_a_rowless_metric_does_not_re_mark_what_was_measured() {
         kind: ProbeKind::SelectIris,
         query: Some(FAST_QUERY.into()),
         fallback_query: None,
+            overlap_probe: None,
+            overlap_query: None,
         expect: None,
         var: Some("s".into()),
         declared_by: None,
@@ -2064,6 +2080,8 @@ fn enumerating_metric(limit: usize) -> MetricDef {
         kind: ProbeKind::SelectIris,
         query: Some(format!("SELECT DISTINCT ?c WHERE {{ ?s a ?c }} LIMIT {limit}")),
         fallback_query: None,
+            overlap_probe: None,
+            overlap_query: None,
         expect: None,
         var: Some("c".into()),
         declared_by: None,
@@ -2581,6 +2599,8 @@ fn probe_and_declined() -> (Vec<MetricDef>, Vec<(MetricDef, NotMeasuredReason)>)
             kind: ProbeKind::Liveness,
             query: Some("SELECT ?s WHERE { ?s ?p ?o } LIMIT 1".into()),
             fallback_query: None,
+            overlap_probe: None,
+            overlap_query: None,
             expect: None,
             var: None,
             declared_by: None,
@@ -2597,6 +2617,8 @@ fn probe_and_declined() -> (Vec<MetricDef>, Vec<(MetricDef, NotMeasuredReason)>)
             kind: ProbeKind::SelectIris,
             query: Some("SELECT DISTINCT ?c WHERE { ?s a ?c } LIMIT 1".into()),
             fallback_query: None,
+            overlap_probe: None,
+            overlap_query: None,
             expect: None,
             var: Some("c".into()),
             declared_by: None,
@@ -2614,6 +2636,8 @@ fn probe_and_declined() -> (Vec<MetricDef>, Vec<(MetricDef, NotMeasuredReason)>)
         kind: ProbeKind::SelectIris,
         query: Some("SELECT DISTINCT ?c WHERE { ?s a ?c } LIMIT 200".into()),
         fallback_query: None,
+            overlap_probe: None,
+            overlap_query: None,
         expect: None,
         var: Some("c".into()),
         declared_by: None,
@@ -2922,6 +2946,8 @@ fn panicking_metric() -> MetricDef {
         kind: ProbeKind::SelectIris,
         query: Some("SELECT ?c WHERE { ?s a ?c } LIMIT 1".into()),
         fallback_query: None,
+            overlap_probe: None,
+            overlap_query: None,
         expect: None,
         var: None,
         declared_by: None,
@@ -4242,5 +4268,164 @@ async fn a_profile_pass_skipped_as_unchanged_declines_the_content_verdict() {
         Some("unchanged"),
         "and must decline with the same reason the pass gave, so the two facts \
          agree about why"
+    );
+}
+
+/// The dataset-shape discriminator, over both shapes that exist in the wild.
+///
+/// "How many triples does this endpoint hold" has no single answer in SPARQL:
+/// the default graph may be storage of its own or a view over the named
+/// graphs, and nothing in a response says which. The default/named UNION is
+/// right for the first and counts everything twice in the second.
+///
+/// That is not hypothetical. data.allie.dbcls.jp declares 335,241,279 triples
+/// and the UNION observed 675,397,120 -- ratio 2.015 -- so this project
+/// published `declared-but-wrong` against an honest declaration.
+///
+/// Taking the larger of the two counts was tried first and is WRONG, which the
+/// synthetic control caught: it holds 9 triples in its default graph and 38 in
+/// named graphs, disjoint, and its ground truth is 47. Both shapes are here.
+async fn triple_count_seen_by(overlap_rows: &str, union_n: &str, named_n: &str) -> Option<u64> {
+    let server = MockServer::start().await;
+    // The discriminator. Matched first and most specifically, because the
+    // count bodies below would otherwise answer it.
+    Mock::given(method("GET"))
+        .and(path("/sparql"))
+        .and(wiremock::matchers::query_param_contains("query", "?overlap"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(format!(
+            r#"{{"head":{{"vars":["overlap"]}},"results":{{"bindings":[{overlap_rows}]}}}}"#
+        )))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/sparql"))
+        .and(wiremock::matchers::query_param_contains("query", "UNION"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(format!(
+            r#"{{"head":{{"vars":["n"]}},"results":{{"bindings":[{{"n":{{"type":"literal","value":"{union_n}"}}}}]}}}}"#
+        )))
+        .mount(&server)
+        .await;
+    // Everything else, which for this test is the named-graphs-only count.
+    Mock::given(method("GET"))
+        .and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(format!(
+            r#"{{"head":{{"vars":["n"]}},"results":{{"bindings":[{{"n":{{"type":"literal","value":"{named_n}"}}}}]}}}}"#
+        )))
+        .mount(&server)
+        .await;
+
+    let defs: Vec<_> = load_metrics(include_str!("../metrics.toml"))
+        .unwrap()
+        .into_iter()
+        .filter(|d| d.id == "triple-count")
+        .collect();
+    let client =
+        std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
+    let url = format!("{}/sparql", server.uri());
+    let Sweep { rows, .. } = without_deadlocking(run_sweep(
+        std::slice::from_ref(&url),
+        &defs,
+        &[],
+        &client,
+        Budget::default(),
+        NonZeroUsize::new(1).unwrap(),
+        &Default::default(),
+        &mut common::discarding(),
+    ))
+    .await
+    .unwrap();
+    rows.into_iter().next().and_then(|r| r.observed_count)
+}
+
+#[tokio::test]
+async fn a_union_default_graph_is_not_counted_twice() {
+    // The default graph IS the union of the named graphs, which is what
+    // Virtuoso serves by default and what allie serves.
+    let counted = triple_count_seen_by(
+        r#"{"overlap":{"type":"literal","value":"1"}}"#,
+        "200",
+        "100",
+    )
+    .await;
+    assert_eq!(
+        counted,
+        Some(100),
+        "a union default graph was counted twice: the UNION says 200 while the          named graphs hold 100, and taking the 200 is what published          declared-but-wrong against an honest declaration"
+    );
+}
+
+#[tokio::test]
+async fn a_separate_default_graph_is_still_counted_in_full() {
+    // The control's shape: the default graph holds triples that appear in no
+    // named graph, so both halves are real and the sum is the answer.
+    let counted = triple_count_seen_by("", "47", "38").await;
+    assert_eq!(
+        counted,
+        Some(47),
+        "the default graph's own triples were dropped: 38 is the named-graph          count and 47 is the control's ground truth"
+    );
+}
+
+/// A probe that does not answer leaves the default query standing.
+///
+/// The discriminator is a REFINEMENT, not a precondition. An endpoint that
+/// refuses it, times it out, or answers something unreadable must be measured
+/// exactly as it was before this existed -- which for a store with real
+/// triples in both halves means the UNION, not the named-graph count.
+///
+/// Read the other way round it would be worse than the bug it fixes: every
+/// endpoint whose probe failed would silently lose its default graph from the
+/// count. This test is the one that was missing when a mutation making an
+/// unreadable probe mean "overlap" passed the other two.
+#[tokio::test]
+async fn a_probe_that_does_not_answer_changes_nothing() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/sparql"))
+        .and(wiremock::matchers::query_param_contains("query", "?overlap"))
+        .respond_with(ResponseTemplate::new(503).set_body_string("upstream is unwell"))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/sparql"))
+        .and(wiremock::matchers::query_param_contains("query", "UNION"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            r#"{"head":{"vars":["n"]},"results":{"bindings":[{"n":{"type":"literal","value":"47"}}]}}"#,
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/sparql"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            r#"{"head":{"vars":["n"]},"results":{"bindings":[{"n":{"type":"literal","value":"38"}}]}}"#,
+        ))
+        .mount(&server)
+        .await;
+
+    let defs: Vec<_> = load_metrics(include_str!("../metrics.toml"))
+        .unwrap()
+        .into_iter()
+        .filter(|d| d.id == "triple-count")
+        .collect();
+    let client =
+        std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
+    let url = format!("{}/sparql", server.uri());
+    let Sweep { rows, .. } = without_deadlocking(run_sweep(
+        std::slice::from_ref(&url),
+        &defs,
+        &[],
+        &client,
+        Budget::default(),
+        NonZeroUsize::new(1).unwrap(),
+        &Default::default(),
+        &mut common::discarding(),
+    ))
+    .await
+    .unwrap();
+    assert_eq!(
+        rows.into_iter().next().and_then(|r| r.observed_count),
+        Some(47),
+        "a failed probe was read as an overlap, so the default graph's own \
+         triples were dropped -- worse than the double-count this fixes"
     );
 }

@@ -317,6 +317,26 @@ tolerance = 0.05
 query = """
 SELECT (COUNT(*) AS ?n) WHERE { { ?s ?p ?o } UNION { GRAPH ?g { ?s ?p ?o } } }
 """
+# WHICH SHAPE OF DATASET IS THIS. The query above is right when the default
+# graph is storage of its own and counts everything twice when it is a view
+# over the named graphs, and nothing in a response says which it is. So it is
+# asked. A row here means a default-graph triple also lives in a named graph.
+#
+# data.allie.dbcls.jp declares 335,241,279 triples; the UNION observed
+# 675,397,120, a ratio of 2.015, and this project published
+# `declared-but-wrong` against an honest declaration. It is Virtuoso serving a
+# union default graph, confirmed with this very query on 2026-09-26.
+#
+# Taking the larger of the two counts was tried first and is WRONG. The
+# synthetic control holds 9 triples in its default graph and 38 in named
+# graphs, disjoint, ground truth 47; the larger is 38. The control exists for
+# this and it caught it within the hour.
+overlap_probe = """
+SELECT (1 AS ?overlap) WHERE { ?s ?p ?o . GRAPH ?g { ?s ?p ?o } } LIMIT 1
+"""
+overlap_query = """
+SELECT (COUNT(*) AS ?n) WHERE { GRAPH ?g { ?s ?p ?o } }
+"""
 
 [[metric]]
 id = "graph-count"
@@ -346,5 +366,18 @@ declared_by = "http://rdfs.org/ns/void#classes"
 tolerance = 0.05
 query = """
 SELECT (COUNT(DISTINCT ?c) AS ?n) WHERE { { ?s a ?c } UNION { GRAPH ?g { ?s a ?c } } }
+"""
+# Same shape question as triple-count's; see its `overlap_probe`. COUNT
+# DISTINCT makes a union default graph harmless here -- the same class seen
+# twice is still one class -- so this exists for the ENDPOINT that puts some
+# classes only in its default graph, where the named-only count would miss
+# them. The probe answers the same question either way and the choice stays
+# consistent across the three counts, which is worth more than saving one
+# cheap request on one metric.
+overlap_probe = """
+SELECT (1 AS ?overlap) WHERE { ?s ?p ?o . GRAPH ?g { ?s ?p ?o } } LIMIT 1
+"""
+overlap_query = """
+SELECT (COUNT(DISTINCT ?c) AS ?n) WHERE { GRAPH ?g { ?s a ?c } }
 """
 
