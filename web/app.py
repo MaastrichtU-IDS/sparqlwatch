@@ -5071,7 +5071,9 @@ def sparql_preflight() -> Response:
 @app.get(SPARQL_PATH)
 @app.post(SPARQL_PATH)
 async def sparql(
-    request: Request, pool=Depends(get_sparql_pool)
+    request: Request,
+    pool=Depends(get_sparql_pool),
+    store: Store = Depends(get_store),
 ) -> Response:
     """SPARQL 1.1 Query over this service's own measurements. Read only.
 
@@ -5099,7 +5101,7 @@ async def sparql(
         # description, which is what SPARQL 1.1 Service Description is for and
         # what a client dereferencing this URL expects to find.
         return Response(
-            content=_service_description(request),
+            content=_service_description(request, store),
             media_type="text/turtle; charset=utf-8",
             headers=sparql_service.CORS,
         )
@@ -5126,7 +5128,7 @@ async def sparql(
     )
 
 
-def _service_description(request: Request) -> bytes:
+def _service_description(request: Request, store: Store) -> bytes:
     """SPARQL 1.1 Service Description, served when no query is given.
 
     Written out rather than generated from the store, because it describes the
@@ -5138,6 +5140,40 @@ def _service_description(request: Request) -> bytes:
     """
     here = external_url(request).split("?")[0]
     sd = "http://www.w3.org/ns/sparql-service-description#"
+
+    # WHAT THIS SERVICE DECLARES ABOUT ITSELF, and why it is here rather than
+    # only in /.well-known/void. The prober reads an endpoint's declarations
+    # from a QUERYLESS GET ON THE ENDPOINT URL -- this document -- and
+    # dereferences no well-known path. Until these were emitted, this service
+    # reported its own triple-count, class-count and vocabulary as
+    # `undeclared-but-verified`: it had checked them by asking, and found
+    # nobody had said them.
+    #
+    # THE TRIPLE COUNT IS THE DATASET'S, not the one the probe will observe.
+    # The probe asks `{ ?s ?p ?o } UNION { GRAPH ?g { ?s ?p ?o } }`, and this
+    # endpoint's default graph IS one of its named graphs, so that counts
+    # `current` twice and observes about 0.35% more than the store holds.
+    # Declaring the observed figure would make this document state a number
+    # that is an artefact of somebody's query shape rather than a fact about
+    # the data. The metric's own `tolerance = 0.05` covers the difference.
+    counted = void_self.counts(store)
+    vocab = void_self.vocabulary(store)
+    partitions = "".join(
+        f"        void:classPartition [ void:class <{iri}> ] ;\n"
+        for iri in vocab["classes"]
+    ) + "".join(
+        f"        void:propertyPartition [ void:property <{iri}> ] ;\n"
+        for iri in vocab["properties"]
+    )
+    declarations = (
+        f'        void:triples "{counted["triples"]}"^^xsd:integer ;\n'
+        f'        void:classes "{len(vocab["classes"])}"^^xsd:integer ;\n'
+        f"{partitions}"
+    )
+    extensions = "".join(
+        f"    sd:extensionFunction <{iri}> ;\n"
+        for iri in void_self.EXTENSION_FUNCTIONS
+    )
     return f"""@prefix sd: <{sd}> .
 @prefix void: <http://rdfs.org/ns/void#> .
 @prefix sw: <urn:sparqlwatch:> .
@@ -5155,8 +5191,9 @@ def _service_description(request: Request) -> bytes:
         <http://www.w3.org/ns/formats/N-Triples> ;
     sd:defaultDataset [
         a sd:Dataset ;
-        sd:defaultGraph [ a sd:Graph ; sd:name <{CURRENT_GRAPH_IRI}> ]
+{declarations}        sd:defaultGraph [ a sd:Graph ; sd:name <{CURRENT_GRAPH_IRI}> ]
     ] ;
+{extensions}
     sw:queryTimeoutSeconds "{sparql_service.TIMEOUT_SECONDS:g}"^^xsd:decimal ;
     sw:maxResultRows "{sparql_service.MAX_ROWS}"^^xsd:integer ;
     sw:maxQueryBytes "{sparql_service.MAX_QUERY_BYTES}"^^xsd:integer ;

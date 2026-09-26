@@ -211,3 +211,35 @@ def document(store: Store, base: str, sparql_url: str) -> bytes:
         "",
     ]
     return "\n".join(lines).encode("utf-8")
+
+
+# The vocabulary this dataset actually uses, for the service description's
+# `void:classPartition` and `void:propertyPartition`. Listed rather than
+# counted, because that is what the predicates take and what makes
+# `vocabulary-described` a comparison rather than a number.
+#
+# NO `ORDER BY`. Sorting these forces the engine to materialise every binding
+# before deduplicating -- 1.5M of them -- and the endpoint's own memory watch
+# stopped exactly that query at 320 MiB while this was being written. The
+# result is sorted in Python instead, where it is 49 strings.
+_VOCABULARY = {
+    "classes": "SELECT DISTINCT ?c WHERE { GRAPH ?g { ?s a ?c } }",
+    "properties": "SELECT DISTINCT ?p WHERE { GRAPH ?g { ?s ?p ?o } }",
+}
+
+# Verified against this build rather than assumed absent: pyoxigraph evaluates
+# `geof:sfWithin`, returning true for a point inside a polygon, while a
+# genuinely unknown function raises. So declaring it states something true.
+# `geo-functions` read `undeclared-but-verified` about this service until it
+# was declared here.
+EXTENSION_FUNCTIONS = ("http://www.opengis.net/def/function/geosparql/sfWithin",)
+
+
+@lru_cache(maxsize=4)
+def vocabulary(store: Store) -> dict[str, tuple[str, ...]]:
+    """The distinct classes and properties, sorted. Cached like `counts`."""
+    out = {}
+    for name, query in _VOCABULARY.items():
+        var = "c" if name == "classes" else "p"
+        out[name] = tuple(sorted(row[var].value for row in store.query(query)))
+    return out
