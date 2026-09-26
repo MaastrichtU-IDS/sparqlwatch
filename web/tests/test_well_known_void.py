@@ -146,3 +146,51 @@ def test_the_count_cache_is_keyed_on_the_store(store, store_two_sweeps):
     second = void_self.counts(store_two_sweeps)
     assert first is not second
     assert void_self.counts(store) == first
+
+
+# ---------------------------------------------------------------------------
+# The scheme
+#
+# Traefik terminates TLS and forwards plain HTTP, so request.url says `http`
+# for a site every reader reaches over `https`. Harmless in a redirect; not
+# harmless in RDF, where an IRI differing by scheme is a different IRI.
+#
+# It shipped wrong: the deployed VoID and service description both named
+# `http://` on an HTTPS-only site, because the response cache keyed without
+# the forwarded scheme and the readiness probe -- which reaches the pod
+# directly, with no such header, every ten seconds -- always won the race to
+# populate it.
+# ---------------------------------------------------------------------------
+def test_the_document_names_the_scheme_the_reader_used(client_for, store):
+    client = client_for(store)
+    secure = client.get(WELL_KNOWN_VOID_PATH, headers={"X-Forwarded-Proto": "https"}).text
+    assert "<https://testserver/.well-known/void>" in secure, secure[:200]
+    assert "void:sparqlEndpoint <https://" in secure
+
+
+def test_the_cache_does_not_serve_one_scheme_to_the_other(client_for, store):
+    """THE bug, and the reason it reached production.
+
+    A probe with no forwarded header and a reader with one must not share a
+    cache entry, or whichever arrives first decides what everyone is told.
+    """
+    client = client_for(store)
+    probe = client.get(WELL_KNOWN_VOID_PATH).text
+    reader = client.get(WELL_KNOWN_VOID_PATH, headers={"X-Forwarded-Proto": "https"}).text
+    assert "<http://testserver/" in probe
+    assert "<https://testserver/" in reader
+    assert probe != reader
+
+    # And the order must not matter: ask again the other way round.
+    again_probe = client.get(WELL_KNOWN_VOID_PATH).text
+    assert again_probe == probe
+
+
+def test_an_unknown_forwarded_scheme_is_ignored(client_for, store):
+    """The header is trusted for a scheme and nothing else. Anything that is
+    not http or https is not a scheme this service will name itself with."""
+    body = client_for(store).get(
+        WELL_KNOWN_VOID_PATH, headers={"X-Forwarded-Proto": "gopher"}
+    ).text
+    assert "gopher://" not in body
+    assert "<http://testserver/" in body

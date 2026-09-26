@@ -720,6 +720,16 @@ class SnapshotCache:
         key = (
             self._store_handle(),
             headers.get(b"host", b""),
+            # THE SCHEME IS PART OF THE ANSWER, exactly as the host is. The
+            # documents this service publishes about itself name absolute
+            # IRIs, and an IRI differing by scheme is a different IRI. Traefik
+            # forwards plain HTTP with this header set, while the readiness
+            # probe reaches the pod directly WITHOUT it -- so a key that
+            # ignored it let whichever arrived first decide what every later
+            # reader was told. In production the probe arrives every ten
+            # seconds, which is why the deployed VoID and service description
+            # named `http://` for an HTTPS-only site.
+            headers.get(b"x-forwarded-proto", b""),
             scope.get("path", ""),
             scope.get("query_string", b""),
             headers.get(b"accept", b""),
@@ -5023,6 +5033,30 @@ def _stop_sparql_pool() -> None:
         _POOL.stop()
 
 
+def external_url(request: Request) -> str:
+    """The request's URL as the CLIENT saw it, scheme included.
+
+    Traefik terminates TLS and forwards plain HTTP to this pod, so
+    `request.url` reports `http` for a site every reader reaches over `https`.
+    That is harmless in a redirect and NOT harmless in RDF: an IRI differing
+    by scheme is a different IRI, so a description built from the wrong one
+    names a resource nobody can dereference and fails to join with anything
+    that links to the real one. Both documents this service publishes about
+    itself -- the VoID and the SPARQL service description -- are built from
+    this.
+
+    `X-Forwarded-Proto` is trusted because only the ingress controller routes
+    to this pod. A client that could set it directly could at most make these
+    two self-descriptions claim the wrong scheme, which is not a privilege
+    worth a configuration knob; nothing here is authorised on it.
+    """
+    url = request.url
+    forwarded = request.headers.get("x-forwarded-proto", "").split(",")[0].strip()
+    if forwarded in ("http", "https") and forwarded != url.scheme:
+        url = url.replace(scheme=forwarded)
+    return str(url)
+
+
 @app.options(SPARQL_PATH)
 def sparql_preflight() -> Response:
     """The CORS preflight.
@@ -5102,7 +5136,7 @@ def _service_description(request: Request) -> bytes:
     a row cap or a deadline, and inventing a meaning for one of its terms would
     be worse than a clearly-local predicate a reader can look up.
     """
-    here = str(request.url).split("?")[0]
+    here = external_url(request).split("?")[0]
     sd = "http://www.w3.org/ns/sparql-service-description#"
     return f"""@prefix sd: <{sd}> .
 @prefix void: <http://rdfs.org/ns/void#> .
@@ -5139,7 +5173,7 @@ def well_known_void(request: Request, store: Store = Depends(get_store)) -> Resp
     pages. Served with open CORS for the same reason the SPARQL endpoint is --
     a description a browser cannot read is one this project would mark down.
     """
-    root = str(request.url).split("/.well-known/")[0] + "/"
+    root = external_url(request).split("/.well-known/")[0] + "/"
     return Response(
         content=void_self.document(
             store, base=root, sparql_url=root.rstrip("/") + SPARQL_PATH
