@@ -34,6 +34,50 @@ cost = "cheap"
 cadence = "hourly"
 
 [[metric]]
+id = "geo-coordinates"
+label = "Holds WGS84 coordinates"
+dimension = "content"
+kind = "AskData"
+var = "lat"
+cost = "cheap"
+query = """
+PREFIX wgs84: <http://www.w3.org/2003/01/geo/wgs84_pos#>
+SELECT ?lat WHERE { { ?s wgs84:lat ?lat } UNION { GRAPH ?anyg { ?s wgs84:lat ?lat } } } LIMIT 1
+"""
+# COORDINATES ARE NOT GEOMETRY, and that is why this is a metric of its own
+# rather than a widening of `geo-data`.
+#
+# `geo-data` asks for `geo:asWKT`, and WKT is what the `geof:` functions
+# operate on. A bare `wgs84:lat` is not: measured against this project's own
+# endpoint on 2026-09-26, `geof:sfWithin("50.84833"^^xsd:decimal, <polygon>)`
+# returns FALSE -- not an error, which is the dangerous kind of wrong. The same
+# point promoted to `"POINT(5.68889 50.84833)"^^geo:wktLiteral` returns true.
+# So an endpoint holding lat/long has location data that no spatial function
+# will touch until somebody builds geometry out of it, and a consumer asking
+# "can I do spatial queries here" needs those two facts apart.
+#
+# Widening `geo-data` instead would have made its own label -- "Holds WKT
+# geometry" -- false, and would have changed what every historical `absent`
+# meant.
+#
+# WHAT THIS FIXES. Until this existed, an endpoint holding every coordinate it
+# owns as `wgs84:lat`/`wgs84:long` read `geo-data: absent`: a confident wrong
+# answer about an endpoint full of exactly the content we said it lacked, which
+# is the failure this whole project is arranged against. Sampled on 2026-09-26,
+# none of twelve answering endpoints in the current registry hold `wgs84:lat`,
+# so this changes nothing today -- but the seeded LOD Cloud registry carries at
+# least thirteen plainly geographic endpoints, LinkedGeoData among them, and
+# LinkedGeoData publishes coordinates exactly this way.
+#
+# `?anyg`, never `?lat`. `GRAPH ?lat { ?s wgs84:lat ?lat }` would join the
+# graph name against the coordinate and publish a silent false `absent`. Same
+# trap as `geo-data`'s, written out again because it is one edit away.
+fallback_query = """
+PREFIX wgs84: <http://www.w3.org/2003/01/geo/wgs84_pos#>
+SELECT ?lat WHERE { ?s wgs84:lat ?lat } LIMIT 1
+"""
+
+[[metric]]
 id = "geo-functions"
 label = "GeoSPARQL relation functions"
 dimension = "capability"

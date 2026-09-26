@@ -2157,6 +2157,7 @@ METRIC_COLUMN_ORDER = (
     "class-count",
     "vocabulary-described",
     "geo-data",
+    "geo-coordinates",
     "geo-functions",
     "cors",
     "cors-preflight",
@@ -2479,6 +2480,7 @@ METRIC_DESCRIPTIONS = {
     "cors-preflight": "Answers a CORS preflight for a cross-origin GET",
     "geo-functions": "GeoSPARQL relation functions",
     "geo-data": "Holds WKT geometry",
+    "geo-coordinates": "Holds WGS84 coordinates",
     "service-description": "Service description informativeness",
     "has-classes": "Holds typed resources",
     "classes": "Distinct classes",
@@ -3766,6 +3768,20 @@ METRIC_DOCS = {
             "real endpoints in this registry."
         ),
     },
+    "geo-coordinates": {
+        "label": "Holds WGS84 coordinates",
+        "dimension": "content",
+        "cost": "cheap",
+        "cadence": "daily",
+        "explains": (
+            "Whether any location is stored as a plain wgs84:lat, which is "
+            "location data that no spatial function will touch. Asked apart "
+            "from the geometry above because the two are not "
+            "interchangeable: geof:sfWithin on a bare coordinate returns "
+            "false rather than an error, so an endpoint holding only "
+            "coordinates would otherwise read as holding nothing at all."
+        ),
+    },
     "geo-data": {
         "label": "Holds WKT geometry",
         "dimension": "content",
@@ -4269,7 +4285,12 @@ POLITENESS = {
     "request-budget-seconds": 30,
     "metric-budget-seconds": 60,
     "endpoint-budget-seconds": 600,
-    "requests-per-endpoint": 6,
+    # 6 -> 7 on 2026-09-26, when geo-coordinates was added. It is a `cheap`
+    # metric, so a default-cost sweep sends one more request per endpoint. It
+    # carries no `cadence`, which means daily: the hourly sweep asks four
+    # metrics and is unchanged, so what this costs a stranger's server is one
+    # extra request per night, not per hour.
+    "requests-per-endpoint": 7,
 }
 
 # What the admission policy costs an endpoint that has proved expensive and

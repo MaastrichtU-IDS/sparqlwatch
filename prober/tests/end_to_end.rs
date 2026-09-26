@@ -108,6 +108,12 @@ async fn a_sweep_over_one_mock_endpoint_produces_nquads() {
         // The mock binds ?s, not ?g, so no WKT literal is present and the 200
         // makes that a genuine absence rather than an unknown.
         ("geo-data", Verdict::Absent),
+        // Same reading for the same reason: the mock binds no ?lat either. The
+        // two are separate metrics because coordinates are not geometry -- a
+        // bare wgs84:lat is something no geof: function will touch -- and an
+        // endpoint holding only coordinates read `geo-data: absent` and nothing
+        // else until this existed.
+        ("geo-coordinates", Verdict::Absent),
         // The mock's single `set_body_string` response is served as
         // `text/plain` regardless of the request (wiremock 0.6.5 always
         // overwrites Content-Type on `set_body_string`; see `tests/fetch.rs`),
