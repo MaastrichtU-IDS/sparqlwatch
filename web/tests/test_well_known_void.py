@@ -153,23 +153,50 @@ def test_the_data_licence_is_cc_by_and_not_the_code_licence(client_for, store):
     assert "creativecommons.org/licenses/by/4.0" in data
 
 
-def test_it_says_who_to_attribute(client_for, store):
+def test_it_says_who_to_attribute_by_identifier_and_by_name(client_for, store):
     """CC BY REQUIRES attribution, so a licence URI alone is not enough.
 
     A consumer told they must attribute and not told to whom cannot comply.
-    The name has to be in the document, because somebody working from the RDF
-    will not read a file in the repository.
+    And the two halves are both needed: the ORCID makes the creator a resource
+    a catalogue can resolve and reconcile rather than match by spelling, while
+    the name is what actually goes in an attribution line -- an identifier
+    cannot be written into one. So the document carries the ORCID on the
+    dataset and the name on the ORCID, one hop away, in the same file.
     """
     from pathlib import Path
 
     _, quads = _graph(client_for(store))
-    creators = {q.object.value for q in quads
-                if q.predicate.value in (f"{DCTERMS}creator", f"{DCTERMS}rightsHolder")}
-    assert creators == {"Michel Dumontier"}, creators
+    orcid = "https://orcid.org/0000-0003-4727-9435"
+    attributed = {q.object.value for q in quads
+                  if q.predicate.value in (f"{DCTERMS}creator", f"{DCTERMS}rightsHolder")}
+    assert attributed == {orcid}, attributed
 
-    # And the same name the repository states, so a consumer cannot find two.
+    named = {q.object.value for q in quads
+             if q.subject.value == orcid and q.predicate.value.endswith("foaf/0.1/name")}
+    assert named == {"Michel Dumontier"}, (
+        "the identifier resolves to nobody inside this document, so a consumer "
+        f"cannot write the attribution line: {named}"
+    )
+
+    # The repository's own attribution line has to agree with both halves.
     data = (Path(__file__).resolve().parents[2] / "LICENSE-DATA").read_text()
     assert "Michel Dumontier" in data
+    assert orcid in data
+
+
+def test_the_orcid_checksum_is_valid(client_for, store):
+    """An ORCID carries an ISO 7064 MOD 11-2 check digit, and one that fails
+    it points at nobody. Published RDF asserting a broken identifier is worse
+    than publishing none: it is a claim about a person who does not exist."""
+    _, quads = _graph(client_for(store))
+    orcid = next(q.object.value for q in quads
+                 if q.predicate.value == f"{DCTERMS}creator")
+    digits = orcid.rsplit("/", 1)[-1].replace("-", "")
+    total = 0
+    for digit in digits[:-1]:
+        total = (total + int(digit)) * 2
+    expected = (12 - total % 11) % 11
+    assert digits[-1] == ("X" if expected == 10 else str(expected)), orcid
 
 
 def test_the_copyright_holder_is_stated_in_both_licence_files(client_for, store):
