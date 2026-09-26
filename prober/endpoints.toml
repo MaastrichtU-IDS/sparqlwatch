@@ -67,6 +67,21 @@
 #                        unreached.
 endpoint = [
   "http://127.0.0.1:9200/sparql",
+  # THIS SERVICE'S OWN ENDPOINT, added 2026-09-26. Second, behind the control,
+  # because it is the other one whose right answers we know.
+  #
+  # A service that measures SPARQL endpoints should be measured by the same
+  # instrument, and the public URL rather than an in-cluster address is the
+  # point: it is the one a stranger uses, so it exercises the ingress, the TLS
+  # and the CORS headers a browser would actually meet. From inside the cluster
+  # it travels through the egress-proxy, like any hardcoded public hostname --
+  # see ids3/projects/_base/restrict-egress.yaml.
+  #
+  # The sweep reads it BEFORE restarting the site, so the hourly publish does
+  # not make this endpoint measure itself as down. If a restart ever does
+  # overlap a sweep, the unavailability recorded is real and belongs on the
+  # page.
+  "https://sparqlwatch.dev.k8s.semanticscience.org/sparql",
   "https://bio2rdf.org/sparql",
   "https://ontoexplorer.dev.k8s.semanticscience.org/api/v1/sparql/content",
   # The DBpedia Knowledge Graph Catalog's nine endpoints, as they ANSWER --
