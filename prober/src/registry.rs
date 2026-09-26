@@ -1533,3 +1533,99 @@ datasets = 42
         assert_eq!(got[1].datasets, Some(42));
     }
 }
+
+/// Narrow a loaded registry to the urls named by `--only`.
+///
+/// FOR A SWEEP ON DEMAND, and the case that motivates it is adding an
+/// endpoint: a url appended to the registry has no readings until the next
+/// nightly pass, so the page for it is empty for up to a day. This is how an
+/// operator fills that in without re-probing everybody else's servers to do
+/// it, which the registry files call an explicit act.
+///
+/// APPLIED AFTER EXCLUSIONS, and never before. `load_endpoints` has already
+/// dropped the hosts somebody asked this project to leave alone, so a url
+/// named here that is not in the result is not swept -- naming it cannot
+/// resurrect it. That ordering is the whole safety property of this function
+/// and it is why this takes an already-loaded list rather than the file.
+///
+/// AN UNKNOWN URL IS AN ERROR, not an empty sweep. A mistyped url that
+/// silently matched nothing would exit 0, write a run naming no endpoint, and
+/// look exactly like a successful catch-up pass -- so the operator would
+/// believe the endpoint had been profiled and the page would stay empty. The
+/// error names what was asked for, since the likeliest cause is a url that
+/// differs from the registry's by a trailing slash.
+pub fn only(endpoints: Vec<String>, wanted: &[String]) -> anyhow::Result<Vec<String>> {
+    if wanted.is_empty() {
+        return Ok(endpoints);
+    }
+    let mut missing: Vec<&str> = Vec::new();
+    for url in wanted {
+        if !endpoints.iter().any(|known| known == url) {
+            missing.push(url.as_str());
+        }
+    }
+    if !missing.is_empty() {
+        anyhow::bail!(
+            "--only named {} url(s) this sweep would not have probed anyway: {}. \
+             Either the registry does not list them, or the exclusion list \
+             removed them because somebody asked not to be probed -- and naming \
+             a url here does not override that. Sweeping nothing and exiting 0 \
+             would look exactly like a successful pass, so this stops instead",
+            missing.len(),
+            missing.join(", ")
+        );
+    }
+    Ok(endpoints
+        .into_iter()
+        .filter(|url| wanted.iter().any(|w| w == url))
+        .collect())
+}
+
+#[cfg(test)]
+mod only_tests {
+    use super::*;
+
+    fn urls(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn no_selection_leaves_the_registry_alone() {
+        let all = urls(&["https://a.test/sparql", "https://b.test/sparql"]);
+        assert_eq!(only(all.clone(), &[]).unwrap(), all);
+    }
+
+    #[test]
+    fn it_keeps_only_what_was_named_and_in_registry_order() {
+        let all = urls(&["https://a.test/sparql", "https://b.test/sparql", "https://c.test/sparql"]);
+        let got = only(all, &urls(&["https://c.test/sparql", "https://a.test/sparql"])).unwrap();
+        assert_eq!(got, urls(&["https://a.test/sparql", "https://c.test/sparql"]));
+    }
+
+    #[test]
+    fn an_unknown_url_stops_the_sweep_rather_than_sweeping_nothing() {
+        let all = urls(&["https://a.test/sparql"]);
+        let err = only(all, &urls(&["https://a.test/sparql/"])).unwrap_err().to_string();
+        assert!(err.contains("https://a.test/sparql/"), "{err}");
+    }
+
+    #[test]
+    fn naming_an_excluded_url_does_not_resurrect_it() {
+        // THE safety property. `load_endpoints` has already removed the hosts
+        // somebody asked to be left alone, so by the time this runs an excluded
+        // url simply is not in the list -- and asking for it is the error above
+        // rather than a sweep of it.
+        let excluded = [Exclusion {
+            host: "b.test".into(),
+            reason: "asked to be left alone, in this test".into(),
+        }];
+        let loaded = load_endpoints(
+            "endpoint = [\"https://a.test/sparql\", \"https://b.test/sparql\"]",
+            &excluded,
+        )
+        .unwrap();
+        assert!(!loaded.iter().any(|u| u.contains("b.test")), "{loaded:?}");
+        let err = only(loaded, &urls(&["https://b.test/sparql"])).unwrap_err().to_string();
+        assert!(err.contains("does not override"), "{err}");
+    }
+}

@@ -1,0 +1,115 @@
+# A sweep on demand, for one endpoint.
+#
+# WHY THIS EXISTS. A url appended to prober/endpoints.toml has no readings
+# until the next sweep: four metrics at the top of the hour, and the other six
+# not until the nightly profile pass at 03:30 UTC. So a freshly added endpoint
+# has an empty page for up to a day, which is exactly when somebody wants to
+# look at it.
+#
+# WHY NOT `kubectl create job --from=cronjob/prober-profile`. That works, and
+# it sweeps every endpoint in the registry at exhaustive cost -- roughly 61
+# third-party servers, a second full pass on top of the night's. The registry
+# files in this repository call probing somebody else's server an explicit act;
+# re-probing sixty of them to fill in a page for one of ours is not one worth
+# making. This narrows the sweep with `--only`.
+#
+# SAFE FOR THE SHARED DORMANCY STATE, which this writes back to.
+# `dormancy::update` clones the state on disk and touches only the endpoints
+# the sweep listed, so the entries for everything else are carried forward
+# untouched.
+#
+# `--only` CANNOT REACH PAST THE EXCLUSION LIST. The urls somebody asked this
+# project to leave alone are removed before `--only` is read, so naming one
+# here is an error rather than a probe. A url the registry does not list is an
+# error too, because a mistyped one that swept nothing would exit 0 and look
+# like a successful pass.
+#
+# USE:
+#
+#     sed 's|ENDPOINT_URL|https://example.org/sparql|' ops/catch-up-sweep.yaml \
+#       | kubectl -n sparqlwatch-dev create -f -
+#     kubectl -n sparqlwatch-dev logs -f job/<the name it printed>
+#
+# The image tag must be one the cluster is running; the deployment's is the
+# safe choice:
+#
+#     kubectl -n sparqlwatch-dev get deploy site \
+#       -o jsonpath='{.spec.template.spec.containers[0].image}'
+#
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: catch-up-sweep-
+spec:
+  backoffLimit: 1
+  # The same ceiling the nightly pass uses. One endpoint will not approach it,
+  # and a sweep that hangs should still be killed before the next hour's.
+  activeDeadlineSeconds: 1200
+  template:
+    spec:
+      # The account that may PATCH the site Deployment, which is how a run is
+      # published: the site opens its store read-only, so a restart is what
+      # makes new facts visible.
+      serviceAccountName: sparqlwatch-prober
+      restartPolicy: Never
+      securityContext:
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: sweep
+          image: IMAGE
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef: { name: prober-config }
+          env:
+            - name: ENDPOINT
+              value: ENDPOINT_URL
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef: { fieldPath: metadata.namespace }
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              : "${ENDPOINT:?substitute ENDPOINT_URL before applying this}"
+              AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+              # Exhaustive and daily: the point of a catch-up pass is the six
+              # metrics the hourly sweep declines on cadence, which are the
+              # ones a new endpoint is missing.
+              sparqlwatch-prober \
+                --at "$AT" \
+                --endpoints /app/prober/endpoints.container.toml \
+                --metrics /app/prober/metrics.toml \
+                --exclusions /app/prober/registry/exclusions.toml \
+                --state /data/state/dormancy.toml \
+                --max-cost exhaustive \
+                --cadence daily \
+                --only "$ENDPOINT" \
+                --out "/data/runs/run-$AT.nq"
+
+              # Publish. The same PATCH sweep.sh sends, by hand, for the same
+              # reason: a read-only RocksDB handle is a snapshot and will never
+              # see this run however long the process lives.
+              SA=/var/run/secrets/kubernetes.io/serviceaccount
+              curl -sS --fail-with-body \
+                --cacert "$SA/ca.crt" \
+                -H "Authorization: Bearer $(cat "$SA/token")" \
+                -H 'Content-Type: application/strategic-merge-patch+json' \
+                -X PATCH \
+                "https://kubernetes.default.svc/apis/apps/v1/namespaces/$NAMESPACE/deployments/site" \
+                -d "{\"spec\":{\"template\":{\"metadata\":{\"annotations\":{\"sparqlwatch.semanticscience.org/restartedAt\":\"$AT\"}}}}}" \
+                > /dev/null
+              echo "swept $ENDPOINT at $AT and restarted the site"
+          volumeMounts:
+            - { name: runs, mountPath: /data/runs }
+            - { name: state, mountPath: /data/state }
+          resources:
+            requests: { cpu: 200m, memory: 512Mi }
+            limits: { memory: 2Gi }
+      volumes:
+        - name: runs
+          persistentVolumeClaim: { claimName: sparqlwatch-runs }
+        - name: state
+          persistentVolumeClaim: { claimName: sparqlwatch-state }
