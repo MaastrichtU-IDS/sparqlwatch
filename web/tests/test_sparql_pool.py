@@ -70,7 +70,7 @@ def test_an_ordinary_query_is_answered(pool):
     assert b'"head"' in body
 
 
-@pytest.mark.parametrize("query", [COUNT_CROSS_JOIN, SORTED_CROSS_JOIN, CROSS_JOIN])
+@pytest.mark.parametrize("query", [COUNT_CROSS_JOIN, SORTED_CROSS_JOIN])
 def test_a_query_that_blocks_inside_the_engine_is_killed(pool, query):
     """THE reason this module exists.
 
@@ -91,7 +91,7 @@ def test_the_pool_recovers_after_a_kill(pool):
     with it. If it were not replaced, capacity would erode with every hostile
     query until the endpoint answered nothing."""
     for _ in range(2):
-        assert pool.execute(CROSS_JOIN)[2] == 504
+        assert pool.execute(COUNT_CROSS_JOIN)[2] == 504
     body, _, status, complete = pool.execute("SELECT * WHERE { ?s ?p ?o } LIMIT 1")
     assert status == 200 and complete, body
 
@@ -104,7 +104,7 @@ def test_excess_concurrency_is_refused_rather_than_queued(pool):
     lock = threading.Lock()
 
     def fire():
-        status = pool.execute(CROSS_JOIN)[2]
+        status = pool.execute(COUNT_CROSS_JOIN)[2]
         with lock:
             statuses.append(status)
 
@@ -128,3 +128,23 @@ def test_a_direct_pool_runs_the_same_guards(store):
     assert direct.execute("SELECT * WHERE { SERVICE <http://x/> {?s ?p ?o} }")[2] == 400
     assert direct.execute("INSERT DATA { <urn:a> <urn:b> <urn:c> }")[2] == 400
     assert direct.execute("SELECT * WHERE { ?s ?p ?o } LIMIT 1")[2] == 200
+
+
+def test_a_streaming_query_is_bounded_without_needing_a_kill(pool):
+    """CROSS_JOIN is the other kind, and it must not be tested as a kill.
+
+    It streams, so the row cap reaches it: on a fast machine it hits 100,000
+    rows and comes back as a truncated 200 well before the budget, and on a
+    slow one the wall clock gets there first and it is a 504. Asserting either
+    one specifically is a test that passes on the machine it was written on --
+    which is exactly how this file failed CI while passing locally, on the same
+    commit. What actually matters is that it is bounded, and that an incomplete
+    answer never claims to be complete.
+    """
+    body, media, status, complete = pool.execute(CROSS_JOIN)
+    assert status in (200, 504), (status, body[:120])
+    assert not complete, "an unbounded join reported a complete answer"
+    if status == 200:
+        import json
+
+        assert json.loads(body)["head"].get("link"), "truncated but did not say so"
