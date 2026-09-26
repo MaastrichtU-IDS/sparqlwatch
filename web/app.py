@@ -5177,11 +5177,14 @@ def _service_description(request: Request, store: Store) -> bytes:
     return f"""@prefix sd: <{sd}> .
 @prefix void: <http://rdfs.org/ns/void#> .
 @prefix sw: <urn:sparqlwatch:> .
+@prefix schema: <https://schema.org/> .
+@prefix wgs84: <http://www.w3.org/2003/01/geo/wgs84_pos#> .
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
 
 <{here}> a sd:Service ;
     sd:endpoint <{here}> ;
     sd:supportedLanguage sd:SPARQL11Query ;
+    schema:location <{void_self.LOCATION}> ;
     sd:resultFormat
         <http://www.w3.org/ns/formats/SPARQL_Results_JSON> ,
         <http://www.w3.org/ns/formats/SPARQL_Results_XML> ,
@@ -5198,7 +5201,8 @@ def _service_description(request: Request, store: Store) -> bytes:
     sw:maxResultRows "{sparql_service.MAX_ROWS}"^^xsd:integer ;
     sw:maxQueryBytes "{sparql_service.MAX_QUERY_BYTES}"^^xsd:integer ;
     sw:federationAvailable false .
-""".encode("utf-8")
+
+{void_self.place_block()}""".encode("utf-8")
 
 
 @app.get(WELL_KNOWN_VOID_PATH)

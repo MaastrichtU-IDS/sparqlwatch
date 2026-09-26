@@ -11,8 +11,9 @@ import pytest
 from pyoxigraph import RdfFormat, Store, parse
 from starlette.testclient import TestClient
 
+import sparql_pool
 import void_self
-from app import WELL_KNOWN_VOID_PATH, app, get_store
+from app import WELL_KNOWN_VOID_PATH, app, get_sparql_pool, get_store
 
 VOID = "http://rdfs.org/ns/void#"
 DCTERMS = "http://purl.org/dc/terms/"
@@ -24,6 +25,9 @@ def client_for():
 
     def build(store):
         app.dependency_overrides[get_store] = lambda: store
+        # /sparql needs the pool too: one of these tests reads the service
+        # description to check both documents agree about the location.
+        app.dependency_overrides[get_sparql_pool] = lambda: sparql_pool.DirectPool(store)
         client = TestClient(app)
         clients.append(client)
         return client
@@ -266,3 +270,89 @@ def test_an_unknown_forwarded_scheme_is_ignored(client_for, store):
     ).text
     assert "gopher://" not in body
     assert "<http://testserver/" in body
+
+
+# ---------------------------------------------------------------------------
+# Where the server is
+#
+# A property of the SERVICE, never of the data, and that distinction is the
+# whole reason these tests exist rather than a single "location is present".
+# ---------------------------------------------------------------------------
+SCHEMA = "https://schema.org/"
+WGS84 = "http://www.w3.org/2003/01/geo/wgs84_pos#"
+MAASTRICHT = "https://sws.geonames.org/2751283/"
+
+
+def test_the_location_hangs_off_the_endpoint_and_never_off_the_dataset(client_for, store):
+    """THE modelling decision, and getting it wrong would publish a falsehood.
+
+    `dcterms:spatial` on a `void:Dataset` means the spatial COVERAGE of the
+    data. This dataset covers SPARQL endpoints in Japan, Brazil, Switzerland
+    and wherever else the registry reaches, so saying it is "about Maastricht"
+    would be false -- and a consumer filtering a catalogue by region would be
+    told these are Dutch measurements.
+
+    What is true is that the machine answering sits in Maastricht, which is a
+    fact about latency and about who to ask when it stops. That hangs off the
+    endpoint.
+    """
+    _, quads = _graph(client_for(store))
+    topic = next(q.object.value for q in quads if q.predicate.value.endswith("primaryTopic"))
+
+    located = [q for q in quads if q.predicate.value == f"{SCHEMA}location"]
+    assert located, "the location is missing"
+    assert all(q.subject.value.endswith("/sparql") for q in located), (
+        f"the location is stated about something other than the endpoint: "
+        f"{[q.subject.value for q in located]}"
+    )
+    assert not any(q.subject.value == topic for q in located), (
+        "the location is on the dataset, which claims the DATA is from there"
+    )
+    # And no coverage claim crept in under another name.
+    assert not any(q.predicate.value.endswith("terms/spatial") for q in quads)
+
+
+def test_the_place_is_identified_and_not_only_named(client_for, store):
+    """A string is not a place. The GeoNames URI is what lets a consumer
+    reconcile it; the coordinates are what lets one that will not dereference
+    still use it."""
+    _, quads = _graph(client_for(store))
+    place = next(q.object.value for q in quads if q.predicate.value == f"{SCHEMA}location")
+    assert place == MAASTRICHT, place
+
+    about = {q.predicate.value: q.object.value for q in quads if q.subject.value == place}
+    assert about.get(f"{SCHEMA}name") == "Maastricht, Netherlands", about
+    # Read from GeoNames rather than recalled, and a city does not move.
+    assert about[f"{WGS84}lat"].startswith("50.8"), about
+    assert about[f"{WGS84}long"].startswith("5.6"), about
+
+
+def test_the_service_description_says_the_same_thing(client_for, store):
+    """Two documents about one service must not be readable as disagreeing."""
+    from pyoxigraph import RdfFormat, parse
+
+    from app import SPARQL_PATH
+
+    client = client_for(store)
+    sd = list(parse(client.get(SPARQL_PATH).content, format=RdfFormat.TURTLE,
+                    base_iri="http://testserver/"))
+    in_sd = {q.object.value for q in sd if q.predicate.value == f"{SCHEMA}location"}
+    _, void = _graph(client)
+    in_void = {q.object.value for q in void if q.predicate.value == f"{SCHEMA}location"}
+    assert in_sd == in_void == {MAASTRICHT}, (in_sd, in_void)
+
+
+def test_the_location_does_not_make_this_an_endpoint_holding_geometry(client_for, store):
+    """`geo-data` asks the STORE for geo:asWKT, and this service holds none.
+
+    Publishing coordinates in a description is not holding geospatial data,
+    and if these two were ever confused this service would start reporting
+    `geo-data` about itself on the strength of its own address.
+    """
+    _, quads = _graph(client_for(store))
+    assert not any("asWKT" in q.predicate.value for q in quads)
+    rows = list(store.query(
+        "SELECT ?g WHERE { { ?s <http://www.opengis.net/ont/geosparql#asWKT> ?g } "
+        "UNION { GRAPH ?any { ?s <http://www.opengis.net/ont/geosparql#asWKT> ?g } } } LIMIT 1"
+    ))
+    assert rows == [], "the store now holds WKT geometry"
