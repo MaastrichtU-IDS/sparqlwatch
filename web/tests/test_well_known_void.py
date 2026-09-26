@@ -126,16 +126,30 @@ def test_it_names_the_host_the_reader_actually_reached(client_for, store):
     assert any(q.subject.value.startswith("http://testserver/") for q in quads)
 
 
-def test_no_licence_is_claimed_until_one_is_chosen(client_for, store):
-    """The repository declares none, so neither does this.
+def test_the_licence_is_stated_and_matches_the_repository(client_for, store):
+    """Chosen 2026-09-26: Apache-2.0, and the document has to say so.
 
-    A VoID description conventionally carries dcterms:license, and asserting
-    one nobody chose would be worse than omitting it -- it is the exact kind of
-    unbacked claim this project reports on other people's endpoints. When a
-    licence is chosen, add it here and delete this test.
+    This replaced a test asserting that NO licence was claimed, which held the
+    line while none had been chosen -- asserting one nobody picked would have
+    been the exact unbacked claim this project reports on other endpoints.
+    Now one is picked, so the obligation inverts: a dataset whose terms a
+    consumer cannot find is one this service would mark down, and the
+    catalogues that list datasets ask for precisely this triple.
+
+    Pinned against the LICENSE file rather than against a string repeated
+    here, so the document and the repository cannot drift into disagreeing
+    about what somebody may do with this data.
     """
+    from pathlib import Path
+
     _, quads = _graph(client_for(store))
-    assert not any(q.predicate.value == f"{DCTERMS}license" for q in quads)
+    stated = [q.object.value for q in quads if q.predicate.value == f"{DCTERMS}license"]
+    assert stated == ["http://www.apache.org/licenses/LICENSE-2.0"], stated
+
+    licence_file = Path(__file__).resolve().parents[2] / "LICENSE"
+    text = licence_file.read_text()
+    assert "Apache License" in text and "Version 2.0" in text, "LICENSE is not Apache-2.0"
+    assert "[name of copyright owner]" not in text, "the appendix placeholder was left in"
 
 
 def test_the_count_cache_is_keyed_on_the_store(store, store_two_sweeps):
