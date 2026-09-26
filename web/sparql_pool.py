@@ -40,6 +40,7 @@ from __future__ import annotations
 import multiprocessing as mp
 import os
 import threading
+import time
 from dataclasses import dataclass
 
 # How many queries may run at once. Each is a process holding its own store
@@ -51,7 +52,37 @@ DEFAULT_WORKERS = 2
 # stream; this is the one that stops the ones that do not.
 DEFAULT_BUDGET_SECONDS = 15.0
 
+# HOW MUCH A SINGLE QUERY MAY HOLD, watched from the parent and enforced by
+# killing the worker before the kernel does.
+#
+# This is the second thing measured in production rather than guessed. A
+# three-way join across the run graphs balloons faster than the budget fires,
+# and on 2026-09-26 it took the whole container with it: exit 137, OOMKilled,
+# one restart, and `/sparql` answering 502 for half a minute. The container
+# limit had done its real job -- `site` never restarted and kept serving pages
+# at 0.195s -- but a stranger should not be able to reboot the endpoint.
+#
+# It cannot be done with setrlimit. RLIMIT_AS and RLIMIT_DATA both bound the
+# allocation, and both make RocksDB fail to create a thread, which C++ raises
+# as std::system_error and which calls terminate: the worker aborts (exit -6)
+# on ordinary queries, before it can answer anything. Measured for both.
+#
+# And it cannot be left to the kernel, because cgroup v2 kills the whole
+# cgroup as a unit, so the ballooning worker takes uvicorn with it rather than
+# dying alone.
+#
+# So the parent polls the worker's RSS while it waits. Crude, and it works: it
+# needs no privileges, touches nothing inside the worker, and turns an OOM
+# kill into an ordinary refusal. The default leaves room for two workers plus
+# the server inside a 1Gi container.
+DEFAULT_RSS_LIMIT_MB = 320
+
+# How often the parent looks. Short enough to catch a fast balloon, long
+# enough that reading /proc is not the expensive part of a query.
+_RSS_POLL_SECONDS = 0.25
+
 WORKERS_VARIABLE = "SPARQLWATCH_SPARQL_WORKERS"
+RSS_VARIABLE = "SPARQLWATCH_SPARQL_RSS_MB"
 BUDGET_VARIABLE = "SPARQLWATCH_SPARQL_BUDGET_SECONDS"
 
 
@@ -93,13 +124,22 @@ class _Worker:
 class Pool:
     """A fixed set of query workers, replaced when one has to be killed."""
 
-    def __init__(self, store_path: str, workers: int | None = None, budget: float | None = None):
+    def __init__(
+        self,
+        store_path: str,
+        workers: int | None = None,
+        budget: float | None = None,
+        rss_limit_mb: int | None = None,
+    ):
         self.store_path = store_path
         self.size = workers if workers is not None else int(
             os.environ.get(WORKERS_VARIABLE, DEFAULT_WORKERS)
         )
         self.budget = budget if budget is not None else float(
             os.environ.get(BUDGET_VARIABLE, DEFAULT_BUDGET_SECONDS)
+        )
+        self.rss_limit_mb = rss_limit_mb if rss_limit_mb is not None else int(
+            os.environ.get(RSS_VARIABLE, DEFAULT_RSS_LIMIT_MB)
         )
         self._ctx = mp.get_context("spawn")
         self._lock = threading.Lock()
@@ -162,6 +202,30 @@ class Pool:
         except RuntimeError:
             pass
 
+    def _wait(self, worker: _Worker) -> tuple[str, int] | None:
+        """Wait for an answer. Returns None on success, or why to stop.
+
+        Two ways a query loses: it runs too long, or it holds too much. The
+        second is polled rather than waited on, because a balloon outruns the
+        clock -- measured in production, a join across the run graphs reached
+        the container limit in under three seconds against a fifteen-second
+        budget, and the kernel took the whole container.
+        """
+        deadline = time.monotonic() + self.budget
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return (f"query exceeded {self.budget:g}s and was stopped\n", 504)
+            if worker.conn.poll(min(_RSS_POLL_SECONDS, remaining)):
+                return None
+            rss = resident_mb(worker.process.pid)
+            if rss is not None and rss > self.rss_limit_mb:
+                return (
+                    f"query needed more than {self.rss_limit_mb} MiB and was "
+                    "stopped\n",
+                    507,
+                )
+
     def execute(self, query: str, accept: str = "") -> tuple:
         """(body, media_type, status, complete). Never raises for a bad query."""
         worker = self._claim()
@@ -174,18 +238,16 @@ class Pool:
             )
         try:
             worker.conn.send((query, accept))
-            if not worker.conn.poll(self.budget):
-                # THE POINT OF THIS MODULE. The query is still inside the
-                # engine and no amount of asking will get it out.
+            overrun = self._wait(worker)
+            if overrun is not None:
+                # THE POINT OF THIS MODULE. The query is inside the engine and
+                # no amount of asking will get it out, so the process running
+                # it stops being a process.
                 worker.process.kill()
                 worker.process.join(timeout=5)
                 self._release(worker, replace=True)
-                return (
-                    f"query exceeded {self.budget:g}s and was stopped\n".encode("utf-8"),
-                    "text/plain; charset=utf-8",
-                    504,
-                    False,
-                )
+                message, status = overrun
+                return (message.encode("utf-8"), "text/plain; charset=utf-8", status, False)
             kind, payload = worker.conn.recv()
         except (EOFError, BrokenPipeError, OSError):
             # The worker died on its own -- an OOM kill, most likely.
@@ -237,3 +299,19 @@ class DirectPool:
             self.store, query, default_graph=CURRENT_GRAPH, accept=accept
         )
         return (answer.body, answer.media_type, answer.status, answer.complete)
+
+
+def resident_mb(pid: int) -> float | None:
+    """A process's resident set size, in MiB, or None if it cannot be read.
+
+    Straight from /proc rather than through psutil: this is one number, read
+    on a timer, and a dependency for it would have to be justified to every
+    future reader. Unreadable means the process has already gone, which the
+    caller discovers a moment later anyway.
+    """
+    try:
+        with open(f"/proc/{pid}/statm") as handle:
+            pages = int(handle.read().split()[1])
+    except (OSError, ValueError, IndexError):
+        return None
+    return pages * os.sysconf("SC_PAGE_SIZE") / (1024 * 1024)

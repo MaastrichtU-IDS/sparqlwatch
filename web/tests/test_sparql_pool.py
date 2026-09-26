@@ -81,7 +81,12 @@ def test_a_query_that_blocks_inside_the_engine_is_killed(pool, query):
     started = time.monotonic()
     body, media, status, complete = pool.execute(query)
     elapsed = time.monotonic() - started
-    assert status == 504, body
+    # EITHER GUARD MAY WIN, and which one does is not the property worth
+    # pinning. A sorted cross join materialises, so the memory watch usually
+    # reaches it first (507); an aggregate is likelier to run out the clock
+    # (504). Asserting one specifically is asserting the machine again --
+    # the same mistake that made this file pass locally and fail in CI.
+    assert status in (504, 507), (status, body[:120])
     assert not complete
     assert elapsed < pool.budget + 5, f"took {elapsed:.1f}s on a {pool.budget}s budget"
 
@@ -148,3 +153,86 @@ def test_a_streaming_query_is_bounded_without_needing_a_kill(pool):
         import json
 
         assert json.loads(body)["head"].get("link"), "truncated but did not say so"
+
+
+# ---------------------------------------------------------------------------
+# Memory, watched from the parent
+#
+# Measured in production 2026-09-26: a join across the run graphs reached the
+# container's 1Gi in under three seconds against a fifteen-second budget, and
+# cgroup v2 killed the whole container -- exit 137, one restart, /sparql
+# answering 502 for half a minute. The container limit did its real job (the
+# page server never restarted and kept serving at 0.195s), but a stranger
+# should not be able to reboot the endpoint.
+#
+# It cannot be done with setrlimit: RLIMIT_AS and RLIMIT_DATA both bound the
+# allocation and both abort RocksDB (exit -6) on ordinary queries. So the
+# parent polls.
+# ---------------------------------------------------------------------------
+def test_resident_mb_reads_a_real_number_and_survives_a_dead_pid():
+    import os
+
+    from sparql_pool import resident_mb
+
+    mine = resident_mb(os.getpid())
+    assert mine is not None and 1 < mine < 100_000, mine
+    # A worker that has already gone must not raise; the caller finds out a
+    # moment later through the pipe.
+    assert resident_mb(999_999) is None
+
+
+def test_a_query_that_holds_too_much_is_stopped_before_the_kernel_acts(tmp_path):
+    """The limit is set below what any worker already holds, so the watchdog
+    is what fires -- not the clock, which is left long on purpose."""
+    from pathlib import Path
+
+    from load_run import load_run
+    from pyoxigraph import Store
+
+    path = tmp_path / "rss-store"
+    store = Store(str(path))
+    load_run(store, (Path(__file__).parent / "fixtures" / "run-with-samples.nq").read_bytes())
+    del store
+
+    pool = Pool(str(path), workers=1, budget=30.0, rss_limit_mb=1)
+    pool.start()
+    try:
+        body, _, status, complete = pool.execute(COUNT_CROSS_JOIN)
+        assert status == 507, (status, body)
+        assert not complete
+        assert b"MiB" in body
+        # And the pool is usable again: a killed worker is replaced.
+        assert pool.execute("SELECT * WHERE { ?s ?p ?o } LIMIT 1")[2] == 200
+    finally:
+        pool.stop()
+
+
+def test_a_slow_but_modest_query_is_not_stopped_by_the_memory_watch(tmp_path):
+    """The watch must only fire on queries that are actually over the limit.
+
+    An instant query never reaches the check at all -- the answer arrives
+    inside the first poll -- so testing with one proves nothing, and a watch
+    that fired on everything passed such a test. This query runs for about a
+    second across many poll intervals while holding very little, which is the
+    case that separates "watching" from "refusing".
+    """
+    from pathlib import Path
+
+    from load_run import load_run
+    from pyoxigraph import Store
+
+    path = tmp_path / "slow-store"
+    store = Store(str(path))
+    load_run(store, (Path(__file__).parent / "fixtures" / "run-with-samples.nq").read_bytes())
+    del store
+
+    pool = Pool(str(path), workers=1, budget=60.0, rss_limit_mb=4096)
+    pool.start()
+    try:
+        body, _, status, complete = pool.execute(
+            "SELECT * WHERE { GRAPH ?g {?a ?b ?c} . GRAPH ?h {?d ?e ?f} } LIMIT 20000"
+        )
+        assert status == 200, (status, body[:120])
+        assert complete, "a query well under the limit was cut short"
+    finally:
+        pool.stop()
