@@ -126,30 +126,61 @@ def test_it_names_the_host_the_reader_actually_reached(client_for, store):
     assert any(q.subject.value.startswith("http://testserver/") for q in quads)
 
 
-def test_the_licence_is_stated_and_matches_the_repository(client_for, store):
-    """Chosen 2026-09-26: Apache-2.0, and the document has to say so.
+def test_the_data_licence_is_cc_by_and_not_the_code_licence(client_for, store):
+    """The split, and why it has to be asserted rather than assumed.
 
-    This replaced a test asserting that NO licence was claimed, which held the
-    line while none had been chosen -- asserting one nobody picked would have
-    been the exact unbacked claim this project reports on other endpoints.
-    Now one is picked, so the obligation inverts: a dataset whose terms a
-    consumer cannot find is one this service would mark down, and the
-    catalogues that list datasets ask for precisely this triple.
+    The software is Apache-2.0 and the measurements are CC BY 4.0. Those files
+    now deliberately DISAGREE, so a test pinning the document against LICENSE
+    -- which is what the previous one did -- would now enforce exactly the
+    confusion this split exists to remove. Each is pinned to its own file.
 
-    Pinned against the LICENSE file rather than against a string repeated
-    here, so the document and the repository cannot drift into disagreeing
-    about what somebody may do with this data.
+    Apache-2.0 is a software licence: its terms speak of source and object
+    form, of contributions and of patent grants, none of which map onto a set
+    of observations. A catalogue that lists datasets looks for a data licence.
     """
     from pathlib import Path
 
     _, quads = _graph(client_for(store))
     stated = [q.object.value for q in quads if q.predicate.value == f"{DCTERMS}license"]
-    assert stated == ["http://www.apache.org/licenses/LICENSE-2.0"], stated
+    assert stated == ["https://creativecommons.org/licenses/by/4.0/"], stated
+    assert not any("apache.org" in url for url in stated), "the code licence leaked into the data"
 
-    licence_file = Path(__file__).resolve().parents[2] / "LICENSE"
-    text = licence_file.read_text()
-    assert "Apache License" in text and "Version 2.0" in text, "LICENSE is not Apache-2.0"
-    assert "[name of copyright owner]" not in text, "the appendix placeholder was left in"
+    root = Path(__file__).resolve().parents[2]
+    code = (root / "LICENSE").read_text()
+    assert "Apache License" in code and "Version 2.0" in code
+    data = (root / "LICENSE-DATA").read_text()
+    assert "CC BY 4.0" in data
+    assert "creativecommons.org/licenses/by/4.0" in data
+
+
+def test_it_says_who_to_attribute(client_for, store):
+    """CC BY REQUIRES attribution, so a licence URI alone is not enough.
+
+    A consumer told they must attribute and not told to whom cannot comply.
+    The name has to be in the document, because somebody working from the RDF
+    will not read a file in the repository.
+    """
+    from pathlib import Path
+
+    _, quads = _graph(client_for(store))
+    creators = {q.object.value for q in quads
+                if q.predicate.value in (f"{DCTERMS}creator", f"{DCTERMS}rightsHolder")}
+    assert creators == {"Michel Dumontier"}, creators
+
+    # And the same name the repository states, so a consumer cannot find two.
+    data = (Path(__file__).resolve().parents[2] / "LICENSE-DATA").read_text()
+    assert "Michel Dumontier" in data
+
+
+def test_the_copyright_holder_is_stated_in_both_licence_files(client_for, store):
+    """A licence with an unfilled holder grants nothing clearly."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    for name in ("LICENSE", "LICENSE-DATA"):
+        text = (root / name).read_text()
+        assert "Michel Dumontier" in text, name
+        assert "[name of copyright owner]" not in text, name
 
 
 def test_the_count_cache_is_keyed_on_the_store(store, store_two_sweeps):

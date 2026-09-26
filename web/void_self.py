@@ -113,18 +113,19 @@ CURRENT_TITLE = "the newest reading for each endpoint and metric"
 
 SOURCE = "https://github.com/MaastrichtU-IDS/sparqlwatch"
 
-# The licence, chosen 2026-09-26. Apache-2.0, matching the LICENSE file at the
-# repository root, and stated here because a dataset whose terms a consumer
-# cannot find is one this service would mark down -- the registries that list
-# datasets ask for exactly this triple.
-#
-# It is a SOFTWARE licence applied to data, which is not what it was drafted
-# for: its terms speak of source and object form, contributions and patent
-# grants, none of which map cleanly onto a set of measurements. A data licence
-# (CC0 or CC-BY) would fit the dataset better and is what a catalogue expects
-# to see. This states what the project actually chose rather than what would
-# look tidier, and changing it is this constant plus the LICENSE file.
-LICENSE = "http://www.apache.org/licenses/LICENSE-2.0"
+# THE DATA LICENCE, which is not the code licence and must not be confused
+# with it. The software is Apache-2.0 (LICENSE); these measurements are CC BY
+# 4.0 (LICENSE-DATA). Apache-2.0 is a software licence -- its terms speak of
+# source and object form, of contributions and of patent grants, none of which
+# map onto a set of observations -- and a catalogue that lists datasets looks
+# for a data licence. This triple is what it looks for.
+LICENSE = "https://creativecommons.org/licenses/by/4.0/"
+
+# CC BY REQUIRES ATTRIBUTION, so a licence URI alone leaves a consumer unable
+# to comply: they are told they must attribute and not told to whom. These say
+# it in the document itself, which is the only place somebody working from the
+# RDF will look. The string matches LICENSE-DATA's attribution line.
+CREATOR = "Michel Dumontier"
 
 
 def _literal(text: str) -> str:
@@ -166,6 +167,8 @@ def document(store: Store, base: str, sparql_url: str) -> bytes:
         f"    void:sparqlEndpoint <{sparql_url}> ;",
         f"    void:rootResource <{base}> ;",
         f"    dcterms:license <{LICENSE}> ;",
+        f"    dcterms:creator {_literal(CREATOR)} ;",
+        f"    dcterms:rightsHolder {_literal(CREATOR)} ;",
         # Every identifier this service mints lives under one URN scheme, which
         # is the one thing a consumer needs to tell our subjects from those of
         # the endpoints we describe.
