@@ -638,6 +638,8 @@ mod tests {
             kind,
             query: None,
             fallback_query: None,
+            overlap_probe: None,
+            overlap_query: None,
             expect,
             var: None,
             declared_by: None,

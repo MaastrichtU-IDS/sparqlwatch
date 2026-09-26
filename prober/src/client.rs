@@ -144,6 +144,10 @@ pub struct Client {
     politeness: Politeness,
 }
 
+/// The variable `MetricDef::overlap_probe` binds. Named here so the query
+/// and the code that reads it cannot drift apart.
+pub const OVERLAP_VAR: &str = "overlap";
+
 impl Client {
     pub fn new(budget: Budget, politeness: Politeness) -> anyhow::Result<Self> {
         // HTTP_PROXY / HTTPS_PROXY are read automatically thanks to the
@@ -826,6 +830,36 @@ impl Client {
         } else {
             first
         }
+    }
+
+    /// Count a dataset, asking first which shape of dataset this is.
+    ///
+    /// `probe` returns a row when a default-graph triple also appears in a
+    /// named graph, which means the default graph is a VIEW over the named
+    /// ones and counting both halves counts everything twice. See
+    /// `MetricDef::overlap_probe` for the endpoint that made this necessary.
+    ///
+    /// A PROBE THAT DOES NOT ANSWER LEAVES THE DEFAULT QUERY STANDING. It is
+    /// a refinement, not a precondition: an endpoint that refuses it, times it
+    /// out, or answers something unreadable is measured exactly as it was
+    /// before this existed, which is the behaviour every endpoint had until
+    /// today and is never worse than not asking.
+    pub async fn counted_by_shape(
+        &self,
+        url: &str,
+        query: &str,
+        probe: Option<&str>,
+        overlap_query: Option<&str>,
+        var: &str,
+    ) -> Observation {
+        let (Some(probe), Some(overlap_query)) = (probe, overlap_query) else {
+            return self.ask_literal(url, query, var).await;
+        };
+        let seen = self.literal_attempt(url, probe, OVERLAP_VAR).await;
+        let overlaps =
+            seen.body_kind == BodyKind::SparqlJson && !seen.bindings.is_empty();
+        let chosen = if overlaps { overlap_query } else { query };
+        self.ask_literal(url, chosen, var).await
     }
 
     async fn literal_attempt(&self, url: &str, query: &str, var: &str) -> Observation {
