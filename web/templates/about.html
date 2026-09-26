@@ -54,15 +54,16 @@
 
   <section class="panel">
     <h2>How often</h2>
-    <p data-cadence="unscheduled">
-      No sweep runs on a schedule. Each one is started by hand, so a server
-      sees a burst of requests and then nothing, possibly for weeks, rather
-      than a visit at the same time every day. The one full sweep of this list
-      so far took {{ full_sweep }}.
+    <p data-cadence="scheduled">
+      Sweeps run on a timer. A cheap pass of four metrics runs at the top of
+      every hour, and a full pass at 03:30 UTC. An endpoint that stops
+      answering is asked less often, and one that has been relegated is asked
+      about once a week. The one full sweep of this list so far took
+      {{ full_sweep }}.
     </p>
     <p class="warn-note">
-      That is what is true today and not a policy. If sweeps later run on a
-      timer, this paragraph is what has to say so.
+      That is what is true today and not a policy. If the cadence changes,
+      this paragraph is what has to say so.
     </p>
   </section>
 

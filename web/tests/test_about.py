@@ -670,30 +670,41 @@ def test_the_page_says_where_the_endpoint_list_came_from(client):
 
 
 @requires_repo_sources
-def test_the_page_says_nothing_is_on_a_schedule_and_nothing_is(client):
+def test_the_page_says_sweeps_are_scheduled_and_names_the_cadence(client):
     """What a reader can expect in their logs, today.
 
-    There is no deployment and no scheduled job in this repository: CI runs
-    on push and pull request and nothing else, and there is no manifest
-    declaring a periodic sweep. So a sweep is something a person starts, and
-    saying otherwise would promise a cadence that does not exist. When stage
-    4 adds the schedule this test reds, and the page is what has to change.
-    """
-    workflows = list((REPO / ".github" / "workflows").glob("*.y*ml"))
-    assert workflows
-    for workflow in workflows:
-        assert "schedule:" not in workflow.read_text(), workflow
-    manifests = [
-        path
-        for path in REPO.glob("*/*.y*ml")
-        if path.parent.name not in {"workflows"}
-    ]
-    assert manifests == [], f"a deployment manifest exists now: {manifests}"
+    THIS PAGE WAS WRONG, from whenever the CronJobs landed until 2026-09-26.
+    It said "No sweep runs on a schedule. Each one is started by hand, so a
+    server sees a burst of requests and then nothing, possibly for weeks."
+    Meanwhile `prober` ran `0 * * * *` and `prober-profile` `30 3 * * *`, and
+    one endpoint in the store had been swept in 131 distinct runs. Every
+    operator reading this page was told they saw sporadic bursts while getting
+    an hourly visit -- on the one page this service publishes about how it
+    treats somebody else's server.
 
+    THE TEST THAT WAS HERE COULD NOT HAVE CAUGHT IT, and that is the lesson
+    worth keeping. It asserted that no manifest in THIS repository declared a
+    schedule, and none did: the CronJobs live in MaastrichtU-IDS/services. So
+    it went on passing while its subject drifted false, and it was tripped
+    eventually by an unrelated hand-run Job rather than by the thing it was
+    watching for.
+
+    Nothing here can fix that. This repository cannot see the deployment, so
+    this test pins what the page CLAIMS and cannot confirm the claim is true.
+    Whoever changes a schedule in the services repository has to change this
+    paragraph, and the paragraph says so itself.
+    """
     html = page(client)
     text = " ".join(texts_with(html, "data-cadence")).lower()
-    assert "schedule" in text
-    assert "by hand" in text or "by a person" in text
+
+    assert "timer" in text or "schedule" in text
+    assert "by hand" not in text, (
+        "the page is back to claiming sweeps are started by hand; they run "
+        "hourly and nightly on CronJobs in the services repository"
+    )
+    # The two cadences an operator actually sees in their logs.
+    assert "hour" in text, text
+    assert "03:30" in text, text
 
     # The one measured full sweep, quoted from where it is recorded rather
     # than rounded into the page. prober/README.md's own Sweep cost section
@@ -702,6 +713,19 @@ def test_the_page_says_nothing_is_on_a_schedule_and_nothing_is(client):
     duration = re.search(r"\b\d+h\d+m\d+s\b", text)
     assert duration, f"no full-sweep duration on the page: {text!r}"
     assert duration.group(0) in (PROBER / "README.md").read_text()
+
+
+def test_ci_itself_still_runs_on_push_and_not_on_a_timer(client):
+    """Separate from the sweep cadence, and it stayed true while that did not.
+
+    A scheduled workflow here would probe from GitHub's runners rather than
+    from the cluster, which is a second source of traffic to somebody else's
+    server that nothing on the About page describes.
+    """
+    workflows = list((REPO / ".github" / "workflows").glob("*.y*ml"))
+    assert workflows
+    for workflow in workflows:
+        assert "schedule:" not in workflow.read_text(), workflow
 
 
 @requires_repo_sources
