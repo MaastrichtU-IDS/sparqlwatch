@@ -1,0 +1,31 @@
+Creative Commons Attribution 4.0 International (CC BY 4.0)
+
+Copyright 2026 Michel Dumontier
+
+THIS FILE COVERS THE DATA, NOT THE CODE. The software in this repository is
+licensed under the Apache License, Version 2.0 -- see LICENSE. The measurements
+this service produces and publishes are licensed under CC BY 4.0 instead,
+because Apache-2.0 is a software licence: its terms speak of source and object
+form, of contributions and of patent grants, none of which map onto a set of
+observations. A catalogue that lists datasets looks for a data licence, and
+this is one.
+
+WHAT IT COVERS: everything this service publishes about the endpoints it
+measures -- the run graphs, the derived `current` graph, the descriptions at
+/void and /.well-known/void, and the answers its SPARQL endpoint returns.
+
+WHAT IT DOES NOT COVER: the endpoints measured. This dataset records what this
+service OBSERVED of them. It does not contain their data, and nothing here
+licenses anybody else's.
+
+ATTRIBUTION. CC BY 4.0 requires attribution. Attribute as:
+
+    sparqlwatch, Michel Dumontier, https://github.com/MaastrichtU-IDS/sparqlwatch
+
+The full licence text:
+
+    https://creativecommons.org/licenses/by/4.0/legalcode
+
+The human-readable summary, which is not a substitute for it:
+
+    https://creativecommons.org/licenses/by/4.0/

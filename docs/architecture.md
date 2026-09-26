@@ -304,6 +304,30 @@ comments are the evidence, and a claim without a number is treated as a guess.
 - **A golden file** (`web/tools/capture_reader_golden.py`) pins what the readers
   produce, so a change in output is visible rather than inferred.
 
+## Licensing, which is two licences and not one
+
+The **software** is Apache-2.0 (`LICENSE`). The **measurements this service
+publishes** are CC BY 4.0 (`LICENSE-DATA`). They differ on purpose.
+
+Apache-2.0 is a software licence: its terms speak of source and object form, of
+contributions and of patent grants, none of which map onto a set of
+observations. A catalogue that lists datasets — the LOD Cloud, YummyData —
+looks for a data licence, and would not find one in Apache-2.0. So the data
+carries its own, and `/.well-known/void` states it with `dcterms:license`
+alongside `dcterms:creator` and `dcterms:rightsHolder`: CC BY requires
+attribution, and a consumer told they must attribute but not told to whom
+cannot comply.
+
+What the data licence covers is what this service observed — the run graphs,
+the derived `current` graph, the VoID documents, and what the SPARQL endpoint
+returns. It does not cover the endpoints measured. This dataset records what we
+saw of them; it does not contain their data, and nothing here licenses anybody
+else's.
+
+`web/tests/test_well_known_void.py` pins each licence to its own file, because
+the two now deliberately disagree and a test pinning one against the other
+would enforce exactly the confusion this split removes.
+
 ## Known weaknesses
 
 Recorded because they are real, not as a to-do list.
