@@ -165,6 +165,8 @@ def document(store: Store, base: str, sparql_url: str) -> bytes:
         "@prefix dcterms: <http://purl.org/dc/terms/> .",
         "@prefix foaf: <http://xmlns.com/foaf/0.1/> .",
         "@prefix sd: <http://www.w3.org/ns/sparql-service-description#> .",
+        "@prefix schema: <https://schema.org/> .",
+        "@prefix wgs84: <http://www.w3.org/2003/01/geo/wgs84_pos#> .",
         "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .",
         "",
         f"<{base}.well-known/void> a void:DatasetDescription ;",
@@ -204,6 +206,13 @@ def document(store: Store, base: str, sparql_url: str) -> bytes:
         f"    sd:name <{CURRENT_GRAPH_IRI}> ;",
         f'    void:triples "{n["current"]}"^^xsd:integer .',
         "",
+        # THE SAME FACT ABOUT THE SAME RESOURCE as the service description
+        # states, so the two documents cannot be read as disagreeing. It hangs
+        # off the ENDPOINT, never off the dataset: see LOCATION's comment for
+        # why `dcterms:spatial` on the dataset would be false.
+        f"<{sparql_url}> schema:location <{LOCATION}> .",
+        "",
+        place_block(),
         # The name the licence's attribution line needs, on the identifier the
         # catalogue wants. Neither alone is enough.
         f"<{CREATOR_ID}> a foaf:Person ;",
@@ -243,3 +252,42 @@ def vocabulary(store: Store) -> dict[str, tuple[str, ...]]:
         var = "c" if name == "classes" else "p"
         out[name] = tuple(sorted(row[var].value for row in store.query(query)))
     return out
+
+
+# WHERE THE SERVER IS, and the modelling matters more than the coordinates.
+#
+# THIS IS A PROPERTY OF THE SERVICE, NOT OF THE DATA, and it is emitted on the
+# endpoint resource rather than on the dataset for that reason. The obvious
+# predicate, `dcterms:spatial` on a `void:Dataset`, means the spatial COVERAGE
+# of the data -- and this dataset covers SPARQL endpoints in Japan, Brazil,
+# Switzerland and everywhere else the registry reaches. Saying it is "about
+# Maastricht" would be false, and a consumer filtering catalogues by region
+# would be misled into thinking these are Dutch measurements.
+#
+# What is true is that the machine answering is in Maastricht, which is a fact
+# about latency, jurisdiction and who to ask about an outage. `schema:location`
+# on the service says that and nothing more.
+#
+# The identifier and the coordinates were read from GeoNames rather than
+# recalled: sws.geonames.org/2751283 returns gn:name "Maastricht",
+# gn:countryCode "NL", and the two figures below.
+LOCATION = "https://sws.geonames.org/2751283/"
+LOCATION_NAME = "Maastricht, Netherlands"
+LOCATION_LAT = "50.84833"
+LOCATION_LONG = "5.68889"
+
+
+def place_block() -> str:
+    """The Turtle describing where the service runs.
+
+    Restated here rather than left to a dereference of the GeoNames URI, so a
+    consumer that will not follow links still gets a usable answer. A city's
+    coordinates do not drift, which is what makes copying them safe; the
+    identifier is what carries the authority.
+    """
+    return (
+        f"<{LOCATION}> a schema:Place ;\n"
+        f"    schema:name {_literal(LOCATION_NAME)} ;\n"
+        f'    wgs84:lat "{LOCATION_LAT}"^^xsd:decimal ;\n'
+        f'    wgs84:long "{LOCATION_LONG}"^^xsd:decimal .\n'
+    )
