@@ -113,6 +113,19 @@ CURRENT_TITLE = "the newest reading for each endpoint and metric"
 
 SOURCE = "https://github.com/MaastrichtU-IDS/sparqlwatch"
 
+# The licence, chosen 2026-09-26. Apache-2.0, matching the LICENSE file at the
+# repository root, and stated here because a dataset whose terms a consumer
+# cannot find is one this service would mark down -- the registries that list
+# datasets ask for exactly this triple.
+#
+# It is a SOFTWARE licence applied to data, which is not what it was drafted
+# for: its terms speak of source and object form, contributions and patent
+# grants, none of which map cleanly onto a set of measurements. A data licence
+# (CC0 or CC-BY) would fit the dataset better and is what a catalogue expects
+# to see. This states what the project actually chose rather than what would
+# look tidier, and changing it is this constant plus the LICENSE file.
+LICENSE = "http://www.apache.org/licenses/LICENSE-2.0"
+
 
 def _literal(text: str) -> str:
     """A Turtle string literal. Escaped, because a description is text."""
@@ -152,6 +165,7 @@ def document(store: Store, base: str, sparql_url: str) -> bytes:
         f"    dcterms:description {_literal(DESCRIPTION)} ;",
         f"    void:sparqlEndpoint <{sparql_url}> ;",
         f"    void:rootResource <{base}> ;",
+        f"    dcterms:license <{LICENSE}> ;",
         # Every identifier this service mints lives under one URN scheme, which
         # is the one thing a consumer needs to tell our subjects from those of
         # the endpoints we describe.
