@@ -859,6 +859,15 @@ pub fn definitions_revision(defs: &[MetricDef]) -> String {
             // differently and must not share a revision.
             tolerance,
         } = d;
+        // Built before the call rather than inside its args: clippy's
+        // `format_in_format_args` is an error here under `-D warnings`, and
+        // the two fields are one revision component so they need joining
+        // somewhere.
+        let overlap = format!(
+            "{}\x1d{}",
+            overlap_probe.as_deref().unwrap_or(""),
+            overlap_query.as_deref().unwrap_or("")
+        );
         canonical.push_str(&format!(
             "{}\x1f{}\x1f{}\x1f{:?}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{:?}\x1f{:?}\x1f{}\x1f{}\x1f{}\x1e",
             id,
@@ -867,11 +876,7 @@ pub fn definitions_revision(defs: &[MetricDef]) -> String {
             kind,
             query.as_deref().unwrap_or(""),
             fallback_query.as_deref().unwrap_or(""),
-            format!(
-                "{}\x1d{}",
-                overlap_probe.as_deref().unwrap_or(""),
-                overlap_query.as_deref().unwrap_or("")
-            ),
+            overlap,
             expect.map(|b| b.to_string()).unwrap_or_default(),
             var.as_deref().unwrap_or(""),
             declared_by.as_deref().unwrap_or(""),
