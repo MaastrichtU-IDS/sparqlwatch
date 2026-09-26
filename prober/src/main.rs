@@ -38,6 +38,21 @@ struct Args {
     exclusions: String,
     #[arg(long, default_value = "metrics.toml")]
     metrics: String,
+    /// Sweep only these urls, out of the ones the registry lists. Repeatable.
+    ///
+    /// For a sweep on demand, and the case it exists for is adding an
+    /// endpoint: a url appended to the registry has no readings until the next
+    /// nightly pass, so its page is empty for up to a day. This fills that in
+    /// without re-probing everybody else's servers, which the registry files
+    /// call an explicit act.
+    ///
+    /// It NARROWS and never widens. The exclusion list is applied first, so a
+    /// url somebody asked this project to leave alone is already gone by the
+    /// time this is read and naming it here is an error rather than a probe.
+    /// A url the registry does not list is an error too: sweeping nothing and
+    /// exiting 0 would look exactly like a successful pass.
+    #[arg(long)]
+    only: Vec<String>,
     #[arg(long, default_value = "run.nq")]
     out: String,
     /// The run instant, spelled exactly `YYYY-MM-DDTHH:MM:SSZ`: UTC, with no
@@ -511,6 +526,10 @@ async fn main() -> anyhow::Result<()> {
     // `registry::read_exclusions`.
     let excluded = read_exclusions(Path::new(&args.exclusions))?;
     let endpoints = load_endpoints(&std::fs::read_to_string(&args.endpoints)?, &excluded)?;
+    // AFTER the exclusions, never before: see registry::only. Narrowing a
+    // sweep is a convenience; the exclusion list is a promise, and a
+    // convenience must not be able to reach past one.
+    let endpoints = sparqlwatch_prober::registry::only(endpoints, &args.only)?;
 
     // The state, then the lock, then the plan, and all three before the run file
     // is opened and before any request is sent: a state problem or a lock left

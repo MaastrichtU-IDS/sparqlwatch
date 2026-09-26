@@ -304,6 +304,41 @@ comments are the evidence, and a claim without a number is treated as a guess.
 - **A golden file** (`web/tools/capture_reader_golden.py`) pins what the readers
   produce, so a change in output is visible rather than inferred.
 
+## Sweeping one endpoint, on demand
+
+Adding a url to `prober/endpoints.toml` does not measure it. Four metrics
+arrive at the top of the next hour; the other six wait for the nightly profile
+pass at 03:30 UTC. So a freshly added endpoint has an empty page for up to a
+day, which is exactly when somebody wants to look at it.
+
+`--only <url>` narrows a sweep to named urls, and `ops/catch-up-sweep.yaml` is
+a Job that runs one at the exhaustive cadence:
+
+    sed 's|ENDPOINT_URL|https://example.org/sparql|' ops/catch-up-sweep.yaml \
+      | kubectl -n sparqlwatch-dev create -f -
+
+The alternative is `kubectl create job --from=cronjob/prober-profile`, which
+works and sweeps **every** endpoint at exhaustive cost — about 61 third-party
+servers, a second full pass on top of the night's. Cadence is a property of
+each metric definition, not of when an endpoint was last probed, so nothing in
+that job would skip the servers it already visited. The registry files call
+probing somebody else's server an explicit act; re-probing sixty of them to
+fill in a page for one of ours is not one worth making.
+
+Three properties of `--only` are load-bearing:
+
+- **It is applied after the exclusion list, never before.** The hosts somebody
+  asked to be left alone are gone before `--only` is read, so naming one is an
+  error rather than a probe. A convenience must not be able to reach past a
+  promise.
+- **An unknown url stops the sweep.** A mistyped one that matched nothing would
+  exit 0 and write a run naming no endpoint — indistinguishable from a
+  successful catch-up pass, so the operator would believe the endpoint had been
+  profiled while its page stayed empty.
+- **It is safe for the shared dormancy state.** `dormancy::update` clones the
+  state on disk and touches only the endpoints the sweep listed, so a
+  one-endpoint run carries every other entry forward untouched.
+
 ## Licensing, which is two licences and not one
 
 The **software** is Apache-2.0 (`LICENSE`). The **measurements this service
