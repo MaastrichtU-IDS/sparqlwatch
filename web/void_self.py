@@ -1,0 +1,181 @@
+"""This service's own VoID description, served at `/.well-known/void`.
+
+NOT void_document.py, and the difference is the whole point. That module
+describes an endpoint we MEASURED -- its subject is our observation of
+somebody else's dataset, and it exists because those operators published
+nothing. This one describes the dataset we ourselves publish: the
+measurements, the runs they came from, and the endpoint that answers
+questions about them.
+
+WHY `.well-known/void`. It is the discovery convention from the VoID note: a
+consumer who has only a hostname can find the dataset description without
+being told where to look. That is the same problem this project complains
+about in others -- nine of nine catalogued endpoints publishing nothing a
+consumer can read -- so not publishing one ourselves would be hard to defend.
+
+IT DOES NOT CHANGE OUR OWN VERDICTS, and it should not be expected to. This
+prober's `FetchWellKnown` probe is a queryless GET on the endpoint URL itself
+and dereferences no well-known path -- the probe name is legacy, and
+resolve.rs says so. So the five metrics that read `undeclared-but-verified`
+about us still will. Making those read as declared means putting the same
+claims in what `/sparql` returns to a queryless GET, which is a separate
+change to the service description, not this file.
+
+THE SUBJECT IS OUR OBSERVATIONS, never the endpoints observed. A reader must
+not come away thinking this dataset contains Wikidata, or that its triple
+count says anything about anyone's store but ours. The description says so in
+its own first triples, for the same reason void_document.py does.
+
+THE COUNTS ARE REAL, not declared-and-hoped. Each is a COUNT over the store
+this process has open, measured on the deployed store at 0.1s to 1.9s, the
+largest being 1.5M triples. They are cached for the life of the process
+because the store cannot change under it: app.py opens it `read_only`, which
+is a snapshot, and publishing new data is a restart. See _opened_store.
+"""
+
+from __future__ import annotations
+
+from functools import lru_cache
+
+from pyoxigraph import Store
+
+from load_run import CURRENT_GRAPH_IRI
+
+# The vocabularies a consumer will meet in this data. Named rather than
+# derived: `void:vocabulary` is a statement about what the dataset uses, and
+# deriving it from whatever happens to be in the store today would make it
+# fluctuate with the fleet's behaviour rather than describe the schema.
+VOCABULARIES = (
+    "http://www.w3.org/ns/dqv#",
+    "http://www.w3.org/ns/prov#",
+    "http://rdfs.org/ns/void#",
+    "urn:sparqlwatch:",
+)
+
+_COUNTS = {
+    "triples": "SELECT (COUNT(*) AS ?n) WHERE { GRAPH ?g { ?s ?p ?o } }",
+    "distinctSubjects": "SELECT (COUNT(DISTINCT ?s) AS ?n) WHERE { GRAPH ?g { ?s ?p ?o } }",
+    "properties": "SELECT (COUNT(DISTINCT ?p) AS ?n) WHERE { GRAPH ?g { ?s ?p ?o } }",
+    "classes": "SELECT (COUNT(DISTINCT ?c) AS ?n) WHERE { GRAPH ?g { ?s a ?c } }",
+    "graphs": "SELECT (COUNT(DISTINCT ?g) AS ?n) WHERE { GRAPH ?g { ?s ?p ?o } }",
+    "current": (
+        "SELECT (COUNT(*) AS ?n) WHERE { GRAPH <" + CURRENT_GRAPH_IRI + "> { ?s ?p ?o } }"
+    ),
+}
+
+
+@lru_cache(maxsize=4)
+def counts(store: Store) -> dict[str, int]:
+    """Every number in the description, measured once per process.
+
+    KEYED ON THE STORE, not on nothing. A cache keyed on nothing is correct in
+    production -- one store per process -- and wrong in every test, which is
+    how a previous cache in this codebase passed its tests and would have
+    served one store's numbers for another's.
+    """
+    out = {}
+    for name, query in _COUNTS.items():
+        rows = list(store.query(query))
+        out[name] = int(rows[0]["n"].value) if rows else 0
+    return out
+
+
+def newest_run(store: Store) -> str | None:
+    """The instant of the most recent run, for `dcterms:modified`.
+
+    The dataset's modification date is when a sweep last added to it, which is
+    a fact the store holds, rather than the moment this document was rendered.
+    """
+    rows = list(
+        store.query(
+            "SELECT (MAX(?at) AS ?newest) WHERE { GRAPH ?g { "
+            "?a <http://www.w3.org/ns/prov#generatedAtTime> ?at } }"
+        )
+    )
+    if not rows or rows[0]["newest"] is None:
+        return None
+    return rows[0]["newest"].value
+
+
+# The dataset's own name and what it is. Kept to what is already written down
+# rather than invented here: the description is the repository's own one-line
+# summary, and the sentence after it is the honesty clause this project applies
+# to every description it writes about somebody else.
+TITLE = "sparqlwatch measurements"
+DESCRIPTION = (
+    "Quality monitoring for public SPARQL endpoints: scheduled probes, "
+    "closed-vocabulary verdicts, and a site that shows what each endpoint "
+    "actually answers. This dataset is what this service OBSERVED of those "
+    "endpoints. It does not contain their data, and its counts describe these "
+    "observations rather than any endpoint measured."
+)
+CURRENT_TITLE = "the newest reading for each endpoint and metric"
+
+SOURCE = "https://github.com/MaastrichtU-IDS/sparqlwatch"
+
+
+def _literal(text: str) -> str:
+    """A Turtle string literal. Escaped, because a description is text."""
+    escaped = (
+        text.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+    )
+    return f'"{escaped}"'
+
+
+def document(store: Store, base: str, sparql_url: str) -> bytes:
+    """The VoID description, as Turtle.
+
+    `base` is this site's root as the request saw it, so the document names the
+    host a reader actually reached rather than one baked in at build time.
+    """
+    n = counts(store)
+    dataset = f"{base}#dataset"
+    current = f"{base}#current"
+    modified = newest_run(store)
+
+    lines = [
+        "@prefix void: <http://rdfs.org/ns/void#> .",
+        "@prefix dcterms: <http://purl.org/dc/terms/> .",
+        "@prefix foaf: <http://xmlns.com/foaf/0.1/> .",
+        "@prefix sd: <http://www.w3.org/ns/sparql-service-description#> .",
+        "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .",
+        "",
+        f"<{base}.well-known/void> a void:DatasetDescription ;",
+        f"    foaf:primaryTopic <{dataset}> ;",
+        f"    dcterms:source <{SOURCE}> .",
+        "",
+        f"<{dataset}> a void:Dataset ;",
+        f"    dcterms:title {_literal(TITLE)} ;",
+        f"    dcterms:description {_literal(DESCRIPTION)} ;",
+        f"    void:sparqlEndpoint <{sparql_url}> ;",
+        f"    void:rootResource <{base}> ;",
+        # Every identifier this service mints lives under one URN scheme, which
+        # is the one thing a consumer needs to tell our subjects from those of
+        # the endpoints we describe.
+        '    void:uriSpace "urn:sparqlwatch:" ;',
+    ]
+    lines += [f"    void:vocabulary <{v}> ;" for v in VOCABULARIES]
+    lines += [
+        f'    void:triples "{n["triples"]}"^^xsd:integer ;',
+        f'    void:distinctSubjects "{n["distinctSubjects"]}"^^xsd:integer ;',
+        f'    void:properties "{n["properties"]}"^^xsd:integer ;',
+        f'    void:classes "{n["classes"]}"^^xsd:integer ;',
+    ]
+    if modified:
+        lines.append(f'    dcterms:modified "{modified}"^^xsd:dateTime ;')
+    lines += [
+        f"    void:subset <{current}> .",
+        "",
+        # The default graph of the endpoint, declared because a consumer who
+        # writes `?s ?p ?o` gets THIS and not the 1.5M triples above, and
+        # nothing else on the open web would tell them why.
+        f"<{current}> a void:Dataset ;",
+        f"    dcterms:title {_literal(CURRENT_TITLE)} ;",
+        f"    sd:name <{CURRENT_GRAPH_IRI}> ;",
+        f'    void:triples "{n["current"]}"^^xsd:integer .',
+        "",
+    ]
+    return "\n".join(lines).encode("utf-8")

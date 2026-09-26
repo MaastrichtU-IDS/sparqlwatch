@@ -72,6 +72,7 @@ from pyoxigraph import (
 import charts
 import sparql_pool
 import sparql_service
+import void_self
 import verdict_encoding
 from endpoint_content import CLASS_SAMPLING_METRICS, EndpointContent, endpoint_content
 from explore_payload import (
@@ -165,6 +166,13 @@ HISTORY_PATH = "/history"
 # dangerous change here, so every guard in front of it lives in
 # sparql_service.py with the measurement that justifies it.
 SPARQL_PATH = "/sparql"
+
+# The VoID discovery convention: a consumer with only a hostname can find the
+# dataset description without being told where to look. This project complains
+# that catalogued endpoints publish nothing a consumer can read, so it
+# publishes its own here. See web/void_self.py, and note that it deliberately
+# describes OUR observations rather than the endpoints observed.
+WELL_KNOWN_VOID_PATH = "/.well-known/void"
 
 # The tab icon, and the separate monochrome mask a Safari pinned tab uses.
 ICON_PATH = "/icon.svg"
@@ -5120,3 +5128,22 @@ def _service_description(request: Request) -> bytes:
     sw:maxQueryBytes "{sparql_service.MAX_QUERY_BYTES}"^^xsd:integer ;
     sw:federationAvailable false .
 """.encode("utf-8")
+
+
+@app.get(WELL_KNOWN_VOID_PATH)
+def well_known_void(request: Request, store: Store = Depends(get_store)) -> Response:
+    """This service's own VoID description.
+
+    Turtle only, and no HTML twin: the well-known URI exists for a machine that
+    has a hostname and needs the dataset, and a reader who wants prose has the
+    pages. Served with open CORS for the same reason the SPARQL endpoint is --
+    a description a browser cannot read is one this project would mark down.
+    """
+    root = str(request.url).split("/.well-known/")[0] + "/"
+    return Response(
+        content=void_self.document(
+            store, base=root, sparql_url=root.rstrip("/") + SPARQL_PATH
+        ),
+        media_type="text/turtle; charset=utf-8",
+        headers=sparql_service.CORS,
+    )

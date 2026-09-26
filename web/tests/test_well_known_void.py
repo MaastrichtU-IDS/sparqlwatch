@@ -1,0 +1,148 @@
+"""The service's own VoID description at /.well-known/void.
+
+Not to be confused with void_document.py's, which describes an endpoint we
+MEASURED. This one describes the dataset we publish, and the distinction is
+the thing most worth protecting: a reader must not come away believing this
+dataset contains the endpoints' data, or that its triple count says anything
+about anyone's store but ours.
+"""
+
+import pytest
+from pyoxigraph import RdfFormat, Store, parse
+from starlette.testclient import TestClient
+
+import void_self
+from app import WELL_KNOWN_VOID_PATH, app, get_store
+
+VOID = "http://rdfs.org/ns/void#"
+DCTERMS = "http://purl.org/dc/terms/"
+
+
+@pytest.fixture
+def client_for():
+    clients = []
+
+    def build(store):
+        app.dependency_overrides[get_store] = lambda: store
+        client = TestClient(app)
+        clients.append(client)
+        return client
+
+    yield build
+    app.dependency_overrides.clear()
+    for client in clients:
+        client.close()
+
+
+def _graph(client):
+    response = client.get(WELL_KNOWN_VOID_PATH)
+    assert response.status_code == 200, response.text
+    assert "turtle" in response.headers["content-type"]
+    return response, list(parse(response.content, format=RdfFormat.TURTLE,
+                                base_iri="http://testserver/"))
+
+
+def test_it_is_parseable_rdf_and_names_the_endpoint(client_for, store):
+    """A description nothing can parse is not a description."""
+    response, quads = _graph(client_for(store))
+    preds = {q.predicate.value for q in quads}
+    assert f"{VOID}sparqlEndpoint" in preds
+    assert f"{VOID}triples" in preds
+    endpoint = next(q.object.value for q in quads if q.predicate.value == f"{VOID}sparqlEndpoint")
+    assert endpoint.endswith("/sparql")
+
+
+def test_the_document_points_at_the_dataset_it_describes(client_for, store):
+    """`.well-known/void` is a DatasetDescription, not the dataset. A consumer
+    follows foaf:primaryTopic to the thing with the counts on it."""
+    _, quads = _graph(client_for(store))
+    kinds = {(q.subject.value, q.object.value) for q in quads
+             if q.predicate.value.endswith("22-rdf-syntax-ns#type")}
+    assert any(s.endswith("/.well-known/void") and o == f"{VOID}DatasetDescription"
+               for s, o in kinds), kinds
+    topic = next(q.object.value for q in quads if q.predicate.value.endswith("primaryTopic"))
+    assert any(s == topic and o == f"{VOID}Dataset" for s, o in kinds)
+
+
+def test_the_counts_are_the_store_s_own_and_not_placeholders(client_for, store):
+    """Measured, not declared-and-hoped. If these ever stop tracking the store,
+    the description becomes the kind of claim this project exists to catch."""
+    client = client_for(store)
+    _, quads = _graph(client)
+    # BY SUBJECT as well as predicate: the document carries two datasets, and
+    # both state void:triples. Keying on the predicate alone let the subset's
+    # count silently stand in for the whole dataset's.
+    topic = next(q.object.value for q in quads if q.predicate.value.endswith("primaryTopic"))
+    stated = {
+        q.predicate.value.rsplit("#", 1)[-1]: int(q.object.value)
+        for q in quads
+        if q.subject.value == topic
+        and q.predicate.value.startswith(VOID)
+        and q.object.value.isdigit()
+    }
+    real = list(store.query("SELECT (COUNT(*) AS ?n) WHERE { GRAPH ?g { ?s ?p ?o } }"))
+    assert stated["triples"] == int(real[0]["n"].value)
+    assert stated["triples"] > 0, "a fixture with no triples proves nothing here"
+
+    # And the subset really is the smaller one, which is what makes the two
+    # numbers worth telling apart.
+    subset = next(q.object.value for q in quads if q.predicate.value == f"{VOID}subset")
+    subset_triples = next(int(q.object.value) for q in quads
+                          if q.subject.value == subset and q.predicate.value == f"{VOID}triples")
+    assert subset_triples < stated["triples"]
+
+
+def test_it_says_whose_data_this_is(client_for, store):
+    """THE property worth protecting. The subject is our observations, never
+    the endpoints observed, and the description has to say so itself -- the
+    same rule void_document.py follows when describing somebody else."""
+    _, quads = _graph(client_for(store))
+    description = next(q.object.value for q in quads
+                       if q.predicate.value == f"{DCTERMS}description")
+    assert "OBSERVED" in description
+    assert "does not contain their data" in description
+
+
+def test_the_default_graph_is_declared_as_a_subset(client_for, store):
+    """A consumer who writes `?s ?p ?o` against our endpoint gets `current`,
+    not the whole history. Nothing else on the open web would tell them why."""
+    _, quads = _graph(client_for(store))
+    subsets = [q.object.value for q in quads if q.predicate.value == f"{VOID}subset"]
+    assert subsets, "the default graph is undeclared"
+    named = {q.object.value for q in quads if q.predicate.value.endswith("#name")}
+    assert "urn:sparqlwatch:current" in named
+
+
+def test_it_is_readable_from_a_browser(client_for, store):
+    """This service marks endpoints down for missing CORS; a description a
+    browser cannot fetch would be the same failure in our own house."""
+    response = client_for(store).get(WELL_KNOWN_VOID_PATH)
+    assert response.headers["access-control-allow-origin"] == "*"
+
+
+def test_it_names_the_host_the_reader_actually_reached(client_for, store):
+    """Baked-in hostnames are how a description ends up describing staging."""
+    _, quads = _graph(client_for(store))
+    assert any(q.subject.value.startswith("http://testserver/") for q in quads)
+
+
+def test_no_licence_is_claimed_until_one_is_chosen(client_for, store):
+    """The repository declares none, so neither does this.
+
+    A VoID description conventionally carries dcterms:license, and asserting
+    one nobody chose would be worse than omitting it -- it is the exact kind of
+    unbacked claim this project reports on other people's endpoints. When a
+    licence is chosen, add it here and delete this test.
+    """
+    _, quads = _graph(client_for(store))
+    assert not any(q.predicate.value == f"{DCTERMS}license" for q in quads)
+
+
+def test_the_count_cache_is_keyed_on_the_store(store, store_two_sweeps):
+    """A cache keyed on nothing is right in production -- one store per
+    process -- and wrong in every test. This codebase has already shipped that
+    bug once, in the page cache."""
+    first = void_self.counts(store)
+    second = void_self.counts(store_two_sweeps)
+    assert first is not second
+    assert void_self.counts(store) == first
