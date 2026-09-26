@@ -266,3 +266,131 @@ def test_a_literal_keeps_its_datatype_and_language(client_for, store):
 def test_comments_and_literals_share_one_model(client_for, store, query, allowed):
     status = _q(client_for(store), query).status_code
     assert (status == 200) is allowed, f"{status} for {query!r}"
+
+
+# ---------------------------------------------------------------------------
+# What the service description DECLARES
+#
+# The prober reads an endpoint's declarations from a queryless GET on the
+# endpoint url -- this document -- and dereferences no well-known path
+# (resolve.rs). Until these were emitted, this service reported its own
+# triple-count, class-count, vocabulary and geo-functions as
+# `undeclared-but-verified`: it had checked them by asking and found nobody
+# had said them. Verified by running the real prober against a local server:
+# all four flip to `verified`.
+# ---------------------------------------------------------------------------
+def _sd(client):
+    from pyoxigraph import RdfFormat, parse
+
+    response = client.get(SPARQL_PATH)
+    assert response.status_code == 200
+    return response.text, list(
+        parse(response.content, format=RdfFormat.TURTLE, base_iri="http://testserver/")
+    )
+
+
+def test_it_declares_its_size_and_vocabulary(client_for, store):
+    VOID = "http://rdfs.org/ns/void#"
+    _, quads = _sd(client_for(store))
+    preds = {q.predicate.value for q in quads}
+    for predicate in ("triples", "classes", "classPartition", "propertyPartition"):
+        assert f"{VOID}{predicate}" in preds, predicate
+    # The partitions name real IRIs rather than being empty structure.
+    classes = {q.object.value for q in quads if q.predicate.value == f"{VOID}class"}
+    assert classes, "classPartition with no void:class says nothing"
+
+
+def test_the_declared_counts_come_from_the_store(client_for, store):
+    """Declared and measured from the same place, or the declaration is a
+    number somebody typed once."""
+    VOID = "http://rdfs.org/ns/void#"
+    _, quads = _sd(client_for(store))
+    declared = next(
+        int(q.object.value) for q in quads if q.predicate.value == f"{VOID}triples"
+    )
+    real = list(store.query("SELECT (COUNT(*) AS ?n) WHERE { GRAPH ?g { ?s ?p ?o } }"))
+    assert declared == int(real[0]["n"].value)
+
+
+def test_the_declared_triple_count_is_the_dataset_s_not_the_probe_s(client_for, store):
+    """THE judgement call in this document, and it is deliberate.
+
+    The probe asks `{ ?s ?p ?o } UNION { GRAPH ?g { ?s ?p ?o } }`. This
+    endpoint's default graph IS one of its named graphs, so that counts
+    `current` twice and observes more triples than the store holds. Declaring
+    the observed figure would make this document state a number that is an
+    artefact of somebody's query shape rather than a fact about the data.
+
+    So the honest number is declared and the difference is absorbed by the
+    metric's own `tolerance = 0.05`. That works while `current` is small
+    beside the history -- 0.35% on the deployed store -- and it is NOT a
+    general guarantee: on a store holding one run, `current` is a third of
+    everything and the same declaration reads `declared-but-wrong`. Measured
+    both ways with the real prober while this was written.
+    """
+    VOID = "http://rdfs.org/ns/void#"
+    _, quads = _sd(client_for(store))
+    declared = next(
+        int(q.object.value) for q in quads if q.predicate.value == f"{VOID}triples"
+    )
+    # ASKED THE WAY THE ENDPOINT ANSWERS IT. A bare store.query() uses the
+    # spec's empty default graph, so the union counts the named graphs once
+    # and the difference this test is about disappears. The endpoint sets
+    # default_graph=current, which is what makes `current` count twice.
+    from load_run import CURRENT_GRAPH
+
+    observed = int(
+        list(
+            store.query(
+                "SELECT (COUNT(*) AS ?n) WHERE "
+                "{ { ?s ?p ?o } UNION { GRAPH ?g { ?s ?p ?o } } }",
+                default_graph=CURRENT_GRAPH,
+            )
+        )[0]["n"].value
+    )
+    assert declared < observed, (
+        "the declaration matches the probe exactly, which means it has been "
+        "changed to the probe's double-counted figure rather than the "
+        "dataset's own"
+    )
+
+
+def test_it_declares_the_geospatial_function_it_actually_evaluates(client_for, store):
+    """Checked rather than assumed. pyoxigraph evaluates `geof:sfWithin` --
+    it returns true for a point inside a polygon, while a genuinely unknown
+    function raises -- so declaring it states something true."""
+    text, quads = _sd(client_for(store))
+    sd = "http://www.w3.org/ns/sparql-service-description#"
+    functions = {q.object.value for q in quads if q.predicate.value == f"{sd}extensionFunction"}
+    assert any("geosparql" in f for f in functions), functions
+
+    answered = client_for(store).get(
+        SPARQL_PATH,
+        params={
+            "query": 'PREFIX geo: <http://www.opengis.net/ont/geosparql#>\n'
+            "PREFIX geof: <http://www.opengis.net/def/function/geosparql/>\n"
+            'ASK { FILTER(geof:sfWithin("POINT(5 52)"^^geo:wktLiteral, '
+            '"POLYGON((0 50,10 50,10 55,0 55,0 50))"^^geo:wktLiteral)) }'
+        },
+    )
+    import json
+
+    assert json.loads(answered.text)["boolean"] is True, (
+        "the description declares a function this endpoint does not evaluate"
+    )
+
+
+def test_nothing_declares_a_graph_count(client_for, store):
+    """It cannot be declared honestly, and that is a finding rather than a gap.
+
+    `declare.rs` says it: there is no VoID or service-description predicate
+    that states a NUMBER of graphs, so the claim is the length of the
+    `sd:namedGraph` list a description gives. Declaring 319 graphs means
+    enumerating 319, and that list grows by about 24 every day forever. So
+    graph-count stays `undeclared-but-verified`, which describes the
+    situation accurately.
+    """
+    text, quads = _sd(client_for(store))
+    sd = "http://www.w3.org/ns/sparql-service-description#"
+    named = [q for q in quads if q.predicate.value == f"{sd}namedGraph"]
+    assert named == [], f"the description now enumerates graphs: {len(named)}"
