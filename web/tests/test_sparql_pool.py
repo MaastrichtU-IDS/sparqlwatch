@@ -45,6 +45,15 @@ SORTED_CROSS_JOIN = f"SELECT * WHERE {{ {_JOIN} }} ORDER BY ?a"
 # volume rather than through blocking.
 CROSS_JOIN = f"SELECT * WHERE {{ {_JOIN} }}"
 
+# THE THREE WAYS A QUERY CAN BE STOPPED, named once because assuming a
+# particular one has now been wrong three times in this file: 504 the clock,
+# 507 the memory watch, and a truncated 200 the row cap. Which guard wins is a
+# race between the machine's speed and its memory, and no test should depend on
+# the outcome. What every test may depend on is that the query was bounded and
+# that an incomplete answer never claims to be complete.
+STOPPED = (504, 507)
+BOUNDED = (200, 504, 507)
+
 
 @pytest.fixture
 def pool(tmp_path):
@@ -86,7 +95,7 @@ def test_a_query_that_blocks_inside_the_engine_is_killed(pool, query):
     # reaches it first (507); an aggregate is likelier to run out the clock
     # (504). Asserting one specifically is asserting the machine again --
     # the same mistake that made this file pass locally and fail in CI.
-    assert status in (504, 507), (status, body[:120])
+    assert status in STOPPED, (status, body[:120])
     assert not complete
     assert elapsed < pool.budget + 5, f"took {elapsed:.1f}s on a {pool.budget}s budget"
 
@@ -96,7 +105,7 @@ def test_the_pool_recovers_after_a_kill(pool):
     with it. If it were not replaced, capacity would erode with every hostile
     query until the endpoint answered nothing."""
     for _ in range(2):
-        assert pool.execute(COUNT_CROSS_JOIN)[2] == 504
+        assert pool.execute(COUNT_CROSS_JOIN)[2] in STOPPED
     body, _, status, complete = pool.execute("SELECT * WHERE { ?s ?p ?o } LIMIT 1")
     assert status == 200 and complete, body
 
@@ -119,7 +128,9 @@ def test_excess_concurrency_is_refused_rather_than_queued(pool):
     for t in threads:
         t.join(timeout=60)
     assert statuses.count(503) == 2, statuses
-    assert statuses.count(504) == 2, statuses
+    # The two that got a worker were stopped by one guard or another; which
+    # one is the same race as everywhere else in this file.
+    assert sum(1 for s in statuses if s in STOPPED) == 2, statuses
 
 
 def test_a_direct_pool_runs_the_same_guards(store):
@@ -138,16 +149,16 @@ def test_a_direct_pool_runs_the_same_guards(store):
 def test_a_streaming_query_is_bounded_without_needing_a_kill(pool):
     """CROSS_JOIN is the other kind, and it must not be tested as a kill.
 
-    It streams, so the row cap reaches it: on a fast machine it hits 100,000
-    rows and comes back as a truncated 200 well before the budget, and on a
-    slow one the wall clock gets there first and it is a 504. Asserting either
-    one specifically is a test that passes on the machine it was written on --
-    which is exactly how this file failed CI while passing locally, on the same
-    commit. What actually matters is that it is bounded, and that an incomplete
-    answer never claims to be complete.
+    It streams, so any of the three guards may reach it first: the row cap
+    (truncated 200) on a fast machine, the clock (504) on a slow one, or the
+    memory watch (507) where accumulating 100,000 rows costs more than a
+    worker is allowed to hold. Asserting one specifically is a test that
+    passes on the machine it was written on -- which is how this file failed
+    CI while passing locally, on the same commit, twice. What matters is that
+    it is bounded and that an incomplete answer never claims to be complete.
     """
     body, media, status, complete = pool.execute(CROSS_JOIN)
-    assert status in (200, 504), (status, body[:120])
+    assert status in BOUNDED, (status, body[:120])
     assert not complete, "an unbounded join reported a complete answer"
     if status == 200:
         import json
