@@ -122,9 +122,19 @@ SOURCE = "https://github.com/MaastrichtU-IDS/sparqlwatch"
 LICENSE = "https://creativecommons.org/licenses/by/4.0/"
 
 # CC BY REQUIRES ATTRIBUTION, so a licence URI alone leaves a consumer unable
-# to comply: they are told they must attribute and not told to whom. These say
+# to comply: they are told they must attribute and not told to whom. This says
 # it in the document itself, which is the only place somebody working from the
-# RDF will look. The string matches LICENSE-DATA's attribution line.
+# RDF will look.
+#
+# AN IDENTIFIER AND A NAME, not one or the other. The ORCID is what makes the
+# creator a resource a consumer can resolve and reconcile against, rather than
+# a string that has to be matched by spelling -- which is what a catalogue
+# wants. But an identifier alone cannot be written into an attribution line, so
+# the document also carries the name, on the ORCID itself, one hop away and in
+# the same file. The checksum was verified before publishing it: ORCIDs carry
+# an ISO 7064 MOD 11-2 check digit, and an identifier that fails it would point
+# at nobody.
+CREATOR_ID = "https://orcid.org/0000-0003-4727-9435"
 CREATOR = "Michel Dumontier"
 
 
@@ -167,8 +177,8 @@ def document(store: Store, base: str, sparql_url: str) -> bytes:
         f"    void:sparqlEndpoint <{sparql_url}> ;",
         f"    void:rootResource <{base}> ;",
         f"    dcterms:license <{LICENSE}> ;",
-        f"    dcterms:creator {_literal(CREATOR)} ;",
-        f"    dcterms:rightsHolder {_literal(CREATOR)} ;",
+        f"    dcterms:creator <{CREATOR_ID}> ;",
+        f"    dcterms:rightsHolder <{CREATOR_ID}> ;",
         # Every identifier this service mints lives under one URN scheme, which
         # is the one thing a consumer needs to tell our subjects from those of
         # the endpoints we describe.
@@ -193,6 +203,11 @@ def document(store: Store, base: str, sparql_url: str) -> bytes:
         f"    dcterms:title {_literal(CURRENT_TITLE)} ;",
         f"    sd:name <{CURRENT_GRAPH_IRI}> ;",
         f'    void:triples "{n["current"]}"^^xsd:integer .',
+        "",
+        # The name the licence's attribution line needs, on the identifier the
+        # catalogue wants. Neither alone is enough.
+        f"<{CREATOR_ID}> a foaf:Person ;",
+        f"    foaf:name {_literal(CREATOR)} .",
         "",
     ]
     return "\n".join(lines).encode("utf-8")
