@@ -2036,6 +2036,10 @@ ROW_DORMANT_TEXT = "the newest sweep did not ask"
 # replay that did not reach an endpoint changed nothing about how often it is
 # asked. One sentence covering three reasons is how that got written, so each
 # reason now carries what follows from it and the template covers none of them.
+# The slug `SkipReason::Inactive` publishes. Named once, because two places
+# read it: the state a row is filed under and the gloss below.
+_INACTIVE_REASON = "inactive"
+
 _ROW_DORMANCY_REASONS = {
     "automatic": (
         "on cost and silence",
@@ -2054,6 +2058,16 @@ _ROW_DORMANCY_REASONS = {
         "a sweep re-running an instant that had already run, which asks "
         "exactly the endpoints that instant asked before and so did not reach "
         "this one, leaving how often it is asked exactly as it was",
+    ),
+    # The only one of the four that no sweep can clear, which is why its clause
+    # says "retired" and not "set aside": the other three end when a sweep, a
+    # date or a person's hold ends, and this one ends only when somebody edits
+    # the registry file.
+    "inactive": (
+        "because the service was retired",
+        "the registry recording that the service is gone, after which no sweep "
+        "asks it at all and its entry is kept so that the URL it used to "
+        "answer on can still be looked up",
     ),
 }
 
@@ -2683,10 +2697,19 @@ def _row_size(entry: EndpointMeasurements) -> list[dict]:
 # asked for and it is a reasonable ask -- the chips are a byte-dense reference
 # and this is the one fact a reader scans a list of 74 for -- but it is a
 # duplication, so it reads the same function rather than a parallel one.
-# The three the fleet partitions into, and the ORDER they are shown in, which
+# The four the fleet partitions into, and the ORDER they are shown in, which
 # is the registry's own question asked once: does it work, did it fail, did we
-# stop asking. Set by the owner on 2026-09-18.
-AVAILABILITY_STATES = ("available", "unresponsive", "dormant")
+# stop asking, is it gone. The first three were set by the owner on 2026-09-18;
+# `inactive` was added on 2026-09-27.
+#
+# INACTIVE IS LAST AND IT IS NOT A FAILURE. The other three are readings of a
+# sweep. This one is a decision recorded in the registry file: the service was
+# retired upstream, so no sweep asks it and none ever will until a person edits
+# that file. It sits in this tuple because a reader filtering the fleet should
+# be able to find it, and it is kept out of `unresponsive` because reporting an
+# archived service as failing would be a finding about a server that no longer
+# exists to have one.
+AVAILABILITY_STATES = ("available", "unresponsive", "dormant", "inactive")
 
 # The one shown when a request names none, and the only page on this site whose
 # bare URL is not its whole contents. `/` is the 66 that answer; `/?facet=all`
@@ -2755,6 +2778,14 @@ def _availability_state(entry: EndpointMeasurements) -> str:
     from, so such a row reads "not measured" to anyone who looks at it.
     """
     if entry.newest_sweep_declined_to_ask_this_endpoint:
+        # INACTIVE BEFORE DORMANT, for the reason dormant comes before the
+        # verdict: both are declines, and the narrower one is the true one. A
+        # retired endpoint reads `dormant` if this test is left out, which says
+        # the sweep will come back to it -- `/about` promises exactly that of a
+        # dormant endpoint -- when in fact nothing will until a person edits the
+        # registry.
+        if entry.newest_dormancy_reason == _INACTIVE_REASON:
+            return "inactive"
         return "dormant"
     verdict = next(
         (v.verdict for v in entry.verdicts if v.metric == _AVAILABILITY_METRIC),

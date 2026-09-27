@@ -230,7 +230,10 @@ pub fn candidates(dump: &[u8], excluded: &[registry::Exclusion]) -> anyhow::Resu
                 1 => (Some(titles.into_iter().next().unwrap()), None),
                 n => (None, Some(n as u32)),
             };
-            registry::RegistryEntry { url, title, domain, datasets }
+            // Never `inactive`: a catalogue says where an endpoint is, not
+            // whether this project has retired it. That is a hand decision,
+            // and `seed-registry` overwrites this file.
+            registry::RegistryEntry { url, title, domain, datasets, inactive: None }
         })
         .collect();
 
@@ -402,6 +405,7 @@ mod tests {
                 title: None,
                 domain: None,
                 datasets: None,
+                inactive: None,
             }],
             "an excluded host may not be written into the registry"
         );

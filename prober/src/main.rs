@@ -3,7 +3,8 @@ use sparqlwatch_prober::{
     budget::Budget,
     client::Client,
     dormancy::{
-        self, plan_sweep, Outcome, Thresholds, DEFAULT_CADENCE_DAYS, DEFAULT_COST_MS,
+        self, plan_sweep, Outcome, SkipReason, Skipped, Thresholds, DEFAULT_CADENCE_DAYS,
+        DEFAULT_COST_MS,
         DEFAULT_GRACE_DAYS, DEFAULT_STRIKES, MIN_COST_MS,
     },
     emit::{DormancyFact, MeasurementRow, NotMeasured, NotMeasuredReason, RunFooter, RunHeader, RunId},
@@ -12,7 +13,7 @@ use sparqlwatch_prober::{
         MetricDef,
     },
     politeness::{Politeness, DEFAULT_MIN_GAP, DEFAULT_RETRY_AFTER_CAP},
-    registry::{load_endpoints, read_exclusions},
+    registry::{load_endpoints, load_inactive, read_exclusions},
     run_sweep,
     state_file::{check_lock, merge_state, read_state, DEFAULT_STATE},
     verdict::Verdict,
@@ -525,11 +526,28 @@ async fn main() -> anyhow::Result<()> {
     // unreadable or malformed list is an error and not an empty one: see
     // `registry::read_exclusions`.
     let excluded = read_exclusions(Path::new(&args.exclusions))?;
-    let endpoints = load_endpoints(&std::fs::read_to_string(&args.endpoints)?, &excluded)?;
+    let endpoint_file = std::fs::read_to_string(&args.endpoints)?;
+    let endpoints = load_endpoints(&endpoint_file, &excluded)?;
     // AFTER the exclusions, never before: see registry::only. Narrowing a
     // sweep is a convenience; the exclusion list is a promise, and a
     // convenience must not be able to reach past one.
     let endpoints = sparqlwatch_prober::registry::only(endpoints, &args.only)?;
+    // The entries the registry retires. Split out HERE rather than inside
+    // `load_endpoints`, because both halves are wanted: the sweep must not ask
+    // them, and the run graph must still name them. An endpoint that no run
+    // mentions has no row on the site at all (`web/endpoint_index.py`), so
+    // dropping them silently would publish a retirement as a deletion -- which
+    // is the one thing `inactive` exists to avoid. See `registry::load_inactive`.
+    //
+    // Intersected with `endpoints` rather than used as it stands, so `--only`
+    // and the exclusion list still decide what this sweep is about: a narrowed
+    // sweep publishes the skips it was actually asked to consider.
+    let retired: Vec<String> = load_inactive(&endpoint_file)?
+        .into_iter()
+        .filter(|url| endpoints.iter().any(|e| e == url))
+        .collect();
+    let endpoints: Vec<String> =
+        endpoints.into_iter().filter(|u| !retired.contains(u)).collect();
 
     // The state, then the lock, then the plan, and all three before the run file
     // is opened and before any request is sent: a state problem or a lock left
@@ -559,7 +577,20 @@ async fn main() -> anyhow::Result<()> {
     } else {
         sparqlwatch_prober::dormancy::Spend::Full
     };
-    let plan = plan_sweep(&state, &endpoints, &args.at, &thresholds, spend)?;
+    let mut plan = plan_sweep(&state, &endpoints, &args.at, &thresholds, spend)?;
+    // Appended rather than decided inside `plan_sweep`, because this is a
+    // registry fact and that function reads sweep state. Nothing it knows --
+    // strikes, cost, holds, the replay marker -- can overturn a retirement, so
+    // routing it through the rules would only invite one of them to.
+    plan.skipped.extend(retired.iter().map(|url| Skipped {
+        url: url.clone(),
+        // No instant for either: this endpoint was not relegated on a date and
+        // this sweep did not probe it. An empty literal would be a claim about
+        // a date nobody recorded, which is the rule `Skipped` already states.
+        dormant_since: None,
+        last_probed: None,
+        reason: SkipReason::Inactive,
+    }));
     // What the profile gate compares against, from the same state file the
     // dormancy plan was built from and read once for both.
     let memory = {

@@ -407,10 +407,26 @@ pub enum SkipReason {
     /// an operator pinned awake, since rule 1 protects a `Dormant` hold from
     /// replay and nothing protects an `Awake` one.
     NotInThisSweep,
+    /// The registry marks it `inactive`: the service is gone and no sweep will
+    /// ask it again until a person edits that file.
+    ///
+    /// NOT `OperatorHold`, though a person decided both. A hold is a pause on
+    /// an endpoint we still expect to answer, and `/about` promises it is
+    /// re-probed when the hold lifts; this is a statement that there is nothing
+    /// left to probe. Collapsing them would tell a reader that neXtProt is
+    /// being rested, when in fact it was archived upstream in 2026 and its URL
+    /// is kept only so the answer to "where was it" survives.
+    ///
+    /// It is also the one skip no sweep can clear. `Automatic` clears on a good
+    /// answer and a hold clears when its date passes, so both are decided from
+    /// state the prober writes. This one is decided from the registry file, and
+    /// nothing the prober observes may overturn it -- an archived host that
+    /// starts answering is a question for a person, not a reason to resume.
+    Inactive,
 }
 
 impl SkipReason {
-    /// The wire slugs, exactly these three strings: run graphs carry them, the
+    /// The wire slugs, exactly these four strings: run graphs carry them, the
     /// loader parses them and the pages render them. Precedent:
     /// `Verdict::slug` in `verdict.rs`.
     pub fn slug(&self) -> &'static str {
@@ -418,6 +434,7 @@ impl SkipReason {
             SkipReason::Automatic => "automatic",
             SkipReason::OperatorHold => "operator-hold",
             SkipReason::NotInThisSweep => "not-in-this-sweep",
+            SkipReason::Inactive => "inactive",
         }
     }
 }
@@ -2183,10 +2200,11 @@ mod tests {
     }
 
     #[test]
-    fn the_three_skip_reason_slugs_are_the_wire_strings_the_pages_read() {
+    fn the_four_skip_reason_slugs_are_the_wire_strings_the_pages_read() {
         assert_eq!(SkipReason::Automatic.slug(), "automatic");
         assert_eq!(SkipReason::OperatorHold.slug(), "operator-hold");
         assert_eq!(SkipReason::NotInThisSweep.slug(), "not-in-this-sweep");
+        assert_eq!(SkipReason::Inactive.slug(), "inactive");
     }
 
 

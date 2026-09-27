@@ -1165,7 +1165,7 @@ def test_the_dormancy_reasons_the_pages_read_are_the_probers_own():
     from app import _ROW_DORMANCY_REASONS
 
     slugs = skip_reason_slugs()
-    assert slugs == {"automatic", "operator-hold", "not-in-this-sweep"}, (
+    assert slugs == {"automatic", "operator-hold", "not-in-this-sweep", "inactive"}, (
         "the prober's reason slugs changed; the prose has to change with them, "
         "which is what the assertion below is about"
     )

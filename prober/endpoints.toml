@@ -172,8 +172,11 @@ endpoint = [
   "https://rdfportal.org/proteinatlas/sparql",
   "http://colil.dbcls.jp/sparql",
   "https://beta.sparql.swisslipids.org/",
-  "http://sparql.southgreen.fr/",
+  "https://sparql.southgreen.fr/sparql",
   "https://bio2rdf.org/sparql",
   "http://sparql.glygen.org:8880/sparql",
-  "https://sparql.nextprot.org/",
+  # Retired 2026-09-27: neXtProt was archived upstream and the URL now
+  # redirects to expasy.org/archives/nextprot. Kept so the answer to
+  # "where was it" survives; never probed. See registry::load_inactive.
+  { url = "https://sparql.nextprot.org/", inactive = "archived upstream at https://www.expasy.org/archives/nextprot" },
 ]

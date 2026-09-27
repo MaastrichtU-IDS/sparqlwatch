@@ -57,6 +57,7 @@
   .strip .n[data-figure="available"] { color: var(--good); }
   .strip .n[data-figure="unresponsive"] { color: var(--crit); }
   .strip .n[data-figure="dormant"] { color: var(--text-dim); }
+  .strip .n[data-figure="inactive"] { color: var(--text-dim); }
   /* The three are LINKS now (2026-09-18), so they need the link's own reset
      and a mark for the one currently showing. Underline on the LABEL rather
      than on the number, and only when selected: at 26px the number carries
@@ -231,6 +232,13 @@
   .dot[data-availability-state="unresponsive"] { background: transparent; border: 2px solid var(--crit); }
   .dot[data-availability-state="dormant"] { background: transparent;
                                      border: 1px dotted var(--text-dim); }
+  /* Hollow and solid-edged, where dormant is hollow and dotted: the dotted
+     edge reads as "not asked this time" and this one has to read as "not
+     asked again". Same dim ink as dormant, because neither is a failure and
+     neither should draw the eye the way the red ring does. */
+  .dot[data-availability-state="inactive"] { background: transparent;
+                                     border: 1px solid var(--text-dim);
+                                     opacity: 0.55; }
   .row-id { flex-grow: 1; min-width: 240px; }
   .row-id > a { overflow-wrap: anywhere; }
   /* block so it always falls to its own line under the name, and truncated

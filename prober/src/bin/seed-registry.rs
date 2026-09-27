@@ -521,6 +521,7 @@ mod tests {
                 title: None,
                 domain: None,
                 datasets: None,
+                inactive: None,
             })
             .collect();
         let rendered = registry_toml(&tricky);
@@ -544,12 +545,14 @@ mod tests {
                 title: Some("Alpha".into()),
                 domain: Some("government".into()),
                 datasets: None,
+                inactive: None,
             },
             registry::RegistryEntry {
                 url: "https://many/sparql".into(),
                 title: None,
                 domain: None,
                 datasets: Some(42),
+                inactive: None,
             },
         ];
         let text = registry_toml(&entries);
@@ -721,6 +724,7 @@ mod tests {
             title: None,
             domain: None,
             datasets: None,
+            inactive: None,
         };
         let honest = seed::Seeded {
             endpoints: vec![entry("https://a/sparql")],
