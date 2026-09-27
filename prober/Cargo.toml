@@ -48,3 +48,11 @@ path = "src/bin/seed-registry.rs"
 [[bin]]
 name = "dormancy"
 path = "src/bin/dormancy.rs"
+
+# Reconnaissance. A fourth binary for the reason the other two are separate:
+# it asks strangers' endpoints one question and writes a report for a person
+# to read, publishing no run graph and touching no state. A sweep must not be
+# one flag away from a pass that probes 537 hosts nobody decided to sweep.
+[[bin]]
+name = "recon"
+path = "src/bin/recon.rs"

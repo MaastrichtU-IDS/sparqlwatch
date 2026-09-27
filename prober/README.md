@@ -336,6 +336,48 @@ registry/lod-cloud.toml` is how a run gets it, a plain `cargo run` uses the
 three-endpoint development list, and `seed-registry` has no flag that can write
 to `endpoints.toml`.
 
+### Reconnaissance
+
+`recon` asks a registry file's endpoints one cheap query each, once, and writes
+a report naming the ones that answered. It exists because `registry/lod-cloud
+.toml` holds 543 endpoints and the sweep asks 6 of them: the other 537 are
+seeded but unswept, and deciding whether to sweep them blind is the problem.
+The dump's own `status` field says 87 of 725 entries answer, which is a third
+party's stale judgement — admitting 537 endpoints to an hourly sweep on the
+strength of it would point recurring load at hosts that mostly died years ago.
+
+```
+recon --registry registry/lod-cloud.toml \
+      --already-swept endpoints.toml \
+      --out recon.toml
+```
+
+**It publishes nothing.** No run graph, no state file, no store write, and
+nothing it learns reaches the site. One request is not a finding about a
+server, and a measurement carries this service's name. The report is a file
+for a person to read.
+
+It is a fourth binary rather than a flag on the prober, for the reason the
+seeder and `dormancy` are separate: a plain sweep must not be one flag away
+from probing 537 hosts nobody decided to sweep.
+
+What it does reuse is load-bearing. It reads `registry/exclusions.toml` and
+**stops** if it cannot, the same fail-closed rule `load_endpoints` applies. It
+goes through `Politeness`, so the per-host gate spaces these requests as it
+spaces a sweep's — `rkbexplorer.com` alone is about 40 hosts on one operator's
+machine. It asks the `availability` metric and reads the answer through
+`resolve::resolve`, so "would a sweep find this alive" is answered by the
+sweep's own rule rather than by a second opinion that could drift from it. And
+it subtracts the endpoints already swept, so nothing is asked an extra time.
+
+The report's three outcomes are `answered`, `not-an-endpoint` (it replied, but
+not with SPARQL results) and `no-answer`. **`no-answer` is not "down"**: one
+request proves nothing, and an egress proxy in the path answers for some
+destinations itself. Run it from inside the cluster — `ops/recon.yaml` — so
+the answers are about the endpoints rather than about a middlebox.
+
+Admitting an endpoint is a hand edit of `endpoints.toml`. Nothing automates it.
+
 ### Retiring an endpoint
 
 An endpoint entry may carry `inactive = "<why>"`, which means the service is

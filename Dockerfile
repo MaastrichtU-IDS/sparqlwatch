@@ -35,7 +35,8 @@ COPY prober/src ./prober/src
 RUN cd prober && cargo build --release --locked \
  && strip target/release/sparqlwatch-prober \
           target/release/dormancy \
-          target/release/seed-registry
+          target/release/seed-registry \
+          target/release/recon
 
 # ---------------------------------------------------------------------------
 # Stage 2: the runtime.
@@ -88,6 +89,9 @@ COPY tools/synthetic/ /app/tools/synthetic/
 COPY --from=prober-build /src/prober/target/release/sparqlwatch-prober /usr/local/bin/
 COPY --from=prober-build /src/prober/target/release/dormancy /usr/local/bin/
 COPY --from=prober-build /src/prober/target/release/seed-registry /usr/local/bin/
+# The reconnaissance pass. Shipped because it has to run from inside the
+# cluster to mean anything -- see ops/recon.yaml -- and it publishes nothing.
+COPY --from=prober-build /src/prober/target/release/recon /usr/local/bin/
 
 # TWO VOLUMES, and they are not interchangeable.
 #
