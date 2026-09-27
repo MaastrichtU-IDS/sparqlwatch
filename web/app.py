@@ -1147,20 +1147,48 @@ def _daily_series(history: EndpointHistory) -> dict:
     # would claim a week of daily observations for a week that has four. The
     # window is time, so the axis has to be time.
     for day in _calendar(min(by_day), max(by_day)):
-        asked = [r for r in by_day.get(day, []) if r is not None and r.verdict is not None]
+        # `indeterminate` DOES NOT COUNT AGAINST AN ENDPOINT, and leaving it in
+        # the denominator was this chart's worst error. The verdict means no
+        # answer arrived -- a throttle, a timeout, a proxy, a blip on our side
+        # -- and resolve.rs calls that "we never got to ask", deliberately not
+        # "it does not answer". Counting it as downtime published reduced
+        # uptime for endpoints that were up: on 2026-09-27 this service showed
+        # Wikidata, NLM MeSH and three IDSM endpoints below full availability
+        # while all five answered its own liveness query in under a second.
+        #
+        # So a sweep we could not interpret contributes NEITHER up nor down: a
+        # day whose four sweeps went verified, verified, unreached, absent is
+        # two good answers out of the THREE we got, not out of four.
+        #
+        # BUT A DAY THAT ANSWERED NOTHING AT ALL IS STILL 0%, and this is the
+        # line between honest and useless. A refused connection resolves
+        # `indeterminate` too, because the prober cannot tell a dead server
+        # from a dead route and does not guess. Excluding those days as well --
+        # which an earlier spelling of this fix did -- drew every endpoint that
+        # was down all day as a GAP, and made a page whose job is reporting
+        # outages structurally incapable of showing one. Between two readings
+        # that are each sometimes wrong, the one that stays silent about a real
+        # outage is the worse one to publish.
+        #
+        # A day with no sweeps at all remains a gap, below: nobody asked, which
+        # is a fact about our rotation and not about their server.
+        asked = [
+            r for r in by_day.get(day, []) if r is not None and r.verdict is not None
+        ]
         if not asked:
-            # Declines and absent readings alike: nobody got an answer out of
-            # this endpoint that day because nobody asked it a question that
-            # produced one. No point, no zero.
             days.append({"day": day, "uptime": None, "median_ms": None, "p95_ms": None})
             continue
-        up = [r for r in asked if r.verdict in _POSITIVE_VERDICTS]
+        answered = [r for r in asked if r.verdict != _UNREACHED_VERDICT]
+        # Every sweep unreached: the day reports 0% over the sweeps we tried,
+        # rather than over the empty set of sweeps that answered.
+        counted = answered or asked
+        up = [r for r in counted if r.verdict in _POSITIVE_VERDICTS]
         timings = sorted(r.elapsed_ms for r in up if r.elapsed_ms is not None)
         days.append(
             {
                 "day": day,
-                "uptime": round(100.0 * len(up) / len(asked), 1),
-                "sweeps": len(asked),
+                "uptime": round(100.0 * len(up) / len(counted), 1),
+                "sweeps": len(counted),
                 "median_ms": _quantile(timings, 0.5),
                 "p95_ms": _quantile(timings, 0.95),
             }

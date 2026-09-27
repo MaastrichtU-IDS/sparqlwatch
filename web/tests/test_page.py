@@ -2731,9 +2731,16 @@ def test_a_day_nobody_asked_is_a_gap_and_never_zero_percent(tmp_path):
 
 
 def test_uptime_is_the_share_of_sweeps_that_answered(tmp_path):
-    """Half the sweeps answering is 50%, which is what makes a day a rate rather
-    than a yes or no. Per sweep this figure is binary, which is why the series
-    is daily at all."""
+    """A day is a rate rather than a yes or no, which is why the series is
+    daily at all: per sweep the figure is binary.
+
+    The four sweeps here are verified, verified, unreached, absent. TWO OUT OF
+    THREE, not two out of four -- the unreached sweep is not a sweep the
+    endpoint failed, and the day reports the share of the answers we got. This
+    read 50% until 2026-09-27, which is the miscount
+    `test_one_unreached_sweep_does_not_drag_a_good_day_down` exists for; the
+    `absent` sweep stays in the denominator, because that one IS an answer.
+    """
     from pyoxigraph import Store
     import load_run
     from app import _daily_series
@@ -2747,8 +2754,8 @@ def test_uptime_is_the_share_of_sweeps_that_answered(tmp_path):
     load_run.rebuild_current(store)
 
     day = _daily_series(endpoint_history(store, KADASTER))["days"][0]
-    assert day["uptime"] == 50.0, day
-    assert day["sweeps"] == 4
+    assert day["uptime"] == 66.7, day
+    assert day["sweeps"] == 3
 
 
 def test_one_day_is_not_a_series(tmp_path):
@@ -3003,3 +3010,78 @@ def test_the_response_ticks_never_repeat_a_value():
     ])
     values = [t["value"] for t in g["response_ticks"]]
     assert len(values) == len(set(values)), values
+
+
+def test_a_day_we_reached_for_and_never_got_is_still_an_outage(tmp_path):
+    """THE line between honest and useless, and I crossed it in both directions.
+
+    `indeterminate` means no answer arrived -- a throttle, a timeout, a proxy,
+    a blip on our side. It is also what a REFUSED CONNECTION resolves to, and
+    the prober does not guess which: resolve.rs grades a transport failure
+    "we never got to ask" on purpose.
+
+    So the first fix here excluded every unreached sweep from the day, and a
+    day of nothing but those became a gap. That drew an endpoint that was down
+    from midnight to midnight as blank -- a monitoring page that cannot render
+    an outage. A day we tried all day and never got an answer out of is 0%.
+
+    The mixed day is where the real miscount lived, and the test below it
+    holds that half.
+    """
+    series = _series_from(tmp_path, {
+        "2026-09-01": (4, "verified", "77"),
+        "2026-09-02": (4, "indeterminate", "77"),
+    })
+    by_day = {d["day"]: d for d in series["days"]}
+    assert by_day["2026-09-01"]["uptime"] == 100.0
+    assert by_day["2026-09-02"]["uptime"] == 0.0, (
+        "a day the endpoint never answered was drawn as a day nobody asked"
+    )
+    assert by_day["2026-09-02"]["sweeps"] == 4, (
+        "the sweeps we tried are the denominator when none of them answered"
+    )
+
+
+def test_a_day_nobody_swept_stays_a_gap_beside_one_that_answered_nothing(tmp_path):
+    """The two states the rule above has to keep apart.
+
+    Both draw no bar in the old spelling and they are not the same claim. One
+    is our rotation, one is their server, and a reader cannot tell them apart
+    unless the chart does.
+    """
+    series = _series_from(tmp_path, {
+        "2026-09-01": (4, "verified", "77"),
+        "2026-09-03": (4, "indeterminate", "77"),
+    })
+    by_day = {d["day"]: d for d in series["days"]}
+    assert by_day["2026-09-02"]["uptime"] is None, "a day with no sweeps is not an outage"
+    assert by_day["2026-09-03"]["uptime"] == 0.0, "a day of no answers is not a gap"
+
+
+def test_one_unreached_sweep_does_not_drag_a_good_day_down(tmp_path):
+    """The mixed day, which is where the denominator actually shows.
+
+    Three answers and one timeout is a hundred percent of what we learned, not
+    seventy-five percent of what we tried.
+    """
+    from app import _daily_series, _UNREACHED_VERDICT
+    from endpoint_history import EndpointHistory, Reading, MetricHistory
+
+    runs = ["2026-09-01T00:00:00Z", "2026-09-01T01:00:00Z",
+            "2026-09-01T02:00:00Z", "2026-09-01T03:00:00Z"]
+    readings = [
+        Reading(verdict="verified", elapsed_ms=10),
+        Reading(verdict="verified", elapsed_ms=12),
+        Reading(verdict=_UNREACHED_VERDICT, elapsed_ms=None),
+        Reading(verdict="verified", elapsed_ms=11),
+    ]
+    from app import _AVAILABILITY_METRIC
+
+    history = EndpointHistory(
+        endpoint='urn:example:e',
+        runs=runs,
+        metrics=[MetricHistory(metric=_AVAILABILITY_METRIC, readings=readings)],
+    )
+    day = _daily_series(history)["days"][0]
+    assert day["uptime"] == 100.0, day
+    assert day["sweeps"] == 3, "the unreached sweep was counted as one we learned from"
