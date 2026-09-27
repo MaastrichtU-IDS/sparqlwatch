@@ -1,0 +1,63 @@
+# A one-off reconnaissance pass over the LOD Cloud candidates nobody sweeps.
+#
+# WHAT IT DOES. Asks each of the ~537 seeded-but-unswept endpoints ONE cheap
+# query, once, and writes a report naming the ones that answered. It publishes
+# nothing: no run graph, no state file, no store write, and nothing it learns
+# reaches the site. The report is a file for a person to read before deciding
+# whether to admit any of them to the hourly sweep.
+#
+# WHY IT RUNS HERE rather than on a workstation. Egress from the cluster goes
+# through egress-proxy.platform.svc:3128, which is the path a sweep takes; a
+# workstation's own proxy answers for some destinations itself and its
+# negatives are therefore about a middlebox rather than an endpoint. The point
+# of this pass is to learn which hosts a SWEEP could reach, so it has to ask
+# from where a sweep asks.
+#
+# COST TO THE ENDPOINTS. One request each, spaced by the same per-host gate a
+# sweep uses -- so an endpoint family on one operator's machine (rkbexplorer
+# has about 40) is still asked one at a time. That is one sweep's worth of
+# load, once, and never again unless a person runs this file again.
+#
+# READING THE REPORT:
+#   kubectl -n sparqlwatch-dev logs job/<name>            # the census
+#   kubectl -n sparqlwatch-dev cp <pod>:/tmp/recon.toml . # the full report
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: recon-
+spec:
+  backoffLimit: 0
+  # Long enough for ~537 endpoints at 8 at a time with a 30s request budget,
+  # and bounded so a pass that wedges cannot run all night.
+  activeDeadlineSeconds: 7200
+  template:
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: recon
+          image: ghcr.io/maastrichtu-ids/sparqlwatch:IMAGE
+          imagePullPolicy: IfNotPresent
+          # The prober's own proxy variables, so this asks down the same path
+          # the sweep does.
+          envFrom:
+            - configMapRef: { name: prober-config }
+          command: ["/usr/local/bin/recon"]
+          args:
+            - "--registry=/app/prober/registry/lod-cloud.toml"
+            - "--already-swept=/app/prober/endpoints.container.toml"
+            - "--exclusions=/app/prober/registry/exclusions.toml"
+            - "--metrics=/app/prober/metrics.toml"
+            - "--out=/tmp/recon.toml"
+            - "--concurrency=8"
+          resources:
+            requests: { cpu: "100m", memory: "128Mi" }
+            limits:   { cpu: "500m", memory: "512Mi" }
+          volumeMounts:
+            - { name: scratch, mountPath: /tmp }
+      volumes:
+        - name: scratch
+          emptyDir: {}

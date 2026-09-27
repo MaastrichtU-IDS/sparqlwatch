@@ -44,3 +44,17 @@ title = "sparqlwatch"
 [[endpoint]]
 url = "https://ontoexplorer.dev.k8s.semanticscience.org/api/v1/sparql/content"
 title = "OntoExplorer"
+
+# Not a correction but an ADDITION, and it is here for the same reason the
+# corrections are: it is this project's claim rather than a catalogue's. The
+# LOD Cloud dump names this endpoint in `other_download` on a dataset whose
+# `sparql` array is empty, and `seed::candidates` reads `sparql[].access_url`
+# and nothing else -- deliberately, since a dump's other fields hold dumps,
+# example links and documentation pages far more often than endpoints. Of the
+# 20 sparql-shaped URLs living only in those fields, this is the one that
+# answers. Editing lod-cloud.toml to add it would be overwritten by the next
+# re-seed and would fail that file's fixed-point test.
+
+[[endpoint]]
+url = "http://rdf.corpora.uni-leipzig.de/sparql"
+title = "Open Bantu isiXhosa Lexicon"

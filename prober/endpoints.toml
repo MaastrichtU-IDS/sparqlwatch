@@ -172,6 +172,12 @@ endpoint = [
   "https://rdfportal.org/proteinatlas/sparql",
   "http://colil.dbcls.jp/sparql",
   "https://beta.sparql.swisslipids.org/",
+  # Found 2026-09-27 by reading the LOD Cloud dump's OTHER fields: this one
+  # is in `other_download` on a dataset whose `sparql` array is empty, so
+  # `seed::candidates` -- which reads sparql[].access_url and nothing else --
+  # never saw it. 200 with SPARQL results in 0.26s. It is the only live
+  # endpoint among the 20 such URLs in the whole dump; see `recon`.
+  "http://rdf.corpora.uni-leipzig.de/sparql",
   "https://sparql.southgreen.fr/sparql",
   # The URL YummyData lists, kept only so that a reader holding it is told
   # where the service actually is. It answers 406 to every SPARQL Accept,
