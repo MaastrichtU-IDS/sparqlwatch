@@ -550,7 +550,16 @@ async fn main() -> anyhow::Result<()> {
     // the lock protects. What this buys is that a lock left behind by a killed
     // sweep is found now rather than after the probing.
     check_lock(Path::new(&args.state))?;
-    let plan = plan_sweep(&state, &endpoints, &args.at, &thresholds)?;
+    // Cheap when this sweep asks only hourly metrics, which are all cheap:
+    // see dormancy::Spend. A dormant endpoint is still asked one trivial
+    // question so that its recovery is noticed within the hour rather than
+    // within a week.
+    let spend = if args.cadence == Cadence::Hourly {
+        sparqlwatch_prober::dormancy::Spend::Cheap
+    } else {
+        sparqlwatch_prober::dormancy::Spend::Full
+    };
+    let plan = plan_sweep(&state, &endpoints, &args.at, &thresholds, spend)?;
     // What the profile gate compares against, from the same state file the
     // dormancy plan was built from and read once for both.
     let memory = {

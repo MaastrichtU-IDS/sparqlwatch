@@ -521,6 +521,30 @@ fn hold_effect(hold: Option<&Hold>, today: i64, url: &str) -> anyhow::Result<Hol
     })
 }
 
+/// Whether this sweep is spending real money on the endpoints it asks.
+///
+/// RELEGATION IS ABOUT COST, NOT ABOUT LOOKING. A dormant endpoint is one that
+/// answered nothing twice, or cost more than the ceiling, so the policy stops
+/// spending an exhaustive pass on it. It was never meant to stop us noticing
+/// that it came back, and for a while it did exactly that: on 2026-09-27 this
+/// service reported Wikidata, NLM MeSH and three IDSM endpoints as dormant
+/// while every one of them answered its own liveness query in under a second
+/// through the cluster's own proxy. They had failed twice in an hour, days
+/// earlier, and nothing cheap enough to run often had looked since.
+///
+/// An hourly sweep asks four metrics, all of them `cheap`, and that is one
+/// request per endpoint. Rationing THAT buys nothing and costs a week of
+/// saying something false about somebody's server. So the slice governs the
+/// expensive pass and lets the cheap one through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Spend {
+    /// Only metrics that cost the endpoint a trivial query. Dormant endpoints
+    /// are probed: one request is not what relegation exists to prevent.
+    Cheap,
+    /// A pass that may enumerate classes and count triples. The slice governs.
+    Full,
+}
+
 /// Decide what this sweep probes and what it declines, and why.
 ///
 /// The rules run in this order per endpoint, and the order is load bearing:
@@ -528,7 +552,7 @@ fn hold_effect(hold: Option<&Hold>, today: i64, url: &str) -> anyhow::Result<Hol
 /// 1. A `Dormant` hold: SKIP, `OperatorHold`. **This precedes replay
 ///    detection**, because a re-run of an `--at` from before an operator's
 ///    `sleep` would otherwise probe an endpoint a person forbade, and a hold
-///    overrides the machine in both directions.
+///    overrides the machine in both directions. `Spend` does not soften it.
 /// 2. This `--at` has already run and this endpoint's `last_probed` is
 ///    `now`: PROBE.
 /// 3. This `--at` has already run and it is not: SKIP, `NotInThisSweep`.
@@ -540,6 +564,13 @@ fn hold_effect(hold: Option<&Hold>, today: i64, url: &str) -> anyhow::Result<Hol
 ///    the state has never seen.
 /// 6. Relegated: PROBE if the cadence is due and this endpoint is in the
 ///    oldest `slice` of the due set, else SKIP, `Automatic`.
+///
+/// **Rules 2 through 6 govern the FULL pass only.** On `Spend::Cheap`
+/// everything after rule 1 is bypassed and every endpoint is probed: one
+/// trivial query is not what relegation exists to prevent, and withholding it
+/// is how a recovered endpoint stayed labelled dormant for a week. See
+/// `Spend`. Rule 1 still applies, because an operator's hold is a person's
+/// instruction rather than a cost policy.
 ///
 /// **Rules 2 and 3 are one decision, and it is computed once for the whole
 /// sweep**, not per endpoint: `this_at_has_already_run` is true when ANY
@@ -557,6 +588,7 @@ pub fn plan_sweep(
     endpoints: &[String],
     now: &str,
     thresholds: &Thresholds,
+    spend: Spend,
 ) -> anyhow::Result<Plan> {
     let today = day_of(now, "--at")?;
     let this_at_has_already_run = endpoints
@@ -613,9 +645,21 @@ pub fn plan_sweep(
                 reason,
             });
         };
-        // 1
+        // 1. An OPERATOR hold is absolute and `Spend` does not soften it: a
+        // person said leave this alone, which is a different statement from
+        // the machine's "this is too expensive to sweep".
         if effect == HoldEffect::Dormant {
             skip(SkipReason::OperatorHold);
+            continue;
+        }
+        // A cheap sweep asks everybody. See `Spend`: relegation is about not
+        // spending an exhaustive pass, and one trivial query is not that.
+        // Rule 6 below still governs the full pass, so the ration survives
+        // where it does some good. A single positive answer here clears the
+        // strikes through `update`'s rule E, which is how an endpoint that
+        // recovered stops being called dormant within the hour.
+        if spend == Spend::Cheap {
+            probe.push(url.clone());
             continue;
         }
         // 2 and 3
@@ -1319,7 +1363,7 @@ mod tests {
     fn an_unknown_endpoint_is_probed() {
         let t = Thresholds::default();
         let endpoints = vec![ep("http://new.example/sparql")];
-        let plan = plan_sweep(&State::empty(), &endpoints, "2026-08-24T00:00:00Z", &t).unwrap();
+        let plan = plan_sweep(&State::empty(), &endpoints, "2026-08-24T00:00:00Z", &t, Spend::Full).unwrap();
         assert_eq!(plan.probe, endpoints);
         assert!(plan.skipped.is_empty());
     }
@@ -1340,7 +1384,7 @@ mod tests {
         assert_eq!(e.strikes, 1);
         assert!(e.dormant_since.is_none(), "one strike is not two");
         assert_eq!(
-            plan_sweep(&state, &endpoints, "2026-08-25T00:00:00Z", &t).unwrap().probe,
+            plan_sweep(&state, &endpoints, "2026-08-25T00:00:00Z", &t, Spend::Full).unwrap().probe,
             endpoints
         );
     }
@@ -1357,7 +1401,7 @@ mod tests {
         let e = state.get("http://a.example/s").unwrap();
         assert_eq!(e.strikes, 2);
         assert_eq!(e.dormant_since.as_deref(), Some("2026-08-25T00:00:00Z"));
-        let plan = plan_sweep(&state, &endpoints, "2026-08-26T00:00:00Z", &t).unwrap();
+        let plan = plan_sweep(&state, &endpoints, "2026-08-26T00:00:00Z", &t, Spend::Full).unwrap();
         assert!(plan.probe.is_empty());
         assert_eq!(plan.skipped[0].reason, SkipReason::Automatic);
         assert_eq!(plan.skipped[0].dormant_since.as_deref(), Some("2026-08-25T00:00:00Z"));
@@ -1475,12 +1519,12 @@ mod tests {
         let (state, endpoints) =
             dormant_fleet(1, "2026-08-24T00:00:00Z", "2026-08-24T00:00:00Z");
         for early in ["2026-08-25T00:00:00Z", "2026-08-30T00:00:00Z"] {
-            let plan = plan_sweep(&state, &endpoints, early, &t).unwrap();
+            let plan = plan_sweep(&state, &endpoints, early, &t, Spend::Full).unwrap();
             assert!(plan.probe.is_empty(), "{early} is inside the cadence");
             assert_eq!(plan.skipped[0].reason, SkipReason::Automatic);
             assert_eq!(plan.skipped[0].dormant_since.as_deref(), Some("2026-08-24T00:00:00Z"));
         }
-        let plan = plan_sweep(&state, &endpoints, "2026-08-31T00:00:00Z", &t).unwrap();
+        let plan = plan_sweep(&state, &endpoints, "2026-08-31T00:00:00Z", &t, Spend::Full).unwrap();
         assert_eq!(plan.probe, endpoints, "seven days is due");
         assert!(plan.skipped.is_empty());
     }
@@ -1491,7 +1535,7 @@ mod tests {
         let t = Thresholds::default();
         let (state, endpoints) =
             dormant_fleet(57, "2026-08-10T00:00:00Z", "2026-08-23T00:00:00Z");
-        let plan = plan_sweep(&state, &endpoints, "2026-08-24T00:00:00Z", &t).unwrap();
+        let plan = plan_sweep(&state, &endpoints, "2026-08-24T00:00:00Z", &t, Spend::Full).unwrap();
         assert_eq!(plan.probe.len(), 9);
         assert_eq!(plan.skipped.len(), 48);
         assert!(plan.skipped.iter().all(|s| s.reason == SkipReason::Automatic));
@@ -1505,7 +1549,7 @@ mod tests {
         let t = Thresholds::default();
         let (state, endpoints) =
             dormant_fleet(57, "2026-08-10T00:00:00Z", "2026-08-17T00:00:00Z");
-        let plan = plan_sweep(&state, &endpoints, "2026-08-24T00:00:00Z", &t).unwrap();
+        let plan = plan_sweep(&state, &endpoints, "2026-08-24T00:00:00Z", &t, Spend::Full).unwrap();
         assert_eq!(plan.probe.len(), 57);
         assert!(plan.skipped.is_empty());
     }
@@ -1548,7 +1592,7 @@ mod tests {
             });
             endpoints.push(url);
         }
-        let plan = plan_sweep(&state, &endpoints, "2026-08-24T00:00:00Z", &t).unwrap();
+        let plan = plan_sweep(&state, &endpoints, "2026-08-24T00:00:00Z", &t, Spend::Full).unwrap();
         assert_eq!(plan.probe.len(), 21, "20 held awake plus one slice of one");
         assert_eq!(plan.skipped.len(), 5);
     }
@@ -1559,7 +1603,7 @@ mod tests {
         let t = Thresholds::default();
         let (state, endpoints) =
             dormant_fleet(1, "2026-09-02T19:45:03Z", "2026-09-08T19:30:00Z");
-        let plan = plan_sweep(&state, &endpoints, "2026-09-09T19:30:00Z", &t).unwrap();
+        let plan = plan_sweep(&state, &endpoints, "2026-09-09T19:30:00Z", &t, Spend::Full).unwrap();
         assert_eq!(plan.probe, endpoints, "fifteen minutes early is not a day early");
     }
 
@@ -1573,12 +1617,12 @@ mod tests {
         let t = Thresholds::default();
         let (state, endpoints) =
             dormant_fleet(57, "2026-08-10T00:00:00Z", "2026-08-23T00:00:00Z");
-        let first = plan_sweep(&state, &endpoints, "2026-08-24T00:00:00Z", &t).unwrap();
+        let first = plan_sweep(&state, &endpoints, "2026-08-24T00:00:00Z", &t, Spend::Full).unwrap();
         assert_eq!(first.probe.len(), 9);
         let outcomes: Vec<Outcome> = first.probe.iter().map(|u| expensive(u)).collect();
         let written =
             update(&state, &endpoints, &outcomes, "2026-08-24T00:00:00Z", &t).unwrap();
-        let rerun = plan_sweep(&written, &endpoints, "2026-08-24T00:00:00Z", &t).unwrap();
+        let rerun = plan_sweep(&written, &endpoints, "2026-08-24T00:00:00Z", &t, Spend::Full).unwrap();
         assert_eq!(rerun.probe, first.probe);
         assert_eq!(rerun.skipped.len(), 48);
         // Rule 3 and not rule 6, even though all 48 are in fact relegated: the
@@ -1620,7 +1664,7 @@ mod tests {
         )
         .unwrap();
 
-        let replay = plan_sweep(&written, &endpoints, "2026-08-24T00:00:00Z", &t).unwrap();
+        let replay = plan_sweep(&written, &endpoints, "2026-08-24T00:00:00Z", &t, Spend::Full).unwrap();
         assert_eq!(replay.probe, narrowed, "rule 2 takes exactly what that --at probed");
         assert_eq!(replay.skipped.len(), 3);
         let healthy = replay
@@ -1666,7 +1710,7 @@ mod tests {
         )
         .unwrap();
 
-        let replay = plan_sweep(&written, &endpoints, "2026-08-24T00:00:00Z", &t).unwrap();
+        let replay = plan_sweep(&written, &endpoints, "2026-08-24T00:00:00Z", &t, Spend::Full).unwrap();
         assert_eq!(replay.probe, vec![ep("http://e000.example/sparql")]);
         assert_eq!(replay.skipped.len(), 1);
         assert_eq!(replay.skipped[0].url, ep("http://pinned.example/sparql"));
@@ -1801,10 +1845,10 @@ mod tests {
         let t = Thresholds::default();
         let (state, endpoints) =
             dormant_fleet(57, "2026-08-10T00:00:00Z", "2026-08-23T00:00:00Z");
-        let crashed = plan_sweep(&state, &endpoints, "2026-08-24T00:00:00Z", &t).unwrap();
+        let crashed = plan_sweep(&state, &endpoints, "2026-08-24T00:00:00Z", &t, Spend::Full).unwrap();
         assert!(state.endpoint.iter().all(|e| e.last_probed.as_deref()
             != Some("2026-08-24T00:00:00Z")));
-        let rerun = plan_sweep(&state, &endpoints, "2026-08-24T00:00:00Z", &t).unwrap();
+        let rerun = plan_sweep(&state, &endpoints, "2026-08-24T00:00:00Z", &t, Spend::Full).unwrap();
         assert_eq!(rerun, crashed, "the same state at the same --at is the same plan");
         assert_eq!(rerun.probe.len(), 9);
     }
@@ -1822,7 +1866,7 @@ mod tests {
             "2026-08-24T00:00:00Z",
         )
         .unwrap();
-        let plan = plan_sweep(&state, &endpoints, "2026-08-25T00:00:00Z", &t).unwrap();
+        let plan = plan_sweep(&state, &endpoints, "2026-08-25T00:00:00Z", &t, Spend::Full).unwrap();
         assert!(plan.probe.is_empty());
         assert_eq!(plan.skipped[0].reason, SkipReason::OperatorHold);
         assert_eq!(plan.skipped[0].dormant_since.as_deref(), Some("2026-08-24T00:00:00Z"));
@@ -1858,7 +1902,7 @@ mod tests {
         let slept =
             sleep(&swept, "http://e.example/s", "operator asked", "2026-08-24T00:00:00Z")
                 .unwrap();
-        let rerun = plan_sweep(&slept, &endpoints, "2026-08-24T00:00:00Z", &t).unwrap();
+        let rerun = plan_sweep(&slept, &endpoints, "2026-08-24T00:00:00Z", &t, Spend::Full).unwrap();
         assert_eq!(rerun.probe, vec![ep("http://f.example/s")]);
         assert_eq!(rerun.skipped.len(), 1);
         assert_eq!(rerun.skipped[0].url, ep("http://e.example/s"));
@@ -1907,7 +1951,7 @@ mod tests {
         assert!(woken.get("http://a.example/s").unwrap().dormant_since.is_none(),
                 "a wake that leaves it relegated is not immunity");
         for day in ["2026-08-27T00:00:00Z", "2026-08-28T00:00:00Z"] {
-            assert_eq!(plan_sweep(&woken, &endpoints, day, &t).unwrap().probe.len(), 1);
+            assert_eq!(plan_sweep(&woken, &endpoints, day, &t, Spend::Full).unwrap().probe.len(), 1);
             woken = update(&woken, &endpoints, &[expensive("http://a.example/s")], day, &t).unwrap();
         }
         assert_eq!(woken.get("http://a.example/s").unwrap().strikes, 2, "strikes accumulate");
@@ -1923,7 +1967,7 @@ mod tests {
         assert_eq!(lapsed.get("http://a.example/s").unwrap().lapsed_hold.as_deref(),
                    Some("operator emailed"));
         // Relegation now costs two fresh sweeps.
-        assert_eq!(plan_sweep(&lapsed, &endpoints, "2026-09-04T00:00:00Z", &t).unwrap().probe.len(), 1);
+        assert_eq!(plan_sweep(&lapsed, &endpoints, "2026-09-04T00:00:00Z", &t, Spend::Full).unwrap().probe.len(), 1);
     }
 
     #[test]
@@ -1945,7 +1989,7 @@ mod tests {
         ));
         let mut later = pinned;
         for day in ["2099-01-01T00:00:00Z", "2099-01-02T00:00:00Z", "2099-01-03T00:00:00Z"] {
-            assert_eq!(plan_sweep(&later, &endpoints, day, &t).unwrap().probe.len(), 1);
+            assert_eq!(plan_sweep(&later, &endpoints, day, &t, Spend::Full).unwrap().probe.len(), 1);
             later =
                 update(&later, &endpoints, &[expensive("http://pinned.example/s")], day, &t)
                     .unwrap();
@@ -2163,7 +2207,7 @@ mod tests {
                    "a wake does write the file");
         assert_eq!(after_wake.last_sweep_at.as_deref(), Some("2026-08-17T00:00:00Z"),
                    "but a wake is not a sweep");
-        assert_eq!(plan_sweep(&after_wake, &endpoints, "2026-08-24T00:00:00Z", &t).unwrap().probe.len(), 57);
+        assert_eq!(plan_sweep(&after_wake, &endpoints, "2026-08-24T00:00:00Z", &t, Spend::Full).unwrap().probe.len(), 57);
     }
 
     #[test]
@@ -2341,7 +2385,7 @@ mod tests {
     fn a_malformed_now_is_refused_and_named() {
         let t = Thresholds::default();
         for error in [
-            plan_sweep(&State::empty(), &[], "banana", &t).unwrap_err().to_string(),
+            plan_sweep(&State::empty(), &[], "banana", &t, Spend::Full).unwrap_err().to_string(),
             update(&State::empty(), &[], &[], "banana", &t).unwrap_err().to_string(),
             wake(&State::empty(), "http://a.example/s", "why", "banana", false, &t)
                 .unwrap_err()
@@ -2353,3 +2397,106 @@ mod tests {
     }
 }
 
+
+#[cfg(test)]
+mod cheap_sweep_tests {
+    use super::*;
+
+    fn relegated() -> State {
+        let mut state = State::empty();
+        state.endpoint.push(EndpointState {
+            url: "https://query.wikidata.org/sparql".into(),
+            strikes: 2,
+            dormant_since: Some("2026-09-20T00:00:00Z".into()),
+            last_probed: Some("2026-09-20T00:00:00Z".into()),
+            ..Default::default()
+        });
+        state
+    }
+
+    #[test]
+    fn a_cheap_sweep_still_asks_a_relegated_endpoint() {
+        // THE failure this exists for. Relegation is about not spending an
+        // exhaustive pass; an hourly sweep asks four cheap metrics, which is
+        // one request. Rationing that bought nothing and cost a week of
+        // reporting Wikidata as dormant while it answered in 0.48s.
+        let endpoints = vec!["https://query.wikidata.org/sparql".to_string()];
+        let plan = plan_sweep(
+            &relegated(),
+            &endpoints,
+            "2026-09-27T12:00:00Z",
+            &Thresholds::default(),
+            Spend::Cheap,
+        )
+        .unwrap();
+        assert_eq!(plan.probe, endpoints, "a cheap sweep skipped a dormant endpoint");
+        assert!(plan.skipped.is_empty(), "{:?}", plan.skipped);
+    }
+
+    #[test]
+    fn a_full_sweep_still_rations_it() {
+        // The ration survives where it does some good: the expensive pass.
+        let endpoints = vec!["https://query.wikidata.org/sparql".to_string()];
+        let plan = plan_sweep(
+            &relegated(),
+            &endpoints,
+            "2026-09-20T12:00:00Z",
+            &Thresholds::default(),
+            Spend::Full,
+        )
+        .unwrap();
+        assert!(plan.probe.is_empty(), "a full pass ignored the relegation: {:?}", plan.probe);
+        assert_eq!(plan.skipped.len(), 1);
+    }
+
+    #[test]
+    fn an_operator_hold_is_not_softened_by_a_cheap_sweep() {
+        // A person said leave this alone, which is a different statement from
+        // the machine's "this is too expensive to sweep".
+        let mut state = State::empty();
+        state.endpoint.push(EndpointState {
+            url: "https://held.test/sparql".into(),
+            hold: Some(Hold::Dormant { reason: "the admin asked".into() }),
+            ..Default::default()
+        });
+        let endpoints = vec!["https://held.test/sparql".to_string()];
+        let plan = plan_sweep(
+            &state,
+            &endpoints,
+            "2026-09-27T12:00:00Z",
+            &Thresholds::default(),
+            Spend::Cheap,
+        )
+        .unwrap();
+        assert!(plan.probe.is_empty(), "a cheap sweep overrode an operator hold");
+        assert_eq!(plan.skipped[0].reason, SkipReason::OperatorHold);
+    }
+
+    #[test]
+    fn one_good_answer_clears_the_relegation() {
+        // Rule E, which is what makes the cheap sweep worth running: an
+        // endpoint that recovered stops being called dormant on the next
+        // sweep rather than on the next week.
+        let outcome = Outcome {
+            url: "https://query.wikidata.org/sparql".into(),
+            cost_ms: 480,
+            positive: true,
+            liveness_failed: false,
+            triples: None,
+            classes: None,
+            profiled: false,
+        };
+        let endpoints = vec!["https://query.wikidata.org/sparql".to_string()];
+        let next = update(
+            &relegated(),
+            &endpoints,
+            &[outcome],
+            "2026-09-27T12:00:00Z",
+            &Thresholds::default(),
+        )
+        .unwrap();
+        let entry = next.get("https://query.wikidata.org/sparql").unwrap();
+        assert_eq!(entry.strikes, 0);
+        assert_eq!(entry.dormant_since, None, "it stayed dormant after answering");
+    }
+}
