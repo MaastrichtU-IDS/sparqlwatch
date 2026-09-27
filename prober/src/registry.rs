@@ -72,6 +72,23 @@ pub struct RegistryEntry {
     pub domain: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub datasets: Option<u32>,
+    /// Why this endpoint is never probed, when somebody has decided it is not
+    /// coming back. `None` is the ordinary case: sweep it.
+    ///
+    /// AN ENTRY, NOT A DELETION, and that is the whole point of the field.
+    /// `registry/exclusions.toml` removes a host from the list because somebody
+    /// asked to be left alone; the entry disappears and nothing on the site
+    /// mentions it again. `inactive` is the opposite decision about a different
+    /// fact: the service is gone, so pinging it hourly reports a failure that
+    /// is neither news nor the operator's fault, but its URL is still the
+    /// answer to "where did neXtProt's SPARQL endpoint used to be" and deleting
+    /// it would lose that. So the sweep skips it and the registry keeps it.
+    ///
+    /// The reason is REQUIRED to be useful to a reader, because a bare `true`
+    /// makes the next person guess whether an endpoint was retired upstream,
+    /// moved, or merely annoying. neXtProt's says where it went.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inactive: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -126,13 +143,41 @@ pub fn load_endpoints(toml_text: &str, excluded: &[Exclusion]) -> anyhow::Result
 /// needs a lookup table, not a sweep list. An endpoint the sweep refuses can
 /// still appear in a stored run from before the refusal, and its row should
 /// still find a name.
+/// The URLs an entry marks `inactive`, which no sweep may probe.
+///
+/// Separate from `load_endpoints` rather than filtered inside it, because the
+/// two answers are wanted in the same breath and they are not the same answer:
+/// the sweep needs the list it probes, and the run graph needs to say WHY each
+/// of these was left out. A filter inside `load_endpoints` would drop them
+/// silently, and an endpoint that vanishes from the graph vanishes from the
+/// site -- `endpoint_index` holds no row for an endpoint no run mentions -- so
+/// the retirement we meant to record would read as a deletion.
+///
+/// Applies none of the sweep's other policy. An inactive entry that is also
+/// excluded, credentialled or unpublishable is dropped by `load_endpoints` on
+/// those grounds, and naming it here as well is harmless: `main` only ever
+/// subtracts this set from that one.
+pub fn load_inactive(toml_text: &str) -> anyhow::Result<Vec<String>> {
+    let file: EndpointFile = toml::from_str(toml_text)?;
+    Ok(file
+        .endpoint
+        .into_iter()
+        .filter_map(|e| match e {
+            Entry::Url(_) => None,
+            Entry::Described(d) => d.inactive.as_ref().map(|_| d.url),
+        })
+        .collect())
+}
+
 pub fn load_registry(toml_text: &str) -> anyhow::Result<Vec<RegistryEntry>> {
     let file: EndpointFile = toml::from_str(toml_text)?;
     Ok(file
         .endpoint
         .into_iter()
         .map(|e| match e {
-            Entry::Url(url) => RegistryEntry { url, title: None, domain: None, datasets: None },
+            Entry::Url(url) => {
+                RegistryEntry { url, title: None, domain: None, datasets: None, inactive: None }
+            }
             Entry::Described(d) => d,
         })
         .collect())
@@ -1627,5 +1672,80 @@ mod only_tests {
         assert!(!loaded.iter().any(|u| u.contains("b.test")), "{loaded:?}");
         let err = only(loaded, &urls(&["https://b.test/sparql"])).unwrap_err().to_string();
         assert!(err.contains("does not override"), "{err}");
+    }
+}
+
+#[cfg(test)]
+mod inactive_tests {
+    use super::*;
+
+    const RETIRED: &str = r#"
+        endpoint = [
+          "https://live.test/sparql",
+          { url = "https://gone.test/sparql", title = "neXtProt", inactive = "archived upstream" },
+        ]
+    "#;
+
+    #[test]
+    fn a_retired_entry_is_named_so_the_sweep_can_leave_it_out() {
+        assert_eq!(load_inactive(RETIRED).unwrap(), vec!["https://gone.test/sparql".to_string()]);
+    }
+
+    #[test]
+    fn a_retired_entry_survives_in_the_registry() {
+        // THE POINT OF THE FIELD. `exclusions.toml` makes an endpoint vanish;
+        // this keeps it, with its title, so the site can still answer "where
+        // was neXtProt's endpoint" after the service itself is gone.
+        let entries = load_registry(RETIRED).unwrap();
+        let gone = entries.iter().find(|e| e.url == "https://gone.test/sparql").unwrap();
+        assert_eq!(gone.title.as_deref(), Some("neXtProt"));
+        assert_eq!(gone.inactive.as_deref(), Some("archived upstream"));
+    }
+
+    #[test]
+    fn a_bare_string_is_never_retired() {
+        // Every hand-kept list is bare strings, so the default has to be
+        // "sweep it". A parser that read absence as retirement would silence
+        // the whole fleet on a file nobody edited.
+        assert!(load_inactive(r#"endpoint = ["https://a.test/sparql"]"#).unwrap().is_empty());
+        let e = &load_registry(r#"endpoint = ["https://a.test/sparql"]"#).unwrap()[0];
+        assert_eq!(e.inactive, None);
+    }
+
+    #[test]
+    fn a_described_entry_without_the_field_is_not_retired() {
+        let toml = r#"endpoint = [{ url = "https://a.test/sparql", title = "A" }]"#;
+        assert!(load_inactive(toml).unwrap().is_empty());
+    }
+
+    #[test]
+    fn retiring_an_endpoint_does_not_take_it_out_of_the_sweep_list_here() {
+        // `load_endpoints` applies the SWEEP's policy and this is not one of
+        // its rules: `main` subtracts the retired set itself, because it also
+        // needs them to publish a skip. If this function ever starts filtering
+        // them, they stop reaching the run graph and the site loses the rows.
+        let urls = load_endpoints(RETIRED, &[]).unwrap();
+        assert!(
+            urls.contains(&"https://gone.test/sparql".to_string()),
+            "load_endpoints dropped a retired entry; main can no longer publish its skip"
+        );
+    }
+
+    #[test]
+    fn the_shipped_registry_retires_nothing_by_accident() {
+        // A typo in one of these files silences an endpoint with no error, so
+        // the shipped set is pinned to exactly what a person decided.
+        let mut retired = vec![];
+        for name in ["../prober/endpoints.toml", "endpoints.toml"] {
+            if let Ok(text) = std::fs::read_to_string(name) {
+                retired = load_inactive(&text).unwrap();
+                break;
+            }
+        }
+        assert_eq!(
+            retired,
+            vec!["https://sparql.nextprot.org/".to_string()],
+            "the set of endpoints this project has retired changed"
+        );
     }
 }

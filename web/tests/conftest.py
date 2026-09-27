@@ -66,6 +66,7 @@ RUN_NO_AVAILABILITY = FIXTURES / "run-no-availability.nq"
 RUN_WITH_DORMANCY = FIXTURES / "run-with-dormancy.nq"
 RUN_DORMANCY_THEN_CRASH = FIXTURES / "run-dormancy-then-crash.nq"
 RUN_DORMANCY_AUTOMATIC = FIXTURES / "run-dormancy-automatic.nq"
+RUN_DORMANCY_INACTIVE = FIXTURES / "run-dormancy-inactive.nq"
 
 
 CURRENT_GRAPH = NamedNode("urn:sparqlwatch:current")
@@ -502,4 +503,21 @@ def store_dormant_automatic(tmp_path):
     """
     return _loaded_store(
         tmp_path, "store-dormant-automatic", RUN_WITH_SAMPLES, RUN_DORMANCY_AUTOMATIC
+    )
+
+
+@pytest.fixture
+def store_dormant_inactive(tmp_path):
+    """``store_dormant_newest`` with the reason that no sweep can clear.
+
+    run-dormancy-inactive.nq is run-with-dormancy.nq with one literal changed,
+    sw:dormancyReason "inactive", so the store's shape is identical to the
+    other two and only the word the page has to read is different. That is the
+    point: `inactive` arrives through exactly the same dormancy group as
+    `automatic` and `operator-hold`, so nothing in the RDF distinguishes a
+    retired endpoint from a rested one except the slug, and the page's reading
+    of that slug is the only thing keeping them apart.
+    """
+    return _loaded_store(
+        tmp_path, "store-dormant-inactive", RUN_WITH_SAMPLES, RUN_DORMANCY_INACTIVE
     )

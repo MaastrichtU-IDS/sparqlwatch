@@ -329,11 +329,39 @@ Two endpoint lists live in this crate and they are not interchangeable.
 | `registry/lod-cloud.provenance.toml` | Which dump produced that list, and every count behind it. A parseable file rather than a comment header, so a test can read it back and compare it against the list beside it. Generated too, and a fixed point of its own writer for the same reason the list is: a hand edit or a change to the renderer fails a test rather than standing as the only record of where the list came from. |
 | `registry/exclusions.toml` | The **exclusion list**: the hosts this project does not probe, because somebody asked. The one file in `registry/` that is not generated, the one a re-seed leaves alone, and the one whose absence stops both binaries. Read from disk at every run. See Asking not to be probed below. |
 | `registry/calibration-sample.toml` | 54 candidates cut out of the seeded list to price a sweep before one was attempted. It is a sample and not a registry, and its own header says so. |
+| `registry/corrections.toml` | The **corrections list**: endpoints whose URL this project fixed, with the name that follows the fixed URL. Hand-kept, never generated, and read last so it can only fill in a field no catalogue set. A correction is this project's claim rather than a catalogue's, so it is kept where it reads as ours instead of being edited into a file that records what somebody else published. |
 
 No sweep reaches the seeded list by accident. `--endpoints
 registry/lod-cloud.toml` is how a run gets it, a plain `cargo run` uses the
 three-endpoint development list, and `seed-registry` has no flag that can write
 to `endpoints.toml`.
+
+### Retiring an endpoint
+
+An endpoint entry may carry `inactive = "<why>"`, which means the service is
+gone and no sweep asks it again:
+
+```toml
+{ url = "https://sparql.nextprot.org/", inactive = "archived upstream at https://www.expasy.org/archives/nextprot" },
+```
+
+**It is not an exclusion, and the difference is the point.** An excluded host
+leaves the list and the site never mentions it again, which is what somebody
+asking to be left alone is owed. A retired endpoint keeps its entry, its name
+and its row, because its URL is still the answer to "where did this service
+used to be" and that answer outlives the service. The sweep publishes a skip
+for it with the reason `inactive`, so the run graph says why the row is there
+and the site files it under its own state rather than under `dormant` — which
+would promise a return visit that is never coming.
+
+`main` subtracts these from the sweep list itself rather than `load_endpoints`
+filtering them out, because both halves are wanted: an endpoint no run mentions
+has no row at all, so a silent filter would publish a retirement as a deletion.
+
+The reason string is required and free text. Nothing parses it; it is there so
+the next person does not have to guess whether an endpoint was archived, moved,
+or merely troublesome. Only a person editing this file can undo it — no
+observation the prober makes will resume an inactive endpoint.
 
 ### Asking not to be probed
 

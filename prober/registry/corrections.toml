@@ -1,0 +1,28 @@
+# prober/registry/corrections.toml
+#
+# Endpoints whose URL this project corrected, and the names that follow them.
+#
+# WHY A SEPARATE FILE. The other registry files are records of what a third
+# party published: `lod-cloud.toml` and `yummydata.toml` are written by
+# `seed-registry` from their catalogues' own dumps, and editing one would make
+# this project's copy disagree with the source it names in the matching
+# `.provenance.toml` -- silently, since nothing re-checks a hand edit. A
+# correction is our claim, not theirs, so it is kept where it can be read as
+# ours.
+#
+# It is read LAST (see `_registry_load_order` in web/app.py: files the seeded
+# and supplement lists do not name are appended in sorted order), so it can
+# only fill in a field no catalogue set. That is the right power for this file:
+# a corrected URL is an endpoint no catalogue names at all, so nothing is being
+# overridden.
+#
+# `sparql.southgreen.fr`: YummyData lists the bare root over http. That URL
+# answers `406` to every Accept a SPARQL client sends -- including
+# `application/sparql-results+json` and `+xml` -- and `200 text/html` to `*/*`,
+# so the sweep read it as an endpoint that does not speak the protocol. The
+# service is at `/sparql` over https and answers in 0.20s. Measured 2026-09-27.
+# The title is the one YummyData gives for the endpoint it meant.
+
+[[endpoint]]
+url = "https://sparql.southgreen.fr/sparql"
+title = "Agronomic Linked Data (AgroLD)"

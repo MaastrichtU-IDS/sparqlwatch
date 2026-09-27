@@ -94,6 +94,14 @@ STORES: dict[str, tuple[Path, ...]] = {
         conftest.RUN_WITH_SAMPLES,
         conftest.RUN_DORMANCY_AUTOMATIC,
     ),
+    # The third decline reason, added 2026-09-27. Same shape as the two above
+    # and one literal apart from them, which is what makes it worth freezing:
+    # the readers must return the slug unchanged so that app.py, and not a
+    # reader, is the one place that decides what `inactive` means.
+    "store_dormant_inactive": (
+        conftest.RUN_WITH_SAMPLES,
+        conftest.RUN_DORMANCY_INACTIVE,
+    ),
     "store_dormancy_then_crash": (
         conftest.RUN_WITH_SAMPLES,
         conftest.RUN_DORMANCY_THEN_CRASH,

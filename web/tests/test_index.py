@@ -2443,19 +2443,20 @@ def test_a_single_sweep_store_draws_no_overview(client_for, store):
     assert 'data-section="overview"' not in body
 
 
-def test_the_index_leads_with_the_fleet_in_five_figures(client_for, store):
-    """endpoints, the three availability states, and the last sweep.
+def test_the_index_leads_with_the_fleet_in_six_figures(client_for, store):
+    """endpoints, the four availability states, and the last sweep.
 
     Four until 2026-09-18, when `answering | not answering` -- one figure about
     our rotation and its inverse -- became the three states the owner asked
-    for. Asserted as a count so that a figure added without a decision has to
-    change a test.
+    for; six from 2026-09-27, when `inactive` was added for endpoints the
+    registry records as retired. Asserted as a count so that a figure added
+    without a decision has to change a test.
     """
     body = client_for(store).get("/?facet=all", headers={"accept": "text/html"}).text
     figures = texts_with(body, "data-figure")
-    assert len(figures) == 5, (
-        f"the strip states endpoints, available, unresponsive, dormant and "
-        f"freshness; got {figures}"
+    assert len(figures) == 6, (
+        f"the strip states endpoints, available, unresponsive, dormant, "
+        f"inactive and freshness; got {figures}"
     )
 
 
@@ -2937,7 +2938,7 @@ def _figures(text):
     }
 
 
-def test_the_strip_offers_the_three_states_and_the_way_back_to_all(
+def test_the_strip_offers_the_four_states_and_the_way_back_to_all(
     client_for, store_registry_sample
 ):
     """Four links: the endpoint total, and one per availability state.
@@ -2951,7 +2952,7 @@ def test_the_strip_offers_the_three_states_and_the_way_back_to_all(
         "/?facet=all", headers={"accept": "text/html"}
     ).text
     figures = _figures(body)
-    assert set(figures) == {"all", "available", "unresponsive", "dormant"}
+    assert set(figures) == {"all", "available", "unresponsive", "dormant", "inactive"}
     for value, a in figures.items():
         assert a["href"].startswith("/?"), f"{value} is not a link: {a}"
         assert f"facet={value}" in a["href"], a["href"]
@@ -3593,3 +3594,58 @@ def test_a_chipless_metric_draws_no_chip_on_the_rendered_page(client_for, tmp_pa
         f"{REGISTRY_SAMPLE_ENDPOINTS} endpoints has a reading for it, so a row "
         f"of dots means the cells were dropped rather than marked"
     )
+
+
+def test_a_retired_endpoint_reads_inactive_and_not_dormant(store_dormant_inactive):
+    """THE reason this state exists rather than reusing `dormant`.
+
+    Both arrive through the same dormancy group, so the slug is the only thing
+    that tells them apart. Read as `dormant`, a retired endpoint inherits
+    /about's promise that a dormant endpoint is asked again on a cadence --
+    which is exactly what will never happen here, because nothing the prober
+    observes can clear an `inactive` skip. Only a person editing the registry
+    can.
+    """
+    from app import _availability_state
+    from endpoint_index import endpoint_index
+
+    entries = {e.endpoint: e for e in endpoint_index(store_dormant_inactive)}
+    kadaster = entries["https://data.kkg.kadaster.nl/query"]
+    assert kadaster.newest_sweep_declined_to_ask_this_endpoint
+    assert _availability_state(kadaster) == "inactive"
+
+
+def test_the_other_two_decline_reasons_still_read_dormant(
+    store_dormant_automatic, store_dormant_newest
+):
+    """The mutation guard for the test above.
+
+    Returning `inactive` for every decline would pass that test and silently
+    relabel the whole dormant fleet, which is the failure worth catching: the
+    two stores here differ from that one by a single literal.
+    """
+    from app import _availability_state
+    from endpoint_index import endpoint_index
+
+    for store in (store_dormant_automatic, store_dormant_newest):
+        entry = {e.endpoint: e for e in endpoint_index(store)}[
+            "https://data.kkg.kadaster.nl/query"
+        ]
+        assert _availability_state(entry) == "dormant"
+
+
+def test_a_retired_endpoint_is_still_on_the_page(client_for, store_dormant_inactive):
+    """`inactive` KEEPS the row. That is the whole difference between retiring
+    an endpoint and excluding one.
+
+    An excluded host leaves `endpoints.toml` and the site never mentions it
+    again. A retired one keeps its row, its name and its URL, so the answer to
+    "where did this service used to answer" survives the service.
+    """
+    body = client_for(store_dormant_inactive).get(
+        "/?facet=inactive", headers={"accept": "text/html"}
+    ).text
+    assert "https://data.kkg.kadaster.nl/query" in body, (
+        "a retired endpoint vanished from the page it was retired to stay on"
+    )
+    assert 'data-availability-state="inactive"' in body
