@@ -121,6 +121,11 @@ endpoint = [
   "http://colil.dbcls.jp/sparql",
   "https://beta.sparql.swisslipids.org/",
   "https://sparql.southgreen.fr/sparql",
+  # The URL YummyData lists, kept only so that a reader holding it is told
+  # where the service actually is. It answers 406 to every SPARQL Accept,
+  # so probing it published "does not speak the protocol" about a server
+  # that does. Never swept; see registry::load_inactive.
+  { url = "http://sparql.southgreen.fr/", inactive = "the registry URL was wrong; the service answers at https://sparql.southgreen.fr/sparql" },
   "https://bio2rdf.org/sparql",
   "http://sparql.glygen.org:8880/sparql",
   # Retired 2026-09-27: neXtProt was archived upstream and the URL now

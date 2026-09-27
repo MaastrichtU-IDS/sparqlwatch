@@ -281,3 +281,44 @@ def test_the_seeded_catalogue_names_a_multi_entry_endpoint_over_the_supplement()
     assert name.title == "dblp Knowledge Graph", (
         f"the seeded catalogue's distinguishing title must win, got {name.title!r}"
     )
+
+
+def test_the_endpoints_this_project_runs_are_named_not_spelled_out():
+    """Our own two carry short names, from registry/corrections.toml.
+
+    No catalogue lists them, so with no entry a row falls back to the whole
+    URL -- and OntoExplorer's is `/api/v1/sparql/content`, which is a route
+    rather than a name. Asserted against the shipped registry rather than a
+    fixture, because the thing that can break it is a file landing in
+    `registry/` that sorts earlier and names these first: `load_names` keeps
+    whichever file set a field FIRST, so precedence here is decided by
+    `_registry_load_order` and nothing else pins it.
+    """
+    from app import _NAMES
+    from registry_names import display
+
+    ours = {
+        "https://sparqlwatch.dev.k8s.semanticscience.org/sparql": "sparqlwatch",
+        "https://ontoexplorer.dev.k8s.semanticscience.org/api/v1/sparql/content": (
+            "OntoExplorer"
+        ),
+    }
+    for url, short in ours.items():
+        assert display(_NAMES.get(url), url) == short, (
+            f"{url} is shown as something other than {short!r}"
+        )
+
+
+def test_a_corrected_url_and_the_one_it_replaced_share_a_name():
+    """Both southgreen rows read `Agronomic Linked Data (AgroLD)`.
+
+    The old URL is kept and never probed, so its row exists to tell a reader
+    holding it where the service went. A row that showed the bare URL would
+    not do that job, and one named differently from its replacement would read
+    as two services rather than one moved.
+    """
+    from app import _NAMES
+    from registry_names import display
+
+    for url in ("https://sparql.southgreen.fr/sparql", "http://sparql.southgreen.fr/"):
+        assert display(_NAMES.get(url), url) == "Agronomic Linked Data (AgroLD)"
