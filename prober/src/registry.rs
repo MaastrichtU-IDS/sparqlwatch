@@ -1744,7 +1744,13 @@ mod inactive_tests {
         }
         assert_eq!(
             retired,
-            vec!["https://sparql.nextprot.org/".to_string()],
+            vec![
+                // Not retired but SUPERSEDED, and kept for the same reason:
+                // somebody holding this URL should be told where the service
+                // went rather than shown a row calling it unresponsive.
+                "http://sparql.southgreen.fr/".to_string(),
+                "https://sparql.nextprot.org/".to_string(),
+            ],
             "the set of endpoints this project has retired changed"
         );
     }

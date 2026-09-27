@@ -1,6 +1,12 @@
 # prober/registry/corrections.toml
 #
-# Endpoints whose URL this project corrected, and the names that follow them.
+# This project's own word about an endpoint, where no catalogue has one or the
+# one it has is wrong. Two kinds live here and both are our claim rather than
+# somebody else's record:
+#
+#   - a URL this project corrected, with the name that follows the fixed URL
+#   - a name for an endpoint no catalogue lists at all, which is every endpoint
+#     this project operates itself
 #
 # WHY A SEPARATE FILE. The other registry files are records of what a third
 # party published: `lod-cloud.toml` and `yummydata.toml` are written by
@@ -26,3 +32,15 @@
 [[endpoint]]
 url = "https://sparql.southgreen.fr/sparql"
 title = "Agronomic Linked Data (AgroLD)"
+
+# The endpoints this project runs. No catalogue lists them, so without an entry
+# here a row shows the whole URL -- and `/api/v1/sparql/content` is a route,
+# not a name. Short names, because that is what these services are called.
+
+[[endpoint]]
+url = "https://sparqlwatch.dev.k8s.semanticscience.org/sparql"
+title = "sparqlwatch"
+
+[[endpoint]]
+url = "https://ontoexplorer.dev.k8s.semanticscience.org/api/v1/sparql/content"
+title = "OntoExplorer"

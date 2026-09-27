@@ -329,7 +329,7 @@ Two endpoint lists live in this crate and they are not interchangeable.
 | `registry/lod-cloud.provenance.toml` | Which dump produced that list, and every count behind it. A parseable file rather than a comment header, so a test can read it back and compare it against the list beside it. Generated too, and a fixed point of its own writer for the same reason the list is: a hand edit or a change to the renderer fails a test rather than standing as the only record of where the list came from. |
 | `registry/exclusions.toml` | The **exclusion list**: the hosts this project does not probe, because somebody asked. The one file in `registry/` that is not generated, the one a re-seed leaves alone, and the one whose absence stops both binaries. Read from disk at every run. See Asking not to be probed below. |
 | `registry/calibration-sample.toml` | 54 candidates cut out of the seeded list to price a sweep before one was attempted. It is a sample and not a registry, and its own header says so. |
-| `registry/corrections.toml` | The **corrections list**: endpoints whose URL this project fixed, with the name that follows the fixed URL. Hand-kept, never generated, and read last so it can only fill in a field no catalogue set. A correction is this project's claim rather than a catalogue's, so it is kept where it reads as ours instead of being edited into a file that records what somebody else published. |
+| `registry/corrections.toml` | **This project's own word** about an endpoint: a URL it corrected, and a name for an endpoint no catalogue lists — which is every endpoint this project operates. Hand-kept, never generated, and read last so it can only fill in a field no catalogue set. These are our claims rather than a catalogue's, so they are kept where they read as ours instead of being edited into a file that records what somebody else published. |
 
 No sweep reaches the seeded list by accident. `--endpoints
 registry/lod-cloud.toml` is how a run gets it, a plain `cargo run` uses the
@@ -362,6 +362,16 @@ The reason string is required and free text. Nothing parses it; it is there so
 the next person does not have to guess whether an endpoint was archived, moved,
 or merely troublesome. Only a person editing this file can undo it — no
 observation the prober makes will resume an inactive endpoint.
+
+It also covers a **superseded** URL, which is the same decision for a different
+fact. Correcting a URL does not rename an endpoint: it creates a second one,
+and the first keeps its row, because `rebuild_current` drops an endpoint only
+once no retained run graph mentions it. Left alone, the old URL is swept out of
+the list but stays on the page for as long as the history does, reporting a
+working service as unresponsive under a name a reader recognises. Marking it
+`inactive` instead keeps the row doing the one job it is still good for:
+telling somebody holding that URL where the service actually is.
+`sparql.southgreen.fr` is the worked example.
 
 ### Asking not to be probed
 
