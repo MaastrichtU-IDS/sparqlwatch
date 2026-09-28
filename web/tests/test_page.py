@@ -3193,3 +3193,99 @@ def test_a_declined_row_publishes_no_measurement(client_for, store_no_availabili
         "the page marked up more measurements than the endpoint has verdicts, "
         "so a decline was published as one"
     )
+
+
+def _store_with(tmp_path, run: Path):
+    from pyoxigraph import Store
+    import load_run
+
+    store = Store(str(tmp_path / "void-store"))
+    load_run.load_run(store, run.read_bytes())
+    load_run.rebuild_current(store)
+    return store
+
+
+_WELL_KNOWN_VOID = Path(__file__).parent / "fixtures" / "run-well-known-void.nq"
+
+
+def test_the_well_known_void_is_read_back_whole(tmp_path):
+    """source, validity, the copy's graph and its size, from one read.
+
+    The fixture is a run THIS PROBER ACTUALLY WROTE against
+    sparql.omabrowser.org, with the copy graph trimmed from 1,710 triples to 6
+    and `voidTriples` set to match -- 474 KB of real document is four times the
+    largest fixture in this directory. Everything else is the prober's own
+    output, so the path under test is the whole one: fetch, parse, emit into a
+    separate graph, load, derive. A fixture assembled in Python would test only
+    the last step.
+    """
+    from endpoint_measurements import void_document
+
+    doc = void_document(_store_with(tmp_path, _WELL_KNOWN_VOID), "https://sparql.omabrowser.org/sparql")
+    assert doc is not None
+    assert doc.source == "https://sparql.omabrowser.org/.well-known/void"
+    assert doc.valid is True
+    assert doc.triples == 6
+    assert doc.graph and doc.graph.startswith("urn:sparqlwatch:void:")
+
+
+def test_the_local_copy_is_not_in_the_run_graph(tmp_path):
+    """THE rule the copy exists under.
+
+    A VoID document is a third party's assertions about their own data. In the
+    run graph beside this project's measurements, a consumer querying one run
+    would read their claims as ours.
+    """
+    from pyoxigraph import NamedNode
+
+    store = _store_with(tmp_path, _WELL_KNOWN_VOID)
+    graphs = {g.value for g in store.named_graphs()}
+    copies = {g for g in graphs if g.startswith("urn:sparqlwatch:void:")}
+    assert copies, "no copy graph was written"
+    # The vendor's own subject must appear ONLY in the copy graph.
+    subject = NamedNode("http://purl.org/query/bioquery#OMA")
+    where = {q.graph_name.value for q in store.quads_for_pattern(subject, None, None, None)}
+    assert where <= copies, f"the vendor's triples leaked into {where - copies}"
+
+
+def test_the_page_links_the_vendors_own_void(client_for, tmp_path):
+    """The URI, on the page, where a reader can press it.
+
+    This exists because the data-layer tests above did not: deleting the whole
+    block from the template left 119 tests green. `void_document` returning the
+    right object and the page showing it are two things, and only the second is
+    what was asked for.
+    """
+    from urllib.parse import quote
+    import microdata
+
+    store = _store_with(tmp_path, _WELL_KNOWN_VOID)
+    ep = "https://sparql.omabrowser.org/sparql"
+    body = client_for(store).get(
+        f"/endpoint?url={quote(ep, safe='')}", headers={"accept": "text/html"}
+    ).text
+    assert 'data-void-source="https://sparql.omabrowser.org/.well-known/void"' in body, (
+        "the page does not link the vendor's own VoID"
+    )
+    svc = microdata.one(body, "http://www.w3.org/ns/dcat#DataService")[0]
+    assert svc.properties["urn:sparqlwatch:voidSource"] == [
+        "https://sparql.omabrowser.org/.well-known/void"
+    ], "the microdata does not carry it either"
+
+
+def test_an_endpoint_with_no_well_known_void_links_nothing(client_for, store):
+    """The mutation guard for the test above.
+
+    Rendering the block unconditionally would pass it and put a link to a 404
+    on every other endpoint's page.
+    """
+    from endpoint_index import endpoint_index
+    from urllib.parse import quote
+
+    ep = endpoint_index(store)[0].endpoint
+    body = client_for(store).get(
+        f"/endpoint?url={quote(ep, safe='')}", headers={"accept": "text/html"}
+    ).text
+    assert "data-void-source" not in body, (
+        "a link to a well-known VoID was shown for an endpoint that has none"
+    )

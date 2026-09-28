@@ -379,6 +379,30 @@ host, port, with the endpoint's own path, query and fragment discarded, because
 `/.well-known/` is defined against an origin. `https://host:8890/dataset/sparql`
 asks `https://host:8890/.well-known/void`.
 
+**What the fetch records, and the local copy.** Three facts hang off the
+endpoint in the run graph, plus the document itself:
+
+| | |
+| --- | --- |
+| `sw:voidSource` | the URL asked. Always, whatever came back — it is where a reader goes to check us |
+| `sw:voidValid` | whether the body parsed as RDF. A publisher can serve something there that is not a VoID |
+| `sw:voidGraph` | the named graph holding the local copy, when there is one |
+| `sw:voidTriples` | how many triples that copy holds |
+
+**The copy is written into its own named graph, never the run graph.** A VoID
+document is a third party's assertions about their own data; mixed in beside
+this project's measurements, a consumer querying one run would read their
+claims as ours. `urn:sparqlwatch:void:<run>:<endpoint>` holds it, per run and
+per endpoint, so two runs' copies can be compared — which is most of the value
+of keeping one. `load_run` ignores those graphs when it looks for runs, because
+a run graph is one holding an activity and a copy holds none.
+
+A body that stops parsing partway keeps what parsed, the same rule `declare.rs`
+follows, and `voidTriples` counts what was actually copied so the number and
+the graph cannot disagree. The 256 KB body cap applies here as everywhere: a
+VoID larger than that is truncated before classification and so reads as
+invalid, which is a known limit rather than a finding about the publisher.
+
 `void-well-known` runs on the **daily** cadence, not hourly. Whether a
 publisher has put a file at a fixed location does not change between breakfast
 and lunch, and it is one more request to somebody else's server — one a night

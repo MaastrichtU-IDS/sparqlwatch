@@ -96,6 +96,7 @@ from endpoint_measurements import (
     EndpointMeasurements,
     description_source,
     endpoint_measurements,
+    void_document,
 )
 from load_run import CURRENT_GRAPH, CURRENT_GRAPH_IRI, pointers_to_missing_runs
 from queries import read_query
@@ -1713,6 +1714,7 @@ def _page_context(
     void: dict | None,
     partitions: list[dict],
     description_source: str | None = None,
+    void_doc=None,
 ) -> dict:
     """Everything the template renders, decided here rather than in the page.
 
@@ -1738,6 +1740,10 @@ def _page_context(
         # is not about one resource simply does not set it.
         "item_type": "http://www.w3.org/ns/dcat#DataService",
         "item_id": endpoint,
+        # The VoID the endpoint's host publishes at the location the VoID spec
+        # names. Its `source` is the vendor's url, which is the thing to show:
+        # this page is our account, and that is theirs.
+        "void_doc": void_doc,
         "description_source": description_source,
         **_nav_context(),
         # The timeline is its OWN section rather than a span on each row. The
@@ -1842,6 +1848,7 @@ def _endpoint_html(
     void: dict | None,
     partitions: list[dict],
     description_source: str | None = None,
+    void_doc=None,
 ) -> str:
     """The page, rendered."""
     return _TEMPLATES.get_template("endpoint.html").render(
@@ -1854,6 +1861,7 @@ def _endpoint_html(
             void,
             partitions,
             description_source,
+            void_doc,
         )
     )
 
@@ -2001,6 +2009,7 @@ def endpoint_resource(
                 void_summary(store, url),
                 void_partitions(store, url),
                 description_source(store, url),
+                void_document(store, url),
             ),
             media_type="text/html; charset=utf-8",
         )

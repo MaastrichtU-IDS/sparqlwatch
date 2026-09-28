@@ -301,8 +301,7 @@ mod tests {
             declarations_read: &all.declarations_read,
             not_measured: &all.not_measured,
             content_samples: &all.content_samples,
-            content_profiles: &all.content_profiles,
-        }
+            content_profiles: &all.content_profiles, void_documents: &[] }
     }
 
     struct Families {

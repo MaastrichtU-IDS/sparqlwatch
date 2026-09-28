@@ -571,6 +571,10 @@ WHERE  {
 } ;
 DELETE WHERE { GRAPH sw:current { endpoint: sw:declarationsRead ?read } } ;
 DELETE WHERE { GRAPH sw:current { endpoint: sw:descriptionSource ?src } } ;
+DELETE WHERE { GRAPH sw:current { endpoint: sw:voidSource ?vs } } ;
+DELETE WHERE { GRAPH sw:current { endpoint: sw:voidValid ?vv } } ;
+DELETE WHERE { GRAPH sw:current { endpoint: sw:voidGraph ?vg } } ;
+DELETE WHERE { GRAPH sw:current { endpoint: sw:voidTriples ?vt } } ;
 DELETE WHERE { GRAPH sw:current { endpoint: sw:currentRun ?run } } ;
 INSERT { GRAPH sw:current { ?thing ?p ?o } }
 WHERE  { GRAPH run: { ?thing dqv:computedOn endpoint: . ?thing ?p ?o } } ;
@@ -600,6 +604,17 @@ WHERE  { GRAPH run: { endpoint: sw:declarationsRead ?read } } ;
 # parsed.
 INSERT { GRAPH sw:current { endpoint: sw:descriptionSource ?src } }
 WHERE  { GRAPH run: { endpoint: sw:descriptionSource ?src } } ;
+# The well-known VoID pointers. Four separate units because each is optional
+# and independent: a document can be there and invalid, in which case there is
+# a source and a validity and no graph and no count.
+INSERT { GRAPH sw:current { endpoint: sw:voidSource ?vs } }
+WHERE  { GRAPH run: { endpoint: sw:voidSource ?vs } } ;
+INSERT { GRAPH sw:current { endpoint: sw:voidValid ?vv } }
+WHERE  { GRAPH run: { endpoint: sw:voidValid ?vv } } ;
+INSERT { GRAPH sw:current { endpoint: sw:voidGraph ?vg } }
+WHERE  { GRAPH run: { endpoint: sw:voidGraph ?vg } } ;
+INSERT { GRAPH sw:current { endpoint: sw:voidTriples ?vt } }
+WHERE  { GRAPH run: { endpoint: sw:voidTriples ?vt } } ;
 INSERT DATA { GRAPH sw:current { endpoint: sw:currentRun run: } }
 """
 
@@ -660,6 +675,10 @@ WHERE  {
 _REPLACE_ENDPOINT_RUN = """
 DELETE WHERE { GRAPH sw:current { endpoint: sw:declarationsRead ?read } } ;
 DELETE WHERE { GRAPH sw:current { endpoint: sw:descriptionSource ?src } } ;
+DELETE WHERE { GRAPH sw:current { endpoint: sw:voidSource ?vs } } ;
+DELETE WHERE { GRAPH sw:current { endpoint: sw:voidValid ?vv } } ;
+DELETE WHERE { GRAPH sw:current { endpoint: sw:voidGraph ?vg } } ;
+DELETE WHERE { GRAPH sw:current { endpoint: sw:voidTriples ?vt } } ;
 DELETE WHERE { GRAPH sw:current { endpoint: sw:currentRun ?run } } ;
 INSERT { GRAPH sw:current { endpoint: sw:declarationsRead ?read } }
 WHERE  { GRAPH run: { endpoint: sw:declarationsRead ?read } } ;
@@ -670,6 +689,17 @@ WHERE  { GRAPH run: { endpoint: sw:declarationsRead ?read } } ;
 # parsed.
 INSERT { GRAPH sw:current { endpoint: sw:descriptionSource ?src } }
 WHERE  { GRAPH run: { endpoint: sw:descriptionSource ?src } } ;
+# The well-known VoID pointers. Four separate units because each is optional
+# and independent: a document can be there and invalid, in which case there is
+# a source and a validity and no graph and no count.
+INSERT { GRAPH sw:current { endpoint: sw:voidSource ?vs } }
+WHERE  { GRAPH run: { endpoint: sw:voidSource ?vs } } ;
+INSERT { GRAPH sw:current { endpoint: sw:voidValid ?vv } }
+WHERE  { GRAPH run: { endpoint: sw:voidValid ?vv } } ;
+INSERT { GRAPH sw:current { endpoint: sw:voidGraph ?vg } }
+WHERE  { GRAPH run: { endpoint: sw:voidGraph ?vg } } ;
+INSERT { GRAPH sw:current { endpoint: sw:voidTriples ?vt } }
+WHERE  { GRAPH run: { endpoint: sw:voidTriples ?vt } } ;
 INSERT DATA { GRAPH sw:current { endpoint: sw:currentRun run: } }
 """
 

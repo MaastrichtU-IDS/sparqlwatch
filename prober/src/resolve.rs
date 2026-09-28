@@ -304,13 +304,30 @@ pub fn resolve(def: &MetricDef, declared: Declared, obs: Result<&Observation, Ex
         // ENDPOINT's description, and letting it lift this verdict to
         // `verified` would let one document vouch for the presence of another.
         ProbeKind::FetchVoid => {
-            if o.body_kind == BodyKind::Rdf && answered_ok(o) {
+            if !answered_ok(o) {
+                // 404/410 were already read as `Absent` above, before the HTML
+                // guard. Everything else non-2xx is a path we did not get past.
+                Verdict::Indeterminate
+            } else if o.body_kind == BodyKind::Rdf {
                 Verdict::UndeclaredButVerified
+            } else if o.body_kind == BodyKind::Html {
+                // A 2xx HTML page at this URL is overwhelmingly a soft 404 or
+                // a site's own error template, not a publisher's broken VoID.
+                // `DeclaredButWrong` is the harshest verdict in the
+                // vocabulary and it is not earned by a server that answers
+                // 200 for every path.
+                Verdict::Indeterminate
             } else {
-                match o.status {
-                    Some(404) | Some(410) => Verdict::Absent,
-                    _ => Verdict::Indeterminate,
-                }
+                // Served, 2xx, not HTML, and did not parse as the RDF syntax
+                // its own content type named. That IS the publisher putting
+                // something broken where the spec says a VoID goes.
+                //
+                // NOT OBSERVED IN THE WILD YET, and said plainly because the
+                // obvious candidate was not one: vocab.getty.edu looked like
+                // this and turned out to be a plain 404 with an HTML error
+                // page, which reads `Absent` and should. The state is modelled
+                // because it is reachable, not because it has been seen.
+                Verdict::DeclaredButWrong
             }
         }
         ProbeKind::Cors => {

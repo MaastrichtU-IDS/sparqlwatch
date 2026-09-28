@@ -18,9 +18,10 @@ pub mod write;
 use crate::budget::{Budget, Expired};
 use crate::client::Client;
 use crate::declare::{parse_declarations_for, Declarations};
+use crate::observe::BodyKind;
 use crate::emit::{
     ContentProfile, ContentSample, DeclarationsRead, EndpointFacts, MeasurementRow,
-    NotMeasured, NotMeasuredReason, ProfileProperty,
+    NotMeasured, NotMeasuredReason, ProfileProperty, VoidDocument,
     RunId,
 };
 use crate::metrics::{MetricDef, ProbeKind};
@@ -51,6 +52,8 @@ use tokio::task::JoinSet;
 pub struct Sweep {
     pub rows: Vec<MeasurementRow>,
     pub declarations_read: Vec<DeclarationsRead>,
+    /// One per endpoint whose `/.well-known/void` fetch reached something.
+    pub void_documents: Vec<VoidDocument>,
     /// Two disjoint families of fact, not one: the metrics `main.rs` declined
     /// at the cost ceiling, and the metrics that would have run on an endpoint
     /// the sweep failed on. `NotMeasuredReason` is what tells them apart, and
@@ -398,6 +401,7 @@ struct EndpointFactLists {
     endpoint: String,
     rows: Vec<MeasurementRow>,
     declarations_read: Vec<DeclarationsRead>,
+    void_documents: Vec<VoidDocument>,
     not_measured: Vec<NotMeasured>,
     content_samples: Vec<ContentSample>,
     content_profiles: Vec<ContentProfile>,
@@ -415,6 +419,7 @@ impl EndpointFactLists {
             endpoint: &self.endpoint,
             rows: &self.rows,
             declarations_read: &self.declarations_read,
+            void_documents: &self.void_documents,
             not_measured: &self.not_measured,
             content_samples: &self.content_samples,
             content_profiles: &self.content_profiles,
@@ -442,6 +447,7 @@ fn assemble_endpoint(
         endpoint: ep.to_string(),
         rows: Vec::new(),
         declarations_read: Vec::new(),
+        void_documents: Vec::new(),
         not_measured: Vec::new(),
         content_samples: Vec::new(),
             content_profiles: Vec::new(),
@@ -459,6 +465,7 @@ fn assemble_endpoint(
                     properties: swept.declared_properties,
                 });
             facts.rows = swept.rows;
+            facts.void_documents = swept.void_documents;
             facts.content_samples = swept.content_samples;
             facts.content_profiles = swept.content_profiles;
             // Extended and not assigned: the cost-ceiling loop below appends to
@@ -546,6 +553,7 @@ fn collect_sweep(per_endpoint: Vec<EndpointFactLists>) -> Sweep {
     let mut sweep = Sweep {
         rows: Vec::new(),
         declarations_read: Vec::new(),
+        void_documents: Vec::new(),
         not_measured: Vec::new(),
         content_samples: Vec::new(),
         failed_endpoints: 0,
@@ -556,6 +564,7 @@ fn collect_sweep(per_endpoint: Vec<EndpointFactLists>) -> Sweep {
         }
         sweep.rows.extend(facts.rows);
         sweep.declarations_read.extend(facts.declarations_read);
+        sweep.void_documents.extend(facts.void_documents);
         sweep.not_measured.extend(facts.not_measured);
         sweep.content_samples.extend(facts.content_samples);
     }
@@ -604,6 +613,10 @@ struct EndpointSweep {
     /// `None` when nothing was read, which is the same rule `declarations_read`
     /// follows: a URL here would claim a document exists at it.
     description_source: Option<String>,
+    /// The well-known VoID fetch's result, when the probe ran. At most one,
+    /// because one metric asks it; a `Vec` because that is the shape every
+    /// fact family here uses and `EndpointFacts` takes a slice.
+    void_documents: Vec<VoidDocument>,
     /// The classes and properties the description named. Empty until the fetch
     /// parses, like `declarations_read` starting `false`, so an endpoint whose
     /// budget expired before the fetch finished publishes an honest nothing
@@ -1038,6 +1051,32 @@ async fn probe_endpoint(
         };
         let declared = Declared::from(&declarations, def);
         let verdict = resolve(def, declared, observed.as_ref().map_err(|e| *e));
+        // THE LOCAL COPY, kept whenever the well-known fetch reached anything
+        // at all -- including a document that is there and does not parse,
+        // because "they publish something invalid" is a finding and the
+        // evidence for it is the document. Nothing is kept for a 404 or a
+        // transport failure: there is no document to copy.
+        if def.kind == ProbeKind::FetchVoid {
+            if let Ok(o) = observed.as_ref() {
+                if let Some(source) = Client::well_known_void(ep) {
+                    let reached = o.error.is_none() && o.status.is_some_and(|s| (200..=299).contains(&s));
+                    if reached {
+                        acc.void_documents.push(VoidDocument {
+                            endpoint: ep.to_string(),
+                            source,
+                            // The same reading `resolve` used, from the same
+                            // bytes: `BodyKind::Rdf` is set only when the
+                            // content type names an RDF format AND the body
+                            // parsed. Two derivations of one fact would be two
+                            // things that can disagree.
+                            valid: o.body_kind == BodyKind::Rdf,
+                            body: o.body.clone(),
+                            content_type: o.content_type.clone(),
+                        });
+                    }
+                }
+            }
+        }
         // The bindings are kept only for a metric that asked to enumerate. Up
         // to here they were used to reach a verdict and then dropped, so an
         // endpoint could be reported as having classes without ever saying
@@ -1410,6 +1449,7 @@ mod tests {
                 .collect(),
             declarations_read: true,
             description_source: None,
+            void_documents: Vec::new(),
             declared_classes: Vec::new(),
             declared_properties: Vec::new(),
             profile_pass_enumerated: false,
