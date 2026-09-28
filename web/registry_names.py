@@ -66,7 +66,28 @@ def load_names(paths: list[Path]) -> dict[str, Name]:
     for path in paths:
         try:
             raw = tomllib.loads(Path(path).read_text())
-            for entry in raw.get("endpoint", []):
+            # `[[service]]` records are flattened into the same per-URL shape
+            # the loop below already reads, with EVERY url a service answers to
+            # -- preferred, alternative and invalid -- carrying the service's
+            # name. That is what makes a row published under a demoted spelling
+            # still read as the service it belongs to: the store holds those
+            # URLs permanently, because `emit::subject_iri` embeds whatever was
+            # swept and run graphs are never rewritten.
+            entries = list(raw.get("endpoint", []))
+            for svc in raw.get("service", []):
+                if not isinstance(svc, dict) or not svc.get("endpoint"):
+                    continue
+                shared = {
+                    "title": svc.get("title"),
+                    "domain": svc.get("domain"),
+                    "datasets": svc.get("datasets"),
+                }
+                entries.append({"url": svc["endpoint"], **shared})
+                for role in ("alternative", "invalid"):
+                    for alias in svc.get(role) or []:
+                        if isinstance(alias, dict) and alias.get("url"):
+                            entries.append({"url": alias["url"], **shared})
+            for entry in entries:
                 if isinstance(entry, str):
                     url, title, domain, datasets = entry, None, None, None
                 elif isinstance(entry, dict):
@@ -152,3 +173,43 @@ def display(name: Name | None, url: str) -> str:
     if name.title:
         return name.title
     return name.host
+
+
+def load_aliases(paths: list[Path]) -> dict[str, str]:
+    """Every non-preferred url mapped to the endpoint it belongs to.
+
+    THE READ SIDE OF THE SERVICE SCHEMA, and the whole reason it is read-side:
+    ``emit::subject_iri`` embeds the swept url in every subject and run graphs
+    are never rewritten, so a row published under a spelling since demoted
+    cannot be re-identified. It is resolved instead, here.
+
+    Same tolerance as ``load_names``: a file that does not exist, does not
+    parse, or holds wrong-shaped entries contributes nothing rather than
+    raising. A broken registry must not stop the site serving, and an alias map
+    that came back empty costs a row its redirect, not the page.
+    """
+    out: dict[str, str] = {}
+    for path in paths:
+        try:
+            raw = tomllib.loads(Path(path).read_text())
+        except Exception:
+            continue
+        for svc in raw.get("service", []) or []:
+            if not isinstance(svc, dict):
+                continue
+            endpoint = svc.get("endpoint")
+            if not endpoint:
+                continue
+            for role in ("alternative", "invalid"):
+                for alias in svc.get(role) or []:
+                    if not isinstance(alias, dict):
+                        continue
+                    url = alias.get("url")
+                    # An alias that is ALSO somebody's endpoint is not resolved
+                    # away. `registry::load_services` refuses that file, but
+                    # this module never raises, so the safe reading here is to
+                    # leave the url alone: a wrong redirect would send a reader
+                    # to a different service's page.
+                    if url and url != endpoint:
+                        out.setdefault(url, endpoint)
+    return out

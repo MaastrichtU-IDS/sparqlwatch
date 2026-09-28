@@ -182,12 +182,6 @@ endpoint = [
   # results in 1.86s when it was added.
   "https://fdp.dcc.sib.swiss/store/fdp/sparql",
   "http://rdf.corpora.uni-leipzig.de/sparql",
-  "https://sparql.southgreen.fr/sparql",
-  # The URL YummyData lists, kept only so that a reader holding it is told
-  # where the service actually is. It answers 406 to every SPARQL Accept,
-  # so probing it published "does not speak the protocol" about a server
-  # that does. Never swept; see registry::load_inactive.
-  { url = "http://sparql.southgreen.fr/", inactive = "the registry URL was wrong; the service answers at https://sparql.southgreen.fr/sparql" },
   "https://bio2rdf.org/sparql",
   "http://sparql.glygen.org:8880/sparql",
   # Retired 2026-09-27: neXtProt was archived upstream and the URL now
@@ -195,3 +189,22 @@ endpoint = [
   # "where was it" survives; never probed. See registry::load_inactive.
   { url = "https://sparql.nextprot.org/", inactive = "archived upstream at https://www.expasy.org/archives/nextprot" },
 ]
+
+# --- services ------------------------------------------------------------
+#
+# The shape this file is moving to: one record per SERVICE, with the URLs that
+# name it. `endpoint` is the only one any sweep asks. See
+# docs/superpowers/specs/2026-09-28-service-identity-design.md.
+
+[[service]]
+endpoint = "https://sparql.southgreen.fr/sparql"
+
+  # The URL YummyData lists. It answers 406 to every Accept a SPARQL client
+  # sends and 200 text/html to */*, so sweeping it published "does not speak
+  # the protocol" about a server that does. Kept, never asked: a reader who
+  # finds it in a catalogue is brought here instead.
+  [[service.invalid]]
+  url = "http://sparql.southgreen.fr/"
+  source = "yummydata"
+  found = "2026-09-27"
+  reason = "406 to every SPARQL Accept; the console, not the endpoint"
