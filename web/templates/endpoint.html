@@ -351,6 +351,17 @@
   <p class="sub"><a href="{{ description_source }}" rel="noopener noreferrer"
      target="_blank" data-description-source="{{ description_source }}">service description</a></p>
   {%- endif %}
+  {%- if void_doc %}
+  {# The VoID the host publishes at the location the VoID spec names. A
+     DIFFERENT document from the service description above: the two
+     specifications give different discovery rules, and a publisher who follows
+     one is not necessarily following the other. Shown whenever the fetch
+     reached something, including a document that did not parse -- the reader
+     checking that finding needs the url more than anyone. #}
+  <link itemprop="urn:sparqlwatch:voidSource" href="{{ void_doc.source }}">
+  <p class="sub"><a href="{{ void_doc.source }}" rel="noopener noreferrer"
+     target="_blank" data-void-source="{{ void_doc.source }}">VoID</a>{% if void_doc.valid is false %} (does not parse){% endif %}</p>
+  {%- endif %}
   <p class="sub"{% if run %} data-run="{{ run }}"{% endif %}>
     {%- if not run -%}
       No run in this store has measured this endpoint. What follows is only the

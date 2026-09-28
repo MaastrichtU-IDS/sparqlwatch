@@ -696,7 +696,7 @@ async fn main() -> anyhow::Result<()> {
     // policy admitted; `endpoints` is the full list, and it goes to `update`
     // below, which has to see every entry so a hold can lapse on a date rather
     // than on being swept.
-    let Sweep { rows, declarations_read, not_measured, content_samples, failed_endpoints } =
+    let Sweep { rows, declarations_read, void_documents, not_measured, content_samples, failed_endpoints } =
         run_sweep(&plan.probe, &run, &declined, &client, budget, args.concurrency, &memory, &mut writer)
             .await?;
     // The footer, and then the rename onto `--out`. Last, because it publishes
@@ -710,6 +710,12 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(endpoints = plan.probe.len(), dormant = dormant.len(),
                    measurements = rows.len(),
                    declarations_read = declarations_read.len(),
+                   // How many hosts served something at /.well-known/void,
+                   // and how many of those parsed. Logged because it is the
+                   // one number that says whether the daily pass's extra
+                   // request is buying anything.
+                   void_documents = void_documents.len(),
+                   void_valid = void_documents.iter().filter(|d| d.valid).count(),
                    not_measured = not_measured.len(), content_samples = content_samples.len(),
                    max_cost = args.max_cost.slug(), concurrency = args.concurrency,
                    failed_endpoints, revision = %revision, out = %args.out, "sweep complete");

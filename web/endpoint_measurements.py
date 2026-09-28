@@ -484,3 +484,50 @@ def description_source(store: Store, endpoint: str) -> str | None:
     ):
         return row["source"].value
     return None
+
+
+_VOID_DOCUMENT_QUERY = read_query("endpoint_void_document")
+
+
+@dataclass(frozen=True)
+class VoidDocument:
+    """The VoID this service found at an endpoint's well-known location.
+
+    ``source`` is always set when this object exists at all: it is the url we
+    asked, derived from the endpoint's origin, and it is where a reader goes to
+    check us. ``valid`` says whether what came back parsed as RDF -- a
+    publisher can serve something there that is not a VoID, and "there" and
+    "usable" are different claims.
+
+    ``graph`` and ``triples`` describe the LOCAL COPY, and are None for a
+    document that is there and does not parse: there is nothing to copy. The
+    copy lives in its own named graph, never in the run graph beside this
+    service's own findings, because it is a third party's assertions about
+    their data.
+    """
+
+    source: str
+    valid: bool | None = None
+    graph: str | None = None
+    triples: int | None = None
+
+
+def void_document(store: Store, endpoint: str) -> VoidDocument | None:
+    """The well-known VoID for ``endpoint``, or None if the fetch reached none.
+
+    None covers both "nothing is published there" and "we could not tell",
+    which the metric row distinguishes and this does not: this answers "is
+    there a document to show a reader", and for both of those the answer is no.
+    """
+    for row in store.query(
+        _VOID_DOCUMENT_QUERY, substitutions={_ENDPOINT: NamedNode(endpoint)}
+    ):
+        valid = row["valid"]
+        triples = row["triples"]
+        return VoidDocument(
+            source=row["source"].value,
+            valid=None if valid is None else valid.value == "true",
+            graph=None if row["graph"] is None else row["graph"].value,
+            triples=None if triples is None else int(triples.value),
+        )
+    return None

@@ -1,0 +1,21 @@
+# The well-known VoID document this service found for one endpoint, if any.
+#
+# Four optional facts about ONE document, so they are read together rather than
+# through four queries: `source` is where we asked, `valid` is whether what
+# came back parsed, `graph` names the local copy and `triples` is how big it
+# is. A document that is there and does not parse binds the first two and not
+# the last two, which is exactly the shape of that finding.
+#
+# `?endpoint` is in the projection because pyoxigraph's SEP-0007 substitution
+# requires it there.
+
+PREFIX sw: <urn:sparqlwatch:>
+
+SELECT ?endpoint ?source ?valid ?graph ?triples WHERE {
+  GRAPH sw:current {
+    ?endpoint sw:voidSource ?source .
+    OPTIONAL { ?endpoint sw:voidValid   ?valid }
+    OPTIONAL { ?endpoint sw:voidGraph   ?graph }
+    OPTIONAL { ?endpoint sw:voidTriples ?triples }
+  }
+}
