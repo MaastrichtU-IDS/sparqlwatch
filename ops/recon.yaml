@@ -18,9 +18,17 @@
 # has about 40) is still asked one at a time. That is one sweep's worth of
 # load, once, and never again unless a person runs this file again.
 #
-# READING THE REPORT:
-#   kubectl -n sparqlwatch-dev logs job/<name>            # the census
-#   kubectl -n sparqlwatch-dev cp <pod>:/tmp/recon.toml . # the full report
+# READING THE REPORT. It is printed to the LOG, between markers, because that
+# is the copy that survives: a pod's filesystem goes with the pod, and
+# `kubectl cp` refuses a completed one. The first run of this pass wrote only
+# to /tmp, the pod exited, and 537 endpoints had to be asked again.
+#
+#   kubectl -n sparqlwatch-dev logs job/<name> \
+#     | sed -n '/----- BEGIN RECON REPORT -----/,/----- END RECON REPORT -----/p' \
+#     | sed '1d;$d' > recon.toml
+#
+# The census is in the last log line too, so `logs --tail=1` answers "how many
+# answered" without pulling the whole report.
 apiVersion: batch/v1
 kind: Job
 metadata:

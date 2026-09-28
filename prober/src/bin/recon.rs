@@ -71,6 +71,10 @@ struct Args {
     #[arg(long, default_value = "metrics.toml")]
     metrics: String,
     /// Where the report goes. A registry fragment plus a census, as TOML.
+    ///
+    /// The report is ALSO printed to stdout between markers, and that is the
+    /// copy a Job leaves behind: a pod's filesystem goes with the pod, and its
+    /// log does not.
     #[arg(long, default_value = "recon.toml")]
     out: String,
     /// Endpoints asked at once. Each still waits on its own host's gate.
@@ -255,7 +259,20 @@ async fn main() -> anyhow::Result<()> {
             out.push_str(&format!("status = {s}\n"));
         }
     }
-    std::fs::write(&args.out, out)?;
+    std::fs::write(&args.out, &out)?;
+
+    // AND TO STDOUT, which is the copy that survives. The first real run of
+    // this pass wrote its report into a Job's emptyDir, the pod exited, and
+    // `kubectl cp` refuses a completed pod: 537 endpoints were asked and the
+    // answer was unreachable. A log is retained after the pod that produced it
+    // has finished, so the report goes where it can still be read.
+    //
+    // Fenced by markers so a reader can cut it out of a log that also carries
+    // tracing lines, and so `sed -n '/BEGIN/,/END/p'` is enough to recover a
+    // file that parses.
+    println!("----- BEGIN RECON REPORT -----");
+    print!("{out}");
+    println!("----- END RECON REPORT -----");
 
     tracing::info!(
         answered = census.get("answered").copied().unwrap_or(0),
@@ -332,6 +349,28 @@ mod tests {
                 _ => Outcome::NoAnswer,
             };
             assert_eq!(got, expected, "{v:?} mapped to the wrong outcome");
+        }
+    }
+}
+
+#[cfg(test)]
+mod report_tests {
+    /// The markers the Job's log is cut on. Pinned because `ops/recon.yaml`
+    /// documents the `sed` that uses them, and a rename here would leave that
+    /// instruction naming a string no log carries -- which is how the first
+    /// run's report was lost in the first place.
+    #[test]
+    fn the_fence_markers_are_the_ones_the_runbook_names() {
+        let ops = std::fs::read_to_string("../ops/recon.yaml")
+            .or_else(|_| std::fs::read_to_string("ops/recon.yaml"))
+            .expect("ops/recon.yaml must be readable from the crate");
+        for marker in ["----- BEGIN RECON REPORT -----", "----- END RECON REPORT -----"] {
+            assert!(
+                ops.contains(marker),
+                "ops/recon.yaml does not name {marker:?}, so its recovery command cannot work"
+            );
+            let src = std::fs::read_to_string("src/bin/recon.rs").unwrap();
+            assert!(src.contains(marker), "recon no longer prints {marker:?}");
         }
     }
 }
