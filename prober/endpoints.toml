@@ -177,6 +177,10 @@ endpoint = [
   # `seed::candidates` -- which reads sparql[].access_url and nothing else --
   # never saw it. 200 with SPARQL results in 0.26s. It is the only live
   # endpoint among the 20 such URLs in the whole dump; see `recon`.
+  # Added 2026-09-28 at the operator's request. In no catalogue this project
+  # seeds, so its name lives in registry/corrections.toml. 200 with SPARQL
+  # results in 1.86s when it was added.
+  "https://fdp.dcc.sib.swiss/store/fdp/sparql",
   "http://rdf.corpora.uni-leipzig.de/sparql",
   "https://sparql.southgreen.fr/sparql",
   # The URL YummyData lists, kept only so that a reader holding it is told
