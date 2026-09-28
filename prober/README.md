@@ -336,6 +336,26 @@ registry/lod-cloud.toml` is how a run gets it, a plain `cargo run` uses the
 three-endpoint development list, and `seed-registry` has no flag that can write
 to `endpoints.toml`.
 
+### What a description fetch publishes
+
+One queryless `GET` per endpoint per sweep, with an RDF `Accept`, is where every
+`declared` fact comes from: the SPARQL 1.1 Service Description spec puts a
+service's description at the endpoint URL itself. Two facts come back from it:
+
+| | |
+| --- | --- |
+| `sw:declarationsRead` | whether a graph of at least one triple parsed |
+| `sw:descriptionSource` | the URL it parsed FROM — the endpoint's own, or wherever a redirect landed |
+
+`descriptionSource` is written **only** when something was read. A URL beside
+`declarationsRead false` would name a document this project never parsed, and
+the site links it, so it has to be a URL a reader can actually open.
+
+It is a `urn:sparqlwatch:` predicate rather than a borrowed one. The closest
+standard candidates carry domains this would assert falsely: `void:dataDump`
+names a dump of the data, `dcat:accessURL` names a distribution's access point,
+and this is neither — it is the document that describes the service.
+
 ### Reconnaissance
 
 `recon` asks a registry file's endpoints one cheap query each, once, and writes

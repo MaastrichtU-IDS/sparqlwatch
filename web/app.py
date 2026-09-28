@@ -92,7 +92,11 @@ from void_document import (
 from endpoint_index import endpoint_index as _endpoint_index
 from endpoint_history import EndpointHistory, Reading, endpoint_history
 from fleet import FleetHistory, fleet_history as _fleet_history, fleet_stats
-from endpoint_measurements import EndpointMeasurements, endpoint_measurements
+from endpoint_measurements import (
+    EndpointMeasurements,
+    description_source,
+    endpoint_measurements,
+)
 from load_run import CURRENT_GRAPH, CURRENT_GRAPH_IRI, pointers_to_missing_runs
 from queries import read_query
 from registry_names import Name, display, load_aliases, load_names
@@ -1708,6 +1712,7 @@ def _page_context(
     vocabulary: list[dict],
     void: dict | None,
     partitions: list[dict],
+    description_source: str | None = None,
 ) -> dict:
     """Everything the template renders, decided here rather than in the page.
 
@@ -1722,6 +1727,18 @@ def _page_context(
     sample = _sample(measurements, content)
     series = _daily_series(history)
     return {
+        # The vendor's own document about their service, when one was read:
+        # everything else on this page is what THIS service observed, and that
+        # is the one link that lets a reader check the two against each other.
+        # `None` when nothing parsed at the endpoint url, which is not the same
+        # as an empty description -- see `endpoint_measurements.description_source`.
+        # What `base.html` puts on <main>: this page IS a description of one
+        # dcat:DataService, which is the type the run graphs already give an
+        # endpoint. Set here rather than in the template so that a page which
+        # is not about one resource simply does not set it.
+        "item_type": "http://www.w3.org/ns/dcat#DataService",
+        "item_id": endpoint,
+        "description_source": description_source,
         **_nav_context(),
         # The timeline is its OWN section rather than a span on each row. The
         # rows answer "what is true now" and the history answers "what has
@@ -1824,11 +1841,19 @@ def _endpoint_html(
     vocabulary: list[dict],
     void: dict | None,
     partitions: list[dict],
+    description_source: str | None = None,
 ) -> str:
     """The page, rendered."""
     return _TEMPLATES.get_template("endpoint.html").render(
         **_page_context(
-            endpoint, measurements, content, history, vocabulary, void, partitions
+            endpoint,
+            measurements,
+            content,
+            history,
+            vocabulary,
+            void,
+            partitions,
+            description_source,
         )
     )
 
@@ -1975,6 +2000,7 @@ def endpoint_resource(
                 endpoint_vocabulary(store, url),
                 void_summary(store, url),
                 void_partitions(store, url),
+                description_source(store, url),
             ),
             media_type="text/html; charset=utf-8",
         )

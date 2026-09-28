@@ -332,6 +332,25 @@
 
      The third branch's sentence stays: it is not a date, it is the only thing
      on the page that says why an endpoint with no verdicts has none. #}
+  {# The endpoint's own identity, as data rather than as text. `link`/`meta`
+     render nothing; they exist so a crawler that parses only HTML gets the
+     same facts the RDF representation serves under content negotiation.
+     dcat:endpointURL is the predicate the run graphs already use for this. #}
+  <link itemprop="http://www.w3.org/ns/dcat#endpointURL" href="{{ endpoint }}">
+  {%- if name and name != endpoint %}
+  <meta itemprop="http://purl.org/dc/terms/title" content="{{ name }}">
+  {%- endif %}
+  {%- if description_source %}
+  {# THE VENDOR'S OWN DOCUMENT. Everything else on this page is what this
+     service observed; this is what the operator published about themselves,
+     and it is the one link that lets a reader check the two against each
+     other. Present only when a description actually parsed -- an endpoint
+     serving an HTML console at its url has none, and a link to it would send
+     a reader to a page that says nothing. #}
+  <link itemprop="urn:sparqlwatch:descriptionSource" href="{{ description_source }}">
+  <p class="sub"><a href="{{ description_source }}" rel="noopener noreferrer"
+     target="_blank" data-description-source="{{ description_source }}">service description</a></p>
+  {%- endif %}
   <p class="sub"{% if run %} data-run="{{ run }}"{% endif %}>
     {%- if not run -%}
       No run in this store has measured this endpoint. What follows is only the
@@ -409,7 +428,39 @@
               {%- if row.older_sweep %} data-older-sweep="true"{% endif %}
               {%- if row.declined %} data-declined="{{ row.reason }}"
               {%- else %} data-verdict="{{ row.verdict }}"{% endif %}>
-            <td><span class="chip {{ row.css_class }}" aria-hidden="true"></span></td>
+            <td><span class="chip {{ row.css_class }}" aria-hidden="true"></span>
+            {%- if not row.declined %}
+            {# ONE MEASUREMENT, in the same three triples the run graph holds.
+               A TOP-LEVEL ITEM, NOT A NESTED ONE. Nesting a measurement under
+               the endpoint would need an inverse of dqv:computedOn, and the
+               obvious candidate (dqv:hasQualityMeasurement) declares a domain
+               this dcat:DataService is not -- borrowing a predicate whose
+               domain we do not satisfy is the one thing emit.rs spends most of
+               its comments refusing to do. An element carrying `itemscope`
+               without `itemprop` is a separate item even inside another, so
+               this states dqv:computedOn in the graph's own direction and
+               needs no inverse at all.
+               No `itemid`: the measurement extracts as a blank node, which
+               says a measurement with this verdict exists without naming it.
+               That is weaker than the run graph, which names it, and weaker is
+               the safe direction for a representation that must never outrun
+               the RDF one.
+               Measured rows only. A decline is not a measurement -- the RDF
+               representation gives it its own type for exactly that reason --
+               so a declined row carries no item and says nothing. #}
+            <span itemscope itemtype="http://www.w3.org/ns/dqv#QualityMeasurement">
+              <link itemprop="http://www.w3.org/ns/dqv#computedOn" href="{{ endpoint }}">
+              {# `row.metric` is ALREADY the full metric IRI, not a bare id.
+                 Prefixing it produced urn:sparqlwatch:metric:urn:sparqlwatch:
+                 metric:availability, which extracted cleanly and pointed at
+                 nothing -- caught by running an extractor over the page rather
+                 than by reading the markup. #}
+              <link itemprop="http://www.w3.org/ns/dqv#isMeasurementOf"
+                    href="{{ row.metric }}">
+              <meta itemprop="http://www.w3.org/ns/dqv#value" content="{{ row.verdict }}">
+            </span>
+            {%- endif %}
+            </td>
             <th scope="row" class="m-name">{{ row.name }}</th>
             {# m-state and m-detail are SIBLING spans, never nested. The suite's
                row parser reads a row's named cells by class and asserts each

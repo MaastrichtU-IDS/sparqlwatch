@@ -454,6 +454,7 @@ fn assemble_endpoint(
                 .push(DeclarationsRead {
                     endpoint: ep.to_string(),
                     read: swept.declarations_read,
+                    source: swept.description_source,
                     classes: swept.declared_classes,
                     properties: swept.declared_properties,
                 });
@@ -591,6 +592,18 @@ struct EndpointSweep {
     /// before the fetch finished publishes an honest `false` rather than
     /// nothing.
     declarations_read: bool,
+    /// The URL the description was actually served from, when one was read.
+    ///
+    /// The SPARQL 1.1 Service Description spec puts a service's description at
+    /// the endpoint URL itself, dereferenced without a query, which is what
+    /// `Client::fetch_rdf` asks for -- so this is that URL, or wherever a
+    /// redirect chain landed. Published so a reader can go and look: this
+    /// service says what a vendor declared, and "according to what document"
+    /// is the first thing anyone checking that will want.
+    ///
+    /// `None` when nothing was read, which is the same rule `declarations_read`
+    /// follows: a URL here would claim a document exists at it.
+    description_source: Option<String>,
     /// The classes and properties the description named. Empty until the fetch
     /// parses, like `declarations_read` starting `false`, so an endpoint whose
     /// budget expired before the fetch finished publishes an honest nothing
@@ -870,6 +883,19 @@ async fn probe_endpoint(
     // keeps what parsed before the error) reads `true` even though
     // `resolve_fetch` below grades that same fetch `Indeterminate`.
     acc.declarations_read = declarations.triples > 0;
+    // Where it came from, recorded only when something was read. `final_url`
+    // is set when the fetch followed a redirect, so an endpoint whose
+    // description lives one hop away publishes the document's own URL rather
+    // than the one we asked for.
+    if acc.declarations_read {
+        acc.description_source = Some(
+            fetch_outcome
+                .as_ref()
+                .ok()
+                .and_then(|o| o.final_url.clone())
+                .unwrap_or_else(|| ep.to_string()),
+        );
+    }
     // Cloned out of the parsed declarations here, where they exist, because
     // `Declarations` is dropped at the end of this function and the fact is
     // assembled by the caller.
@@ -1377,6 +1403,7 @@ mod tests {
                 })
                 .collect(),
             declarations_read: true,
+            description_source: None,
             declared_classes: Vec::new(),
             declared_properties: Vec::new(),
             profile_pass_enumerated: false,

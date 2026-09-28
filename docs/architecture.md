@@ -244,6 +244,33 @@ start to disagree. Keeping the CONSTRUCT means the RDF cannot state anything the
 store does not hold, and it means `web/tests/test_negotiation.py` compares two
 genuinely independent derivations rather than two views of one list.
 
+**The endpoint page is also a third representation, in microdata.** `<main>`
+carries `itemscope itemtype="dcat:DataService"` with the endpoint URL as its
+`itemid`, and each measured row carries a `dqv:QualityMeasurement` item stating
+`dqv:computedOn`, `dqv:isMeasurementOf` and `dqv:value`. Same vocabulary as the
+RDF, same direction, so a crawler that parses only HTML gets the same facts.
+
+It is held to a one-way rule: **the microdata may say less than the RDF, never
+anything else.** Measurement items carry no `itemid`, so they extract as blank
+nodes — an existence claim rather than the named measurement the run graph
+holds — and a declined row is marked up as nothing at all, because a decline is
+not a measurement. `test_every_microdata_verdict_is_one_the_rdf_representation_states`
+checks the HTML's verdicts against the Turtle directly.
+
+Each measurement is a *top-level* item rather than nested under the service.
+Nesting would need an inverse of `dqv:computedOn`, and the obvious candidate
+declares a domain a `dcat:DataService` does not satisfy; an element with
+`itemscope` and no `itemprop` is a separate item, which lets the page state the
+relation in the graph's own direction instead.
+
+**The vendor's own description is linked where there is one.** The prober
+publishes `sw:descriptionSource` — the URL a service description actually
+parsed from, which is the endpoint URL itself per the SPARQL 1.1 Service
+Description spec, or wherever a redirect landed. Everything else on an endpoint
+page is what *this* service observed; that link is the one thing that lets a
+reader check the two accounts against each other. Absent when nothing parsed,
+which is not the same as an empty description.
+
 ### The queries
 
 `web/queries/` holds five files, each with a header comment carrying its own

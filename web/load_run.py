@@ -129,6 +129,8 @@ whose facts current holds, in graph urn:sparqlwatch:current:
         sw:sampleRunMetric M     naming the newest run that published an
         sw:sampleRunIs <run>     M sample of E. See _sample_pointer_iri.
   E sw:declarationsRead <bool>   copied verbatim from sw:currentRun's graph
+  E sw:descriptionSource <url>   where that description was served from,
+                                 present only when the boolean is true
   <measurement> ?p ?o            every quad of every dqv:QualityMeasurement
                                  whose dqv:computedOn is E, copied verbatim
                                  from sw:currentRun's graph
@@ -568,6 +570,7 @@ WHERE  {
   FILTER (!(?newReason IN ("cost-ceiling", "cadence")) || ?oldReason IN ("cost-ceiling", "cadence"))
 } ;
 DELETE WHERE { GRAPH sw:current { endpoint: sw:declarationsRead ?read } } ;
+DELETE WHERE { GRAPH sw:current { endpoint: sw:descriptionSource ?src } } ;
 DELETE WHERE { GRAPH sw:current { endpoint: sw:currentRun ?run } } ;
 INSERT { GRAPH sw:current { ?thing ?p ?o } }
 WHERE  { GRAPH run: { ?thing dqv:computedOn endpoint: . ?thing ?p ?o } } ;
@@ -590,6 +593,13 @@ WHERE  {
 } ;
 INSERT { GRAPH sw:current { endpoint: sw:declarationsRead ?read } }
 WHERE  { GRAPH run: { endpoint: sw:declarationsRead ?read } } ;
+# Where the description was read from, beside the boolean saying one was.
+# Conditional in effect rather than in syntax: the prober writes this only when
+# something WAS read, so a run with `declarationsRead false` matches nothing
+# here. A source without a read would name a document this service never
+# parsed.
+INSERT { GRAPH sw:current { endpoint: sw:descriptionSource ?src } }
+WHERE  { GRAPH run: { endpoint: sw:descriptionSource ?src } } ;
 INSERT DATA { GRAPH sw:current { endpoint: sw:currentRun run: } }
 """
 
@@ -649,9 +659,17 @@ WHERE  {
 # are properties of the ENDPOINT and of one run, not of a metric.
 _REPLACE_ENDPOINT_RUN = """
 DELETE WHERE { GRAPH sw:current { endpoint: sw:declarationsRead ?read } } ;
+DELETE WHERE { GRAPH sw:current { endpoint: sw:descriptionSource ?src } } ;
 DELETE WHERE { GRAPH sw:current { endpoint: sw:currentRun ?run } } ;
 INSERT { GRAPH sw:current { endpoint: sw:declarationsRead ?read } }
 WHERE  { GRAPH run: { endpoint: sw:declarationsRead ?read } } ;
+# Where the description was read from, beside the boolean saying one was.
+# Conditional in effect rather than in syntax: the prober writes this only when
+# something WAS read, so a run with `declarationsRead false` matches nothing
+# here. A source without a read would name a document this service never
+# parsed.
+INSERT { GRAPH sw:current { endpoint: sw:descriptionSource ?src } }
+WHERE  { GRAPH run: { endpoint: sw:descriptionSource ?src } } ;
 INSERT DATA { GRAPH sw:current { endpoint: sw:currentRun run: } }
 """
 
