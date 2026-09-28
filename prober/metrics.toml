@@ -155,6 +155,34 @@ cost = "cheap"
 cadence = "hourly"
 graded = true
 
+# The OTHER discovery rule, and it finds a different document.
+#
+# `service-description` above dereferences the ENDPOINT URL, which is where
+# SPARQL 1.1 Service Description says a service describes itself. VoID states
+# its own rule and names `/.well-known/void` on the host. Asking only one of
+# the two reports the publisher who followed the other as having described
+# nothing, and both are common: measured 2026-09-28, sparql.uniprot.org serves
+# 1,245 lines of VoID at its endpoint URL and nothing at the well-known
+# location, while sparql.omabrowser.org serves 402 lines at the well-known
+# location and none at its endpoint.
+#
+# DAILY, NOT HOURLY, and that is the whole reason it is a separate metric
+# rather than a second fetch inside the one above. It is one more request to
+# somebody else's server; on the daily cadence that is one a day per endpoint
+# rather than one an hour, and whether a publisher has put a file at a fixed
+# location is not a thing that changes between breakfast and lunch.
+#
+# Not `graded`: `service-description` scores how INFORMATIVE a description is,
+# because 21 of 28 in the wild are the same 14-triple Virtuoso stub. This one
+# answers presence, which is what was asked for, and a grade would be a second
+# judgement nobody has calibrated.
+[[metric]]
+id = "void-well-known"
+label = "Publishes VoID at /.well-known/void"
+dimension = "documentation"
+kind = "FetchVoid"
+cost = "cheap"
+
 # `classes` and `has-classes` were both retired here, and the questions they
 # were reaching for are answered by the content pass below.
 #

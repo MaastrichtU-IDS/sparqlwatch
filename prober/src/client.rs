@@ -491,6 +491,66 @@ impl Client {
         .observation
     }
 
+    /// The VoID document at the endpoint's origin, if one is published there.
+    ///
+    /// A DIFFERENT URL FROM `fetch_rdf`'s, on purpose. SPARQL 1.1 Service
+    /// Description says a service describes itself at its own URL, which is
+    /// what `fetch_rdf` asks; VoID states its own discovery rule and names
+    /// `/.well-known/void` on the host. The two find different documents in
+    /// practice -- measured 2026-09-28, `sparql.uniprot.org` publishes VoID at
+    /// its endpoint URL and nothing at the well-known location, and
+    /// `sparql.omabrowser.org` does exactly the reverse.
+    ///
+    /// Derived from the ORIGIN and nothing else: scheme, host and port, with
+    /// the endpoint's own path, query and fragment discarded. `/.well-known/`
+    /// is defined against an origin, so `https://host:8890/dataset/sparql`
+    /// asks `https://host:8890/.well-known/void` -- not
+    /// `https://host:8890/dataset/.well-known/void`, which is a URL the spec
+    /// does not define and nobody serves.
+    ///
+    /// Goes through the same gate and the same redirect walk as every other
+    /// request: one more URL is still one more request to somebody's server.
+    pub async fn fetch_void(&self, url: &str) -> Observation {
+        // No origin to hang `/.well-known/` off. Reported as a failed
+        // observation, which `resolve` reads as `Indeterminate`: we did not
+        // ask, so we know nothing. Guessing a URL would be a request to
+        // somewhere nobody named.
+        let Some(target) = Self::well_known_void(url) else {
+            return Observation::failed(
+                format!("{url} has no origin to derive /.well-known/void from"),
+                0,
+            );
+        };
+        self.honouring_retry_after(&target, || {
+            let target = target.clone();
+            async move {
+                self.gated_chain(&target, |t| async move { self.fetch_rdf_once(&t).await }).await
+            }
+        })
+        .await
+        .observation
+    }
+
+    /// `<scheme>://<authority>/.well-known/void` for an endpoint URL, or
+    /// `None` when the URL has no origin to hang one off.
+    ///
+    /// `None` rather than a guess, and the caller turns it into a row that
+    /// claims nothing. A URL this cannot parse is one no sweep could have
+    /// probed in the first place, so the case is defensive rather than live.
+    pub(crate) fn well_known_void(url: &str) -> Option<String> {
+        let mut parsed = reqwest::Url::parse(url).ok()?;
+        // `cannot_be_a_base` covers the schemes with no authority to derive an
+        // origin from -- `urn:`, `mailto:` -- where joining a path is
+        // meaningless rather than merely unusual.
+        if parsed.cannot_be_a_base() {
+            return None;
+        }
+        parsed.set_path("/.well-known/void");
+        parsed.set_query(None);
+        parsed.set_fragment(None);
+        Some(parsed.to_string())
+    }
+
     /// One queryless RDF fetch, and one request only: a redirect is returned
     /// as the `3xx` it is for `gated_chain` to follow. **NEVER acquires the
     /// gate**: this runs inside the guard `gated_hop` holds, and the per-host
@@ -943,5 +1003,35 @@ impl Client {
             o.profile = Self::extract_profile(&a.extra);
         }
         o
+    }
+}
+
+#[cfg(test)]
+mod well_known_tests {
+    use super::Client;
+
+    #[test]
+    fn the_void_url_is_derived_from_the_origin_and_not_from_the_path() {
+        // `/.well-known/` is defined against an ORIGIN. Appending it to the
+        // endpoint's own path would ask for a URL the spec does not define and
+        // nobody serves, and would report every such host as publishing no
+        // VoID.
+        for (endpoint, want) in [
+            ("https://sparql.omabrowser.org/sparql", "https://sparql.omabrowser.org/.well-known/void"),
+            ("https://host.test/dataset/sparql", "https://host.test/.well-known/void"),
+            ("http://host.test:8890/sparql?x=1#y", "http://host.test:8890/.well-known/void"),
+            ("https://host.test", "https://host.test/.well-known/void"),
+        ] {
+            assert_eq!(Client::well_known_void(endpoint).as_deref(), Some(want), "{endpoint}");
+        }
+    }
+
+    #[test]
+    fn a_url_with_no_origin_yields_no_well_known_url() {
+        // Defensive: `load_endpoints` refuses these long before a sweep. A
+        // guess here would be a request to a URL nobody named.
+        for bad in ["urn:example:thing", "mailto:a@b.test", "not a url"] {
+            assert_eq!(Client::well_known_void(bad), None, "{bad}");
+        }
     }
 }

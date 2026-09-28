@@ -2258,6 +2258,7 @@ def metric_abbreviations(metrics: list[str]) -> dict[str, str]:
 METRIC_COLUMN_ORDER = (
     "availability",
     "service-description",
+    "void-well-known",
     "triple-count",
     "graph-count",
     "class-count",
@@ -2588,6 +2589,7 @@ METRIC_DESCRIPTIONS = {
     "geo-data": "Holds WKT geometry",
     "geo-coordinates": "Holds WGS84 coordinates",
     "service-description": "Service description informativeness",
+    "void-well-known": "Publishes VoID at /.well-known/void",
     "has-classes": "Holds typed resources",
     "classes": "Distinct classes",
 }
@@ -3919,6 +3921,25 @@ METRIC_DOCS = {
             "held was nil."
         ),
     },
+    "void-well-known": {
+        "label": "Publishes VoID at /.well-known/void",
+        "dimension": "documentation",
+        "cost": "cheap",
+        "cadence": "daily",
+        "explains": (
+            "Whether a VoID description is served at the location the VoID "
+            "specification names for one. Asked apart from the service "
+            "description above because the two specifications give different "
+            "discovery rules and the documents genuinely differ: on "
+            "2026-09-28 one endpoint in this registry served 1,245 lines of "
+            "VoID at its own url and nothing at the well-known location, "
+            "while another did exactly the reverse. Asking only one of the "
+            "two would report whichever publisher followed the other rule as "
+            "having described nothing. Daily rather than hourly: whether a "
+            "file sits at a fixed location does not change by the hour, and "
+            "it is one more request to somebody else's server."
+        ),
+    },
     "service-description": {
         "label": "Service description informativeness",
         "dimension": "documentation",
@@ -4413,7 +4434,14 @@ POLITENESS = {
     # carries no `cadence`, which means daily: the hourly sweep asks four
     # metrics and is unchanged, so what this costs a stranger's server is one
     # extra request per night, not per hour.
-    "requests-per-endpoint": 7,
+    #
+    # 7 -> 8 on 2026-09-28, when void-well-known was added, and the same
+    # sentence applies to it: cheap, no cadence, so one more request per night
+    # and none per hour. It is also the first metric that asks a URL other
+    # than the endpoint's own -- `<origin>/.well-known/void` -- which changes
+    # nothing about the count and is worth saying, because a reader checking
+    # this number against their own logs will see a path they did not expect.
+    "requests-per-endpoint": 8,
 }
 
 # What the admission policy costs an endpoint that has proved expensive and

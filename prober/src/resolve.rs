@@ -187,6 +187,28 @@ pub fn resolve(def: &MetricDef, declared: Declared, obs: Result<&Observation, Ex
         Ok(o) => o,
     };
 
+    // A 404 AT A FIXED LOCATION IS AN ANSWER, EVEN IN HTML, and this arm runs
+    // before the guard below for that reason. Everywhere else an HTML body
+    // means we reached a console instead of the thing we asked about, and
+    // concluding anything from it would be wrong. `/.well-known/void` is
+    // different: the URL is fixed by the VoID spec, so a 404 there says the
+    // publisher has not put a file at it, whatever the error page is written
+    // in -- and that is the exact fact this metric was asked to report.
+    //
+    // Found by running the real prober: sparql.southgreen.fr answers 404 with
+    // a Virtuoso HTML error page, and read `indeterminate` -- "we could not
+    // tell" -- when we could tell perfectly well.
+    //
+    // Deliberately narrow: only 404 and 410, only when the transport itself
+    // succeeded. A 403, a timeout or an unresolvable redirect still falls
+    // through to the guard below and stays indeterminate, because those are
+    // cases where we genuinely did not find out.
+    if def.kind == ProbeKind::FetchVoid && o.error.is_none() {
+        if let Some(404) | Some(410) = o.status {
+            return Verdict::Absent;
+        }
+    }
+
     // A transport failure or an HTML console tells us nothing about the
     // attribute itself.
     if o.error.is_some() || o.body_kind == BodyKind::Html {
@@ -262,6 +284,35 @@ pub fn resolve(def: &MetricDef, declared: Declared, obs: Result<&Observation, Ex
                 if declared.claimed { Verdict::DeclaredOnly } else { Verdict::Indeterminate }
             }
         },
+        // IS THERE A VoID WHERE THE SPEC SAYS TO LOOK. The verdict is about the
+        // PUBLISHER, not about the data: `absent` here means "nothing is
+        // served at /.well-known/void", which is a true and ordinary thing to
+        // say about most endpoints, and says nothing about whether they
+        // describe themselves elsewhere -- `service-description` asks that, of
+        // a different URL.
+        //
+        // The same three rules `resolve_fetch` applies to the endpoint's own
+        // description, for the same reasons. A parseable RDF body counts only
+        // with a 2xx, because a 429 notice or a 503 maintenance page can carry
+        // an RDF-ish payload and none of them is a publisher publishing a
+        // VoID. Only 404 and 410 license `absent`: they are the codes that
+        // speak to what is at the URL. Everything else -- a 403, a timeout, a
+        // redirect we could not resolve -- is `indeterminate`, because we did
+        // not find out.
+        //
+        // Never `confirmed(def, declared)`: `declared` here comes from the
+        // ENDPOINT's description, and letting it lift this verdict to
+        // `verified` would let one document vouch for the presence of another.
+        ProbeKind::FetchVoid => {
+            if o.body_kind == BodyKind::Rdf && answered_ok(o) {
+                Verdict::UndeclaredButVerified
+            } else {
+                match o.status {
+                    Some(404) | Some(410) => Verdict::Absent,
+                    _ => Verdict::Indeterminate,
+                }
+            }
+        }
         ProbeKind::Cors => {
             if o.cors {
                 // The header proves CORS is configured whatever the status
@@ -630,7 +681,7 @@ mod tests {
         }
     }
 
-    fn def(kind: ProbeKind, expect: Option<bool>) -> MetricDef {
+    pub(super) fn def(kind: ProbeKind, expect: Option<bool>) -> MetricDef {
         MetricDef {
             id: "t".into(),
             label: "t".into(),
@@ -1297,5 +1348,91 @@ mod tests {
         let (v, level) = resolve_fetch(&Declarations::empty(), Err(Expired));
         assert_eq!(v, Verdict::Indeterminate);
         assert_eq!(level, None);
+    }
+}
+
+#[cfg(test)]
+mod void_well_known_tests {
+    use super::*;
+    use crate::observe::BodyKind;
+
+    fn fetched(status: Option<u16>, body_kind: BodyKind, error: Option<String>) -> Observation {
+        Observation {
+            status,
+            cors: false,
+            boolean: None,
+            bindings: vec![],
+            body_kind,
+            body: None,
+            final_url: None,
+            content_type: None,
+            allow_origin: None,
+            allow_methods: None,
+            allow_headers: None,
+            profile: None,
+            elapsed_ms: 5,
+            error,
+        }
+    }
+
+    fn verdict(o: &Observation) -> Verdict {
+        // `claimed: true` on purpose: the endpoint's OWN description must not
+        // be able to vouch for a document at a different URL.
+        resolve(&super::tests::def(ProbeKind::FetchVoid, None), Declared { claimed: true, value: None }, Ok(o))
+    }
+
+    #[test]
+    fn rdf_with_a_success_status_is_a_published_void() {
+        assert_eq!(
+            verdict(&fetched(Some(200), BodyKind::Rdf, None)),
+            Verdict::UndeclaredButVerified
+        );
+    }
+
+    #[test]
+    fn a_404_is_absent_even_when_the_error_page_is_html() {
+        // THE case the real prober found. sparql.southgreen.fr answers 404
+        // with a Virtuoso HTML error page, and the generic "an HTML body tells
+        // us nothing" guard read that as `indeterminate` -- "we could not
+        // tell" -- when we could tell perfectly well. The URL is fixed by the
+        // VoID spec, so a 404 there means the publisher has not put a file at
+        // it, whatever the error page is written in.
+        assert_eq!(verdict(&fetched(Some(404), BodyKind::Html, None)), Verdict::Absent);
+        assert_eq!(verdict(&fetched(Some(410), BodyKind::Html, None)), Verdict::Absent);
+    }
+
+    #[test]
+    fn everything_else_is_we_did_not_find_out() {
+        // Deliberately narrow. A 403, a throttle, a maintenance page and a
+        // transport failure are all cases where we did NOT learn whether a
+        // file is there, and saying `absent` of them would publish a finding
+        // about a publisher on evidence that is about the path.
+        for (status, kind) in [
+            (Some(403), BodyKind::Html),
+            (Some(429), BodyKind::Rdf),
+            (Some(503), BodyKind::Rdf),
+            (Some(500), BodyKind::Html),
+            (Some(200), BodyKind::Html),
+            (None, BodyKind::None),
+        ] {
+            assert_eq!(
+                verdict(&fetched(status, kind, None)),
+                Verdict::Indeterminate,
+                "{status:?} {kind:?}"
+            );
+        }
+        assert_eq!(
+            verdict(&fetched(Some(404), BodyKind::Html, Some("boom".into()))),
+            Verdict::Indeterminate,
+            "a transport error is never an absence, whatever status came with it"
+        );
+    }
+
+    #[test]
+    fn rdf_without_a_success_status_is_not_a_published_void() {
+        // A 429 notice or a 503 maintenance page can carry an RDF-ish payload,
+        // and neither is a publisher publishing a VoID. Same gate every other
+        // assertive verdict in this module applies.
+        assert_eq!(verdict(&fetched(Some(429), BodyKind::Rdf, None)), Verdict::Indeterminate);
     }
 }

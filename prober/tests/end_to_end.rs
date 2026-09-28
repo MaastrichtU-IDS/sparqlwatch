@@ -132,6 +132,10 @@ async fn a_sweep_over_one_mock_endpoint_produces_nquads() {
         // `indeterminate` is what a declined or failed pass produces, and
         // an_unreachable_endpoint_yields_indeterminate_not_a_panic covers that.
         ("vocabulary-described", Verdict::Absent),
+        // The mock serves nothing at /.well-known/void, so wiremock answers
+        // 404 -- which is exactly the case this metric exists to report, and
+        // the one that reads `absent` rather than "we could not tell".
+        ("void-well-known", Verdict::Absent),
         // The three counts, all `indeterminate`. This mock answers every query
         // with a result set carrying no rows, and a COUNT with no GROUP BY
         // returns exactly one row from any real engine, so no row means the
@@ -382,8 +386,13 @@ async fn a_metric_binding_a_nonstandard_variable_is_extracted_via_its_declared_v
     );
 }
 
-/// One fetch, not one per metric: six metrics must not mean six identical
-/// queryless GETs in an operator's log. This supersedes an earlier test
+/// One fetch per URL, not one per metric: six metrics must not mean six
+/// identical queryless GETs in an operator's log.
+///
+/// TWO queryless GETs per endpoint since 2026-09-28, at different URLs and
+/// asking different questions: the endpoint's own description (SPARQL 1.1
+/// Service Description's discovery rule) and `/.well-known/void` (VoID's).
+/// Each is pinned at exactly one. This supersedes an earlier test
 /// (`a_probe_kind_with_no_implementation_issues_no_request`, removed) that
 /// pinned `FetchWellKnown` issuing *no* request at all -- true only while it
 /// had no probe. Now that it does, the invariant worth pinning is "exactly
@@ -406,9 +415,26 @@ async fn the_sweep_fetches_the_description_once_per_endpoint() {
     let url = format!("{}/sparql", server.uri());
     let Sweep { rows, declarations_read: _declarations_read, not_measured: _not_measured, content_samples: _content_samples, failed_endpoints: _failed_endpoints } = without_deadlocking(run_sweep(std::slice::from_ref(&url), &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap(), &Default::default(), &mut common::discarding())).await.unwrap();
 
-    let queryless = server.received_requests().await.unwrap().iter()
-        .filter(|r| r.method == Method::GET && r.url.query().is_none()).count();
-    assert_eq!(queryless, 1, "expected exactly one queryless fetch per endpoint");
+    // COUNTED BY PATH, because there are now two queryless GETs per endpoint
+    // and they ask different questions of different URLs. The invariant this
+    // test was written for is unchanged and still pinned below: however many
+    // metrics want the endpoint's own description, the sweep fetches it ONCE.
+    let requests = server.received_requests().await.unwrap();
+    let queryless = |p: &str| {
+        requests
+            .iter()
+            .filter(|r| r.method == Method::GET && r.url.query().is_none() && r.url.path() == p)
+            .count()
+    };
+    assert_eq!(queryless("/sparql"), 1, "expected exactly one queryless fetch per endpoint");
+    // And the second one is pinned the same way, for the same reason: the
+    // well-known VoID location is a fixed URL, so two metrics asking it would
+    // be two identical GETs in somebody's log.
+    assert_eq!(
+        queryless("/.well-known/void"),
+        1,
+        "expected exactly one well-known VoID fetch per endpoint"
+    );
     assert_eq!(rows.len(), measured(&defs));
 }
 
