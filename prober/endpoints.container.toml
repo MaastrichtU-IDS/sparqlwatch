@@ -131,11 +131,65 @@ endpoint = [
   "https://fdp.dcc.sib.swiss/store/fdp/sparql",
   "http://rdf.corpora.uni-leipzig.de/sparql",
   "https://bio2rdf.org/sparql",
-  "http://sparql.glygen.org:8880/sparql",
   # Retired 2026-09-27: neXtProt was archived upstream and the URL now
   # redirects to expasy.org/archives/nextprot. Kept so the answer to
   # "where was it" survives; never probed. See registry::load_inactive.
   { url = "https://sparql.nextprot.org/", inactive = "archived upstream at https://www.expasy.org/archives/nextprot" },
+  # --- from the LOD Cloud, admitted 2026-09-28 ---
+  #
+  # The 51 endpoints that answered the reconnaissance pass over the 537 seeded
+  # but unswept candidates, minus glygen (below) and minus three urls demoted
+  # to alternatives of the services they duplicate. `recon` asked each one
+  # cheap query, once, from inside the cluster; these are the ones that replied
+  # with SPARQL results and a success status.
+  #
+  # Their names come from registry/lod-cloud.toml, which already held every one
+  # of them -- seeding was never the gap. The gap was that nothing swept them.
+  "http://caligraph.org/sparql",
+  "http://chemdb.semweb.csdb.cn/sparql",
+  "http://cr.eionet.europa.eu/sparql",
+  "http://data.allie.dbcls.jp/sparql",
+  "http://data.bnf.fr/sparql",
+  "http://data.cnr.it/sparql-proxy/",
+  "http://data.logainm.ie/sparql",
+  "http://data.persee.fr/sparql",
+  "http://dati.camera.it/sparql",
+  "http://dati.isprambiente.it/sparql",
+  "http://environment.data.gov.uk/sparql/bwq/query",
+  "http://id.eaufrance.fr/sparql",
+  "http://id.ndl.go.jp/auth/ndla/",
+  "http://id.ndl.go.jp/auth/ndlsh/",
+  "http://kaiko.getalp.org/sparql",
+  "http://ldf.fi/warsa/sparql",
+  "http://ldf.fi/ww1lod/sparql",
+  "http://libris.kb.se/sparql",
+  "http://linguistic.linkeddata.es/sparql",
+  "http://linkeddata.uriburner.com/sparql",
+  "http://lod.sztaki.hu/sparql",
+  "http://lod.xdams.org/sparql",
+  "http://micro.semweb.csdb.cn/sparql",
+  "http://premon.fbk.eu/sparql",
+  "http://publications.europa.eu/webapi/rdf/sparql",
+  "http://rdf.muninn-project.org/sparql",
+  "http://vocab.getty.edu/sparql",
+  "http://vocab.nerc.ac.uk/sparql/",
+  "http://vocabs.ardc.edu.au/repository/api/sparql/csiro_international-chronostratigraphic-chart_geologic-time-scale-2020",
+  "http://vocabulary.semantic-web.at/PoolParty/sparql/OpenData",
+  "http://vocabulary.semantic-web.at/PoolParty/sparql/semweb",
+  "http://webisa.webdatacommons.org/sparql",
+  "https://api.data.muziekweb.nl/datasets/muziekweborganization/Muziekweb/services/Muziekweb/sparql",
+  "https://api.linkeddata.cultureelerfgoed.nl/datasets/rce/cho/services/cho/sparql",
+  "https://data.epo.org/linked-data/query",
+  "https://data.gov.cz/sparql",
+  "https://data.muziekweb.nl/MuziekwebOrganization/Muziekweb/sparql/Muziekweb",
+  "https://digitaalerfgoed.poolparty.biz/PoolParty/sparql/term/id/cht",
+  "https://digitale.bncf.firenze.sbn.it/openrdf-workbench/repositories/NS/query",
+  "https://mmisw.org/sparql",
+  "https://pgxlod.loria.fr/sparql",
+  "https://projects.dharc.unibo.it/icondataset/sparql",
+  "https://trackloaded.com/sparql-endpoint.php",
+  "https://www.3lgm2.de/sparql",
+  "https://www.snik.eu/sparql",
 ]
 
 # --- services ------------------------------------------------------------
@@ -156,3 +210,44 @@ endpoint = "https://sparql.southgreen.fr/sparql"
   source = "yummydata"
   found = "2026-09-27"
   reason = "406 to every SPARQL Accept; the console, not the endpoint"
+
+[[service]]
+endpoint = "https://dbpedia.org/sparql"
+
+  [[service.alternative]]
+  url = "http://dbpedia.org/sparql"
+  note = "answers the same service; kept so the spelling a catalogue lists resolves here"
+
+[[service]]
+endpoint = "https://opendata.aragon.es/sparql"
+
+  [[service.alternative]]
+  url = "http://opendata.aragon.es/sparql"
+  note = "answers the same service; kept so the spelling a catalogue lists resolves here"
+
+[[service]]
+endpoint = "https://sparql.uniprot.org/sparql"
+
+  [[service.alternative]]
+  url = "http://sparql.uniprot.org"
+  note = "answers the same service; kept so the spelling a catalogue lists resolves here"
+
+# --- glygen, removed from the sweep 2026-09-28 ---
+#
+# `http://sparql.glygen.org:8880/sparql` is not here, and the reason is OURS
+# rather than theirs. Both egress proxies in the path -- the cluster's and the
+# operator's workstation -- refuse port 8880:
+#
+#   HTTP/1.1 403 Forbidden
+#   X-Squid-Error: ERR_ACCESS_DENIED 0
+#
+# so no request this project makes has ever reached glygen. It was published as
+# `unresponsive` for weeks on the strength of a denial generated on our side of
+# the network, which is a false statement about somebody's server.
+#
+# NOT in registry/exclusions.toml: that file means "somebody asked to be left
+# alone", and glygen asked for nothing. Recording it there would put a reason
+# in the record that nobody gave.
+#
+# It stays in registry/lod-cloud.toml, so its name and its url survive. If the
+# egress policy ever allows 8880, it comes back by adding one line here.
