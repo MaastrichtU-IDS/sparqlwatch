@@ -1,0 +1,26 @@
+# Where one endpoint's own description was served from, if this service read
+# one.
+#
+# ITS OWN QUERY, and a deliberately tiny one. The fact lives on the endpoint in
+# the derived `sw:current` graph beside `sw:declarationsRead`, so reading it
+# costs one pattern; folding it into endpoint_measurements.rq would put an
+# OPTIONAL on a query whose comments spend forty lines explaining why its joins
+# are shaped the way they are, to fetch a value that has nothing to do with a
+# measurement row.
+#
+# Bound only when a description WAS read: the prober writes this fact solely on
+# that branch, so an endpoint publishing nothing readable returns zero rows
+# rather than an empty string. See prober/src/emit.rs.
+#
+# `?endpoint` is substituted by the caller.
+
+PREFIX sw: <urn:sparqlwatch:>
+
+# `?endpoint` is in the projection because pyoxigraph's SEP-0007 substitution
+# requires it there -- the same constraint endpoint_measurements.rq documents at
+# its own head. Without it the query raises rather than filtering.
+SELECT ?endpoint ?source WHERE {
+  GRAPH sw:current {
+    ?endpoint sw:descriptionSource ?source .
+  }
+}

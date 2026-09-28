@@ -24,7 +24,19 @@
     {% endfor %}
   </nav>
 </header>
-<main>
+{# MICRODATA ON THE MAIN ELEMENT, not on a wrapper of its own, so the markup
+   this page already lays out is the markup that carries the data. A page that
+   sets `item_type` becomes one microdata item whose subject is `item_id`;
+   every other page renders exactly what it rendered before.
+
+   WHY MICRODATA AND NOT A SECOND STORY. The endpoint resource already serves
+   RDF under content negotiation, and that representation is a CONSTRUCT over
+   the store, so it cannot assert anything the graph does not hold (see
+   queries/endpoint_description.rq). Microdata here is a THIRD representation
+   of the same resource and is held to the same rule: it uses the same
+   vocabulary, in the same direction, and says strictly LESS. Anything it
+   cannot say safely, it leaves out. #}
+<main{% if item_type %} itemscope itemtype="{{ item_type }}" itemid="{{ item_id }}"{% endif %}>
 {% block content %}{% endblock %}
 </main>
 {# "how we measure" (docs_path) and "VoID" (void_path) stood here and were

@@ -103,6 +103,13 @@ pub struct MeasurementRow {
 pub struct DeclarationsRead {
     pub endpoint: String,
     pub read: bool,
+    /// The URL the description was served from, when one was read: the
+    /// endpoint URL itself per the Service Description spec, or wherever a
+    /// redirect landed.
+    ///
+    /// `None` when nothing was read. Publishing a URL there would assert that
+    /// a document exists at it, which is exactly what `read: false` denies.
+    pub source: Option<String>,
     /// The classes the description named, through `void:classPartition` and
     /// `void:class`. Empty when it named none, which is different from not
     /// having been read at all: `read` answers that.
@@ -1652,7 +1659,7 @@ pub fn emit_endpoint(state: &mut EmitState, facts: EndpointFacts) -> anyhow::Res
             }
         }
         quads.push(Quad::new(
-            NamedOrBlankNode::NamedNode(endpoint),
+            NamedOrBlankNode::NamedNode(endpoint.clone()),
             nn("urn:sparqlwatch:declarationsRead")?,
             Term::Literal(Literal::new_typed_literal(
                 if fact.read { "true" } else { "false" },
@@ -1660,6 +1667,34 @@ pub fn emit_endpoint(state: &mut EmitState, facts: EndpointFacts) -> anyhow::Res
             )),
             graph.clone(),
         ));
+        // WHERE the description was read from, so a reader can check this
+        // service's account against the vendor's own document. A
+        // `urn:sparqlwatch:` predicate rather than a borrowed one: the closest
+        // standard candidates all carry domains we would be asserting falsely
+        // -- `void:dataDump` names a dump of the data, and `dcat:accessURL`
+        // names a distribution's access point, which this is not; it is the
+        // document describing the service.
+        //
+        // A stranger's URL, so it goes through the same IRI check every other
+        // borrowed string does: a redirect can land anywhere, and a
+        // `Location` that is not a valid IRI must cost this fact rather than
+        // the run.
+        if let Some(src) = fact.source.as_deref() {
+            match nn(src) {
+                Ok(source) => quads.push(Quad::new(
+                    NamedOrBlankNode::NamedNode(endpoint),
+                    nn("urn:sparqlwatch:descriptionSource")?,
+                    Term::NamedNode(source),
+                    graph.clone(),
+                )),
+                Err(e) => tracing::warn!(
+                    endpoint = %fact.endpoint,
+                    source = %src,
+                    error = %e,
+                    "skipping descriptionSource: the url the description came from is not a valid IRI"
+                ),
+            }
+        }
     }
 
     // The chunk's terminator, and its last line. Says that this activity
@@ -2007,8 +2042,8 @@ mod tests {
             },
         ];
         let declarations_read = vec![
-            DeclarationsRead { endpoint: "https://a.example/sparql".into(), read: true, classes: Vec::new(), properties: Vec::new() },
-            DeclarationsRead { endpoint: "https://b.example/sparql".into(), read: false, classes: Vec::new(), properties: Vec::new() },
+            DeclarationsRead { endpoint: "https://a.example/sparql".into(), read: true, classes: Vec::new(), properties: Vec::new(), source: None },
+            DeclarationsRead { endpoint: "https://b.example/sparql".into(), read: false, classes: Vec::new(), properties: Vec::new(), source: None },
         ];
         let not_measured = vec![NotMeasured {
             endpoint: "https://b.example/sparql".into(),
@@ -2189,9 +2224,9 @@ mod tests {
             },
         ];
         let declarations_read = vec![
-            DeclarationsRead { endpoint: "https://a.example/sparql".into(), read: true, classes: Vec::new(), properties: Vec::new() },
-            DeclarationsRead { endpoint: "https://b.example/sparql".into(), read: false, classes: Vec::new(), properties: Vec::new() },
-            DeclarationsRead { endpoint: "https://c.example/sparql".into(), read: true, classes: Vec::new(), properties: Vec::new() },
+            DeclarationsRead { endpoint: "https://a.example/sparql".into(), read: true, classes: Vec::new(), properties: Vec::new(), source: None },
+            DeclarationsRead { endpoint: "https://b.example/sparql".into(), read: false, classes: Vec::new(), properties: Vec::new(), source: None },
+            DeclarationsRead { endpoint: "https://c.example/sparql".into(), read: true, classes: Vec::new(), properties: Vec::new(), source: None },
         ];
         let not_measured = vec![
             NotMeasured {
@@ -2433,8 +2468,7 @@ mod tests {
                     endpoint: "https://a.example/sparql".into(),
                     read: true,
                     classes: Vec::new(),
-                    properties: Vec::new(),
-                }],
+                    properties: Vec::new(), source: None }],
                 not_measured: &[],
                 content_samples: &[],
                 content_profiles: &[],
@@ -3447,7 +3481,7 @@ mod tests {
 
     #[test]
     fn declarations_read_emits_a_boolean_quad_shaped_for_the_run() {
-        let facts = vec![DeclarationsRead { endpoint: "https://qlever.dev/api/osm-planet".into(), read: true, classes: Vec::new(), properties: Vec::new() }];
+        let facts = vec![DeclarationsRead { endpoint: "https://qlever.dev/api/osm-planet".into(), read: true, classes: Vec::new(), properties: Vec::new(), source: None }];
         let out = emit_nquads(RunEmission {
             run: &RunId("r1".into()),
             generated_at: "2026-08-20T08:00:00Z",
@@ -3495,8 +3529,7 @@ mod tests {
             endpoint: "https://a.example/sparql".into(),
             read: true,
             classes: vec!["http://xmlns.com/foaf/0.1/Person".into()],
-            properties: vec!["http://xmlns.com/foaf/0.1/name".into()],
-        }];
+            properties: vec!["http://xmlns.com/foaf/0.1/name".into()], source: None }];
         let out = emit_nquads(RunEmission {
             run: &RunId("r1".into()),
             generated_at: "2026-08-20T08:00:00Z",
@@ -3540,8 +3573,7 @@ mod tests {
             endpoint: "https://a.example/sparql".into(),
             read: true,
             classes: vec!["not an iri".into(), "http://ok.example/C".into()],
-            properties: Vec::new(),
-        }];
+            properties: Vec::new(), source: None }];
         let out = emit_nquads(RunEmission {
             run: &RunId("r1".into()),
             generated_at: "2026-08-20T08:00:00Z",
@@ -3568,8 +3600,8 @@ mod tests {
     #[test]
     fn every_endpoint_with_a_fact_gets_its_own_quad_whatever_the_boolean() {
         let facts = vec![
-            DeclarationsRead { endpoint: "https://a.example/sparql".into(), read: true, classes: Vec::new(), properties: Vec::new() },
-            DeclarationsRead { endpoint: "https://b.example/sparql".into(), read: false, classes: Vec::new(), properties: Vec::new() },
+            DeclarationsRead { endpoint: "https://a.example/sparql".into(), read: true, classes: Vec::new(), properties: Vec::new(), source: None },
+            DeclarationsRead { endpoint: "https://b.example/sparql".into(), read: false, classes: Vec::new(), properties: Vec::new(), source: None },
         ];
         let out = emit_nquads(RunEmission {
             run: &RunId("r1".into()),

@@ -458,3 +458,29 @@ def measurements_from_rows(endpoint: str, rows: list) -> EndpointMeasurements:
         verdicts=sorted(verdicts, key=lambda v: v.metric),
         declined=sorted(declined, key=lambda d: d.metric),
     )
+
+
+_DESCRIPTION_SOURCE_QUERY = read_query("endpoint_description_source")
+
+
+def description_source(store: Store, endpoint: str) -> str | None:
+    """The URL this endpoint's own description was served from, or None.
+
+    WHAT IT IS. The SPARQL 1.1 Service Description spec puts a service's
+    description at the endpoint URL itself, dereferenced without a query, and
+    that is what the prober asks for; this is that URL, or wherever a redirect
+    chain landed. So it is the VENDOR's document about their own service, as
+    opposed to everything else on the endpoint page, which is this service's
+    account of what it observed.
+
+    ``None`` means no description was read, and that is different from "the
+    description was empty": the prober publishes this fact only on the branch
+    where something parsed. An endpoint that serves an HTML console at its URL
+    has no source here, which is correct -- there is no document to send a
+    reader to.
+    """
+    for row in store.query(
+        _DESCRIPTION_SOURCE_QUERY, substitutions={_ENDPOINT: NamedNode(endpoint)}
+    ):
+        return row["source"].value
+    return None

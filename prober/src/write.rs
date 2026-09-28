@@ -325,7 +325,7 @@ mod tests {
                 level: None, declared_count: None, observed_count: None,
                 elapsed_ms: Some(12),
             }],
-            declarations_read: vec![DeclarationsRead { endpoint: endpoint.into(), read: true, classes: Vec::new(), properties: Vec::new() }],
+            declarations_read: vec![DeclarationsRead { endpoint: endpoint.into(), read: true, source: None, classes: Vec::new(), properties: Vec::new() }],
             not_measured: vec![NotMeasured {
                 endpoint: endpoint.into(),
                 metric_id: "geo-data".into(),

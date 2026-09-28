@@ -3085,3 +3085,111 @@ def test_one_unreached_sweep_does_not_drag_a_good_day_down(tmp_path):
     day = _daily_series(history)["days"][0]
     assert day["uptime"] == 100.0, day
     assert day["sweeps"] == 3, "the unreached sweep was counted as one we learned from"
+
+
+def _microdata(body: str) -> list:
+    """Every microdata item on the page.
+
+    `tests/microdata.py` rather than `extruct`, and never `importorskip`: a
+    dependency CI does not install turns these into tests that pass by
+    skipping, which is the one outcome worse than not writing them. The markup
+    itself was cross-checked against extruct while it was written -- that is
+    how the double-prefixed `isMeasurementOf` was caught -- and the local
+    extractor reproduces extruct's output on this page item for item.
+    """
+    import microdata
+
+    return microdata.items(body)
+
+
+def test_the_page_is_itself_a_description_of_the_endpoint(client_for, store):
+    """The HTML carries the same identity the RDF representation does.
+
+    A crawler that parses only HTML should get the endpoint's identity without
+    asking for Turtle. `itemid` is the endpoint URL, so the microdata subject
+    and the RDF subject are the same IRI rather than two names for one thing.
+    """
+    from endpoint_index import endpoint_index
+    from urllib.parse import quote
+
+    ep = endpoint_index(store)[0].endpoint
+    body = client_for(store).get(
+        f"/endpoint?url={quote(ep, safe='')}", headers={"accept": "text/html"}
+    ).text
+    services = [
+        i for i in _microdata(body)
+        if i.type == "http://www.w3.org/ns/dcat#DataService"
+    ]
+    assert len(services) == 1, "the page describes exactly one service"
+    assert services[0].id == ep
+    assert services[0].properties["http://www.w3.org/ns/dcat#endpointURL"] == [ep]
+
+
+def test_every_microdata_verdict_is_one_the_rdf_representation_states(client_for, store):
+    """THE rule the third representation is held to: it may say less than the
+    RDF one, never anything else.
+
+    The RDF is a CONSTRUCT over the store, so it cannot assert what the graph
+    does not hold. This checks the microdata against it directly -- every
+    (metric, verdict) pair the HTML publishes must appear in the Turtle, so a
+    template edit cannot invent a verdict. `isMeasurementOf` is compared as a
+    full IRI because an earlier draft double-prefixed it into
+    `urn:sparqlwatch:metric:urn:sparqlwatch:metric:availability`, which
+    extracted perfectly and pointed at nothing.
+    """
+    from endpoint_index import endpoint_index
+    from urllib.parse import quote
+
+    ep = endpoint_index(store)[0].endpoint
+    c = client_for(store)
+    q = f"/endpoint?url={quote(ep, safe='')}"
+    body = c.get(q, headers={"accept": "text/html"}).text
+    turtle = c.get(q, headers={"accept": "text/turtle"}).text
+
+    measured = [
+        i for i in _microdata(body)
+        if i.type == "http://www.w3.org/ns/dqv#QualityMeasurement"
+    ]
+    assert measured, "the page published no measurements at all"
+    for item in measured:
+        props = item.properties
+        assert props["http://www.w3.org/ns/dqv#computedOn"] == [ep]
+        (metric,) = props["http://www.w3.org/ns/dqv#isMeasurementOf"]
+        (verdict,) = props["http://www.w3.org/ns/dqv#value"]
+        assert f"<{metric}>" in turtle, (
+            f"the HTML names {metric}, which the RDF representation does not"
+        )
+        assert f'"{verdict}"' in turtle, (
+            f"the HTML publishes the verdict {verdict!r}, which the RDF does not state"
+        )
+
+
+def test_a_declined_row_publishes_no_measurement(client_for, store_no_availability_two_ways):
+    """A decline is not a measurement, and the RDF gives it its own type.
+
+    Marking one would assert that a metric was measured and produced a verdict
+    when the sweep never ran it -- the same claim `NotMeasuredReason` exists to
+    avoid on the prober's side.
+    """
+    from endpoint_index import endpoint_index
+    from urllib.parse import quote
+
+    store = store_no_availability_two_ways
+    entries = {e.endpoint: e for e in endpoint_index(store)}
+    target = next(
+        (e for e in entries.values() if e.declined), None
+    )
+    if target is None:
+        pytest.skip("this store holds no declined metric")
+    body = client_for(store).get(
+        f"/endpoint?url={quote(target.endpoint, safe='')}",
+        headers={"accept": "text/html"},
+    ).text
+    measured = [
+        i for i in _microdata(body)
+        if i.type == "http://www.w3.org/ns/dqv#QualityMeasurement"
+    ]
+    assert len(measured) == len(target.verdicts), (
+        "the page marked up more measurements than the endpoint has verdicts, "
+        "so a decline was published as one"
+    )
