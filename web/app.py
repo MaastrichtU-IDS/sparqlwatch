@@ -57,6 +57,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
 
 from fastapi import Depends, FastAPI, Query, Request, Response
+from starlette.responses import RedirectResponse
 from starlette.middleware.gzip import GZipMiddleware
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from pyoxigraph import (
@@ -94,7 +95,7 @@ from fleet import FleetHistory, fleet_history as _fleet_history, fleet_stats
 from endpoint_measurements import EndpointMeasurements, endpoint_measurements
 from load_run import CURRENT_GRAPH, CURRENT_GRAPH_IRI, pointers_to_missing_runs
 from queries import read_query
-from registry_names import Name, display, load_names
+from registry_names import Name, display, load_aliases, load_names
 
 # ---------------------------------------------------------------------------
 # The URL shape
@@ -554,8 +555,26 @@ def get_store() -> Store:
 # often anyone asks. The opinion belongs next to the handle it depends on.
 @lru_cache(maxsize=4)
 def endpoint_index(store: Store) -> list[EndpointMeasurements]:
-    """`endpoint_index.endpoint_index`, once per store handle."""
-    return _endpoint_index(store)
+    """`endpoint_index.endpoint_index`, once per store handle, minus aliases.
+
+    AN ALIAS IS NOT AN ENDPOINT. The store holds rows under every url a sweep
+    ever asked, and a url demoted to `alternative` or `invalid` was asked
+    before it was demoted -- `emit::subject_iri` embeds it and run graphs are
+    never rewritten, so those rows are permanent. Listing them puts one service
+    on the page twice: AgroLD sat there for a day as a working row beside an
+    identically-named row reporting it unresponsive, because correcting a url
+    creates a second endpoint rather than renaming the first.
+
+    Filtered HERE rather than in `endpoint_index.endpoint_index`, which is a
+    pure function of a store and has no business reading a registry file. This
+    wrapper is already the place where policy about the index lives.
+
+    The rows are not MERGED into the preferred endpoint's. Deciding which of
+    two runs' verdicts is the service's would be a claim this project has no
+    basis for; the history stays reachable under the url that was actually
+    swept, which `/endpoint` still serves.
+    """
+    return [e for e in _endpoint_index(store) if e.endpoint not in _ALIASES]
 
 
 @lru_cache(maxsize=4)
@@ -1855,6 +1874,25 @@ def endpoint_resource(
             ),
             status_code=400,
             media_type="text/plain; charset=utf-8",
+        )
+
+    # AN ALIAS REDIRECTS, before the store is QUERIED -- though not before it
+    # is opened, since FastAPI resolves `Depends(get_store)` to call this
+    # function at all. The url names a
+    # service this registry knows under a different spelling, so the answer is
+    # "it is over there" rather than a page: two urls serving one service's
+    # description would publish the same facts at two identifiers, and a reader
+    # arriving from a catalogue that still lists the old spelling should land on
+    # the service rather than on a row that says nothing.
+    #
+    # 301 and not 302: the demotion is a curation decision recorded in a file,
+    # not a temporary state of this deployment, and a catalogue that follows it
+    # should update its own copy. `quote` with an empty safe set, matching
+    # every other place this service builds an endpoint link.
+    if url in _ALIASES:
+        return RedirectResponse(
+            ENDPOINT_PATH + "?url=" + quote(_ALIASES[url], safe=""),
+            status_code=301,
         )
 
     # A url that cannot be an absolute IRI cannot name an endpoint, and both
@@ -4885,6 +4923,26 @@ def _registry_load_order(directory: Path) -> list[Path]:
 
 
 _NAMES: dict[str, Name] = load_names(_registry_load_order(_REGISTRY_DIR))
+
+# Where the `[[service]]` records live: beside the sweep list, because the rule
+# they carry is "never ask this", and a rule about what a sweep may ask belongs
+# in the file the sweep reads. `prober/registry/` governs NAMES and its
+# precedence order is about which catalogue names an endpoint; folding these in
+# there would mix the two questions.
+#
+# Both spellings of the list are read and merged. They differ only in how the
+# synthetic endpoint is addressed (127.0.0.1 versus a sibling container), so
+# their service records are the same; reading both means the site is right
+# whichever one the deployment sweeps with.
+_ENDPOINT_LISTS = [
+    _REGISTRY_DIR.parent / name
+    for name in ("endpoints.toml", "endpoints.container.toml")
+]
+
+# Every demoted url mapped to the endpoint it belongs to. See
+# docs/superpowers/specs/2026-09-28-service-identity-design.md: the store keeps
+# rows under whatever url was swept, permanently, so resolution happens here.
+_ALIASES: dict[str, str] = load_aliases(_ENDPOINT_LISTS)
 
 
 # The one stylesheet. Assembled at import from the static file plus the verdict

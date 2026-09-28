@@ -3649,3 +3649,96 @@ def test_a_retired_endpoint_is_still_on_the_page(client_for, store_dormant_inact
         "a retired endpoint vanished from the page it was retired to stay on"
     )
     assert 'data-availability-state="inactive"' in body
+
+
+def test_an_alias_is_not_listed_as_its_own_endpoint(client_for, store, monkeypatch):
+    """THE row that appeared twice.
+
+    The store keeps rows under every url a sweep ever asked, and a url demoted
+    to `alternative` or `invalid` was asked before it was demoted -- those rows
+    are permanent, because `emit::subject_iri` embeds the url and run graphs
+    are never rewritten. Listing them puts one service on the page twice, which
+    is exactly what AgroLD did for a day: a working row beside an
+    identically-named row reporting it unresponsive.
+    """
+    import app
+    from endpoint_index import endpoint_index as raw_index
+
+    swept = [e.endpoint for e in raw_index(store)]
+    assert len(swept) >= 2, "this store needs two endpoints for the test to mean anything"
+    demoted, preferred = swept[0], swept[1]
+
+    monkeypatch.setattr(app, "_ALIASES", {demoted: preferred})
+    app.endpoint_index.cache_clear()
+    try:
+        listed = [e.endpoint for e in app.endpoint_index(store)]
+        assert demoted not in listed, "an alias was listed as an endpoint of its own"
+        assert preferred in listed, "the preferred endpoint lost its row"
+        assert len(listed) == len(swept) - 1
+    finally:
+        app.endpoint_index.cache_clear()
+
+
+def test_an_alias_redirects_to_the_endpoint_it_belongs_to(client_for, store, monkeypatch):
+    """A reader arriving from a catalogue that still lists the old spelling
+    lands on the service, not on a row that says nothing.
+
+    301 rather than 302: the demotion is a curation decision recorded in a
+    file, not a temporary state of this deployment.
+    """
+    import app
+    from urllib.parse import quote
+
+    demoted = "http://alias.test/"
+    preferred = "https://alias.test/sparql"
+    monkeypatch.setattr(app, "_ALIASES", {demoted: preferred})
+
+    r = client_for(store).get(
+        f"/endpoint?url={quote(demoted, safe='')}",
+        headers={"accept": "text/html"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 301, r.status_code
+    assert r.headers["location"] == "/endpoint?url=" + quote(preferred, safe="")
+
+
+def test_a_url_that_is_not_an_alias_is_not_redirected(client_for, store, monkeypatch):
+    """The mutation guard: redirecting everything would pass the test above."""
+    import app
+    from urllib.parse import quote
+    from endpoint_index import endpoint_index as raw_index
+
+    known = raw_index(store)[0].endpoint
+    monkeypatch.setattr(app, "_ALIASES", {"http://alias.test/": "https://alias.test/sparql"})
+    r = client_for(store).get(
+        f"/endpoint?url={quote(known, safe='')}",
+        headers={"accept": "text/html"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 200, f"a real endpoint was redirected: {r.status_code}"
+
+
+def test_the_shipped_registry_redirects_the_url_that_caused_this(client_for, store):
+    """Against the REAL alias map, not a monkeypatched one.
+
+    `http://sparql.southgreen.fr/` is the URL YummyData publishes, the one that
+    answers 406 to every SPARQL Accept, and the one that sat on the page for a
+    day as a second AgroLD row reporting the service unresponsive. If the
+    service record for it is ever edited away, this fails rather than the page
+    quietly growing that row back.
+    """
+    from urllib.parse import quote
+    import app
+
+    demoted = "http://sparql.southgreen.fr/"
+    preferred = "https://sparql.southgreen.fr/sparql"
+    assert app._ALIASES.get(demoted) == preferred, (
+        "the shipped registry no longer resolves the URL this whole design came from"
+    )
+    r = client_for(store).get(
+        f"/endpoint?url={quote(demoted, safe='')}",
+        headers={"accept": "text/html"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 301
+    assert r.headers["location"] == "/endpoint?url=" + quote(preferred, safe="")

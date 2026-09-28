@@ -378,6 +378,68 @@ the answers are about the endpoints rather than about a middlebox.
 
 Admitting an endpoint is a hand edit of `endpoints.toml`. Nothing automates it.
 
+### Services: preferred, alternative, invalid
+
+A registry file may name **services** rather than bare URLs. One record, the
+URLs that point at it:
+
+```toml
+[[service]]
+endpoint = "https://sparql.southgreen.fr/sparql"   # the only one swept
+
+  [[service.alternative]]
+  url  = "http://sparql.southgreen.fr/sparql"
+  note = "http; redirects to the https form"
+
+  [[service.invalid]]
+  url    = "http://sparql.southgreen.fr/"
+  source = "yummydata"
+  reason = "406 to every SPARQL Accept; the console, not the endpoint"
+```
+
+| | asserts | swept |
+| --- | --- | --- |
+| `endpoint` | this is the service's SPARQL endpoint | yes |
+| `alternative` | another spelling of the SAME service | never |
+| `invalid` | a URL somebody published that is NOT this endpoint | never |
+
+**Why it exists.** A registry of URLs cannot say that two URLs are one service,
+and three failures in one week came from that. AgroLD was swept at a URL that
+answers `406` to every SPARQL Accept and was published as a server that does not
+speak the protocol. Correcting that URL created a *second* endpoint rather than
+fixing the first, so the page carried one service twice — identically named, one
+row working and one reporting it unresponsive. And the reconnaissance pass found
+six live hosts listed under two schemes each, which as listed would put six more
+services on the page twice.
+
+**Resolution happens on the read side, and it has to.** `emit::subject_iri`
+embeds the endpoint URL in every subject and run graphs are never rewritten, so
+a row published under a spelling since demoted is permanent. The site resolves
+it: an alias is not listed in the index, and `/endpoint` for one answers `301`
+to the preferred URL. The measurement history is **not** merged — deciding which
+of two runs' verdicts is "the service's" would be a claim nothing supports, so it
+stays reachable under the URL that was actually asked.
+
+**Alternates are curated, never inferred.** `http://` and `https://` on one host
+look like one service, and five such pairs sit in `lod-cloud.toml` — but
+southgreen is precisely the case where two near-identical URLs behaved
+completely differently, and "same service" is not provable by probing.
+`seed-registry` is unchanged and still writes one entry per URL; `recon` may
+report candidate pairs, and a person makes the claim.
+
+`load_services` refuses a file that claims one URL twice **and differently** — as
+one service's endpoint and another's `invalid`, say, which has two opposite
+readings. A plain repeat is not a contradiction and passes through to `dedupe`,
+which has always dropped it with a warning.
+
+The legacy `[[endpoint]]` shape — a bare string or a table — keeps working, and
+all 543 seeded entries still use it. A file naming neither key is a load error
+rather than an empty list: an empty list sweeps nothing and exits 0, so
+`--endpoints` aimed at the wrong file would look like a quiet healthy run. Say
+`endpoint = []` to mean it.
+
+Full design: `docs/superpowers/specs/2026-09-28-service-identity-design.md`.
+
 ### Retiring an endpoint
 
 An endpoint entry may carry `inactive = "<why>"`, which means the service is
@@ -405,15 +467,11 @@ the next person does not have to guess whether an endpoint was archived, moved,
 or merely troublesome. Only a person editing this file can undo it — no
 observation the prober makes will resume an inactive endpoint.
 
-It also covers a **superseded** URL, which is the same decision for a different
-fact. Correcting a URL does not rename an endpoint: it creates a second one,
-and the first keeps its row, because `rebuild_current` drops an endpoint only
-once no retained run graph mentions it. Left alone, the old URL is swept out of
-the list but stays on the page for as long as the history does, reporting a
-working service as unresponsive under a name a reader recognises. Marking it
-`inactive` instead keeps the row doing the one job it is still good for:
-telling somebody holding that URL where the service actually is.
-`sparql.southgreen.fr` is the worked example.
+`inactive` is a property of the **service**, never of a URL. A URL that was
+superseded is an `alternative` or an `invalid` on its service — see Services
+above. southgreen's old URL was marked `inactive` for a day before that
+distinction existed, which claimed the service was gone when only its address
+had changed.
 
 ### Asking not to be probed
 

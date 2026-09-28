@@ -91,9 +91,150 @@ pub struct RegistryEntry {
     pub inactive: Option<String>,
 }
 
+/// One SERVICE, with the URLs that name it.
+///
+/// THE UNIT THIS FILE IS ABOUT. `RegistryEntry` records a URL; this records the
+/// thing a URL points at, and the difference is what three failures in one week
+/// came down to -- see
+/// `docs/superpowers/specs/2026-09-28-service-identity-design.md`. AgroLD was
+/// swept at a URL that answers `406` to every SPARQL Accept and was published
+/// as a server that does not speak the protocol; correcting the URL created a
+/// SECOND endpoint rather than fixing the first, because a registry of URLs has
+/// no way to say "these are the same service"; and the reconnaissance pass
+/// found six live hosts listed under two schemes each, which as listed would
+/// put six services on the page twice.
+///
+/// Modelled on Bioregistry, which this project's operator named as the
+/// precedent: one record per resource, `uri_format` canonical, `providers[]`
+/// alternate, and any observed form resolving TO the record.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Service {
+    /// The preferred URL, and the ONLY one any sweep probes.
+    pub endpoint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub datasets: Option<u32>,
+    /// Why no sweep asks this SERVICE again. See `RegistryEntry::inactive`.
+    ///
+    /// A property of the service and not of a URL, which is the distinction
+    /// this struct exists to make: a URL that was superseded is an
+    /// `alternative` or an `invalid`, and saying `inactive` of it -- as this
+    /// project did for southgreen on 2026-09-27 -- claims the service is gone
+    /// when only its address changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inactive: Option<String>,
+    /// Other spellings of the SAME service. Never probed.
+    ///
+    /// Kept so a reader holding one is brought here, and so a row published
+    /// under one before it was demoted resolves here rather than standing as a
+    /// second service.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alternative: Vec<Alias>,
+    /// URLs somebody published that are NOT this service's endpoint. Never
+    /// probed.
+    ///
+    /// Distinct from `alternative` because they assert opposite things: an
+    /// alternative WORKS and is another way to reach the service, an invalid
+    /// one does not and is recorded so that nothing re-adds it and so a reader
+    /// who finds it in a catalogue learns why it is not here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub invalid: Vec<Alias>,
+}
+
+/// A URL that names a service without being the one we ask.
+///
+/// `note`/`reason` are free text and nothing parses them. They exist because a
+/// bare list of demoted URLs makes the next person guess whether one was a
+/// redirect, an old hostname, or a catalogue's mistake -- and guessing wrong is
+/// how an invalid URL gets promoted back into a sweep.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Alias {
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// Which catalogue published it, for an `invalid` one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub found: Option<String>,
+}
+
+impl Service {
+    /// Every URL this service answers to, preferred first.
+    pub fn urls(&self) -> impl Iterator<Item = &str> {
+        std::iter::once(self.endpoint.as_str())
+            .chain(self.alternative.iter().map(|a| a.url.as_str()))
+            .chain(self.invalid.iter().map(|a| a.url.as_str()))
+    }
+
+    /// The URLs that are NOT the endpoint: everything a sweep must not ask and
+    /// the site must resolve.
+    pub fn aliases(&self) -> impl Iterator<Item = &str> {
+        self.alternative
+            .iter()
+            .chain(self.invalid.iter())
+            .map(|a| a.url.as_str())
+    }
+}
+
+impl From<RegistryEntry> for Service {
+    fn from(e: RegistryEntry) -> Service {
+        Service {
+            endpoint: e.url,
+            title: e.title,
+            domain: e.domain,
+            datasets: e.datasets,
+            inactive: e.inactive,
+            alternative: Vec::new(),
+            invalid: Vec::new(),
+        }
+    }
+}
+
 #[derive(Deserialize)]
 struct EndpointFile {
-    endpoint: Vec<Entry>,
+    /// The legacy shape: one entry per URL, a bare string or a table. Kept
+    /// because 543 seeded entries and every hand-kept list use it, and a
+    /// schema change that required rewriting them all on day one would be a
+    /// change nobody could land incrementally.
+    ///
+    /// `Option`, not a defaulted `Vec`, so that ABSENT and EMPTY stay
+    /// distinguishable. With both keys defaulted, `nonsense = 1` parsed as a
+    /// file with no endpoints instead of failing -- so pointing `--endpoints`
+    /// at the wrong file would have swept nothing and reported success, which
+    /// is the failure mode every other loader in this module refuses. An
+    /// explicit `endpoint = []` is still a legitimate empty list.
+    endpoint: Option<Vec<Entry>>,
+    /// The shape this file is moving to. `Option` for the reason above.
+    service: Option<Vec<Service>>,
+}
+
+impl EndpointFile {
+    /// Both shapes as one list, legacy entries first so a file mixing them
+    /// keeps the order a reader sees.
+    fn services(self) -> Vec<Service> {
+        self.endpoint
+            .unwrap_or_default()
+            .into_iter()
+            .map(|e| match e {
+                Entry::Url(url) => RegistryEntry {
+                    url,
+                    title: None,
+                    domain: None,
+                    datasets: None,
+                    inactive: None,
+                }
+                .into(),
+                Entry::Described(d) => d.into(),
+            })
+            .chain(self.service.unwrap_or_default())
+            .collect()
+    }
 }
 
 /// Parse `endpoints.toml` and return its endpoint list, each entry once, with
@@ -112,18 +253,19 @@ struct EndpointFile {
 /// reports `deduped_position` in the list it was handed, and the second is not
 /// a line in `endpoints.toml` whenever a duplicate came before it.
 pub fn load_endpoints(toml_text: &str, excluded: &[Exclusion]) -> anyhow::Result<Vec<String>> {
-    let file: EndpointFile = toml::from_str(toml_text)?;
+    let services = load_services(toml_text)?;
+    // PREFERRED URLS ONLY. An `alternative` is another spelling of a service
+    // this list already names, so sweeping it would ask one server twice and
+    // publish it as two; an `invalid` one is a URL we have established is not
+    // the endpoint, and asking it again would re-publish the finding that got
+    // AgroLD reported as not speaking SPARQL for weeks. Neither may reach a
+    // sweep, and `load_services` has already refused a file where one of them
+    // is also somebody's endpoint.
+    //
     // The sweep path wants URLs and nothing else, so the extra fields stop
     // here. Every rule below this line judges the string, and none of them
     // has an opinion about a title.
-    let urls: Vec<String> = file
-        .endpoint
-        .into_iter()
-        .map(|e| match e {
-            Entry::Url(u) => u,
-            Entry::Described(d) => d.url,
-        })
-        .collect();
+    let urls: Vec<String> = services.into_iter().map(|s| s.endpoint).collect();
     let deduped = dedupe(&urls);
     let named = without_credentials(&deduped);
     // Before the two rules that judge the string itself, so an excluded host
@@ -158,29 +300,97 @@ pub fn load_endpoints(toml_text: &str, excluded: &[Exclusion]) -> anyhow::Result
 /// those grounds, and naming it here as well is harmless: `main` only ever
 /// subtracts this set from that one.
 pub fn load_inactive(toml_text: &str) -> anyhow::Result<Vec<String>> {
-    let file: EndpointFile = toml::from_str(toml_text)?;
-    Ok(file
-        .endpoint
+    Ok(load_services(toml_text)?
         .into_iter()
-        .filter_map(|e| match e {
-            Entry::Url(_) => None,
-            Entry::Described(d) => d.inactive.as_ref().map(|_| d.url),
-        })
+        .filter(|s| s.inactive.is_some())
+        .map(|s| s.endpoint)
         .collect())
 }
 
 pub fn load_registry(toml_text: &str) -> anyhow::Result<Vec<RegistryEntry>> {
-    let file: EndpointFile = toml::from_str(toml_text)?;
-    Ok(file
-        .endpoint
+    Ok(load_services(toml_text)?
         .into_iter()
-        .map(|e| match e {
-            Entry::Url(url) => {
-                RegistryEntry { url, title: None, domain: None, datasets: None, inactive: None }
-            }
-            Entry::Described(d) => d,
+        .map(|s| RegistryEntry {
+            url: s.endpoint,
+            title: s.title,
+            domain: s.domain,
+            datasets: s.datasets,
+            inactive: s.inactive,
         })
         .collect())
+}
+
+/// Every service a registry file names, both spellings of the file read as one.
+///
+/// REFUSES A URL WHOSE ROLE IS CONTRADICTED, naming both claims. A URL that is
+/// one service's endpoint and another's `invalid` has two opposite readings --
+/// sweep it, never sweep it -- and picking one silently is how a file comes to
+/// mean something nobody decided. `read_exclusions` sets the precedent: a
+/// registry that cannot be read unambiguously stops the run rather than
+/// guessing.
+///
+/// A PLAIN REPEAT IS NOT A CONTRADICTION, and passes through to `dedupe`, which
+/// has always dropped it with a warning. `endpoints.toml` lists Wikidata and
+/// Bio2RDF twice today, and the seeded list exists because 725 `access_url`
+/// entries collapse to 548 distinct URLs: repetition is the expected case here,
+/// not the exotic one. The first draft of this function refused it and failed a
+/// file that works; `the_shipped_lists_sweep_no_alias` caught that.
+pub fn load_services(toml_text: &str) -> anyhow::Result<Vec<Service>> {
+    let file: EndpointFile = toml::from_str(toml_text)?;
+    // Neither key present: this is not an endpoint list. Failing beats
+    // returning an empty one, because an empty list sweeps nothing and says
+    // so with a success exit -- so `--endpoints` aimed at the wrong file would
+    // look like a quiet, healthy, useless run.
+    if file.endpoint.is_none() && file.service.is_none() {
+        anyhow::bail!(
+            "this file names neither `endpoint` nor `service`, so it is not an endpoint list; \
+             an empty list is spelled `endpoint = []`"
+        );
+    }
+    let services = file.services();
+    // url -> (the endpoint claiming it, the role it was claimed in)
+    let mut seen: std::collections::BTreeMap<String, (String, &'static str)> =
+        std::collections::BTreeMap::new();
+    for svc in &services {
+        let claims = std::iter::once((svc.endpoint.as_str(), "the endpoint"))
+            .chain(svc.alternative.iter().map(|a| (a.url.as_str(), "an alternative")))
+            .chain(svc.invalid.iter().map(|a| (a.url.as_str(), "invalid")));
+        for (url, role) in claims {
+            match seen.get(url) {
+                Some((owner, first_role)) if owner != &svc.endpoint || *first_role != role => {
+                    anyhow::bail!(
+                        "the registry claims '{url}' twice and differently: as {first_role} of \
+                         '{owner}', and as {role} of '{}'. Whether a sweep may ask it then has \
+                         two answers; give it one home",
+                        svc.endpoint
+                    );
+                }
+                // A plain repeat of the same claim. `dedupe` handles it.
+                Some(_) => {}
+                None => {
+                    seen.insert(url.to_string(), (svc.endpoint.clone(), role));
+                }
+            }
+        }
+    }
+    Ok(services)
+}
+
+/// Every non-preferred URL, mapped to the endpoint it belongs to.
+///
+/// This is the whole read side of the design: the store permanently holds rows
+/// under whatever URL was swept at the time, because `emit::subject_iri`
+/// embeds it and run graphs are never rewritten. So nothing can re-identify
+/// history -- the site resolves it instead, and this is the map it resolves
+/// with.
+pub fn load_aliases(toml_text: &str) -> anyhow::Result<Vec<(String, String)>> {
+    let mut out = Vec::new();
+    for svc in load_services(toml_text)? {
+        for alias in svc.aliases() {
+            out.push((alias.to_string(), svc.endpoint.clone()));
+        }
+    }
+    Ok(out)
 }
 
 /// `endpoints` with every entry naming the local machine or a private network
@@ -1745,13 +1955,175 @@ mod inactive_tests {
         assert_eq!(
             retired,
             vec![
-                // Not retired but SUPERSEDED, and kept for the same reason:
-                // somebody holding this URL should be told where the service
-                // went rather than shown a row calling it unresponsive.
-                "http://sparql.southgreen.fr/".to_string(),
+                // ONLY nextProt. southgreen was here until the service schema
+                // landed, and it was the wrong word for it: `inactive` says
+                // the service is gone, and southgreen's had only moved. It is
+                // now an `invalid` alias of its own endpoint, which says the
+                // true thing -- see `service_tests`.
                 "https://sparql.nextprot.org/".to_string(),
             ],
             "the set of endpoints this project has retired changed"
         );
+    }
+}
+
+#[cfg(test)]
+mod service_tests {
+    use super::*;
+
+    const FILE: &str = r#"
+        endpoint = [
+          "https://plain.test/sparql",
+          { url = "https://described.test/sparql", title = "Described" },
+        ]
+
+        [[service]]
+        endpoint = "https://svc.test/sparql"
+        title = "A Service"
+
+          [[service.alternative]]
+          url = "http://svc.test/sparql"
+          note = "http; redirects"
+
+          [[service.invalid]]
+          url = "http://svc.test/"
+          reason = "406 to every SPARQL Accept"
+    "#;
+
+    #[test]
+    fn both_spellings_of_the_file_load_as_services() {
+        // The legacy shape has to keep working: 543 seeded entries and every
+        // hand-kept list use it, and a schema nobody can adopt incrementally
+        // is a schema that does not land.
+        let svcs = load_services(FILE).unwrap();
+        assert_eq!(
+            svcs.iter().map(|s| s.endpoint.as_str()).collect::<Vec<_>>(),
+            ["https://plain.test/sparql", "https://described.test/sparql", "https://svc.test/sparql"]
+        );
+        assert_eq!(svcs[1].title.as_deref(), Some("Described"));
+        assert_eq!(svcs[2].alternative.len(), 1);
+        assert_eq!(svcs[2].invalid[0].reason.as_deref(), Some("406 to every SPARQL Accept"));
+    }
+
+    #[test]
+    fn a_sweep_asks_the_preferred_url_and_never_an_alias() {
+        // THE failure this schema exists for. An alternative is the same
+        // server, so asking it publishes one service as two; an invalid one is
+        // the URL that got AgroLD reported as not speaking SPARQL for weeks.
+        let urls = load_endpoints(FILE, &[]).unwrap();
+        assert!(urls.contains(&"https://svc.test/sparql".to_string()));
+        for alias in ["http://svc.test/sparql", "http://svc.test/"] {
+            assert!(!urls.contains(&alias.to_string()), "a sweep would have asked {alias}");
+        }
+    }
+
+    #[test]
+    fn every_alias_resolves_to_its_endpoint() {
+        let mut aliases = load_aliases(FILE).unwrap();
+        aliases.sort();
+        assert_eq!(
+            aliases,
+            vec![
+                ("http://svc.test/".to_string(), "https://svc.test/sparql".to_string()),
+                ("http://svc.test/sparql".to_string(), "https://svc.test/sparql".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_url_under_two_services_is_refused_rather_than_guessed() {
+        // Sweep it or never sweep it: two answers, and picking one silently is
+        // how a registry comes to mean something nobody decided.
+        let clash = r#"
+            [[service]]
+            endpoint = "https://a.test/sparql"
+              [[service.invalid]]
+              url = "https://b.test/sparql"
+
+            [[service]]
+            endpoint = "https://b.test/sparql"
+        "#;
+        let err = load_services(clash).unwrap_err().to_string();
+        // The message has to name the URL and BOTH claims, because the fix is
+        // to delete one of them and a reader cannot do that without knowing
+        // where they are.
+        assert!(err.contains("https://b.test/sparql"), "{err}");
+        assert!(err.contains("invalid of 'https://a.test/sparql'"), "{err}");
+        assert!(err.contains("the endpoint of 'https://b.test/sparql'"), "{err}");
+        // And the refusal reaches the sweep path, which is what matters.
+        assert!(load_endpoints(clash, &[]).is_err());
+    }
+
+    #[test]
+    fn a_url_that_is_both_alternative_and_invalid_is_refused() {
+        let contradiction = r#"
+            [[service]]
+            endpoint = "https://a.test/sparql"
+              [[service.alternative]]
+              url = "http://a.test/sparql"
+              [[service.invalid]]
+              url = "http://a.test/sparql"
+        "#;
+        assert!(load_services(contradiction).is_err(), "it works and it does not work");
+    }
+
+    #[test]
+    fn inactive_is_a_property_of_the_service() {
+        let retired = r#"
+            [[service]]
+            endpoint = "https://gone.test/sparql"
+            inactive = "archived upstream"
+        "#;
+        assert_eq!(load_inactive(retired).unwrap(), vec!["https://gone.test/sparql".to_string()]);
+    }
+
+    #[test]
+    fn an_alias_is_never_reported_inactive() {
+        // The bug this schema replaces: southgreen's superseded URL was marked
+        // `inactive`, which says the SERVICE is gone. It was not; its address
+        // changed. An alias must not be published as a retirement.
+        assert!(load_inactive(FILE).unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_shipped_lists_sweep_no_alias() {
+        // Against the real files, because the thing that breaks this is a hand
+        // edit promoting an alias back into the endpoint array.
+        for name in ["endpoints.toml", "endpoints.container.toml"] {
+            let text = std::fs::read_to_string(name).unwrap();
+            let swept = load_endpoints(&text, &[]).unwrap();
+            for (alias, endpoint) in load_aliases(&text).unwrap() {
+                assert!(
+                    !swept.contains(&alias),
+                    "{name} sweeps {alias}, which is an alias of {endpoint}"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod not_a_list_tests {
+    use super::*;
+
+    #[test]
+    fn a_file_naming_neither_key_is_a_load_error_not_an_empty_sweep() {
+        // The regression the service schema nearly shipped. Both keys became
+        // `#[serde(default)]`, so `nonsense = 1` parsed as a list of no
+        // endpoints: `--endpoints` aimed at the wrong file would have swept
+        // nothing, written a run graph saying so, and exited 0.
+        for text in ["nonsense = 1", "", "[something]\nelse = true"] {
+            assert!(load_services(text).is_err(), "{text:?} loaded as an endpoint list");
+            assert!(load_endpoints(text, &[]).is_err(), "{text:?} reached the sweep path");
+        }
+    }
+
+    #[test]
+    fn an_explicitly_empty_list_is_allowed() {
+        // Distinct from the above, and the reason `Option` is used rather than
+        // a defaulted `Vec`: a person CAN say "sweep nothing" and mean it.
+        assert!(load_services("endpoint = []").unwrap().is_empty());
+        assert!(load_endpoints("endpoint = []", &[]).unwrap().is_empty());
+        assert!(load_services("service = []").unwrap().is_empty());
     }
 }
