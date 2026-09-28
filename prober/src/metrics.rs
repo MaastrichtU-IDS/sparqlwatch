@@ -44,6 +44,22 @@ pub enum ProbeKind {
     /// from being called wrong because the dataset grew since.
     Counted,
     FetchWellKnown,
+    /// Whether the endpoint's host publishes a VoID description at the
+    /// location the VoID spec names for one: `/.well-known/void`.
+    ///
+    /// DISTINCT FROM `FetchWellKnown` DESPITE THAT KIND'S NAME, which is
+    /// legacy: that one dereferences the ENDPOINT URL, because that is where
+    /// SPARQL 1.1 Service Description says a service's description lives. This
+    /// one asks a different URL, derived from the endpoint's origin, because
+    /// VoID states its own discovery rule and it is not the same rule.
+    ///
+    /// The two find genuinely different documents. Measured 2026-09-28:
+    /// `sparql.uniprot.org` serves 1,245 lines of VoID at its endpoint URL and
+    /// nothing at `/.well-known/void`; `sparql.omabrowser.org` does the exact
+    /// opposite, 402 lines of VoID at the well-known location and none at the
+    /// endpoint. Asking only one of the two reports the other publisher as
+    /// having described nothing.
+    FetchVoid,
     /// Enumerate an endpoint's classes, then profile each one: which properties
     /// its instances carry and how many carry each.
     ///
@@ -62,7 +78,7 @@ impl ProbeKind {
     /// Kept honest by `sequence` below rather than by discipline: a
     /// hand-maintained list in a test looks like it enforces coverage and does
     /// not, which is the defect shape this crate keeps finding in itself.
-    pub const ALL: [ProbeKind; 10] = [
+    pub const ALL: [ProbeKind; 11] = [
         ProbeKind::Liveness,
         ProbeKind::Cors,
         ProbeKind::CorsPreflight,
@@ -70,6 +86,7 @@ impl ProbeKind {
         ProbeKind::AskData,
         ProbeKind::SelectIris,
         ProbeKind::FetchWellKnown,
+        ProbeKind::FetchVoid,
         ProbeKind::ClassProfile,
         ProbeKind::VocabularyDescribed,
         ProbeKind::Counted,
@@ -96,6 +113,10 @@ impl ProbeKind {
             | ProbeKind::AskData
             | ProbeKind::SelectIris
             | ProbeKind::FetchWellKnown
+            // A verdict about what the publisher publishes, and the whole
+            // point of the metric: every endpoint gets a row saying whether a
+            // VoID is at the location the spec names.
+            | ProbeKind::FetchVoid
             // Derived: it sends nothing, and grades the profile pass's own
             // results against the description already fetched. A measurement
             // all the same, and the only content verdict there is.
@@ -130,6 +151,9 @@ impl ProbeKind {
             | ProbeKind::AskData
             | ProbeKind::SelectIris
             | ProbeKind::FetchWellKnown
+            // One request at a URL derived from the endpoint's, so the
+            // ordinary per-metric dispatch handles it like any other fetch.
+            | ProbeKind::FetchVoid
             // Sends one aggregate query, so the ordinary dispatch handles it.
             | ProbeKind::Counted => true,
             ProbeKind::ClassProfile | ProbeKind::VocabularyDescribed => false,
@@ -154,9 +178,10 @@ impl ProbeKind {
             ProbeKind::AskData => 4,
             ProbeKind::SelectIris => 5,
             ProbeKind::FetchWellKnown => 6,
-            ProbeKind::ClassProfile => 7,
-            ProbeKind::VocabularyDescribed => 8,
-            ProbeKind::Counted => 9,
+            ProbeKind::FetchVoid => 7,
+            ProbeKind::ClassProfile => 8,
+            ProbeKind::VocabularyDescribed => 9,
+            ProbeKind::Counted => 10,
         }
     }
 
@@ -179,6 +204,7 @@ impl ProbeKind {
             | ProbeKind::AskData
             | ProbeKind::SelectIris
             | ProbeKind::FetchWellKnown
+            | ProbeKind::FetchVoid
             | ProbeKind::ClassProfile
             // Derived, and therefore always "implemented": it sends no request
             // at all, so there is no probe that could be missing.

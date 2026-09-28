@@ -356,6 +356,47 @@ standard candidates carry domains this would assert falsely: `void:dataDump`
 names a dump of the data, `dcat:accessURL` names a distribution's access point,
 and this is neither — it is the document that describes the service.
 
+### The two description locations
+
+Two specifications, two discovery rules, two documents — and a publisher who
+follows one is not necessarily following the other.
+
+| metric | asks | because |
+| --- | --- | --- |
+| `service-description` | the **endpoint URL**, no query | SPARQL 1.1 Service Description says a service describes itself at its own URL |
+| `void-well-known` | `<origin>/.well-known/void` | the VoID spec names that location |
+
+Asking only one of the two reports whichever publisher followed the other rule
+as having described nothing. Both are common. Measured 2026-09-28:
+
+- `sparql.uniprot.org` — 1,245 lines of VoID at its endpoint URL, nothing at
+  the well-known location
+- `sparql.omabrowser.org` — 402 lines at the well-known location, none at its
+  endpoint
+
+The well-known URL is derived from the **origin** and nothing else: scheme,
+host, port, with the endpoint's own path, query and fragment discarded, because
+`/.well-known/` is defined against an origin. `https://host:8890/dataset/sparql`
+asks `https://host:8890/.well-known/void`.
+
+`void-well-known` runs on the **daily** cadence, not hourly. Whether a
+publisher has put a file at a fixed location does not change between breakfast
+and lunch, and it is one more request to somebody else's server — one a night
+per endpoint rather than one an hour.
+
+**A 404 there is `absent`, even when the error page is HTML.** Everywhere else
+in `resolve.rs` an HTML body means we reached a console instead of the thing we
+asked about, and nothing may be concluded from it. This URL is fixed by the
+spec, so a 404 says the publisher has not put a file at it whatever the error
+page is written in — and that is the fact the metric was asked to report. The
+exception is narrow: only 404 and 410, only when the transport succeeded. A
+403, a throttle or a timeout stays `indeterminate`, because those are cases
+where we did not find out.
+
+Note that `ProbeKind::FetchWellKnown`, which backs `service-description`, does
+**not** fetch a well-known URL. The name is legacy from an earlier design and
+`resolve.rs` says so; `FetchVoid` is the kind that dereferences one.
+
 ### Reconnaissance
 
 `recon` asks a registry file's endpoints one cheap query each, once, and writes

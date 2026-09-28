@@ -983,6 +983,12 @@ async fn probe_endpoint(
                     )
                     .await,
                 ProbeKind::SelectIris => client.select_iris(ep, &q, var.as_deref().expect(VAR_REQUIRED)).await,
+                // A fetch at a URL derived from this endpoint's ORIGIN, not at
+                // the endpoint itself. `Client::fetch_void` explains why the
+                // two are different questions; `metrics.toml` carries this on
+                // the daily cadence so it costs an endpoint one extra request
+                // a day rather than one an hour.
+                ProbeKind::FetchVoid => client.fetch_void(ep).await,
                 // One aggregate, read as a literal. `ask_literal` already
                 // extracts literal bindings and a COUNT comes back as one, so
                 // this needs no new client path. It does need the metric's own
