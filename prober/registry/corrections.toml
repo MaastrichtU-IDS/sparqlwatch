@@ -58,3 +58,10 @@ title = "OntoExplorer"
 [[endpoint]]
 url = "http://rdf.corpora.uni-leipzig.de/sparql"
 title = "Open Bantu isiXhosa Lexicon"
+
+# Added at the operator's request, 2026-09-28. An FDP (FAIR Data Point) store,
+# named by a person because no catalogue this project seeds lists it.
+
+[[endpoint]]
+url = "https://fdp.dcc.sib.swiss/store/fdp/sparql"
+title = "SPHN Metadata Catalog"
