@@ -992,7 +992,9 @@ def _from_an_older_sweep(row, measurements: EndpointMeasurements) -> bool:
     )
 
 
-def _rows(measurements: EndpointMeasurements) -> list[dict]:
+def _rows(
+    measurements: EndpointMeasurements, documents: dict[str, str] | None = None
+) -> list[dict]:
     # Verdictless metrics are excluded here, as they are from the index's
     # columns and for the same reason, found by reading a real timeline. A
     # `class-profiles` row drew `not measured` on the days its pass was
@@ -1012,6 +1014,11 @@ def _rows(measurements: EndpointMeasurements) -> list[dict]:
     metric", and a metric the run declined belongs in the same place as the
     others, drawn in the state that says we did not look.
     """
+    # metric IRI -> the vendor document that metric read, when there is one.
+    # THE ROW THAT REPORTS THE FINDING IS THE ROW THAT CARRIES THE LINK: the two
+    # documentation metrics each ask a different URL, and a paragraph above the
+    # table could not say which row it belonged to.
+    documents = documents or {}
     rows = []
     for verdict in measurements.verdicts:
         if not _yields_measurement(verdict.metric):
@@ -1022,6 +1029,7 @@ def _rows(measurements: EndpointMeasurements) -> list[dict]:
             {
                 "metric": verdict.metric,
                 "name": _metric_name(verdict.metric),
+                "document_url": documents.get(verdict.metric),
                 "declined": False,
                 "reason": None,
                 "verdict": verdict.verdict,
@@ -1065,6 +1073,12 @@ def _rows(measurements: EndpointMeasurements) -> list[dict]:
                 "reason": declined.reason,
                 "measured_at": declined.measured_at,
                 "older_sweep": _from_an_older_sweep(declined, measurements),
+                # A DECLINED ROW STILL LINKS ITS DOCUMENT. `void-well-known` is
+                # asked daily, so for 23 hours in 24 its row reads "not
+                # measured" while the document an earlier run found is still
+                # the current answer -- which is exactly when a reader most
+                # wants to see it for themselves.
+                "document_url": documents.get(declined.metric),
                 "verdict": None,
                 "slug": state.slug,
                 "css_class": verdict_encoding.css_class(state.slug),
@@ -1722,7 +1736,14 @@ def _page_context(
     sample means or how a state is drawn. Both of those are decisions with a
     right answer, and they belong where they can be tested.
     """
-    rows = _rows(measurements)
+    # Which metric row links which vendor document. Keyed by metric IRI, so the
+    # template needs no knowledge of which metric reads which URL.
+    documents: dict[str, str] = {}
+    if description_source:
+        documents["urn:sparqlwatch:metric:service-description"] = description_source
+    if void_doc is not None:
+        documents["urn:sparqlwatch:metric:void-well-known"] = void_doc.source
+    rows = _rows(measurements, documents)
     # Hoisted out of the dict literal below, because the vocabulary view now
     # reads it too: the class sample is that list's source when no profile pass
     # exists, and carries the sentences that explain an absent one.

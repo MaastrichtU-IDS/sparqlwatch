@@ -3259,13 +3259,31 @@ def test_the_page_links_the_vendors_own_void(client_for, tmp_path):
     from urllib.parse import quote
     import microdata
 
+    import re
+
     store = _store_with(tmp_path, _WELL_KNOWN_VOID)
     ep = "https://sparql.omabrowser.org/sparql"
     body = client_for(store).get(
         f"/endpoint?url={quote(ep, safe='')}", headers={"accept": "text/html"}
     ).text
-    assert 'data-void-source="https://sparql.omabrowser.org/.well-known/void"' in body, (
-        "the page does not link the vendor's own VoID"
+    # ON ITS OWN METRIC'S ROW, not merely somewhere on the page. The link moved
+    # off a paragraph under the heading and into the `declares` cell at the
+    # owner's request, and "somewhere on the page" would pass for either.
+    rows = {
+        m.group(1).split(":")[-1]: m.group(2)
+        for m in re.finditer(
+            r'<tr class="metric-row" data-metric="([^"]+)"(.*?)</tr>', body, re.S
+        )
+    }
+    assert "void-well-known" in rows, "the page has no void-well-known row"
+    link = re.search(r'data-document-source="([^"]+)"', rows["void-well-known"])
+    assert link and link.group(1) == "https://sparql.omabrowser.org/.well-known/void", (
+        "the VoID is not linked from its own row's declares cell"
+    )
+    # And the other documentation metric links ITS document, not this one.
+    other = re.search(r'data-document-source="([^"]+)"', rows["service-description"])
+    assert other and other.group(1) != link.group(1), (
+        "both rows link the same document, so the mapping is not per metric"
     )
     svc = microdata.one(body, "http://www.w3.org/ns/dcat#DataService")[0]
     assert svc.properties["urn:sparqlwatch:voidSource"] == [
@@ -3286,6 +3304,6 @@ def test_an_endpoint_with_no_well_known_void_links_nothing(client_for, store):
     body = client_for(store).get(
         f"/endpoint?url={quote(ep, safe='')}", headers={"accept": "text/html"}
     ).text
-    assert "data-void-source" not in body, (
-        "a link to a well-known VoID was shown for an endpoint that has none"
+    assert "data-document-source" not in body, (
+        "a document link was shown for an endpoint that publishes none"
     )
