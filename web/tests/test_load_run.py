@@ -2749,3 +2749,38 @@ def test_warming_an_empty_store_is_harmless(tmp_path):
 
     timings = load_run.warm(Store(str(tmp_path / "s")))
     assert timings["quads read"] == 0
+
+
+def test_a_restart_with_nothing_to_load_still_warms(tmp_path, capsys):
+    """THE case the warm-up exists for, and the one it shipped not covering.
+
+    The site restarts hourly and most restarts have one run file or none. A
+    restart with nothing to load is precisely the one that would otherwise
+    leave the page cache cold -- and `--skip-loaded` returned early before
+    warming, so the first deployment to carry the warm-up printed no warm line
+    at all.
+    """
+    import load_run
+    from pyoxigraph import Store
+
+    store_dir = tmp_path / "store"
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    at = "2026-09-29T03:30:00Z"
+    g, a = f"<urn:sparqlwatch:run:{at}>", f"<urn:sparqlwatch:activity:{at}>"
+    f = runs / f"run-{at}.nq"
+    f.write_bytes(("\n".join([
+        f"{a} <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/prov#Activity> {g} .",
+        f'{a} <http://www.w3.org/ns/prov#generatedAtTime> "{at}"^^<http://www.w3.org/2001/XMLSchema#dateTime> {g} .',
+        f"<urn:sparqlwatch:m> <http://www.w3.org/ns/dqv#computedOn> <https://e.test/sparql> {g} .",
+        f"<urn:sparqlwatch:m> <http://www.w3.org/ns/dqv#isMeasurementOf> <urn:sparqlwatch:metric:availability> {g} .",
+        f'<urn:sparqlwatch:m> <http://www.w3.org/ns/dqv#value> "verified" {g} .',
+    ]) + "\n").encode())
+
+    assert load_run.main(["--skip-loaded", str(store_dir), str(f)]) == 0
+    capsys.readouterr()
+    # The second run has nothing to load: the manifest already names the file.
+    assert load_run.main(["--skip-loaded", str(store_dir), str(f)]) == 0
+    out = capsys.readouterr().out
+    assert "0 to load" in out, out
+    assert "warmed the store" in out, f"a restart with nothing to load did not warm:\n{out}"
