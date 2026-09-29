@@ -2277,9 +2277,30 @@ def main(argv: list[str] | None = None) -> int:
             f"{len(pending)} to load"
         )
         if not pending:
-            # Nothing to load means nothing to open. Store() would create the
-            # directory if the path were wrong, and there is no work here that
-            # justifies the risk of that on the hot restart path.
+            # Nothing to load, but there IS work: warming. This is the common
+            # restart -- the site restarts hourly and most restarts have one
+            # file or none -- and it is exactly the one that would otherwise
+            # leave the page cache cold. The warm-up shipped without this and
+            # so never ran on the case it was written for; the deployment's
+            # first restart after it printed no warm line at all.
+            #
+            # Store() would create the directory if the path were wrong, which
+            # is the risk the early return existed to avoid, so the store is
+            # opened only when the path is already a store. Same guard
+            # `--rebuild` and `--check` apply, for the same reason.
+            #
+            # Belt and braces rather than reachable: the manifest that makes
+            # `pending` empty lives beside the store, so a missing store means a
+            # missing manifest, nothing is skipped, and this branch is not
+            # taken. Left in because the cost of being wrong about that is an
+            # empty RocksDB the site then refuses to serve.
+            if Path(args[0]).is_dir():
+                timings = warm(Store(args[0]))
+                read = int(timings.pop("quads read", 0))
+                print(
+                    f"warmed the store: {read:,} quads of current, "
+                    + ", ".join(f"{k} {v:.2f}s" for k, v in timings.items())
+                )
             return 0
     run_paths = [run_paths[i] for i in pending]
     contents = [contents[i] for i in pending]
