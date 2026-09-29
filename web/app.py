@@ -993,7 +993,9 @@ def _from_an_older_sweep(row, measurements: EndpointMeasurements) -> bool:
 
 
 def _rows(
-    measurements: EndpointMeasurements, documents: dict[str, str] | None = None
+    measurements: EndpointMeasurements,
+    documents: dict[str, str] | None = None,
+    declarations: dict[str, int] | None = None,
 ) -> list[dict]:
     # Verdictless metrics are excluded here, as they are from the index's
     # columns and for the same reason, found by reading a real timeline. A
@@ -1019,6 +1021,7 @@ def _rows(
     # documentation metrics each ask a different URL, and a paragraph above the
     # table could not say which row it belonged to.
     documents = documents or {}
+    declarations = declarations or {}
     rows = []
     for verdict in measurements.verdicts:
         if not _yields_measurement(verdict.metric):
@@ -1047,7 +1050,11 @@ def _rows(
                 # for -- and it is drawn beside the verdict, which is what it is
                 # about. A number has no business in that cell and a sentence
                 # has none in a count column.
-                "declared_count": verdict.declared_count,
+                # A metric whose declaration comes from a document rather than
+                # from the count comparison carries it here instead.
+                "declared_count": declarations.get(
+                    verdict.metric, verdict.declared_count
+                ),
                 "observed_count": verdict.observed_count,
                 "detail": _detail(verdict, recognised),
                 "elapsed_ms": verdict.elapsed_ms,
@@ -1743,7 +1750,17 @@ def _page_context(
         documents["urn:sparqlwatch:metric:service-description"] = description_source
     if void_doc is not None:
         documents["urn:sparqlwatch:metric:void-well-known"] = void_doc.source
-    rows = _rows(measurements, documents)
+    # What the well-known VoID CLAIMS for this endpoint, for the `declares`
+    # column of its own row. Present only when the document tied a dataset to
+    # the url we asked and that dataset states a count -- two conditions, and on
+    # the fleet measured 2026-09-29 the first alone held for 2 endpoints of 128.
+    # It is not merged into `triple-count`'s declaration: that comparison grades
+    # an endpoint, and a claim lifted from a document that describes a host
+    # would sometimes be somebody else's.
+    declarations: dict[str, int] = {}
+    if void_doc is not None and void_doc.declared_triples is not None:
+        declarations["urn:sparqlwatch:metric:void-well-known"] = void_doc.declared_triples
+    rows = _rows(measurements, documents, declarations)
     # Hoisted out of the dict literal below, because the vocabulary view now
     # reads it too: the class sample is that list's source when no profile pass
     # exists, and carries the sentences that explain an absent one.

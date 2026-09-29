@@ -1811,9 +1811,45 @@ pub fn emit_endpoint(state: &mut EmitState, facts: EndpointFacts) -> anyhow::Res
             continue;
         };
         let mut copied = 0usize;
+        // WHICH DATASET IN THE DOCUMENT, IF ANY, IS THIS ENDPOINT'S. Recorded
+        // rather than assumed, and this is the whole question the merge into
+        // `declared` turns on.
+        //
+        // A well-known VoID describes a HOST, not an endpoint, and routinely
+        // describes several datasets. omabrowser's names two -- its own and
+        // UniProt's, each with its own `void:sparqlEndpoint` -- so a merge that
+        // took "the counts in this file" would publish UniProt's numbers as
+        // omabrowser's declaration and then grade omabrowser
+        // `declared-but-wrong` against them. That is the harshest verdict in
+        // the vocabulary, awarded for somebody else's data.
+        //
+        // So the tie has to be stated by the document: a dataset counts as this
+        // endpoint's only when it says `void:sparqlEndpoint <the url we asked>`.
+        // Matched EXACTLY. UniProt's own VoID names itself with a trailing
+        // slash it does not use elsewhere, so an exact match misses it -- a
+        // known limitation, left in place deliberately until the count below
+        // says whether widening the rule would buy anything. Guessing is how a
+        // claim gets attributed to the wrong server.
+        let void_endpoint = nn("http://rdfs.org/ns/void#sparqlEndpoint")?;
+        let void_triples = nn("http://rdfs.org/ns/void#triples")?;
+        let mut describes: Option<NamedNode> = None;
+        // Where this document's quads start in `quads`, so the scoped claim can
+        // be read back after the whole document has been seen: a dataset's
+        // `void:triples` may be stated before or after the `void:sparqlEndpoint`
+        // that ties it to us, and a single forward pass would miss one order.
+        let copy_start = quads.len();
         for triple in RdfParser::from_format(format).for_reader(body.as_bytes()) {
             match triple {
                 Ok(t) => {
+                    if t.predicate == void_endpoint {
+                        if let (NamedOrBlankNode::NamedNode(subject), Term::NamedNode(named)) =
+                            (&t.subject, &t.object)
+                        {
+                            if named.as_str() == doc.endpoint {
+                                describes.get_or_insert_with(|| subject.clone());
+                            }
+                        }
+                    }
                     quads.push(Quad::new(t.subject, t.predicate, t.object, copy_graph.clone()));
                     copied += 1;
                 }
@@ -1833,6 +1869,43 @@ pub fn emit_endpoint(state: &mut EmitState, facts: EndpointFacts) -> anyhow::Res
             Term::NamedNode(copy_graph),
             graph.clone(),
         ));
+        // Published only when the document tied a dataset to this endpoint.
+        // Its absence is the interesting case and is readable as such: a
+        // document that describes a host without ever naming the endpoint
+        // cannot have its claims attributed to one.
+        if let Some(dataset) = describes {
+            // WHAT THAT DATASET CLAIMS, lifted out of the copy so the page can
+            // show a number in the `declares` column without a reader having to
+            // query the copy graph themselves. Only `void:triples` for now: it
+            // is the term 8 of 9 documents actually carry, and publishing the
+            // rest before anything reads them would be four predicates nobody
+            // asked for.
+            let declared = quads[copy_start..].iter().find_map(|q| {
+                let subject_matches = matches!(
+                    &q.subject, NamedOrBlankNode::NamedNode(n) if *n == dataset
+                );
+                if subject_matches && q.predicate == void_triples {
+                    if let Term::Literal(l) = &q.object {
+                        return l.value().parse::<u64>().ok();
+                    }
+                }
+                None
+            });
+            quads.push(Quad::new(
+                NamedOrBlankNode::NamedNode(endpoint.clone()),
+                nn("urn:sparqlwatch:voidDataset")?,
+                Term::NamedNode(dataset),
+                graph.clone(),
+            ));
+            if let Some(n) = declared {
+                quads.push(Quad::new(
+                    NamedOrBlankNode::NamedNode(endpoint.clone()),
+                    nn("urn:sparqlwatch:voidDeclaredTriples")?,
+                    Term::Literal(Literal::new_typed_literal(n.to_string(), xsd::INTEGER)),
+                    graph.clone(),
+                ));
+            }
+        }
         quads.push(Quad::new(
             NamedOrBlankNode::NamedNode(endpoint),
             nn("urn:sparqlwatch:voidTriples")?,
@@ -4905,5 +4978,121 @@ mod void_copy_tests {
         let nq = emit(&[doc(true, &broken, "text/turtle")]);
         assert!(nq.contains("void#triples"), "the triples before the error were dropped");
         assert!(nq.contains("urn:sparqlwatch:voidTriples> \"1\""), "the count disagrees with the copy");
+    }
+}
+
+#[cfg(test)]
+mod void_scoping_tests {
+    use super::*;
+
+    fn emit_with(body: &str) -> String {
+        emit_nquads(RunEmission {
+            run: &RunId("R".into()),
+            generated_at: "2026-09-29T00:00:00Z",
+            metric_revision: "rev",
+            rows: &[],
+            declarations_read: &[],
+            void_documents: &[VoidDocument {
+                endpoint: "https://mine.test/sparql".into(),
+                source: "https://mine.test/.well-known/void".into(),
+                valid: true,
+                body: Some(body.into()),
+                content_type: Some("text/turtle".into()),
+            }],
+            not_measured: &[],
+            content_samples: &[],
+            content_profiles: &[],
+            max_cost: Cost::Cheap,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
+        })
+        .unwrap()
+    }
+
+    /// Two datasets, one document: exactly omabrowser's shape, where the
+    /// well-known VoID names its own endpoint AND UniProt's.
+    const TWO: &str = r#"
+        @prefix void: <http://rdfs.org/ns/void#> .
+        <https://mine.test/#ds>  void:sparqlEndpoint <https://mine.test/sparql> ; void:triples 42 .
+        <https://other.test/#ds> void:sparqlEndpoint <https://other.test/sparql> ; void:triples 999999 .
+    "#;
+
+    #[test]
+    fn only_the_dataset_that_names_this_endpoint_is_attributed_to_it() {
+        // THE hazard the whole scoping rule exists for. omabrowser's document
+        // describes its own dataset and UniProt's; attributing "the counts in
+        // this file" would publish UniProt's numbers as omabrowser's
+        // declaration, and `declared-but-wrong` is the harshest verdict in the
+        // vocabulary to award for somebody else's data.
+        let nq = emit_with(TWO);
+        assert!(nq.contains("urn:sparqlwatch:voidDataset> <https://mine.test/#ds>"), "{nq}");
+        assert!(
+            !nq.contains("voidDataset> <https://other.test/#ds>"),
+            "another publisher's dataset was attributed to this endpoint"
+        );
+        assert!(nq.contains("voidDeclaredTriples> \"42\""), "the wrong count, or none");
+        assert!(
+            !nq.contains("voidDeclaredTriples> \"999999\""),
+            "this endpoint was credited with another publisher's count"
+        );
+    }
+
+    #[test]
+    fn a_document_that_names_no_endpoint_attributes_nothing() {
+        // The ordinary case on this fleet: a VoID describes a HOST and never
+        // ties a dataset to the url we asked. Measured 2026-09-29, only 2
+        // endpoints of 128 did. Silence is the answer, not a guess at the only
+        // dataset present.
+        let nq = emit_with(
+            r#"@prefix void: <http://rdfs.org/ns/void#> .
+               <https://mine.test/#ds> void:triples 42 ."#,
+        );
+        assert!(!nq.contains("voidDataset"), "a dataset was attributed with no link to us");
+        assert!(!nq.contains("voidDeclaredTriples"), "a count was attributed with no link to us");
+        // The copy is still kept: the document is evidence whether or not we
+        // can attribute it.
+        assert!(nq.contains("urn:sparqlwatch:voidGraph"), "the copy was dropped too");
+    }
+
+    /// The same two datasets with the OTHER one written FIRST.
+    ///
+    /// Added because the test above passed a mutation that dropped the endpoint
+    /// check entirely: the scan keeps the first `void:sparqlEndpoint` it sees,
+    /// and in that fixture ours was first, so "take any dataset" and "take the
+    /// one that names us" agreed by accident of document order. A document
+    /// listing somebody else first is the ordinary case, not a contrived one --
+    /// nothing says a publisher puts themselves at the top.
+    #[test]
+    fn document_order_does_not_decide_which_dataset_is_ours() {
+        let nq = emit_with(
+            r#"
+            @prefix void: <http://rdfs.org/ns/void#> .
+            <https://other.test/#ds> void:sparqlEndpoint <https://other.test/sparql> ; void:triples 999999 .
+            <https://mine.test/#ds>  void:sparqlEndpoint <https://mine.test/sparql> ; void:triples 42 .
+            "#,
+        );
+        assert!(
+            nq.contains("voidDataset> <https://mine.test/#ds>"),
+            "the dataset that names US was not the one attributed: {nq}"
+        );
+        assert!(
+            !nq.contains("voidDataset> <https://other.test/#ds>"),
+            "the first dataset in the document won, rather than the one naming us"
+        );
+        assert!(nq.contains("voidDeclaredTriples> \"42\""));
+        assert!(!nq.contains("voidDeclaredTriples> \"999999\""));
+    }
+
+    #[test]
+    fn a_scoped_dataset_with_no_count_is_named_without_one() {
+        // omabrowser's real shape: it ties its dataset to its endpoint and
+        // states no void:triples. The tie is worth publishing on its own --
+        // it is what says a merge COULD attribute claims here later.
+        let nq = emit_with(
+            r#"@prefix void: <http://rdfs.org/ns/void#> .
+               <https://mine.test/#ds> void:sparqlEndpoint <https://mine.test/sparql> ."#,
+        );
+        assert!(nq.contains("voidDataset> <https://mine.test/#ds>"));
+        assert!(!nq.contains("voidDeclaredTriples"), "a count was invented");
     }
 }
