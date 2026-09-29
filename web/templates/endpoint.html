@@ -47,6 +47,15 @@
              margin-left: 6px; word-break: normal; text-decoration: none; }
   h1 a.out::after { content: "\2197"; }
   h1 a.out:hover { text-decoration: none; color: var(--accent); }
+  /* The RDF badge in the `declares` cell. `currentColor` throughout, so it
+     inherits the cell's ink and needs no second definition for dark mode --
+     the same reason the chips carry no colour of their own. Muted until
+     hovered: it is evidence a reader can go and check, not a call to action,
+     and a row of accent-coloured icons would pull the eye off the verdicts. */
+  td[data-declared] a.rdf { display: inline-flex; vertical-align: middle;
+                            margin-left: 6px; color: var(--text-muted);
+                            text-decoration: none; }
+  td[data-declared] a.rdf:hover { color: var(--accent); }
   /* Mono and tight, unlike site.css's default h1: the subject of this page is
      a URL, which reads better in the same face as the mono spans beside it,
      and word-break: break-all is what keeps one with no spaces from
@@ -340,27 +349,16 @@
   {%- if name and name != endpoint %}
   <meta itemprop="http://purl.org/dc/terms/title" content="{{ name }}">
   {%- endif %}
+  {# THE VENDOR'S OWN DOCUMENTS are linked from the metric rows that read them,
+     not from here: see the `declares` cell in the metrics table. Each of the
+     two documentation metrics asks a different URL, and a paragraph here could
+     not say which row it belonged to. The microdata stays on the page item,
+     because these are properties of the SERVICE rather than of a row. #}
   {%- if description_source %}
-  {# THE VENDOR'S OWN DOCUMENT. Everything else on this page is what this
-     service observed; this is what the operator published about themselves,
-     and it is the one link that lets a reader check the two against each
-     other. Present only when a description actually parsed -- an endpoint
-     serving an HTML console at its url has none, and a link to it would send
-     a reader to a page that says nothing. #}
   <link itemprop="urn:sparqlwatch:descriptionSource" href="{{ description_source }}">
-  <p class="sub"><a href="{{ description_source }}" rel="noopener noreferrer"
-     target="_blank" data-description-source="{{ description_source }}">service description</a></p>
   {%- endif %}
   {%- if void_doc %}
-  {# The VoID the host publishes at the location the VoID spec names. A
-     DIFFERENT document from the service description above: the two
-     specifications give different discovery rules, and a publisher who follows
-     one is not necessarily following the other. Shown whenever the fetch
-     reached something, including a document that did not parse -- the reader
-     checking that finding needs the url more than anyone. #}
   <link itemprop="urn:sparqlwatch:voidSource" href="{{ void_doc.source }}">
-  <p class="sub"><a href="{{ void_doc.source }}" rel="noopener noreferrer"
-     target="_blank" data-void-source="{{ void_doc.source }}">VoID</a>{% if void_doc.valid is false %} (does not parse){% endif %}</p>
   {%- endif %}
   <p class="sub"{% if run %} data-run="{{ run }}"{% endif %}>
     {%- if not run -%}
@@ -489,7 +487,27 @@
                not the newest sweep's with "measured by the sweep at" since
                2026-09-16, and one fact deserves one phrasing across two pages. #}
             <td class="v-cell tok-{{ row.token }}"><span class="m-state">{{ row.state_text }}</span>{%- if row.detail %} <span class="m-detail">{{ row.detail }}</span>{% endif %}{%- if row.older_sweep %} <span class="m-sweep">{{ row_measured_by_text }} {{ row.measured_at }}</span>{% endif %}</td>
-            <td class="num" data-declared>{% if row.declared_count is not none %}{{ "{:,}".format(row.declared_count) }}{% endif %}</td>
+            {# `declares` holds what the ENDPOINT stated, which for a counting
+               metric is a number and for the two documentation metrics is a
+               document. The icon links that document, on the row whose verdict
+               it is the evidence for. A row can never hold both: no metric
+               both counts and fetches. #}
+            <td class="num" data-declared>{% if row.declared_count is not none %}{{ "{:,}".format(row.declared_count) }}{% endif %}
+              {%- if row.document_url %}{# aria-label rather than a hidden span, matching
+                 the outward link on the h1: a link whose whole content is a glyph
+                 reads as "link, graphic" otherwise, and a span beside an
+                 aria-hidden svg would have it announced twice. `title` stays for
+                 the pointer, where a tooltip is the only affordance there is. #}
+                 <a class="rdf" href="{{ row.document_url }}" target="_blank"
+                 rel="noopener noreferrer" data-document-source="{{ row.document_url }}"
+                 title="{{ row.document_url }}"
+                 aria-label="open the document this endpoint publishes"
+                 ><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" focusable="false"
+                   ><rect x="1.5" y="4.5" width="21" height="15" rx="3.5" fill="none"
+                      stroke="currentColor" stroke-width="1.6"/><text x="12" y="15.4"
+                      text-anchor="middle" font-size="8.2" font-weight="600"
+                      font-family="system-ui, sans-serif" fill="currentColor">RDF</text></svg
+                 ></a>{% endif %}</td>
             <td class="num" data-counted>{% if row.observed_count is not none %}{{ "{:,}".format(row.observed_count) }}{% endif %}</td>
             <td class="num m-time">{% if row.elapsed_ms is not none %}{{ row.elapsed_ms }}{% endif %}</td>
           </tr>
