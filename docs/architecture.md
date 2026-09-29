@@ -246,6 +246,30 @@ rebuild reads from `_VOID_ENDPOINTS` — the newest run that *published* one —
 the way samples already use their own pointer. Anything else moved to a slower
 cadence needs the same treatment.
 
+**The store is warmed on every restart.** It lives on Longhorn — network
+replicated block storage — so a cold read is a network round trip, and an
+endpoint page makes nine separate store reads. Measured on the deployment
+2026-09-29: first view of any measured endpoint 3.3–4.2 s, the same page again
+0.10 s, the same endpoint as RDF (which makes ONE read) 0.35–0.86 s, and the
+very first page after a pod restart **23 s**.
+
+The queries are not the problem — the same readers over a local 399-graph,
+2.45-million-quad store of the same shape total 0.55 s warm. It is latency.
+
+`SnapshotCache` is what makes it persist: it caches whole responses, so a URL
+that has been served never touches the store again and RocksDB's block cache
+never accumulates a working set. Every *new* endpoint pays full cold cost, and
+the hourly restart empties the response cache, so every page is cold again each
+hour for whoever opens it first.
+
+So `load_run --skip-loaded` — the restart path — finishes by scanning `current`
+and reading every run's instant, filling the node's page cache before the site
+container starts. It runs on every restart including the ones that load nothing,
+because those are precisely the restarts that would otherwise leave a cold cache.
+It deliberately does not walk the run graphs' contents: that is the whole
+archive, it grows 25 runs a day, and reading it to warm pages nobody may open is
+a worse trade than the one being fixed.
+
 **A run that lands out of order triggers a rebuild.** A run file is stamped with
 the instant its sweep STARTED and written when it FINISHES, so the daily pass —
 which starts at 03:30 and, at 126 endpoints, finishes near 06:30 — arrives after

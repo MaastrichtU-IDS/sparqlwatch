@@ -222,6 +222,12 @@ from pyoxigraph import DefaultGraph, NamedNode, RdfFormat, Store, parse
 
 import loaded_manifest
 
+# The same query `endpoint_history` uses to place readings on a timeline. Read
+# from the file rather than imported from that module: the loader has no
+# business importing a page reader, and the two would then have to agree about
+# import order at startup.
+_RUN_INSTANTS = (Path(__file__).resolve().parent / "queries" / "run_instants.rq").read_text()
+
 
 @dataclass
 class LoadResult:
@@ -2106,6 +2112,64 @@ _USAGE = (
 )
 
 
+def warm(store: Store) -> dict[str, float]:
+    """Read the store's hot pages into the OS page cache, and say what it cost.
+
+    WHY THIS EXISTS. The store lives on Longhorn, which is network-replicated
+    block storage, so a cold read is a network round trip. An endpoint page
+    makes nine separate store reads; cold, they cost a few hundred milliseconds
+    each and the page takes three seconds. Measured on the deployment
+    2026-09-29: first view of any measured endpoint 3.3-4.2 s, the same page
+    again 0.10 s, the same endpoint as RDF -- which makes ONE read -- 0.35-0.86
+    s, and the very first page after a pod restart 23 s.
+
+    The queries are not the problem. The same readers over a local 399-graph,
+    2.45-million-quad store of the same shape total 0.55 s warm. It is latency,
+    and the fix is to have paid it before anyone asks.
+
+    RUN IN THE INIT CONTAINER, not in the site. `build-store` already has the
+    store open to load into, it runs before the site container starts, and the
+    page cache it fills is the node's -- so the warmth is there for whichever
+    process reads next. Doing it in the site would make the first request wait
+    for it, which is the thing being fixed.
+
+    WHAT IT READS is the derived `current` graph whole, plus every run graph's
+    instant. Those are what the index and every endpoint page touch first, and
+    both are bounded: `current` is O(endpoints) by construction and the instants
+    are one row per run. It deliberately does NOT walk the run graphs' contents
+    -- that is the whole archive, it grows by 25 runs a day, and reading it all
+    to warm a page nobody may open is a worse trade than the one being fixed.
+
+    Returns what each pass cost, so a restart's log says whether the warmth was
+    worth waiting for rather than leaving an operator to guess.
+    """
+    timings: dict[str, float] = {}
+
+    # A PATTERN SCAN, NOT A COUNT. `SELECT (COUNT(*) ...)` reads as the obvious
+    # way to touch every quad and is not: the planner can answer an aggregate
+    # without materialising what it counted, and a warm-up that does not read
+    # the pages is theatre. Measured while writing this -- the COUNT form
+    # "scanned" 6,000 quads in 0.005 s. `quads_for_pattern` is a direct scan
+    # with no planning in front of it.
+    started = datetime.now(timezone.utc)
+    quads = 0
+    for _ in store.quads_for_pattern(None, None, None, CURRENT_GRAPH):
+        quads += 1
+    timings["current"] = (datetime.now(timezone.utc) - started).total_seconds()
+
+    # One row per run graph, which is what endpoint_history reads to place
+    # readings on a timeline before it reads any of them. A query rather than a
+    # scan because it is the exact shape that reader issues, so it warms the
+    # path as well as the pages.
+    started = datetime.now(timezone.utc)
+    for _ in store.query(_RUN_INSTANTS):
+        pass
+    timings["run instants"] = (datetime.now(timezone.utc) - started).total_seconds()
+
+    timings["quads read"] = float(quads)
+    return timings
+
+
 def _rebuild_mode(path: str) -> int:
     """The repair path, and the migration path for a store built before current.
 
@@ -2343,6 +2407,17 @@ def main(argv: list[str] | None = None) -> int:
         store.optimize()
         print(f"compacted the store in {(datetime.now(timezone.utc) - started).total_seconds():.1f}s")
         loaded_manifest.write(args[0], manifest, optimized=started)
+    if skip_loaded:
+        # ALWAYS under --skip-loaded, not only when something was loaded: the
+        # restart that loads nothing is exactly the one that leaves a cold page
+        # cache behind, and it is the common case -- the site restarts hourly
+        # and most restarts have one file or none.
+        timings = warm(store)
+        read = int(timings.pop("quads read", 0))
+        print(
+            f"warmed the store: {read:,} quads of current, "
+            + ", ".join(f"{label} {cost:.2f}s" for label, cost in timings.items())
+        )
     return 1 if drifted else 0
 
 
