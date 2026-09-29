@@ -322,11 +322,17 @@ pub fn resolve(def: &MetricDef, declared: Declared, obs: Result<&Observation, Ex
                 // its own content type named. That IS the publisher putting
                 // something broken where the spec says a VoID goes.
                 //
-                // NOT OBSERVED IN THE WILD YET, and said plainly because the
-                // obvious candidate was not one: vocab.getty.edu looked like
-                // this and turned out to be a plain 404 with an HTML error
-                // page, which reads `Absent` and should. The state is modelled
-                // because it is reachable, not because it has been seen.
+                // OBSERVED, 13 TIMES, on the first daily pass that ran this
+                // metric (2026-09-29): UniProt, Rhea, HAMAP, OrthoDB, IMGT,
+                // SwissLipids and seven more serve something at their
+                // well-known location that does not parse as the RDF syntax
+                // their own content type names. This comment said "not
+                // observed in the wild yet" when the metric shipped, which was
+                // true for about a day.
+                //
+                // The obvious earlier candidate was NOT one: vocab.getty.edu
+                // looked like this and turned out to be a plain 404 with an
+                // HTML error page, which reads `Absent` and should.
                 Verdict::DeclaredButWrong
             }
         }
