@@ -400,6 +400,32 @@ SELECT DISTINCT ?endpoint ?metric WHERE {
 }
 """
 
+# Which endpoints a run published a well-known VoID for.
+#
+# ITS OWN POINTER, for the reason _SAMPLED_PAIRS has one: the fact is produced
+# on a slower cadence than the endpoint's newest run, so "the newest run that
+# recorded anything for this endpoint" is the wrong run to read it from. Keyed
+# on the ENDPOINT rather than on a pair, because there is one such document per
+# endpoint and not one per metric.
+_VOID_ENDPOINTS = _PREAMBLE + """
+SELECT DISTINCT ?endpoint WHERE {
+  GRAPH run: { ?endpoint sw:voidSource ?source }
+}
+"""
+
+# One endpoint's void facts, rewritten from the run that last published them.
+_REPLACE_VOID = """
+DELETE WHERE { GRAPH sw:current { endpoint: sw:voidSource ?o } } ;
+DELETE WHERE { GRAPH sw:current { endpoint: sw:voidValid ?o } } ;
+DELETE WHERE { GRAPH sw:current { endpoint: sw:voidGraph ?o } } ;
+DELETE WHERE { GRAPH sw:current { endpoint: sw:voidTriples ?o } } ;
+INSERT { GRAPH sw:current { endpoint: ?p ?o } }
+WHERE  {
+  VALUES ?p { sw:voidSource sw:voidValid sw:voidGraph sw:voidTriples }
+  GRAPH run: { endpoint: ?p ?o }
+} ;
+"""
+
 # What current currently points each endpoint at, and when that run ran. One
 # query for the whole graph rather than one per endpoint: at 543 endpoints the
 # per-endpoint form is 543 round trips to answer a question one scan answers.
@@ -571,10 +597,24 @@ WHERE  {
 } ;
 DELETE WHERE { GRAPH sw:current { endpoint: sw:declarationsRead ?read } } ;
 DELETE WHERE { GRAPH sw:current { endpoint: sw:descriptionSource ?src } } ;
-DELETE WHERE { GRAPH sw:current { endpoint: sw:voidSource ?vs } } ;
-DELETE WHERE { GRAPH sw:current { endpoint: sw:voidValid ?vv } } ;
-DELETE WHERE { GRAPH sw:current { endpoint: sw:voidGraph ?vg } } ;
-DELETE WHERE { GRAPH sw:current { endpoint: sw:voidTriples ?vt } } ;
+# GUARDED ON THE INCOMING RUN CARRYING ONE, unlike the two above. The
+# well-known VoID is asked on the DAILY cadence, so 23 runs in 24 carry no
+# void facts at all -- and an unguarded delete-then-insert meant every hourly
+# run wiped the daily reading and put nothing back. Measured 2026-09-29: 27
+# endpoints published a VoID, `current` held zero, and a full rebuild did not
+# help because it derives these from each endpoint's newest run, which is
+# hourly.
+#
+# `declarationsRead` and `descriptionSource` above need no such guard, and the
+# difference is cadence rather than design: `service-description` is hourly, so
+# every run republishes them. They would break the same way the day that
+# metric moved to a slower cadence.
+DELETE { GRAPH sw:current { endpoint: ?vp ?vo } }
+WHERE {
+  VALUES ?vp { sw:voidSource sw:voidValid sw:voidGraph sw:voidTriples }
+  GRAPH sw:current { endpoint: ?vp ?vo }
+  FILTER EXISTS { GRAPH run: { endpoint: sw:voidSource ?any } }
+} ;
 DELETE WHERE { GRAPH sw:current { endpoint: sw:currentRun ?run } } ;
 INSERT { GRAPH sw:current { ?thing ?p ?o } }
 WHERE  { GRAPH run: { ?thing dqv:computedOn endpoint: . ?thing ?p ?o } } ;
@@ -1179,6 +1219,10 @@ def _newest_per_endpoint(
     "the newest run" a question with no answer.
     """
     measured: dict[str, str] = {}
+    # The newest run that published a well-known VoID for each endpoint. See
+    # _VOID_ENDPOINTS: produced daily, so routinely older than the endpoint's
+    # newest run and not readable from that one.
+    void: dict[str, str] = {}
     # Keyed on the PAIR, because a run may sample classes and decline properties
     # and each half then has its own newest run.
     sampled: dict[tuple[str, str], str] = {}
@@ -1196,6 +1240,8 @@ def _newest_per_endpoint(
     for run, instant in runs:
         for endpoint in _run_endpoints(store, run, _MEASURED_ENDPOINTS):
             _keep_newest(measured, instants, endpoint, run, instant, CURRENT_RUN)
+        for endpoint in _run_endpoints(store, run, _VOID_ENDPOINTS):
+            _keep_newest(void, instants, endpoint, run, instant, "void")
         # The `pointer` argument namespaces the tie-detection key, and these
         # three dicts are all keyed on (endpoint, metric): passing the bare
         # metric for each made them share one key, so a run that measured a
@@ -1231,7 +1277,7 @@ def _newest_per_endpoint(
     # nothing was ever observed.
     declined_pairs = dict(declined_policy)
     declined_pairs.update(declined_observed)
-    return measured, measured_pairs, declined_pairs, sampled
+    return measured, measured_pairs, declined_pairs, sampled, void
 
 
 def _keep_newest(
@@ -1277,7 +1323,7 @@ def rebuild_current(store: Store) -> RebuildResult:
     diagnose.
     """
     runs = _run_graphs(store)
-    measured, measured_pairs, declined_pairs, sampled = _newest_per_endpoint(
+    measured, measured_pairs, declined_pairs, sampled, void = _newest_per_endpoint(
         store, runs
     )
 
@@ -1316,6 +1362,13 @@ def rebuild_current(store: Store) -> RebuildResult:
             _update_text(_REPLACE_SAMPLED),
             prefixes=_pair_run(endpoint, metric, run),
         )
+    # From the run that last published one, not from the endpoint's newest run:
+    # the daily cadence means those are routinely different runs.
+    for endpoint, run in sorted(void.items()):
+        store.update(
+            _update_text(_REPLACE_VOID),
+            prefixes=_endpoint_run(endpoint, run),
+        )
 
     touched = set(measured) | {endpoint for endpoint, _ in sampled}
     return RebuildResult(
@@ -1346,7 +1399,11 @@ def check_current(store: Store) -> CheckResult:
     operator running a check, not by a page load.
     """
     runs = _run_graphs(store)
-    measured, measured_pairs, declined_pairs, sampled = _newest_per_endpoint(
+    # `void` is not compared here: the check reads current against the run
+    # graphs pair by pair, and the void facts hang off the endpoint rather than
+    # a pair. Naming it explicitly so the discard is a decision rather than a
+    # tuple that happened to be the wrong length.
+    measured, measured_pairs, declined_pairs, sampled, _void = _newest_per_endpoint(
         store, runs
     )
     reasons: dict[str, list[str]] = {}

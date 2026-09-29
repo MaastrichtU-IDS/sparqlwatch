@@ -2628,3 +2628,82 @@ def test_an_in_order_load_does_not_rebuild(tmp_path):
     assert "rebuilt" not in buf.getvalue(), (
         f"an in-order load rebuilt the whole store:\n{buf.getvalue()}"
     )
+
+
+def test_an_hourly_run_does_not_wipe_the_daily_void_facts(tmp_path):
+    """THE bug this fact family shipped with, for one day.
+
+    The well-known VoID is asked on the DAILY cadence, so 23 runs in 24 carry
+    no void facts at all. The load path deleted the endpoint's void facts and
+    re-inserted from the incoming run unconditionally, so every hourly run
+    wiped the daily reading and put nothing back.
+
+    Measured on the deployment 2026-09-29: 27 endpoints published a VoID, the
+    run graph held all 27, and `current` held zero. A full rebuild did not help
+    either, because it derived these from each endpoint's NEWEST run -- which is
+    always hourly. `declarationsRead` and `descriptionSource` escape only
+    because `service-description` is hourly and republishes them every time.
+    """
+    import load_run
+    from pyoxigraph import Store
+
+    ep = "https://e.test/sparql"
+
+    def run(at: str, with_void: bool) -> bytes:
+        g, a = f"<urn:sparqlwatch:run:{at}>", f"<urn:sparqlwatch:activity:{at}>"
+        lines = [
+            f"{a} <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/prov#Activity> {g} .",
+            f'{a} <http://www.w3.org/ns/prov#generatedAtTime> "{at}"^^<http://www.w3.org/2001/XMLSchema#dateTime> {g} .',
+            f"<urn:sparqlwatch:m:{at}> <http://www.w3.org/ns/dqv#computedOn> <{ep}> {g} .",
+            f"<urn:sparqlwatch:m:{at}> <http://www.w3.org/ns/dqv#isMeasurementOf> <urn:sparqlwatch:metric:availability> {g} .",
+            f'<urn:sparqlwatch:m:{at}> <http://www.w3.org/ns/dqv#value> "verified" {g} .',
+        ]
+        if with_void:
+            lines.append(
+                f"<{ep}> <urn:sparqlwatch:voidSource> <https://e.test/.well-known/void> {g} ."
+            )
+        return ("\n".join(lines) + "\n").encode()
+
+    store = Store(str(tmp_path / "s"))
+    has_void = "ASK { GRAPH <urn:sparqlwatch:current> { ?e <urn:sparqlwatch:voidSource> ?s } }"
+
+    load_run.load_run(store, run("2026-09-29T03:30:00Z", with_void=True))
+    assert store.query(has_void), "the daily run's void source never reached current"
+    for at in ("2026-09-29T04:00:00Z", "2026-09-29T05:00:00Z", "2026-09-29T06:00:00Z"):
+        load_run.load_run(store, run(at, with_void=False))
+    assert store.query(has_void), "an hourly run wiped the daily void source"
+
+    # And the rebuild keeps it, reading from the run that published it rather
+    # than from the endpoint's newest run.
+    load_run.rebuild_current(store)
+    assert store.query(has_void), "the rebuild dropped the void source"
+
+
+def test_a_newer_void_document_replaces_an_older_one(tmp_path):
+    """The mutation guard: never deleting would leave two sources standing."""
+    import load_run
+    from pyoxigraph import Store
+
+    ep = "https://e.test/sparql"
+
+    def run(at: str, source: str) -> bytes:
+        g, a = f"<urn:sparqlwatch:run:{at}>", f"<urn:sparqlwatch:activity:{at}>"
+        return ("\n".join([
+            f"{a} <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/prov#Activity> {g} .",
+            f'{a} <http://www.w3.org/ns/prov#generatedAtTime> "{at}"^^<http://www.w3.org/2001/XMLSchema#dateTime> {g} .',
+            f"<urn:sparqlwatch:m:{at}> <http://www.w3.org/ns/dqv#computedOn> <{ep}> {g} .",
+            f"<urn:sparqlwatch:m:{at}> <http://www.w3.org/ns/dqv#isMeasurementOf> <urn:sparqlwatch:metric:availability> {g} .",
+            f'<urn:sparqlwatch:m:{at}> <http://www.w3.org/ns/dqv#value> "verified" {g} .',
+            f"<{ep}> <urn:sparqlwatch:voidSource> <{source}> {g} .",
+        ]) + "\n").encode()
+
+    store = Store(str(tmp_path / "s"))
+    load_run.load_run(store, run("2026-09-28T03:30:00Z", "https://e.test/old"))
+    load_run.load_run(store, run("2026-09-29T03:30:00Z", "https://e.test/new"))
+    sources = {
+        r["s"].value
+        for r in store.query(
+            "SELECT ?s WHERE { GRAPH <urn:sparqlwatch:current> { ?e <urn:sparqlwatch:voidSource> ?s } }"
+        )
+    }
+    assert sources == {"https://e.test/new"}, f"current holds {sources}"

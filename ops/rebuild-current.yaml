@@ -1,0 +1,56 @@
+# Rebuild the derived `current` graph from the run archive. A repair, not a
+# routine: nothing needs this on a healthy deployment.
+#
+# WHEN IT IS NEEDED. `current` is derived, and the load path keeps it right as
+# each run arrives. One case defeated that until 2026-09-29: a run file is
+# stamped with the instant its sweep STARTED and written when it FINISHES, so
+# the daily pass -- 03:30 to roughly 06:30 at 126 endpoints -- landed behind
+# three already-loaded hourly runs, and every fact in it was skipped. The loader
+# now rebuilds when it sees that, so this file is for recovering the readings
+# that were already dropped before the fix shipped.
+#
+# It is also the repair `web/app.py` names when it refuses to serve a store that
+# holds run graphs and no current graph.
+#
+# ORDER MATTERS. Run this, wait for it, THEN restart the site:
+#
+#   kubectl -n sparqlwatch-dev create -f ops/rebuild-current.yaml
+#   kubectl -n sparqlwatch-dev wait --for=condition=complete job/<name> --timeout=30m
+#   kubectl -n sparqlwatch-dev rollout restart deploy/site
+#
+# The site opens the store READ-ONLY and caches its snapshot for the life of the
+# pod, so it neither blocks this job nor notices what it did until it restarts.
+# That is the same reason the hourly sweep restarts the site after writing.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: rebuild-current-
+spec:
+  backoffLimit: 0
+  # A full walk of every run graph. 389 runs took the deploy path about ten
+  # minutes; this bound is generous against an archive that keeps growing.
+  activeDeadlineSeconds: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: rebuild
+          image: ghcr.io/maastrichtu-ids/sparqlwatch:IMAGE
+          imagePullPolicy: IfNotPresent
+          workingDir: /app/web
+          # The store's own path, not the mount: the init container opens
+          # /data/store/sparqlwatch.db and this must be the same database.
+          command: ["python", "load_run.py", "--rebuild", "/data/store/sparqlwatch.db"]
+          resources:
+            requests: { cpu: "200m", memory: "512Mi" }
+            limits:   { cpu: "2",    memory: "4Gi" }
+          volumeMounts:
+            - { name: store, mountPath: /data/store }
+      volumes:
+        - name: store
+          persistentVolumeClaim:
+            claimName: sparqlwatch-store
