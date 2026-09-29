@@ -227,6 +227,25 @@ dropped, leaves the derived graph attributing facts to a run that no longer
 states them. That shows up as an endpoint whose pointer names a run whose graph
 no longer mentions it, reported in `LoadResult.drifted`.
 
+**An endpoint fact produced on a slow cadence needs its own pointer.** `current`
+holds a few facts on the endpoint rather than on a measurement —
+`sw:declarationsRead`, `sw:descriptionSource`, and the `sw:void*` family. The
+load path rewrites those from the incoming run, and the rebuild reads them from
+each endpoint's newest run. Both are correct only while the fact is republished
+by *every* run.
+
+`service-description` is hourly, so `declarationsRead` and `descriptionSource`
+are. The well-known VoID is daily, so 23 runs in 24 carry none — and the
+unguarded rewrite meant every hourly run deleted the daily reading and put
+nothing back, while the rebuild read it from a run that never had it. Shipped
+2026-09-28; on 2026-09-29, 27 endpoints published a VoID, the run graphs held
+all 27, and `current` held zero.
+
+So the delete is now guarded on the incoming run actually carrying one, and the
+rebuild reads from `_VOID_ENDPOINTS` — the newest run that *published* one —
+the way samples already use their own pointer. Anything else moved to a slower
+cadence needs the same treatment.
+
 **A run that lands out of order triggers a rebuild.** A run file is stamped with
 the instant its sweep STARTED and written when it FINISHES, so the daily pass —
 which starts at 03:30 and, at 126 endpoints, finishes near 06:30 — arrives after
