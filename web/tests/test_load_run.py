@@ -2707,3 +2707,45 @@ def test_a_newer_void_document_replaces_an_older_one(tmp_path):
         )
     }
     assert sources == {"https://e.test/new"}, f"current holds {sources}"
+
+
+def test_warming_actually_reads_the_pages(tmp_path):
+    """A warm-up that does not touch the quads is theatre.
+
+    `SELECT (COUNT(*) ...)` reads as the obvious way to touch every quad and is
+    not: the planner can answer the aggregate without materialising what it
+    counted. Measured while this was written, the COUNT form "scanned" 6,272
+    quads in 0.005 s against a scan's 0.047 s.
+
+    So this asserts the count of quads actually read, which a COUNT-based
+    implementation cannot report at all.
+    """
+    import load_run
+    from pyoxigraph import Store
+
+    store = Store(str(tmp_path / "s"))
+    ep = "https://e.test/sparql"
+    at = "2026-09-29T03:30:00Z"
+    g, a = f"<urn:sparqlwatch:run:{at}>", f"<urn:sparqlwatch:activity:{at}>"
+    run = "\n".join([
+        f"{a} <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/prov#Activity> {g} .",
+        f'{a} <http://www.w3.org/ns/prov#generatedAtTime> "{at}"^^<http://www.w3.org/2001/XMLSchema#dateTime> {g} .',
+        f"<urn:sparqlwatch:m> <http://www.w3.org/ns/dqv#computedOn> <{ep}> {g} .",
+        f"<urn:sparqlwatch:m> <http://www.w3.org/ns/dqv#isMeasurementOf> <urn:sparqlwatch:metric:availability> {g} .",
+        f'<urn:sparqlwatch:m> <http://www.w3.org/ns/dqv#value> "verified" {g} .',
+    ]) + "\n"
+    load_run.load_run(store, run.encode())
+
+    timings = load_run.warm(store)
+    assert timings["quads read"] > 0, "the warm-up read nothing at all"
+    assert "current" in timings and "run instants" in timings
+
+
+def test_warming_an_empty_store_is_harmless(tmp_path):
+    """It runs on every restart, including one onto a store with no current
+    graph yet -- which is the state `--rebuild` exists to repair."""
+    import load_run
+    from pyoxigraph import Store
+
+    timings = load_run.warm(Store(str(tmp_path / "s")))
+    assert timings["quads read"] == 0
