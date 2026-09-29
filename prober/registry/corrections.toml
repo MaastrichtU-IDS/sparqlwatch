@@ -65,3 +65,10 @@ title = "Open Bantu isiXhosa Lexicon"
 [[endpoint]]
 url = "https://fdp.dcc.sib.swiss/store/fdp/sparql"
 title = "SPHN Metadata Catalog"
+
+# Added at the operator's request, 2026-09-29. Named from the FAIR Data Point's
+# own `dct:title`, asked of the endpoint itself rather than invented here.
+
+[[endpoint]]
+url = "https://sparql.healthdata.nl/repositories/fdp"
+title = "Health-RI FAIR Data Point"
