@@ -11,11 +11,15 @@
 
 PREFIX sw: <urn:sparqlwatch:>
 
-SELECT ?endpoint ?source ?valid ?graph ?triples WHERE {
+SELECT ?endpoint ?source ?valid ?graph ?triples ?dataset ?declared WHERE {
   GRAPH sw:current {
     ?endpoint sw:voidSource ?source .
     OPTIONAL { ?endpoint sw:voidValid   ?valid }
     OPTIONAL { ?endpoint sw:voidGraph   ?graph }
     OPTIONAL { ?endpoint sw:voidTriples ?triples }
+    # Which dataset in the document is this endpoint's, and what that dataset
+    # claims. Both absent when the document never tied one to the url we asked.
+    OPTIONAL { ?endpoint sw:voidDataset ?dataset }
+    OPTIONAL { ?endpoint sw:voidDeclaredTriples ?declared }
   }
 }

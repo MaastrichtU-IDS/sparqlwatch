@@ -419,9 +419,12 @@ DELETE WHERE { GRAPH sw:current { endpoint: sw:voidSource ?o } } ;
 DELETE WHERE { GRAPH sw:current { endpoint: sw:voidValid ?o } } ;
 DELETE WHERE { GRAPH sw:current { endpoint: sw:voidGraph ?o } } ;
 DELETE WHERE { GRAPH sw:current { endpoint: sw:voidTriples ?o } } ;
+DELETE WHERE { GRAPH sw:current { endpoint: sw:voidDataset ?o } } ;
+DELETE WHERE { GRAPH sw:current { endpoint: sw:voidDeclaredTriples ?o } } ;
 INSERT { GRAPH sw:current { endpoint: ?p ?o } }
 WHERE  {
-  VALUES ?p { sw:voidSource sw:voidValid sw:voidGraph sw:voidTriples }
+  VALUES ?p { sw:voidSource sw:voidValid sw:voidGraph sw:voidTriples
+              sw:voidDataset sw:voidDeclaredTriples }
   GRAPH run: { endpoint: ?p ?o }
 } ;
 """
@@ -611,7 +614,8 @@ DELETE WHERE { GRAPH sw:current { endpoint: sw:descriptionSource ?src } } ;
 # metric moved to a slower cadence.
 DELETE { GRAPH sw:current { endpoint: ?vp ?vo } }
 WHERE {
-  VALUES ?vp { sw:voidSource sw:voidValid sw:voidGraph sw:voidTriples }
+  VALUES ?vp { sw:voidSource sw:voidValid sw:voidGraph sw:voidTriples
+               sw:voidDataset sw:voidDeclaredTriples }
   GRAPH sw:current { endpoint: ?vp ?vo }
   FILTER EXISTS { GRAPH run: { endpoint: sw:voidSource ?any } }
 } ;
@@ -655,6 +659,13 @@ INSERT { GRAPH sw:current { endpoint: sw:voidGraph ?vg } }
 WHERE  { GRAPH run: { endpoint: sw:voidGraph ?vg } } ;
 INSERT { GRAPH sw:current { endpoint: sw:voidTriples ?vt } }
 WHERE  { GRAPH run: { endpoint: sw:voidTriples ?vt } } ;
+# Which dataset in the document is this endpoint's, and what it claims. Both
+# absent when the document never tied a dataset to the url we asked, which is
+# the ordinary case and is readable as such.
+INSERT { GRAPH sw:current { endpoint: sw:voidDataset ?vd } }
+WHERE  { GRAPH run: { endpoint: sw:voidDataset ?vd } } ;
+INSERT { GRAPH sw:current { endpoint: sw:voidDeclaredTriples ?vdt } }
+WHERE  { GRAPH run: { endpoint: sw:voidDeclaredTriples ?vdt } } ;
 INSERT DATA { GRAPH sw:current { endpoint: sw:currentRun run: } }
 """
 

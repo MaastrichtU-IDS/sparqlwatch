@@ -403,6 +403,28 @@ the graph cannot disagree. The 256 KB body cap applies here as everywhere: a
 VoID larger than that is truncated before classification and so reads as
 invalid, which is a known limit rather than a finding about the publisher.
 
+**Whose dataset is it.** A well-known VoID describes a HOST, and routinely
+describes several datasets. `sparql.omabrowser.org`'s names two — its own and
+UniProt's, each with its own `void:sparqlEndpoint`. So a dataset counts as this
+endpoint's only when the document says `void:sparqlEndpoint <the url we asked>`,
+matched exactly, and that tie is published as `sw:voidDataset` with the
+dataset's `void:triples` as `sw:voidDeclaredTriples` where it states one.
+
+**Nothing merges those claims into the declared-versus-observed axis yet, and
+the numbers are why.** Measured 2026-09-29 across 9 stored documents:
+`void:triples` appears in 8 of them, but `void:sparqlEndpoint` in only 4, and
+only 2 endpoints of 128 had a dataset resolvable to the url we asked — one of
+them this service's own. Grading an endpoint against a claim lifted from a
+document that describes a host would sometimes award `declared-but-wrong`, the
+harshest verdict in the vocabulary, for somebody else's data. The tie is
+recorded so that the decision can be made on a count rather than on a guess:
+after one daily pass it is a fleet-wide number, at no extra cost to anyone.
+
+UniProt's own VoID names itself with a trailing slash it does not use elsewhere,
+so an exact match misses it. Left as a known limitation rather than widened:
+guessing is how a claim gets attributed to the wrong server, and the count above
+will say whether widening buys anything.
+
 `void-well-known` runs on the **daily** cadence, not hourly. Whether a
 publisher has put a file at a fixed location does not change between breakfast
 and lunch, and it is one more request to somebody else's server — one a night

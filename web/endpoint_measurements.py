@@ -510,6 +510,13 @@ class VoidDocument:
     valid: bool | None = None
     graph: str | None = None
     triples: int | None = None
+    #: The dataset in the document that names THIS endpoint, via
+    #: ``void:sparqlEndpoint``. None when the document describes a host without
+    #: ever tying a dataset to the url we asked -- which is most of them, and is
+    #: why nothing merges these claims into the declared-versus-observed axis.
+    dataset: str | None = None
+    #: What that dataset claims for ``void:triples``. None when it claims none.
+    declared_triples: int | None = None
 
 
 def void_document(store: Store, endpoint: str) -> VoidDocument | None:
@@ -524,10 +531,13 @@ def void_document(store: Store, endpoint: str) -> VoidDocument | None:
     ):
         valid = row["valid"]
         triples = row["triples"]
+        declared = row["declared"]
         return VoidDocument(
             source=row["source"].value,
             valid=None if valid is None else valid.value == "true",
             graph=None if row["graph"] is None else row["graph"].value,
             triples=None if triples is None else int(triples.value),
+            dataset=None if row["dataset"] is None else row["dataset"].value,
+            declared_triples=None if declared is None else int(declared.value),
         )
     return None
