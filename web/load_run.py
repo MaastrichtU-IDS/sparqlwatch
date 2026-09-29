@@ -2158,6 +2158,9 @@ def main(argv: list[str] | None = None) -> int:
     # sticky across the loop: a later clean file does not repair an earlier
     # file's drift.
     drifted = False
+    # Set when any file in this invocation landed behind current. See the
+    # rebuild below: on this deployment the daily pass always lands late.
+    out_of_order = False
     for path, data in zip(run_paths, contents):
         result = load_run(store, data)
         if skip_loaded:
@@ -2187,16 +2190,32 @@ def main(argv: list[str] | None = None) -> int:
             )
         if result.kept_newer:
             # An out-of-order load: current already pointed at a strictly newer
-            # run, so the pointer was left alone and the site shows something
-            # other than the file just named. That is the right behaviour and it
-            # is not an error, so it is said and the exit status is unaffected;
-            # saying nothing left an operator believing they had just published
-            # this file.
+            # run, so the pointer was left alone and this file's facts did not
+            # reach the page. Reported, and then REPAIRED below, because on this
+            # deployment it is the normal case rather than the exotic one.
+            #
+            # WHY IT IS NORMAL. A run file is stamped with the instant the sweep
+            # STARTED and written when it FINISHES. The daily pass starts at
+            # 03:30 and, at 126 endpoints, finishes near 06:30 -- by which time
+            # the 04:00, 05:00 and 06:00 hourly runs have each been loaded by
+            # their own restart. The daily file then arrives "old" and every
+            # fact in it is skipped.
+            #
+            # What that cost, measured on 2026-09-29: the daily pass measured
+            # void-well-known for 118 endpoints and the page showed `cadence`
+            # for all 124 of them -- "not this hour's question" -- while the
+            # answers sat in the run graph unreachable. `geo-coordinates` had
+            # been losing the same way since it was added on 2026-09-26. The
+            # endpoints that DID show daily readings were the ones a deploy's
+            # full replay had happened to apply, which is why the symptom looked
+            # arbitrary: 72 endpoints right, 54 wrong, split by whether they
+            # predated the last rebuild.
             print(
                 f"{path}: current already pointed at a newer run for "
                 f"{len(result.kept_newer)} endpoint(s), so what the site shows "
                 f"for them is unchanged by this file: {result.kept_newer}"
             )
+            out_of_order = True
         if result.dormant:
             # An endpoint the sweep declined to ask is an endpoint whose page
             # will not move this week, and current keeps its last probe's
@@ -2216,6 +2235,31 @@ def main(argv: list[str] | None = None) -> int:
             # left it in a log nobody reads.
             drifted = True
             print(f"{path}: {_drift_advice(result.drifted, args[0])}", file=sys.stderr)
+
+    if out_of_order:
+        # REBUILD, rather than teaching the load path to merge an older run into
+        # a newer current. `rebuild_current` already derives current from every
+        # run graph in instant order, and it is already the path a deploy takes,
+        # so it is known to produce the right answer for exactly this input --
+        # verified by loading the hourly runs first and then the daily one, and
+        # watching the reading come back.
+        #
+        # The alternative -- a per-fact merge in `_REPLACE_MEASURED` -- would be
+        # a second implementation of "which run wins for this pair", and the two
+        # could then disagree. This project already has one such pair of rules
+        # and keeps them together on purpose (see `POLICY_DECLINE_REASONS`).
+        #
+        # It costs a full walk of the run graphs, which is what a deploy pays
+        # anyway. It fires when a run lands out of order, so in steady state
+        # that is once a day, after the daily pass -- not on the hourly restart,
+        # which loads one file in order and reports nothing.
+        started = datetime.now(timezone.utc)
+        rebuilt = rebuild_current(store)
+        print(
+            f"a run landed out of order, so current was rebuilt from "
+            f"{rebuilt.runs} run graph(s) covering {rebuilt.endpoints} endpoints "
+            f"in {(datetime.now(timezone.utc) - started).total_seconds():.1f}s"
+        )
 
     if skip_loaded and loaded_manifest.due_for_optimize(args[0]):
         # ONLY UNDER --skip-loaded, which is the deployment's restart path and

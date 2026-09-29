@@ -227,6 +227,23 @@ dropped, leaves the derived graph attributing facts to a run that no longer
 states them. That shows up as an endpoint whose pointer names a run whose graph
 no longer mentions it, reported in `LoadResult.drifted`.
 
+**A run that lands out of order triggers a rebuild.** A run file is stamped with
+the instant its sweep STARTED and written when it FINISHES, so the daily pass —
+which starts at 03:30 and, at 126 endpoints, finishes near 06:30 — arrives after
+three hourly runs have already been loaded. `current` then points at something
+newer and the daily run's facts are skipped, which `LoadResult.kept_newer`
+reports. That was silent data loss: on 2026-09-29 the daily pass measured
+`void-well-known` for 118 endpoints and the page showed `cadence` for all 124,
+while the readings sat unreachable in the run graph. `geo-coordinates` had been
+losing the same way since it was added.
+
+The repair is `rebuild_current`, not a merge rule in `_REPLACE_MEASURED`: that
+rebuild already derives current from every run graph in instant order and is
+already the path a deploy takes, so it is known correct for exactly this input.
+A second implementation of "which run wins for this pair" could disagree with
+the first. It fires only when a file lands behind current — in steady state once
+a day, after the daily pass, and never on the hourly restart.
+
 ### `app.py` (2,692 lines)
 
 Serves each resource in five representations: HTML, Turtle, N-Triples, RDF/XML

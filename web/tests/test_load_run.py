@@ -2528,3 +2528,103 @@ def test_a_hand_load_is_never_made_to_wait_for_a_compaction(tmp_path, capsys):
     run = _run_file(tmp_path, "run-2026-09-01T12-00-00Z.nq", "2026-09-01T12:00:00Z")
     assert main([store, run]) == 0
     assert "compacted" not in capsys.readouterr().out
+
+
+def _run_quads(at: str, endpoint: str, measured: list[str], declined: list[str]) -> bytes:
+    """One run graph, as the prober writes it: stamped with its START instant."""
+    g, a = f"<urn:sparqlwatch:run:{at}>", f"<urn:sparqlwatch:activity:{at}>"
+    lines = [
+        f"{a} <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/prov#Activity> {g} .",
+        f'{a} <http://www.w3.org/ns/prov#generatedAtTime> "{at}"^^<http://www.w3.org/2001/XMLSchema#dateTime> {g} .',
+    ]
+    for m in measured:
+        s = f"<urn:sparqlwatch:measurement:{at}:{m}>"
+        lines += [
+            f"{s} <http://www.w3.org/ns/dqv#computedOn> <{endpoint}> {g} .",
+            f"{s} <http://www.w3.org/ns/dqv#isMeasurementOf> <urn:sparqlwatch:metric:{m}> {g} .",
+            f'{s} <http://www.w3.org/ns/dqv#value> "verified" {g} .',
+        ]
+    for m in declined:
+        s = f"<urn:sparqlwatch:notmeasured:{at}:{m}>"
+        lines += [
+            f"{s} <urn:sparqlwatch:notMeasuredOn> <{endpoint}> {g} .",
+            f"{s} <urn:sparqlwatch:notMeasuredMetric> <urn:sparqlwatch:metric:{m}> {g} .",
+            f'{s} <urn:sparqlwatch:notMeasuredReason> "cadence" {g} .',
+        ]
+    return ("\n".join(lines) + "\n").encode()
+
+
+def test_a_run_that_lands_out_of_order_is_repaired_rather_than_dropped(tmp_path):
+    """THE daily pass, and what it cost for three days before this test existed.
+
+    A run file is stamped with the instant its sweep STARTED and written when
+    it FINISHES. The daily pass starts 03:30 and, at 126 endpoints, finishes
+    near 06:30 -- so the 04:00, 05:00 and 06:00 hourly runs are each loaded
+    first, by their own restart. The daily file then arrives behind `current`
+    and every fact in it is skipped.
+
+    Measured on the deployment 2026-09-29: the daily pass measured
+    `void-well-known` for 118 endpoints and the page showed `cadence` for all
+    124, while the answers sat in the run graph. `geo-coordinates` had been
+    losing the same way since 2026-09-26.
+
+    So a load that reports `kept_newer` now rebuilds, and the daily reading
+    survives.
+    """
+    import load_run
+
+    ep = "https://e.test/sparql"
+    store_dir = tmp_path / "store"
+    hourly = tmp_path / "runs"
+    hourly.mkdir()
+    paths = []
+    for at in ("2026-09-29T04:00:00Z", "2026-09-29T05:00:00Z", "2026-09-29T06:00:00Z"):
+        p = hourly / f"run-{at}.nq"
+        p.write_bytes(_run_quads(at, ep, ["availability"], ["void-well-known"]))
+        paths.append(str(p))
+    daily = hourly / "run-2026-09-29T03:30:00Z.nq"
+    daily.write_bytes(_run_quads("2026-09-29T03:30:00Z", ep, ["availability", "void-well-known"], []))
+
+    assert load_run.main([str(store_dir), *paths]) == 0
+    # The daily file, arriving last because it was written last.
+    assert load_run.main([str(store_dir), str(daily)]) == 0
+
+    from pyoxigraph import Store
+
+    store = Store(str(store_dir))
+    measured = store.query(
+        "PREFIX dqv: <http://www.w3.org/ns/dqv#> ASK { GRAPH <urn:sparqlwatch:current> "
+        "{ ?x dqv:isMeasurementOf <urn:sparqlwatch:metric:void-well-known> } }"
+    )
+    assert measured, (
+        "the daily run's reading did not reach current: an out-of-order load "
+        "was dropped instead of repaired"
+    )
+
+
+def test_an_in_order_load_does_not_rebuild(tmp_path):
+    """The mutation guard, and the cost control.
+
+    Rebuilding unconditionally would pass the test above and make every hourly
+    restart walk the whole archive -- 387 run files on the deployment today.
+    The rebuild must fire only when a file actually lands behind current.
+    """
+    import load_run
+
+    ep = "https://e.test/sparql"
+    store_dir = tmp_path / "store"
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    out = []
+    for at in ("2026-09-29T04:00:00Z", "2026-09-29T05:00:00Z"):
+        p = runs / f"run-{at}.nq"
+        p.write_bytes(_run_quads(at, ep, ["availability"], []))
+        out.append(str(p))
+    import io, contextlib
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        assert load_run.main([str(store_dir), *out]) == 0
+    assert "rebuilt" not in buf.getvalue(), (
+        f"an in-order load rebuilt the whole store:\n{buf.getvalue()}"
+    )
