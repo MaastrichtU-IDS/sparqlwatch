@@ -131,6 +131,15 @@ endpoint = [
   # Added 2026-09-29 at the operator's request. A GraphDB repository behind
   # a FAIR Data Point, which names itself "Health-RI FAIR Data Point" in its
   # own dct:title. 200 with SPARQL results in 0.80s when it was added.
+  # Two national/European catalogue aggregators, added 2026-09-29 at the
+  # operator's request. NO ENTRY IN corrections.toml FOR EITHER, and that is
+  # the registry's own rule rather than an omission: a title is absent for an
+  # endpoint that serves many datasets, because picking one of many asserts
+  # something untrue about the server. Asked on 2026-09-29, the first holds
+  # 129 dcat:Catalog and 9,044 dcat:Dataset; the second holds 372 and
+  # 1,916,190. Their rows show their url.
+  "https://sparql.fellesdatakatalog.digdir.no",
+  "https://data.europa.eu/sparql",
   "https://sparql.healthdata.nl/repositories/fdp",
   "https://fdp.dcc.sib.swiss/store/fdp/sparql",
   "http://rdf.corpora.uni-leipzig.de/sparql",
