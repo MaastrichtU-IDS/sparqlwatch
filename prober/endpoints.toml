@@ -180,6 +180,10 @@ endpoint = [
   # Added 2026-09-28 at the operator's request. In no catalogue this project
   # seeds, so its name lives in registry/corrections.toml. 200 with SPARQL
   # results in 1.86s when it was added.
+  # Added 2026-09-29 at the operator's request. A GraphDB repository behind
+  # a FAIR Data Point, which names itself "Health-RI FAIR Data Point" in its
+  # own dct:title. 200 with SPARQL results in 0.80s when it was added.
+  "https://sparql.healthdata.nl/repositories/fdp",
   "https://fdp.dcc.sib.swiss/store/fdp/sparql",
   "http://rdf.corpora.uni-leipzig.de/sparql",
   "https://bio2rdf.org/sparql",
