@@ -189,10 +189,16 @@ ICON_MASK_PATH = "/icon-mono.svg"
 # ---------------------------------------------------------------------------
 # Representations
 # ---------------------------------------------------------------------------
-# One line per endpoint-page request, saying where its seconds went. uvicorn
-# configures the root logger, so this lands in the container log beside the
-# access lines with no extra wiring.
-_LOG = logging.getLogger("sparqlwatch.page")
+# One line per endpoint-page request, saying where its seconds went.
+#
+# `uvicorn.error` AND NOT A LOGGER OF OUR OWN, which is the whole reason this
+# line exists in the container log at all. uvicorn configures its own loggers
+# and leaves the root one alone, so `getLogger("sparqlwatch.page").info(...)`
+# is written to nowhere -- shipped that way once and the deployment printed
+# access lines and nothing else. Despite the name, `uvicorn.error` is the
+# general server logger rather than an error channel; it is where uvicorn's own
+# startup lines go.
+_LOG = logging.getLogger("uvicorn.error")
 
 HTML_MEDIA_TYPE = "text/html"
 
