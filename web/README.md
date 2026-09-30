@@ -349,7 +349,9 @@ The site publishes by restarting. `app.py` opens the store with
 `Store.read_only` and caches the handle for the life of the process, so new
 sweep data reaches a reader only when the process is replaced — and the prober
 CronJob does exactly that, `rollout restart`ing the `site` Deployment after
-every hourly sweep.
+every hourly sweep. (`site` is the Deployment's actual name in
+`sparqlwatch-dev` — there is no `deploy/sparqlwatch`; see
+`docs/architecture.md`.)
 
 That was cheap while the store held a few runs and ruinous once it held a few
 hundred. The store volume was an `emptyDir`, so every hourly restart rebuilt it
