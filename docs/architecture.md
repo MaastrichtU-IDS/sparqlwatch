@@ -246,29 +246,28 @@ rebuild reads from `_VOID_ENDPOINTS` — the newest run that *published* one —
 the way samples already use their own pointer. Anything else moved to a slower
 cadence needs the same treatment.
 
-**The store is warmed on every restart.** It lives on Longhorn — network
-replicated block storage — so a cold read is a network round trip, and an
-endpoint page makes nine separate store reads. Measured on the deployment
-2026-09-29: first view of any measured endpoint 3.3–4.2 s, the same page again
-0.10 s, the same endpoint as RDF (which makes ONE read) 0.35–0.86 s, and the
-very first page after a pod restart **23 s**.
+**The fleet-wide caches are warmed at startup, in the site process.** An
+endpoint page was 3–5 s on first view and 23 s after a restart, and the cause
+was one call: `endpoint_vocabulary` reached `explore_payload.build_payload` —
+the uncached function — rather than the `@lru_cache`d wrapper here, so every
+page rebuilt the whole fleet's vocabulary (15,844 terms from ~19,000 rows) to
+keep one endpoint's 156. Fixing that moved the cost onto whoever opened the
+first page after a restart, 20.5 s of it, so `app.py` now pays it in a startup
+handler: index, fleet history, vocabulary payload, about 26 s inside the
+container's 40 s HEALTHCHECK start-period. Pages are 0.4–1.3 s.
 
-The queries are not the problem — the same readers over a local 399-graph,
-2.45-million-quad store of the same shape total 0.55 s warm. It is latency.
+It has to be THIS process. These are `@lru_cache`s keyed on the store handle,
+and that handle belongs to whoever serves requests — an earlier attempt warmed
+from the `build-store` init container, which then exits, and achieved nothing
+measurable: it filled the node's page cache and left every Python-side result
+to be computed again. `build_payload` is almost entirely that Python side.
 
-`SnapshotCache` is what makes it persist: it caches whole responses, so a URL
-that has been served never touches the store again and RocksDB's block cache
-never accumulates a working set. Every *new* endpoint pays full cold cost, and
-the hourly restart empties the response cache, so every page is cold again each
-hour for whoever opens it first.
-
-So `load_run --skip-loaded` — the restart path — finishes by scanning `current`
-and reading every run's instant, filling the node's page cache before the site
-container starts. It runs on every restart including the ones that load nothing,
-because those are precisely the restarts that would otherwise leave a cold cache.
-It deliberately does not walk the run graphs' contents: that is the whole
-archive, it grows 25 runs a day, and reading it to warm pages nobody may open is
-a worse trade than the one being fixed.
+Four theories were wrong before instrumentation settled it: cold Longhorn
+reads, the unbounded history scan (bounding it is twenty times *worse*), CPU
+starvation, and size-proportional rendering (`render` is 0.00–0.10 s on a
+754 KB page). Every query timed against the `sparql` container came back in
+hundredths of a second — a different process with its own warm handle. The
+per-request timing line in the endpoint route is what ended the guessing.
 
 **A run that lands out of order triggers a rebuild.** A run file is stamped with
 the instant its sweep STARTED and written when it FINISHES, so the daily pass —
