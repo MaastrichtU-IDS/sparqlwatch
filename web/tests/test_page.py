@@ -3307,3 +3307,45 @@ def test_an_endpoint_with_no_well_known_void_links_nothing(client_for, store):
     assert "data-document-source" not in body, (
         "a document link was shown for an endpoint that publishes none"
     )
+
+
+def test_startup_warms_the_caches_so_the_first_reader_does_not(tmp_path, monkeypatch):
+    """The fleet-wide passes are paid before the first request, not inside it.
+
+    `build_payload` took 20.5 s on the deployment measured 2026-09-30, as the
+    first endpoint page, where a reader waited for it. It was already paid once
+    per restart -- the site restarts hourly -- so this moves it rather than
+    adding it.
+
+    Asserted through the caches' own `cache_info`, which says whether the work
+    was done, rather than through a duration.
+    """
+    import app
+
+    store = _store_with(tmp_path, _WELL_KNOWN_VOID)
+    monkeypatch.setattr(app, "_opened_store", lambda path: store)
+    monkeypatch.setattr(app, "_store_path", lambda: "unused")
+    for cached in (app.endpoint_index, app.fleet_history, app.build_payload):
+        cached.cache_clear()
+
+    app._warm_the_caches()
+
+    for cached in (app.endpoint_index, app.fleet_history, app.build_payload):
+        info = cached.cache_info()
+        assert info.misses == 1, f"{cached.__name__} was not warmed: {info}"
+    # And a reader now hits the cache rather than recomputing.
+    app.build_payload(store)
+    assert app.build_payload.cache_info().hits >= 1
+
+
+def test_startup_serves_even_with_no_store(monkeypatch):
+    """A fresh namespace has no store until the first sweep lands, and
+    `_store_path` raises for it by design. Refusing to start over a warm-up
+    would turn a cache miss into an outage."""
+    import app
+
+    def boom():
+        raise RuntimeError("no store to read")
+
+    monkeypatch.setattr(app, "_store_path", boom)
+    app._warm_the_caches()  # must not raise
