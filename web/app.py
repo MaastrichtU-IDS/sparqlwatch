@@ -54,6 +54,8 @@ from collections import Counter, OrderedDict
 from datetime import date, timedelta
 from functools import lru_cache
 from pathlib import Path
+from time import perf_counter
+import logging
 from urllib.parse import parse_qs, quote, urlparse
 
 from fastapi import Depends, FastAPI, Query, Request, Response
@@ -187,6 +189,11 @@ ICON_MASK_PATH = "/icon-mono.svg"
 # ---------------------------------------------------------------------------
 # Representations
 # ---------------------------------------------------------------------------
+# One line per endpoint-page request, saying where its seconds went. uvicorn
+# configures the root logger, so this lands in the container log beside the
+# access lines with no extra wiring.
+_LOG = logging.getLogger("sparqlwatch.page")
+
 HTML_MEDIA_TYPE = "text/html"
 
 # Every RDF media type pyoxigraph 0.5.9 can serialise a triple stream into
@@ -1992,8 +1999,12 @@ def endpoint_resource(
             media_type="text/plain; charset=utf-8",
         )
 
+    _started = perf_counter()
     measurements = endpoint_measurements(store, url)
+    _measurements_cost = perf_counter() - _started
+    _started = perf_counter()
     content = endpoint_content(store, url)
+    _content_cost = perf_counter() - _started
 
     # What is actually checked, and it is narrower than "the store holds any
     # fact about this endpoint": a measurement, a decline, or a class sample.
@@ -2037,20 +2048,57 @@ def endpoint_resource(
         )
 
     if media_type == HTML_MEDIA_TYPE:
-        return Response(
-            content=_endpoint_html(
+        # TIMED, AND SAID ONCE PER REQUEST. This page takes seconds on its first
+        # view and 0.10 s afterwards, and three rounds of measuring from outside
+        # could not say where the time goes: every query timed against the
+        # `sparql` container -- a different process with its own warm store
+        # handle -- came back in hundredths of a second; warming `current` at
+        # startup changed nothing; and bounding the history scan to the newest
+        # 30 runs made it twenty times WORSE, 0.27 s to 15.27 s, because the
+        # VALUES scoping forces a different plan. The one thing left untried was
+        # asking this process what it is doing.
+        #
+        # HTML branch only. The RDF branch answers from one CONSTRUCT in 0.8 s
+        # and is not the slow one; the gap between them is the nine reads below.
+        timed: list[tuple[str, float]] = [
+            ("measure", _measurements_cost),
+            ("content", _content_cost),
+        ]
+
+        def _read(label: str, call):
+            started = perf_counter()
+            value = call()
+            timed.append((label, perf_counter() - started))
+            return value
+
+        history = _read("history", lambda: endpoint_history(store, url, limit=_HISTORY_RUNS))
+        vocabulary = _read("vocab", lambda: endpoint_vocabulary(store, url))
+        summary = _read("void", lambda: void_summary(store, url))
+        partitions = _read("parts", lambda: void_partitions(store, url))
+        source = _read("descsrc", lambda: description_source(store, url))
+        document = _read("voiddoc", lambda: void_document(store, url))
+        body = _read(
+            "render",
+            lambda: _endpoint_html(
                 url,
                 measurements,
                 content,
-                endpoint_history(store, url, limit=_HISTORY_RUNS),
-                endpoint_vocabulary(store, url),
-                void_summary(store, url),
-                void_partitions(store, url),
-                description_source(store, url),
-                void_document(store, url),
+                history,
+                vocabulary,
+                summary,
+                partitions,
+                source,
+                document,
             ),
-            media_type="text/html; charset=utf-8",
         )
+        _LOG.info(
+            "endpoint page %s | %s | reads+render %.2fs | %d bytes",
+            url,
+            " ".join(f"{label}={cost:.2f}" for label, cost in timed),
+            sum(cost for _, cost in timed),
+            len(body),
+        )
+        return Response(content=body, media_type="text/html; charset=utf-8")
     return Response(
         content=_endpoint_rdf(store, url, media_type),
         media_type=media_type,
