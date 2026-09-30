@@ -389,6 +389,31 @@ endpoint in the run graph, plus the document itself:
 | `sw:voidGraph` | the named graph holding the local copy, when there is one |
 | `sw:voidTriples` | how many triples that copy holds |
 
+**The endpoint's own description is copied the same way.** `DereferenceEndpoint`
+already fetches it every sweep to build the declarations, so the bytes are in
+hand; the sweep keeps them as a copy, under the same rules and into its own graph
+`urn:sparqlwatch:description:<run>:<endpoint>`, with `sw:descriptionGraph`
+pointing at it from the run graph beside `sw:descriptionSource`.
+
+| | |
+| --- | --- |
+| `sw:descriptionSource` | where the description was served from. Written by **every** sweep |
+| `sw:descriptionGraph` | the graph holding the copy, when one was taken. Written by the **daily** sweep only |
+
+Two clocks, on purpose. Sampled 2026-09-30, a description is a median of 14
+triples but uniprot's is 6,670, for a fleet mean near 547 — copied hourly across
+72 endpoints that is roughly 945,000 quads a day against a store then holding
+3.3 million, and copied daily about 39,000. `metrics::keeps_vendor_documents`
+is the gate; it reads the same `cadence` field the metric filter reads, so the
+two cannot drift. The web tier's `sw:descriptionGraph` handling carries the
+guard that asymmetry needs — see `docs/architecture.md`.
+
+The copy is what makes the endpoint page's link honest. SPARQL 1.1 Service
+Description puts the document at the endpoint URL, so `descriptionSource` is
+usually that URL, and that URL answers a browser with the query console:
+`sparql.uniprot.org/sparql` serves `text/html` to a browser's `Accept` and
+`text/turtle` to a machine's. Only a copy can be linked and opened.
+
 **The copy is written into its own named graph, never the run graph.** A VoID
 document is a third party's assertions about their own data; mixed in beside
 this project's measurements, a consumer querying one run would read their

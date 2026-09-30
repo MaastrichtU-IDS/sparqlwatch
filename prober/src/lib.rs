@@ -21,7 +21,7 @@ use crate::declare::{parse_declarations_for, Declarations};
 use crate::observe::BodyKind;
 use crate::emit::{
     ContentProfile, ContentSample, DeclarationsRead, EndpointFacts, MeasurementRow,
-    NotMeasured, NotMeasuredReason, ProfileProperty, VoidDocument,
+    DescriptionDocument, NotMeasured, NotMeasuredReason, ProfileProperty, VoidDocument,
     RunId,
 };
 use crate::metrics::{MetricDef, ProbeKind};
@@ -54,6 +54,9 @@ pub struct Sweep {
     pub declarations_read: Vec<DeclarationsRead>,
     /// One per endpoint whose `/.well-known/void` fetch reached something.
     pub void_documents: Vec<VoidDocument>,
+    /// The endpoint descriptions this sweep copied. Empty unless the sweep runs
+    /// the daily set; see `metrics::keeps_vendor_documents`.
+    pub description_documents: Vec<DescriptionDocument>,
     /// Two disjoint families of fact, not one: the metrics `main.rs` declined
     /// at the cost ceiling, and the metrics that would have run on an endpoint
     /// the sweep failed on. `NotMeasuredReason` is what tells them apart, and
@@ -402,6 +405,7 @@ struct EndpointFactLists {
     rows: Vec<MeasurementRow>,
     declarations_read: Vec<DeclarationsRead>,
     void_documents: Vec<VoidDocument>,
+    description_documents: Vec<DescriptionDocument>,
     not_measured: Vec<NotMeasured>,
     content_samples: Vec<ContentSample>,
     content_profiles: Vec<ContentProfile>,
@@ -420,6 +424,7 @@ impl EndpointFactLists {
             rows: &self.rows,
             declarations_read: &self.declarations_read,
             void_documents: &self.void_documents,
+            description_documents: &self.description_documents,
             not_measured: &self.not_measured,
             content_samples: &self.content_samples,
             content_profiles: &self.content_profiles,
@@ -448,6 +453,7 @@ fn assemble_endpoint(
         rows: Vec::new(),
         declarations_read: Vec::new(),
         void_documents: Vec::new(),
+        description_documents: Vec::new(),
         not_measured: Vec::new(),
         content_samples: Vec::new(),
             content_profiles: Vec::new(),
@@ -466,6 +472,7 @@ fn assemble_endpoint(
                 });
             facts.rows = swept.rows;
             facts.void_documents = swept.void_documents;
+            facts.description_documents = swept.description_documents;
             facts.content_samples = swept.content_samples;
             facts.content_profiles = swept.content_profiles;
             // Extended and not assigned: the cost-ceiling loop below appends to
@@ -554,6 +561,7 @@ fn collect_sweep(per_endpoint: Vec<EndpointFactLists>) -> Sweep {
         rows: Vec::new(),
         declarations_read: Vec::new(),
         void_documents: Vec::new(),
+        description_documents: Vec::new(),
         not_measured: Vec::new(),
         content_samples: Vec::new(),
         failed_endpoints: 0,
@@ -565,6 +573,7 @@ fn collect_sweep(per_endpoint: Vec<EndpointFactLists>) -> Sweep {
         sweep.rows.extend(facts.rows);
         sweep.declarations_read.extend(facts.declarations_read);
         sweep.void_documents.extend(facts.void_documents);
+        sweep.description_documents.extend(facts.description_documents);
         sweep.not_measured.extend(facts.not_measured);
         sweep.content_samples.extend(facts.content_samples);
     }
@@ -617,6 +626,9 @@ struct EndpointSweep {
     /// because one metric asks it; a `Vec` because that is the shape every
     /// fact family here uses and `EndpointFacts` takes a slice.
     void_documents: Vec<VoidDocument>,
+    /// The description this endpoint served at its own URL, kept only on a sweep
+    /// that copies vendor documents. A `Vec` for the same reason.
+    description_documents: Vec<DescriptionDocument>,
     /// The classes and properties the description named. Empty until the fetch
     /// parses, like `declarations_read` starting `false`, so an endpoint whose
     /// budget expired before the fetch finished publishes an honest nothing
@@ -901,13 +913,30 @@ async fn probe_endpoint(
     // description lives one hop away publishes the document's own URL rather
     // than the one we asked for.
     if acc.declarations_read {
-        acc.description_source = Some(
-            fetch_outcome
-                .as_ref()
-                .ok()
-                .and_then(|o| o.final_url.clone())
-                .unwrap_or_else(|| ep.to_string()),
-        );
+        let source = fetch_outcome
+            .as_ref()
+            .ok()
+            .and_then(|o| o.final_url.clone())
+            .unwrap_or_else(|| ep.to_string());
+        // THE COPY, from the same bytes and under the same condition as the
+        // source above. Gated on the sweep rather than on the endpoint: see
+        // `keeps_vendor_documents`, which is where the cost is reasoned about.
+        //
+        // Only where something PARSED, which is why the emission can treat an
+        // empty copy as a fault. `resolve_fetch` says what an unparseable
+        // description means for the verdict; it does not need a copy of an HTML
+        // console to say it.
+        if metrics::keeps_vendor_documents(defs) {
+            if let Ok(o) = fetch_outcome.as_ref() {
+                acc.description_documents.push(DescriptionDocument {
+                    endpoint: ep.to_string(),
+                    source: source.clone(),
+                    body: o.body.clone(),
+                    content_type: o.content_type.clone(),
+                });
+            }
+        }
+        acc.description_source = Some(source);
     }
     // Cloned out of the parsed declarations here, where they exist, because
     // `Declarations` is dropped at the end of this function and the fact is
@@ -1450,6 +1479,7 @@ mod tests {
             declarations_read: true,
             description_source: None,
             void_documents: Vec::new(),
+        description_documents: Vec::new(),
             declared_classes: Vec::new(),
             declared_properties: Vec::new(),
             profile_pass_enumerated: false,

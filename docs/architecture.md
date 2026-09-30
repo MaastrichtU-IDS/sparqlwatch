@@ -246,6 +246,32 @@ rebuild reads from `_VOID_ENDPOINTS` — the newest run that *published* one —
 the way samples already use their own pointer. Anything else moved to a slower
 cadence needs the same treatment.
 
+`sw:descriptionGraph` is the second instance, added 2026-09-30, and it arrived
+knowing the rule rather than discovering it. It points at this service's copy of
+an endpoint's own description. The copy is kept on the daily pass only, while
+`sw:descriptionSource` beside it is written hourly — so the two are on different
+clocks by design, and the pointer gets the guard and its own `_DESCRIPTION_ENDPOINTS`
+rebuild pointer while the source keeps neither.
+
+**Why a copy and not a link.** SPARQL 1.1 Service Description puts a service's
+description at the endpoint URL, so `descriptionSource` *is* the endpoint URL for
+60 of 72 endpoints (2026-09-30). That URL serves the description only under
+content negotiation: `sparql.uniprot.org/sparql` answers `text/html` to a
+browser's `Accept` and `text/turtle` to a machine's, from the same URL. The RDF
+icon on the endpoint page therefore sent every human reader to the query console
+and called it the service description. `/description?url=` serves the copy
+instead, with `Content-Location` naming where it came from; the 12 endpoints
+whose description lives at a URL of its own still link that URL, which is a real
+document and fresher than any copy.
+
+**Why daily and not hourly.** Sampled 2026-09-30, a service description is a
+median of 14 triples, but uniprot's is 6,670 and the fleet mean is about 547.
+Copied on every hourly sweep that is roughly 945,000 quads a day against a store
+then holding 3.3 million; copied daily, about 39,000 — some 14% on top of the
+store's existing growth. The gate is `prober::metrics::keeps_vendor_documents`,
+which reads the same `cadence` field the metric filter reads, so the two cannot
+drift.
+
 **The fleet-wide caches are warmed at startup, in the site process.** An
 endpoint page was 3–5 s on first view and 23 s after a restart, and the cause
 was one call: `endpoint_vocabulary` reached `explore_payload.build_payload` —

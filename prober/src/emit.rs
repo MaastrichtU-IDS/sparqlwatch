@@ -159,6 +159,49 @@ pub struct VoidDocument {
     pub content_type: Option<String>,
 }
 
+/// The description an endpoint serves at its own URL, and a local copy of it.
+///
+/// The sibling of `VoidDocument`, for the other discovery rule. `DereferenceEndpoint`
+/// already fetches this document every sweep to build `Declarations`; this keeps
+/// what it read.
+///
+/// WHY A COPY AND NOT A LINK. The endpoint URL is the SPARQL 1.1 Service
+/// Description discovery rule, so `descriptionSource` is almost always the
+/// endpoint URL itself -- 60 of 72 on the fleet, measured 2026-09-30. That URL
+/// serves the description only under content negotiation: asked with a browser's
+/// `Accept`, `sparql.uniprot.org/sparql` answers `text/html` and shows the query
+/// console, and asked for RDF it answers `text/turtle`. A reader clicking a link
+/// to it therefore lands on a query form, never on the document the verdict was
+/// computed from. The copy is what makes that link honest.
+///
+/// Like a VoID copy, it is emitted as TRIPLES IN THEIR OWN NAMED GRAPH and never
+/// into the run graph: a third party's assertions about their own service must
+/// not be readable as this project's findings about it.
+#[derive(Clone)]
+pub struct DescriptionDocument {
+    pub endpoint: String,
+    /// Where the document was served from -- the endpoint URL, or wherever a
+    /// redirect landed. The same value `descriptionSource` publishes.
+    pub source: String,
+    /// What came back, kept for `emit` to parse into the copy.
+    pub body: Option<String>,
+    /// The response's content type, which decides how the body is parsed.
+    pub content_type: Option<String>,
+}
+
+impl DescriptionDocument {
+    /// The graph this endpoint's copy is written into, for one run.
+    ///
+    /// Per run and per endpoint, for the reason `VoidDocument::graph_iri` gives.
+    pub fn graph_iri(&self, run: &RunId) -> String {
+        format!(
+            "urn:sparqlwatch:description:{}:{}",
+            run.0,
+            encode_unreserved(&self.endpoint)
+        )
+    }
+}
+
 impl VoidDocument {
     /// The graph this endpoint's copy is written into, for one run.
     ///
@@ -546,6 +589,9 @@ pub struct RunEmission<'a> {
     pub declarations_read: &'a [DeclarationsRead],
     /// The well-known VoID documents this run fetched, with their copies.
     pub void_documents: &'a [VoidDocument],
+    /// The endpoint descriptions this run copied. Empty on a sweep that does
+    /// not run the daily set -- see `keeps_vendor_documents`.
+    pub description_documents: &'a [DescriptionDocument],
     pub not_measured: &'a [NotMeasured],
     /// The ceiling the sweep was run with, recorded on the run's activity. A
     /// parameter rather than something this function discovers:
@@ -1085,6 +1131,9 @@ pub struct EndpointFacts<'a> {
     /// This endpoint's well-known VoID document and its copy, when the fetch
     /// reached one. Empty otherwise.
     pub void_documents: &'a [VoidDocument],
+    /// This endpoint's own description and its copy, when this sweep keeps one.
+    /// Empty otherwise.
+    pub description_documents: &'a [DescriptionDocument],
     pub not_measured: &'a [NotMeasured],
     pub content_samples: &'a [ContentSample],
     /// This endpoint's class profiles. Emitted after the samples and before the
@@ -1125,6 +1174,7 @@ pub fn emit_endpoint(state: &mut EmitState, facts: EndpointFacts) -> anyhow::Res
         rows,
         declarations_read,
         void_documents,
+        description_documents,
         not_measured,
         content_samples,
         content_profiles,
@@ -1755,6 +1805,66 @@ pub fn emit_endpoint(state: &mut EmitState, facts: EndpointFacts) -> anyhow::Res
         }
     }
 
+    // THE ENDPOINT'S OWN DESCRIPTION, copied into its own graph.
+    //
+    // `descriptionSource` above says WHERE it came from; this says WHAT came
+    // back. The two are separate facts because the source is published on every
+    // sweep and the copy only on the ones that keep vendor documents, so a
+    // reader holding a source with no graph is reading a fresh pointer to a
+    // document last copied earlier -- not a missing one.
+    //
+    // Unlike the VoID block below there is no dataset to tie and no claim to
+    // lift: what this document declares is already read into `Declarations` and
+    // published as the metrics' `declared` values. This is the evidence behind
+    // those, kept so a reader can check them.
+    for doc in description_documents {
+        let endpoint = match nn(&doc.endpoint) {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!(endpoint = %doc.endpoint, error = %e, "skipping descriptionGraph: endpoint is not a valid IRI");
+                continue;
+            }
+        };
+        let copy_graph = nn(&doc.graph_iri(run))?;
+        let body = doc.body.as_deref().unwrap_or_default();
+        let format = doc
+            .content_type
+            .as_deref()
+            .and_then(|ct| RdfFormat::from_media_type(ct.split(';').next().unwrap_or(ct).trim()));
+        let Some(format) = format else {
+            // Not a warning. An endpoint serving an HTML console at its URL
+            // reaches here on every daily sweep and is the ordinary case, not a
+            // fault: `resolve_fetch` already records what that means for the
+            // verdict. See `keeps_vendor_documents` for why one is offered at all.
+            continue;
+        };
+        let mut copied = 0usize;
+        for triple in RdfParser::from_format(format).for_reader(body.as_bytes()) {
+            match triple {
+                Ok(t) => {
+                    quads.push(Quad::new(t.subject, t.predicate, t.object, copy_graph.clone()));
+                    copied += 1;
+                }
+                // Keep what parsed, for the reason the VoID copy gives.
+                Err(e) => {
+                    tracing::warn!(endpoint = %doc.endpoint, error = %e, copied, "stopped copying the description at a parse error");
+                    break;
+                }
+            }
+        }
+        // The pointer, published only when the copy holds something. A graph IRI
+        // naming an empty graph is a promise of evidence that is not there, and
+        // the page would link a reader to nothing.
+        if copied > 0 {
+            quads.push(Quad::new(
+                NamedOrBlankNode::NamedNode(endpoint),
+                nn("urn:sparqlwatch:descriptionGraph")?,
+                Term::NamedNode(copy_graph),
+                graph.clone(),
+            ));
+        }
+    }
+
     // THE WELL-KNOWN VoID, as a pointer here and a copy in its own graph.
     //
     // The pointer facts hang off the endpoint beside `declarationsRead`,
@@ -2060,6 +2170,7 @@ fn endpoint_order(
     content_profiles: &[ContentProfile],
     declarations_read: &[DeclarationsRead],
     void_documents: &[VoidDocument],
+    description_documents: &[DescriptionDocument],
 ) -> Vec<String> {
     let mut seen: BTreeSet<&str> = BTreeSet::new();
     let mut order: Vec<String> = Vec::new();
@@ -2074,7 +2185,12 @@ fn endpoint_order(
         // gets a chunk. Every list feeding this has to be here or the emitter
         // silently drops whatever it alone knows about -- caught by
         // `void_copy_tests`, which emit exactly that shape.
-        .chain(void_documents.iter().map(|d| d.endpoint.as_str()));
+        .chain(void_documents.iter().map(|d| d.endpoint.as_str()))
+        // The same, for the description copy. In a production sweep this
+        // endpoint always has a `declarations_read` fact too, so omitting it
+        // changed nothing there -- and `description_copy_tests` emit a run whose
+        // only fact is the copy, which came out empty until this line existed.
+        .chain(description_documents.iter().map(|d| d.endpoint.as_str()));
     for endpoint in all {
         if seen.insert(endpoint) {
             order.push(endpoint.to_string());
@@ -2101,6 +2217,7 @@ pub fn emit_nquads(input: RunEmission) -> anyhow::Result<String> {
         rows,
         declarations_read,
         void_documents,
+        description_documents,
         not_measured,
         max_cost,
         content_profiles,
@@ -2127,7 +2244,7 @@ pub fn emit_nquads(input: RunEmission) -> anyhow::Result<String> {
     })?;
     let mut state = EmitState::new();
     for endpoint in
-        endpoint_order(rows, not_measured, content_samples, content_profiles, declarations_read, void_documents)
+        endpoint_order(rows, not_measured, content_samples, content_profiles, declarations_read, void_documents, description_documents)
     {
         // The five flat lists carry no endpoint grouping this function can rely
         // on, so each is sliced by endpoint here. Cloned rather than borrowed
@@ -2145,6 +2262,8 @@ pub fn emit_nquads(input: RunEmission) -> anyhow::Result<String> {
             declarations_read.iter().filter(|d| d.endpoint == endpoint).cloned().collect();
         let void_documents: Vec<VoidDocument> =
             void_documents.iter().filter(|d| d.endpoint == endpoint).cloned().collect();
+        let description_documents: Vec<DescriptionDocument> =
+            description_documents.iter().filter(|d| d.endpoint == endpoint).cloned().collect();
         out.push_str(&emit_endpoint(
             &mut state,
             EndpointFacts {
@@ -2153,6 +2272,7 @@ pub fn emit_nquads(input: RunEmission) -> anyhow::Result<String> {
                 rows: &rows,
                 declarations_read: &declarations_read,
                 void_documents: &void_documents,
+                description_documents: &description_documents,
                 not_measured: &not_measured,
                 content_samples: &content_samples,
                 content_profiles: &content_profiles,
@@ -2226,7 +2346,7 @@ mod tests {
             concurrency: NonZeroUsize::new(1).unwrap(),
             failed_endpoints: 0,
             content_samples: &[],
-            content_profiles: &[], void_documents: &[] }).unwrap();
+            content_profiles: &[], void_documents: &[], description_documents: &[] }).unwrap();
         quads_of(&out)
     }
 
@@ -2296,7 +2416,7 @@ mod tests {
             concurrency: NonZeroUsize::new(1).unwrap(),
             failed_endpoints: 0,
             content_samples: &content_samples,
-            content_profiles: &[], void_documents: &[] })
+            content_profiles: &[], void_documents: &[], description_documents: &[] })
         .unwrap()
     }
 
@@ -2496,7 +2616,7 @@ mod tests {
             concurrency: NonZeroUsize::new(4).unwrap(),
             failed_endpoints: 1,
             content_samples: &content_samples,
-            content_profiles: &[], void_documents: &[] })
+            content_profiles: &[], void_documents: &[], description_documents: &[] })
         .unwrap()
     }
 
@@ -2695,7 +2815,7 @@ mod tests {
                     properties: Vec::new(), source: None }],
                 not_measured: &[],
                 content_samples: &[],
-                content_profiles: &[], void_documents: &[] },
+                content_profiles: &[], void_documents: &[], description_documents: &[] },
         )
         .unwrap();
         assert!(
@@ -2802,7 +2922,7 @@ mod tests {
                 declarations_read: &[],
                 not_measured: &[],
                 content_samples: &[],
-                content_profiles: &[], void_documents: &[] })
+                content_profiles: &[], void_documents: &[], description_documents: &[] })
             .unwrap();
         writer.finish(RunFooter { run: &run, failed_endpoints: 0 }).unwrap();
         let written = bytes.lock().unwrap().clone();
@@ -3005,7 +3125,7 @@ mod tests {
                 declarations_read: &[],
                 not_measured: &[],
                 content_samples: &[],
-                content_profiles: &[], void_documents: &[] },
+                content_profiles: &[], void_documents: &[], description_documents: &[] },
         )
         .unwrap();
         let qs = quads_of(&chunk);
@@ -3061,7 +3181,7 @@ mod tests {
                 declarations_read: &[],
                 not_measured: &[],
                 content_samples: &[],
-                content_profiles: &[], void_documents: &[] },
+                content_profiles: &[], void_documents: &[], description_documents: &[] },
         )
         .unwrap();
         assert_eq!(typed_in(&quads_of(&first)), BTreeSet::from([a.to_string()]));
@@ -3075,7 +3195,7 @@ mod tests {
                 declarations_read: &[],
                 not_measured: &[],
                 content_samples: &[],
-                content_profiles: &[], void_documents: &[] },
+                content_profiles: &[], void_documents: &[], description_documents: &[] },
         )
         .unwrap();
         assert_eq!(
@@ -3110,7 +3230,7 @@ mod tests {
                 declarations_read: &[],
                 not_measured: &[],
                 content_samples: &[],
-                content_profiles: &[], void_documents: &[] },
+                content_profiles: &[], void_documents: &[], description_documents: &[] },
         )
         .unwrap();
         let qs = quads_of(&chunk);
@@ -3150,7 +3270,7 @@ mod tests {
                     declarations_read: &[],
                     not_measured: &[],
                     content_samples: &[],
-                    content_profiles: &[], void_documents: &[] },
+                    content_profiles: &[], void_documents: &[], description_documents: &[] },
             )
             .unwrap()
         };
@@ -3187,7 +3307,7 @@ mod tests {
                     ],
                     truncated: false,
                 }],
-                content_profiles: &[], void_documents: &[] },
+                content_profiles: &[], void_documents: &[], description_documents: &[] },
         )
         .unwrap();
         let lines: Vec<&str> = out.lines().collect();
@@ -3497,7 +3617,7 @@ mod tests {
             concurrency: NonZeroUsize::new(1).unwrap(),
             failed_endpoints: 0,
             content_samples: &[],
-            content_profiles: &[], void_documents: &[] });
+            content_profiles: &[], void_documents: &[], description_documents: &[] });
         assert!(out.is_ok(), "a bad metric id must not cost the sweep its output");
         let qs = quads_of(&out.unwrap());
         assert_eq!(
@@ -3520,7 +3640,7 @@ mod tests {
             concurrency: NonZeroUsize::new(1).unwrap(),
             failed_endpoints: 0,
             content_samples: &[],
-            content_profiles: &[], void_documents: &[] }).unwrap();
+            content_profiles: &[], void_documents: &[], description_documents: &[] }).unwrap();
         let expected = GraphName::NamedNode(
             NamedNode::new("urn:sparqlwatch:run:2026-08-20T08:00:00Z").unwrap(),
         );
@@ -3627,7 +3747,7 @@ mod tests {
             concurrency: NonZeroUsize::new(1).unwrap(),
             failed_endpoints: 0,
             content_samples: &[],
-            content_profiles: &[], void_documents: &[] })
+            content_profiles: &[], void_documents: &[], description_documents: &[] })
             .expect("one junk endpoint must not discard the sweep");
         assert!(!out.contains("not an iri at all"));
         let qs = quads_of(&out);
@@ -3706,7 +3826,7 @@ mod tests {
             concurrency: NonZeroUsize::new(1).unwrap(),
             failed_endpoints: 0,
             content_samples: &[],
-            content_profiles: &[], void_documents: &[] }).unwrap();
+            content_profiles: &[], void_documents: &[], description_documents: &[] }).unwrap();
         let qs = quads_of(&out);
         let q = qs
             .iter()
@@ -3753,7 +3873,7 @@ mod tests {
             concurrency: NonZeroUsize::new(1).unwrap(),
             failed_endpoints: 0,
             content_samples: &[],
-            content_profiles: &[], void_documents: &[] })
+            content_profiles: &[], void_documents: &[], description_documents: &[] })
         .unwrap();
         let quads = quads_of(&out);
         let object_of = |p: &str| {
@@ -3796,7 +3916,7 @@ mod tests {
             concurrency: NonZeroUsize::new(1).unwrap(),
             failed_endpoints: 0,
             content_samples: &[],
-            content_profiles: &[], void_documents: &[] })
+            content_profiles: &[], void_documents: &[], description_documents: &[] })
         .unwrap();
         let quads = quads_of(&out);
         let declared: Vec<String> = quads
@@ -3824,7 +3944,7 @@ mod tests {
             concurrency: NonZeroUsize::new(1).unwrap(),
             failed_endpoints: 0,
             content_samples: &[],
-            content_profiles: &[], void_documents: &[] }).unwrap();
+            content_profiles: &[], void_documents: &[], description_documents: &[] }).unwrap();
         let qs = quads_of(&out);
         let read_quads: Vec<&Quad> =
             qs.iter().filter(|q| q.predicate.as_str() == "urn:sparqlwatch:declarationsRead").collect();
@@ -3848,7 +3968,7 @@ mod tests {
             concurrency: NonZeroUsize::new(1).unwrap(),
             failed_endpoints: 0,
             content_samples: &[],
-            content_profiles: &[], void_documents: &[] })
+            content_profiles: &[], void_documents: &[], description_documents: &[] })
         .unwrap();
 
         assert!(nq.contains("urn:sparqlwatch:NotMeasured"));
@@ -3880,7 +4000,7 @@ mod tests {
             concurrency: NonZeroUsize::new(1).unwrap(),
             failed_endpoints: 0,
             content_samples: &[],
-            content_profiles: &[], void_documents: &[] }).unwrap();
+            content_profiles: &[], void_documents: &[], description_documents: &[] }).unwrap();
 
         // Collect the two subject sets separately, each by the rdf:type that
         // marks what kind of fact it is. Do NOT filter on a substring of one
@@ -3929,7 +4049,7 @@ mod tests {
             concurrency: NonZeroUsize::new(1).unwrap(),
             failed_endpoints: 0,
             content_samples: &[],
-            content_profiles: &[], void_documents: &[] }).unwrap();
+            content_profiles: &[], void_documents: &[], description_documents: &[] }).unwrap();
         let qs = quads_of(&out);
         let subj = NamedOrBlankNode::NamedNode(
             subject_iri(
@@ -3996,7 +4116,7 @@ mod tests {
             concurrency: NonZeroUsize::new(1).unwrap(),
             failed_endpoints: 0,
             content_samples: &[],
-            content_profiles: &[], void_documents: &[] }).unwrap();
+            content_profiles: &[], void_documents: &[], description_documents: &[] }).unwrap();
         let qs = quads_of(&out);
         let subj = NamedOrBlankNode::NamedNode(
             subject_iri(
@@ -4067,7 +4187,7 @@ mod tests {
             concurrency: NonZeroUsize::new(1).unwrap(),
             failed_endpoints: 0,
             content_samples: &[],
-            content_profiles: &[], void_documents: &[] }).unwrap();
+            content_profiles: &[], void_documents: &[], description_documents: &[] }).unwrap();
         let qs = quads_of(&out);
 
         let declined: BTreeSet<String> = qs
@@ -4120,7 +4240,7 @@ mod tests {
             concurrency: NonZeroUsize::new(1).unwrap(),
             failed_endpoints: 0,
             content_samples: &[],
-            content_profiles: &[], void_documents: &[] }).unwrap();
+            content_profiles: &[], void_documents: &[], description_documents: &[] }).unwrap();
         let qs = quads_of(&out);
         let subjects: BTreeSet<String> = qs
             .iter()
@@ -4149,7 +4269,7 @@ mod tests {
             concurrency: NonZeroUsize::new(1).unwrap(),
             failed_endpoints: 0,
             content_samples: &[],
-            content_profiles: &[], void_documents: &[] })
+            content_profiles: &[], void_documents: &[], description_documents: &[] })
             .expect("one junk endpoint must not discard the sweep");
         assert!(!out.contains("not an iri at all"));
         let qs = quads_of(&out);
@@ -4174,7 +4294,7 @@ mod tests {
                 concurrency: NonZeroUsize::new(1).unwrap(),
                 failed_endpoints: 0,
                 content_samples: &[],
-                content_profiles: &[], void_documents: &[] }).unwrap();
+                content_profiles: &[], void_documents: &[], description_documents: &[] }).unwrap();
             let qs = quads_of(&out);
             assert_eq!(
                 objects(&qs, "urn:sparqlwatch:maxCost"),
@@ -4211,7 +4331,7 @@ mod tests {
             content_samples: &[],
             content_profiles: &[],
             concurrency: NonZeroUsize::new(4).unwrap(),
-            failed_endpoints: 2, void_documents: &[] })
+            failed_endpoints: 2, void_documents: &[], description_documents: &[] })
         .unwrap();
         let qs = quads_of(&out);
         let four = Term::Literal(Literal::new_typed_literal("4", xsd::INTEGER));
@@ -4268,7 +4388,7 @@ mod tests {
             content_samples: &[],
             content_profiles: &[],
             concurrency: NonZeroUsize::new(1).unwrap(),
-            failed_endpoints: 1, void_documents: &[] })
+            failed_endpoints: 1, void_documents: &[], description_documents: &[] })
         .unwrap();
         let qs = quads_of(&out);
         let mut reasons: Vec<String> = objects(&qs, "urn:sparqlwatch:notMeasuredReason")
@@ -4312,7 +4432,7 @@ mod tests {
                 concurrency: NonZeroUsize::new(1).unwrap(),
                 failed_endpoints: 0,
                 content_samples: &[s],
-                content_profiles: &[], void_documents: &[] }).unwrap();
+                content_profiles: &[], void_documents: &[], description_documents: &[] }).unwrap();
         assert!(nq.contains("urn:sparqlwatch:ContentSample"));
         assert_eq!(nq.matches("urn:sparqlwatch:sampledValue").count(), 2);
         assert!(nq.contains(r#""2"^^<http://www.w3.org/2001/XMLSchema#integer>"#));
@@ -4338,7 +4458,7 @@ mod tests {
                 concurrency: NonZeroUsize::new(1).unwrap(),
                 failed_endpoints: 0,
                 content_samples: &[sample(&["http://example.org/A"], true)],
-                content_profiles: &[], void_documents: &[] }).unwrap();
+                content_profiles: &[], void_documents: &[], description_documents: &[] }).unwrap();
         let qs = quads_of(&out);
         assert_eq!(
             objects(&qs, "urn:sparqlwatch:sampleTruncated"),
@@ -4376,7 +4496,7 @@ mod tests {
             concurrency: NonZeroUsize::new(1).unwrap(),
             failed_endpoints: 0,
             content_samples: &[sample(&["http://example.org/A", "http://example.org/B"], false)],
-            content_profiles: &[], void_documents: &[] })
+            content_profiles: &[], void_documents: &[], description_documents: &[] })
         .unwrap();
         let subjects: std::collections::HashSet<&str> = nq
             .lines()
@@ -4431,7 +4551,7 @@ mod tests {
             concurrency: NonZeroUsize::new(1).unwrap(),
             failed_endpoints: 0,
             content_samples: &[sample(&["http://example.org/A"], false)],
-            content_profiles: &[], void_documents: &[] })
+            content_profiles: &[], void_documents: &[], description_documents: &[] })
         .unwrap();
         let qs = quads_of(&out);
         let typed = |iri: &str| -> BTreeSet<String> {
@@ -4473,7 +4593,7 @@ mod tests {
                 &["http://example.org/Zebra", "http://example.org/Apple", "http://example.org/Mango"],
                 false,
             )],
-            content_profiles: &[], void_documents: &[] })
+            content_profiles: &[], void_documents: &[], description_documents: &[] })
         .unwrap();
         let qs = quads_of(&out);
         let subj = NamedOrBlankNode::NamedNode(
@@ -4541,7 +4661,7 @@ mod tests {
                     truncated: true,
                 },
             ],
-            content_profiles: &[], void_documents: &[] })
+            content_profiles: &[], void_documents: &[], description_documents: &[] })
         .unwrap();
         let qs = quads_of(&out);
         let subjects: BTreeSet<String> = qs
@@ -4574,7 +4694,7 @@ mod tests {
                 sample(&["https://a.example/A"], false),
                 sample(&["https://a.example/B"], false),
             ],
-            content_profiles: &[], void_documents: &[] })
+            content_profiles: &[], void_documents: &[], description_documents: &[] })
         .expect("a contradicted sample must not cost the sweep its output");
         let qs = quads_of(&out);
         assert!(
@@ -4617,7 +4737,7 @@ mod tests {
                 },
                 sample(&["http://example.org/A", "not an iri either"], false),
             ],
-            content_profiles: &[], void_documents: &[] })
+            content_profiles: &[], void_documents: &[], description_documents: &[] })
         .expect("one junk string must not discard the sweep");
         assert!(!out.contains("not an iri"));
         let qs = quads_of(&out);
@@ -4655,7 +4775,7 @@ mod tests {
             concurrency: NonZeroUsize::new(1).unwrap(),
             failed_endpoints: 0,
             content_samples: &[sample(&["not an iri", "nor this one"], false)],
-            content_profiles: &[], void_documents: &[] })
+            content_profiles: &[], void_documents: &[], description_documents: &[] })
         .unwrap();
         assert!(
             !out.contains("urn:sparqlwatch:sample"),
@@ -4682,7 +4802,7 @@ mod tests {
                 &["http://example.org/A", "not an iri", "http://example.org/B", "no space allowed"],
                 false,
             )],
-            content_profiles: &[], void_documents: &[] })
+            content_profiles: &[], void_documents: &[], description_documents: &[] })
         .unwrap();
         let qs = quads_of(&out);
         let values = objects(&qs, "urn:sparqlwatch:sampledValue").len();
@@ -4907,7 +5027,7 @@ mod void_copy_tests {
             metric_revision: "rev",
             rows: &[],
             declarations_read: &[],
-            void_documents: docs,
+            void_documents: docs, description_documents: &[],
             not_measured: &[],
             content_samples: &[],
             content_profiles: &[],
@@ -4992,6 +5112,7 @@ mod void_scoping_tests {
             metric_revision: "rev",
             rows: &[],
             declarations_read: &[],
+            description_documents: &[],
             void_documents: &[VoidDocument {
                 endpoint: "https://mine.test/sparql".into(),
                 source: "https://mine.test/.well-known/void".into(),
@@ -5094,5 +5215,114 @@ mod void_scoping_tests {
         );
         assert!(nq.contains("voidDataset> <https://mine.test/#ds>"));
         assert!(!nq.contains("voidDeclaredTriples"), "a count was invented");
+    }
+}
+
+#[cfg(test)]
+mod description_copy_tests {
+    use super::*;
+
+    const SD: &str = "<https://e.test/sparql> <http://www.w3.org/ns/sparql-service-description#endpoint> <https://e.test/sparql> .";
+
+    fn doc(body: &str, ct: &str) -> DescriptionDocument {
+        DescriptionDocument {
+            endpoint: "https://e.test/sparql".into(),
+            source: "https://e.test/sparql".into(),
+            body: Some(body.into()),
+            content_type: Some(ct.into()),
+        }
+    }
+
+    fn emit(docs: &[DescriptionDocument]) -> String {
+        emit_nquads(RunEmission {
+            run: &RunId("R".into()),
+            generated_at: "2026-09-30T00:00:00Z",
+            metric_revision: "rev",
+            rows: &[],
+            declarations_read: &[],
+            void_documents: &[],
+            description_documents: docs,
+            not_measured: &[],
+            content_samples: &[],
+            content_profiles: &[],
+            max_cost: Cost::Cheap,
+            concurrency: NonZeroUsize::new(1).unwrap(),
+            failed_endpoints: 0,
+        })
+        .unwrap()
+    }
+
+    /// WHY THE COPY EXISTS AT ALL.
+    ///
+    /// `descriptionSource` is almost always the endpoint URL -- 60 of 72 on the
+    /// fleet, measured 2026-09-30 -- because that is what the SPARQL 1.1 Service
+    /// Description discovery rule says. A browser asking that URL sends
+    /// `Accept: text/html` and gets the query console, so a page linking the
+    /// source sends its reader to a query form rather than to the description.
+    /// The copy is the thing a link can point at and be honest.
+    #[test]
+    fn the_copy_lands_in_its_own_graph_and_not_the_run_graph() {
+        let nq = emit(&[doc(SD, "text/turtle")]);
+        let copy_line = nq
+            .lines()
+            .find(|l| l.contains("sparql-service-description#endpoint"))
+            .expect("the copy was not written at all");
+        assert!(
+            copy_line.contains("urn:sparqlwatch:description:R:"),
+            "the copied triple is not in its own graph: {copy_line}"
+        );
+        assert!(
+            !copy_line.contains("urn:sparqlwatch:run:"),
+            "a vendor's assertion landed in the run graph, where it reads as ours: {copy_line}"
+        );
+    }
+
+    #[test]
+    fn the_run_graph_keeps_the_pointer() {
+        let nq = emit(&[doc(SD, "text/turtle")]);
+        assert!(
+            nq.lines().any(|l| l.contains("urn:sparqlwatch:descriptionGraph")
+                && l.contains("urn:sparqlwatch:description:R:")
+                && l.contains("urn:sparqlwatch:run:")),
+            "the run graph has no pointer to the copy"
+        );
+    }
+
+    /// An endpoint serving an HTML console at its own URL is the ordinary case,
+    /// not a fault: 60 of 72 do it. Writing a pointer to an empty graph would
+    /// promise evidence that is not there, and the page would link to nothing.
+    #[test]
+    fn a_console_is_not_copied_and_gets_no_pointer() {
+        let nq = emit(&[doc("<html><body>query form</body></html>", "text/html")]);
+        assert!(
+            !nq.contains("urn:sparqlwatch:descriptionGraph"),
+            "an HTML console got a copy-graph pointer"
+        );
+        assert!(
+            !nq.contains("urn:sparqlwatch:description:R:"),
+            "an HTML console wrote copy quads"
+        );
+    }
+
+    /// RDF that parses to nothing is the same promise as no RDF at all.
+    #[test]
+    fn an_empty_graph_gets_no_pointer() {
+        let nq = emit(&[doc("", "text/turtle")]);
+        assert!(
+            !nq.contains("urn:sparqlwatch:descriptionGraph"),
+            "an empty document got a pointer to an empty graph"
+        );
+    }
+
+    /// The two documents are kept apart. They answer different discovery rules
+    /// and routinely differ: measured 2026-09-28, uniprot serves VoID at its
+    /// endpoint URL and nothing well-known, omabrowser the exact opposite.
+    #[test]
+    fn a_description_copy_never_lands_in_a_void_graph() {
+        let nq = emit(&[doc(SD, "text/turtle")]);
+        assert!(
+            !nq.contains("urn:sparqlwatch:void:"),
+            "a description copy was written into a VoID graph"
+        );
     }
 }

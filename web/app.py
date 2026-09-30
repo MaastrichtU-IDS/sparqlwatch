@@ -97,7 +97,9 @@ from endpoint_history import EndpointHistory, Reading, endpoint_history
 from fleet import FleetHistory, fleet_history as _fleet_history, fleet_stats
 from endpoint_measurements import (
     EndpointMeasurements,
+    description_graph,
     description_source,
+    description_triples,
     endpoint_measurements,
     void_document,
 )
@@ -166,6 +168,19 @@ EXPLORE_PATH = "/explore"
 # a description to autocomplete against needs a url it can point at and quote,
 # and "the RDF you get from /endpoint if you ask for turtle" is not one.
 VOID_PATH = "/void"
+# The VENDOR's description of their own service, copied verbatim. Its own path
+# for the same reason /void has one, and the two must not be confused: /void is
+# what THIS service observed, shaped as VoID, and this is what the endpoint's
+# operator published about themselves.
+#
+# It exists because the vendor's own URL cannot serve the purpose. SPARQL 1.1
+# Service Description puts the document at the endpoint URL, so that is what
+# `descriptionSource` holds for 60 of 72 endpoints (2026-09-30) -- and a browser
+# asking that URL sends `Accept: text/html` and gets the query console.
+# `sparql.uniprot.org/sparql` answers `text/html` to a browser and `text/turtle`
+# to a machine, from the same URL. A page linking the source therefore sent every
+# human reader to a query form and called it the service description.
+DESCRIPTION_PATH = "/description"
 
 ABOUT_PATH = "/about"
 HISTORY_PATH = "/history"
@@ -1779,6 +1794,7 @@ def _page_context(
     void: dict | None,
     partitions: list[dict],
     description_source: str | None = None,
+    description_copy: str | None = None,
     void_doc=None,
 ) -> dict:
     """Everything the template renders, decided here rather than in the page.
@@ -1790,7 +1806,22 @@ def _page_context(
     # Which metric row links which vendor document. Keyed by metric IRI, so the
     # template needs no knowledge of which metric reads which URL.
     documents: dict[str, str] = {}
-    if description_source:
+    # OUR COPY WHEN WE HAVE ONE, and the vendor's URL only when we do not.
+    #
+    # The source is almost always the endpoint URL -- the SPARQL 1.1 Service
+    # Description discovery rule says the description lives there, and it did for
+    # 60 of 72 endpoints on 2026-09-30. That URL serves the description only
+    # under content negotiation, so a browser following this link got the query
+    # console: `sparql.uniprot.org/sparql` answers `text/html` to a browser and
+    # `text/turtle` to a machine, from the same URL. The link was spec-correct
+    # and sent every human reader to a query form.
+    #
+    # Falling back to the source rather than dropping the link: for the 12
+    # endpoints whose description lives at a URL of its own, that URL is a real
+    # document and works in a browser, and it is fresher than any copy.
+    if description_copy:
+        documents["urn:sparqlwatch:metric:service-description"] = description_copy
+    elif description_source:
         documents["urn:sparqlwatch:metric:service-description"] = description_source
     if void_doc is not None:
         documents["urn:sparqlwatch:metric:void-well-known"] = void_doc.source
@@ -1930,6 +1961,7 @@ def _endpoint_html(
     void: dict | None,
     partitions: list[dict],
     description_source: str | None = None,
+    description_copy: str | None = None,
     void_doc=None,
 ) -> str:
     """The page, rendered."""
@@ -1943,6 +1975,7 @@ def _endpoint_html(
             void,
             partitions,
             description_source,
+            description_copy,
             void_doc,
         )
     )
@@ -2103,6 +2136,13 @@ def endpoint_resource(
         summary = void_summary(store, url)
         partitions = void_partitions(store, url)
         source = description_source(store, url)
+        # OUR copy's url, not the store's graph IRI: the page links a resource a
+        # reader can open, and `/description` is what serves that graph.
+        copy = (
+            f"{DESCRIPTION_PATH}?url={quote(url, safe='')}"
+            if description_graph(store, url)
+            else None
+        )
         document = void_document(store, url)
         body = _endpoint_html(
             url,
@@ -2113,6 +2153,7 @@ def endpoint_resource(
             summary,
             partitions,
             source,
+            copy,
             document,
         )
         _LOG.info(
@@ -5278,6 +5319,88 @@ def void_resource(
     return Response(
         content=body,
         media_type="text/plain; charset=utf-8" if as_text else media_type,
+    )
+
+
+@app.get(DESCRIPTION_PATH)
+def description_resource(
+    request: Request,
+    url: str | None = None,
+    store: Store = Depends(get_store),
+) -> Response:
+    """One endpoint's own description, as this service last read it.
+
+    NOT OUR WORDS. Every other resource here publishes what this project
+    measured; this republishes what the endpoint's operator published about
+    themselves, copied verbatim on the sweep that read it. It is the evidence
+    behind the `service-description` verdict and behind every `declared` value on
+    the endpoint page, which is why it is worth serving at all: a verdict whose
+    evidence a reader cannot open is a claim they have to take on trust.
+
+    IT IS A COPY, AND IT SAYS SO. `Content-Location` names the URL the document
+    came from, so a reader who wants the live one has it in a header rather than
+    having to trust that this is current. The copy is taken daily; see
+    `endpoint_measurements.description_graph` for why not hourly.
+
+    RDF only and no HTML, for the reason `void_resource` gives, and with the same
+    browser accommodation: a reader clicking through from the endpoint page gets
+    Turtle labelled `text/plain`, so the browser paints it instead of downloading
+    it.
+    """
+    if not url:
+        return Response(
+            content="this resource describes one endpoint; name it with ?url=\n",
+            status_code=400,
+            media_type="text/plain; charset=utf-8",
+        )
+    media_type = choose_representation(request.headers.get("accept"))
+    if media_type is None:
+        return Response(
+            content=(
+                "this resource is RDF only; it offers " + ", ".join(RDF_MEDIA_TYPES) + "\n"
+            ),
+            status_code=406,
+            media_type="text/plain; charset=utf-8",
+        )
+    graph = description_graph(store, url)
+    if graph is None:
+        # THREE DIFFERENT ABSENCES, one status. No copy has been taken yet; the
+        # endpoint serves no RDF at its URL; or this store has never heard of it.
+        # The body separates them as far as it honestly can, and the page does
+        # not link here at all in the second case, so a reader arriving with no
+        # copy has usually typed the url themselves.
+        return Response(
+            content=(
+                "no copy of that endpoint's own description in this store. Either "
+                "it serves no RDF at its url, or the daily pass that keeps copies "
+                "has not reached it yet\n"
+            ),
+            status_code=404,
+            media_type="text/plain; charset=utf-8",
+        )
+    triples = description_triples(store, graph)
+    if not triples:
+        # A pointer to an empty graph is a bug, not a state: the prober publishes
+        # the pointer only where the copy holds something. Saying so plainly
+        # beats serving an empty document that reads as "they describe nothing".
+        _LOG.warning("description graph %s is empty; the pointer should not exist", graph)
+        return Response(
+            content="the copy of that endpoint's description is empty\n",
+            status_code=404,
+            media_type="text/plain; charset=utf-8",
+        )
+    as_text = media_type == HTML_MEDIA_TYPE
+    body = serialize(
+        triples,
+        format=RdfFormat.from_media_type(RDF_MEDIA_TYPES[0] if as_text else media_type),
+        prefixes=VOID_PREFIXES,
+    )
+    source = description_source(store, url)
+    headers = {"Content-Location": source} if source else {}
+    return Response(
+        content=body,
+        media_type="text/plain; charset=utf-8" if as_text else media_type,
+        headers=headers,
     )
 
 

@@ -796,6 +796,24 @@ pub fn load_metrics(toml_src: &str) -> anyhow::Result<Vec<MetricDef>> {
 /// `NotMeasured` facts for one (endpoint, metric) pair, and the reader is
 /// owed the reason that was decided first. Both halves preserve input order,
 /// for the reason `within_cost` gives.
+/// Whether this sweep keeps a copy of the vendor documents it fetches.
+///
+/// Reads the same field `within_cadence` filters on, so the two cannot drift:
+/// `defs` has already been narrowed to what this sweep asks, and a sweep that
+/// asks a daily metric is a daily sweep. The cadence itself is not threaded down
+/// to the fetch -- `run_sweep` is given the narrowed `defs` and nothing else,
+/// and it is `defs` that says what the sweep is doing.
+///
+/// WHY NOT EVERY SWEEP. Sampled 2026-09-30, service descriptions are mostly tiny
+/// -- a median of 14 triples -- but `sparql.uniprot.org` serves 6,670, and the
+/// fleet mean is about 547. Copied hourly that is roughly 945,000 quads a day
+/// against a store then holding 3.3 million; copied daily it is about 39,000, or
+/// some 14% on top of the store's existing growth. The daily copy is what makes
+/// keeping the evidence affordable.
+pub fn keeps_vendor_documents(defs: &[MetricDef]) -> bool {
+    defs.iter().any(|d| d.cadence == Cadence::Daily)
+}
+
 pub fn within_cadence(defs: &[MetricDef], cadence: Cadence) -> (Vec<MetricDef>, Vec<MetricDef>) {
     let mut run = Vec::new();
     let mut declined = Vec::new();
@@ -1642,6 +1660,31 @@ query = "SELECT ?s WHERE { ?s ?p ?o } LIMIT 1"
              sample_limit=200\nquery=\"\"\"\n# every class, bounded, in whichever graph the endpoint defaults to\n\
              SELECT DISTINCT ?c WHERE { ?s a ?c } LIMIT 200\n\"\"\"\n";
         assert!(load_metrics(harmless).is_ok(), "a comment is not a limit, and not a problem either");
+    }
+
+    #[test]
+    fn only_a_daily_sweep_keeps_vendor_documents() {
+        // The real files, not a fixture: the gate reads what the shipped
+        // metrics actually declare, and the whole point is that an hourly sweep
+        // copies nothing. Copied hourly, service descriptions would add roughly
+        // 945,000 quads a day to a store holding 3.3 million (sampled
+        // 2026-09-30, mean 547 triples over 72 endpoints, uniprot alone 6,670).
+        let all = load_metrics(include_str!("../metrics.toml")).unwrap();
+        let (hourly, _) = within_cadence(&all, Cadence::Hourly);
+        let (daily, _) = within_cadence(&all, Cadence::Daily);
+
+        assert!(
+            !keeps_vendor_documents(&hourly),
+            "an hourly sweep would copy every endpoint's description, 24 times a day"
+        );
+        assert!(
+            keeps_vendor_documents(&daily),
+            "the daily sweep keeps no copy, so the evidence is never kept at all"
+        );
+        assert!(
+            !keeps_vendor_documents(&[]),
+            "a sweep asking nothing is not a daily sweep"
+        );
     }
 
     #[test]
