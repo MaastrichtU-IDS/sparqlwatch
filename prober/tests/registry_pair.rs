@@ -61,3 +61,70 @@ fn the_container_registry_names_the_service_and_not_loopback() {
     );
     assert!(!host.iter().any(|u| u.contains(CONTAINER_ONLY)), "{host:?}");
 }
+
+/// Neither registry may list a url twice.
+///
+/// `load_endpoints` already drops a repeat and WARNs, so a duplicate costs
+/// nothing at sweep time -- which is exactly why two of them sat in both files
+/// long enough to be warned about on every hourly sweep for weeks. A warning
+/// that fires every hour and changes nothing trains a reader to skip warnings,
+/// and the next one will be about something that matters.
+///
+/// Asked of the FILE and not of `load_endpoints`, which returns the
+/// deduplicated list: asking the loader would compare a set against itself and
+/// pass forever.
+#[test]
+fn neither_registry_lists_an_endpoint_twice() {
+    /// Mirrors the loader's own `Entry`, which is private: an entry is a bare
+    /// url or a table carrying one. Both spellings name an endpoint, so both
+    /// count -- listing a url as a string and again as an inactive record is
+    /// the same duplicate wearing two hats.
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum Entry {
+        Url(String),
+        Described { url: String },
+    }
+
+    impl Entry {
+        fn url(&self) -> &str {
+            match self {
+                Entry::Url(url) | Entry::Described { url } => url,
+            }
+        }
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Listed {
+        endpoint: Option<Vec<Entry>>,
+    }
+
+    for (name, text) in [
+        ("endpoints.toml", include_str!("../endpoints.toml")),
+        (
+            "endpoints.container.toml",
+            include_str!("../endpoints.container.toml"),
+        ),
+    ] {
+        let listed: Listed = toml::from_str(text).expect("the registry parses");
+        let entries = listed.endpoint.unwrap_or_default();
+        let mut seen: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+        for entry in &entries {
+            *seen.entry(entry.url()).or_insert(0) += 1;
+        }
+        let repeated: Vec<String> = seen
+            .iter()
+            .filter(|(_, &count)| count > 1)
+            .map(|(url, count)| format!("{url} ({count}x)"))
+            .collect();
+        assert!(
+            repeated.is_empty(),
+            "{name} lists {} url(s) more than once: {}. Probing is unaffected -- \
+             the loader drops the repeat -- but the sweep warns about it every \
+             hour. Delete the later entry, keeping the one whose surrounding \
+             comment explains why the endpoint is listed.",
+            repeated.len(),
+            repeated.join(", ")
+        );
+    }
+}
