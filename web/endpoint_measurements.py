@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from pyoxigraph import NamedNode, Store, Variable
+from pyoxigraph import NamedNode, Store, Triple, Variable
 
 from queries import read_query
 
@@ -484,6 +484,46 @@ def description_source(store: Store, endpoint: str) -> str | None:
     ):
         return row["source"].value
     return None
+
+
+_DESCRIPTION_GRAPH_QUERY = read_query("endpoint_description_graph")
+
+
+def description_graph(store: Store, endpoint: str) -> str | None:
+    """The graph holding this service's copy of the endpoint's own description.
+
+    ``None`` when no copy has been taken. That is not an error and not a gap in
+    the record: the copy is kept on the daily sweep only (see the query), and an
+    endpoint serving an HTML console at its URL never produces one at all.
+
+    The copy is what a link can honestly point at. `description_source` names
+    where the document came from, which under SPARQL 1.1 Service Description is
+    the endpoint URL itself for 60 of 72 endpoints measured on 2026-09-30 -- and
+    that URL answers a browser with the query console, because the description is
+    there only under content negotiation.
+    """
+    for row in store.query(
+        _DESCRIPTION_GRAPH_QUERY, substitutions={_ENDPOINT: NamedNode(endpoint)}
+    ):
+        return row["graph"].value
+    return None
+
+
+def description_triples(store: Store, graph: str) -> list[Triple]:
+    """The copied description, verbatim, as triples.
+
+    Read straight out of the copy graph and not reshaped: this is somebody
+    else's document, and the only honest way to republish it is unchanged. The
+    graph is per run and per endpoint, so it holds one document and nothing else.
+
+    Empty when the graph holds nothing, which the prober should never produce --
+    it publishes the pointer only where the copy has triples. The caller turns
+    that into a 404 and logs it.
+    """
+    return [
+        Triple(q.subject, q.predicate, q.object)
+        for q in store.quads_for_pattern(None, None, None, NamedNode(graph))
+    ]
 
 
 _VOID_DOCUMENT_QUERY = read_query("endpoint_void_document")

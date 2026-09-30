@@ -2696,3 +2696,109 @@ def test_a_newer_void_document_replaces_an_older_one(tmp_path):
             f'<urn:sparqlwatch:m:{at}> <http://www.w3.org/ns/dqv#value> "verified" {g} .',
             f"<{ep}> <urn:sparqlwatch:voidSource> <{source}> {g} .",
         ]) + "\n").encode()
+
+
+def test_an_hourly_run_does_not_wipe_the_daily_description_copy(tmp_path):
+    """The same trap as the VoID one above, for the description copy.
+
+    `descriptionSource` is written on every sweep and needs no guard.
+    `descriptionGraph` is not: the copy of a vendor's description is kept only on
+    a sweep that keeps vendor documents, because copying it hourly would add
+    roughly 945,000 quads a day to a store holding 3.3 million (sampled
+    2026-09-30: a median of 14 triples per description, but 6,670 for uniprot).
+
+    So the two arrive on different clocks, and the pointer has to survive the 23
+    hourly runs between copies -- on the load path AND through a rebuild, which
+    derives from each endpoint's newest run and would otherwise never see one.
+    """
+    import load_run
+    from pyoxigraph import Store
+
+    ep = "https://e.test/sparql"
+    copy_graph = "urn:sparqlwatch:description:2026-09-30T03:30:00Z:https%3A%2F%2Fe.test%2Fsparql"
+
+    def run(at: str, with_copy: bool) -> bytes:
+        g, a = f"<urn:sparqlwatch:run:{at}>", f"<urn:sparqlwatch:activity:{at}>"
+        lines = [
+            f"{a} <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/prov#Activity> {g} .",
+            f'{a} <http://www.w3.org/ns/prov#generatedAtTime> "{at}"^^<http://www.w3.org/2001/XMLSchema#dateTime> {g} .',
+            f"<urn:sparqlwatch:m:{at}> <http://www.w3.org/ns/dqv#computedOn> <{ep}> {g} .",
+            f"<urn:sparqlwatch:m:{at}> <http://www.w3.org/ns/dqv#isMeasurementOf> <urn:sparqlwatch:metric:service-description> {g} .",
+            f'<urn:sparqlwatch:m:{at}> <http://www.w3.org/ns/dqv#value> "verified" {g} .',
+            # Written by EVERY sweep, copy or not: that is the asymmetry.
+            f"<{ep}> <urn:sparqlwatch:descriptionSource> <{ep}> {g} .",
+        ]
+        if with_copy:
+            lines.append(f"<{ep}> <urn:sparqlwatch:descriptionGraph> <{copy_graph}> {g} .")
+            lines.append(
+                f"<{ep}> <http://www.w3.org/ns/sparql-service-description#endpoint> <{ep}> <{copy_graph}> ."
+            )
+        return ("\n".join(lines) + "\n").encode()
+
+    store = Store(str(tmp_path / "s"))
+    has_graph = (
+        "ASK { GRAPH <urn:sparqlwatch:current> { ?e <urn:sparqlwatch:descriptionGraph> ?g } }"
+    )
+
+    load_run.load_run(store, run("2026-09-30T03:30:00Z", with_copy=True))
+    assert store.query(has_graph), "the daily run's copy pointer never reached current"
+
+    for at in ("2026-09-30T04:00:00Z", "2026-09-30T05:00:00Z", "2026-09-30T06:00:00Z"):
+        load_run.load_run(store, run(at, with_copy=False))
+    assert store.query(has_graph), "an hourly run wiped the daily description copy pointer"
+
+    load_run.rebuild_current(store)
+    assert store.query(has_graph), "the rebuild dropped the description copy pointer"
+
+    # The copy itself is still readable, and still in its own graph rather than
+    # in `current` or in a run graph -- a vendor's claims about their own service
+    # must not be readable as this project's findings about it.
+    in_own_graph = (
+        "ASK { GRAPH <%s> { ?s <http://www.w3.org/ns/sparql-service-description#endpoint> ?o } }"
+        % copy_graph
+    )
+    assert store.query(in_own_graph), "the copied triples are gone"
+    leaked = (
+        "ASK { GRAPH <urn:sparqlwatch:current> { ?s "
+        "<http://www.w3.org/ns/sparql-service-description#endpoint> ?o } }"
+    )
+    assert not store.query(leaked), "a vendor's triple leaked into current"
+
+
+def test_a_newer_copy_replaces_an_older_one(tmp_path):
+    """Two daily copies, and `current` points at the newer.
+
+    The pointer is republished from the run that last wrote one, so a second
+    daily pass has to move it -- otherwise the page would keep showing the first
+    copy this service ever took and call it evidence.
+    """
+    import load_run
+    from pyoxigraph import Store
+
+    ep = "https://e.test/sparql"
+
+    def run(at: str) -> bytes:
+        g, a = f"<urn:sparqlwatch:run:{at}>", f"<urn:sparqlwatch:activity:{at}>"
+        graph = f"urn:sparqlwatch:description:{at}:https%3A%2F%2Fe.test%2Fsparql"
+        return ("\n".join([
+            f"{a} <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/prov#Activity> {g} .",
+            f'{a} <http://www.w3.org/ns/prov#generatedAtTime> "{at}"^^<http://www.w3.org/2001/XMLSchema#dateTime> {g} .',
+            f"<urn:sparqlwatch:m:{at}> <http://www.w3.org/ns/dqv#computedOn> <{ep}> {g} .",
+            f"<urn:sparqlwatch:m:{at}> <http://www.w3.org/ns/dqv#isMeasurementOf> <urn:sparqlwatch:metric:service-description> {g} .",
+            f'<urn:sparqlwatch:m:{at}> <http://www.w3.org/ns/dqv#value> "verified" {g} .',
+            f"<{ep}> <urn:sparqlwatch:descriptionGraph> <{graph}> {g} .",
+            f"<{ep}> <http://www.w3.org/ns/sparql-service-description#endpoint> <{ep}> <{graph}> .",
+        ]) + "\n").encode()
+
+    store = Store(str(tmp_path / "s"))
+    load_run.load_run(store, run("2026-09-30T03:30:00Z"))
+    load_run.load_run(store, run("2026-10-01T03:30:00Z"))
+
+    pointers = [
+        str(row["g"]) for row in store.query(
+            "SELECT ?g WHERE { GRAPH <urn:sparqlwatch:current> "
+            "{ ?e <urn:sparqlwatch:descriptionGraph> ?g } }"
+        )
+    ]
+    assert len(pointers) == 1, f"current holds {len(pointers)} copy pointers: {pointers}"
+    assert "2026-10-01" in pointers[0], f"current still points at the older copy: {pointers[0]}"

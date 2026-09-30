@@ -1,0 +1,20 @@
+# Which graph holds this service's copy of one endpoint's own description.
+#
+# A POINTER ON A SLOWER CLOCK than `descriptionSource` beside it. The source is
+# written by every sweep; the copy only by a sweep that keeps vendor documents,
+# because copying every description hourly would add roughly 945,000 quads a day
+# to a store that held 3.3 million (sampled 2026-09-30: a median of 14 triples
+# per description, and 6,670 for uniprot). So a bound source with no graph here
+# is the ordinary shape for an endpoint whose description has never parsed, and
+# for one whose first daily copy has not happened yet.
+#
+# `?endpoint` is substituted by the caller, and is in the projection because
+# pyoxigraph's SEP-0007 substitution requires it there.
+
+PREFIX sw: <urn:sparqlwatch:>
+
+SELECT ?endpoint ?graph WHERE {
+  GRAPH sw:current {
+    ?endpoint sw:descriptionGraph ?graph .
+  }
+}

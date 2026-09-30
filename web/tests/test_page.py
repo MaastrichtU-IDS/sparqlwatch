@@ -3416,3 +3416,113 @@ def test_concurrent_first_readers_build_the_payload_once(tmp_path, monkeypatch):
         assert len(calls) == 1, f"the payload was built {len(calls)} times by 5 readers"
     finally:
         app.build_payload.cache_clear()
+
+
+_DESCRIPTION_COPY = Path(__file__).parent / "fixtures" / "run-description-copy.nq"
+
+_SD = "http://www.w3.org/ns/sparql-service-description#"
+
+
+def _has_service_triple(turtle: str) -> bool:
+    """Whether the document says something is an `sd:Service`."""
+    import io
+
+    import pyoxigraph
+
+    return any(
+        t.predicate.value.endswith("rdf-syntax-ns#type") and t.object.value == _SD + "Service"
+        for t in pyoxigraph.parse(
+            io.BytesIO(turtle.encode()), format=pyoxigraph.RdfFormat.TURTLE
+        )
+    )
+
+
+def test_the_description_link_points_at_our_copy_not_the_endpoint_url(tmp_path, client_for):
+    """THE BUG THIS FEATURE EXISTS FOR.
+
+    SPARQL 1.1 Service Description puts a service's description at the endpoint
+    URL, so `descriptionSource` IS the endpoint URL for 60 of 72 endpoints
+    (measured 2026-09-30). That URL serves the description only under content
+    negotiation: `sparql.uniprot.org/sparql` answers `text/html` to a browser's
+    Accept and `text/turtle` to a machine's, from the same URL. So the RDF icon
+    on the endpoint page sent every human reader to the query console and
+    called it the service description.
+    """
+    store = _store_with(tmp_path, _DESCRIPTION_COPY)
+    endpoint = "http://127.0.0.1:9311/sparql"
+
+    client = client_for(store)
+    page = client.get("/endpoint", params={"url": endpoint})
+    assert page.status_code == 200
+    hrefs = re.findall(r'href="([^"]+)"', page.text)
+
+    assert any(h.startswith("/description?url=") for h in hrefs), (
+        "the page does not link our copy of the description"
+    )
+    # The bare endpoint URL may still appear on the page -- it is the endpoint,
+    # and the page names it. What must not happen is the DESCRIPTION row linking
+    # it, so this asserts on the document link specifically.
+    row = re.search(
+        r'data-metric-column="service-description".*?</td>', page.text, re.S
+    ) or re.search(r'service-description.*?</tr>', page.text, re.S)
+    assert row, "no service-description row on the page"
+    assert "/description?url=" in row.group(0), (
+        "the service-description row still links somewhere other than the copy"
+    )
+
+
+def test_the_copy_is_served_as_rdf(tmp_path, client_for):
+    """What the link leads to: the vendor's own triples, verbatim."""
+    store = _store_with(tmp_path, _DESCRIPTION_COPY)
+    endpoint = "http://127.0.0.1:9311/sparql"
+
+    client = client_for(store)
+    machine = client.get(
+            "/description", params={"url": endpoint}, headers={"accept": "text/turtle"}
+        )
+    assert machine.status_code == 200
+    assert machine.headers["content-type"].startswith("text/turtle")
+    # PARSED, not string-matched: the response is written with prefixes, so
+    # `sd:Service` and the full IRI are the same triple and a substring test
+    # pins the serializer's choices rather than the content.
+    assert _has_service_triple(machine.text), (
+        "the vendor's own triples are not in the response"
+    )
+    # Says where it came from, so a reader can reach the live document.
+    assert machine.headers.get("content-location") == endpoint
+
+    # A browser gets the same bytes painted rather than downloaded -- the same
+    # accommodation /void makes, and for the same reason: this link is clicked
+    # from a page.
+    client = client_for(store)
+    browser = client.get(
+            "/description",
+            params={"url": endpoint},
+            headers={"accept": "text/html,application/xhtml+xml"},
+        )
+    assert browser.status_code == 200
+    assert browser.headers["content-type"].startswith("text/plain")
+    assert _has_service_triple(browser.text), "the browser got no triples"
+
+
+def test_the_copy_route_404s_for_an_endpoint_with_none(tmp_path, client_for):
+    """An endpoint serving an HTML console at its URL has no copy, and that is
+    the ordinary case rather than a fault -- 60 of 72 serve a console to a
+    browser. Saying so beats an empty document, which would read as "they
+    describe nothing"."""
+    store = _store_with(tmp_path, _DESCRIPTION_COPY)
+    client = client_for(store)
+    missing = client.get(
+            "/description",
+            params={"url": "https://never.heard.of/sparql"},
+            headers={"accept": "text/turtle"},
+        )
+    assert missing.status_code == 404
+    assert "no copy" in missing.text
+
+
+def test_the_copy_route_needs_an_endpoint(tmp_path, client_for):
+    store = _store_with(tmp_path, _DESCRIPTION_COPY)
+    client = client_for(store)
+    bare = client.get("/description", headers={"accept": "text/turtle"})
+    assert bare.status_code == 400

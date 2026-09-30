@@ -414,6 +414,31 @@ SELECT DISTINCT ?endpoint WHERE {
 }
 """
 
+# The endpoints whose description this run COPIED, which is not the same set as
+# the ones it read a description from.
+#
+# ITS OWN POINTER, for the reason _VOID_ENDPOINTS has one, and this is the case
+# that comment predicted: `descriptionSource` is written on every sweep, but the
+# copy only on the ones that keep vendor documents (prober
+# `metrics::keeps_vendor_documents`). So the newest run holding a source is
+# routinely NOT the newest run holding a graph, and reading the graph from the
+# source's run would drop the copy for a whole day at a time.
+_DESCRIPTION_ENDPOINTS = _PREAMBLE + """
+SELECT DISTINCT ?endpoint WHERE {
+  GRAPH run: { ?endpoint sw:descriptionGraph ?graph }
+}
+"""
+
+# One endpoint's description copy pointer, rewritten from the run that last
+# published it. `descriptionSource` is NOT here: it rides the endpoint's newest
+# run like every hourly fact, and rewriting it from an older run would publish a
+# stale source beside a fresh verdict.
+_REPLACE_DESCRIPTION = """
+DELETE WHERE { GRAPH sw:current { endpoint: sw:descriptionGraph ?o } } ;
+INSERT { GRAPH sw:current { endpoint: sw:descriptionGraph ?o } }
+WHERE  { GRAPH run: { endpoint: sw:descriptionGraph ?o } } ;
+"""
+
 # One endpoint's void facts, rewritten from the run that last published them.
 _REPLACE_VOID = """
 DELETE WHERE { GRAPH sw:current { endpoint: sw:voidSource ?o } } ;
@@ -611,8 +636,22 @@ DELETE WHERE { GRAPH sw:current { endpoint: sw:descriptionSource ?src } } ;
 #
 # `declarationsRead` and `descriptionSource` above need no such guard, and the
 # difference is cadence rather than design: `service-description` is hourly, so
-# every run republishes them. They would break the same way the day that
-# metric moved to a slower cadence.
+# every run republishes them.
+#
+# `descriptionGraph` DOES need one, and it is the case this comment used to
+# predict in the abstract: the copy of an endpoint's description is kept only on
+# a sweep that keeps vendor documents (prober `metrics::keeps_vendor_documents`),
+# so it arrives daily while its own `descriptionSource` arrives hourly.
+# Unguarded, every hourly run would wipe the pointer the daily run wrote -- the
+# exact VoID bug above, which held `current` at zero VoID documents while 27
+# endpoints published one.
+DELETE { GRAPH sw:current { endpoint: sw:descriptionGraph ?dg } }
+WHERE {
+  GRAPH sw:current { endpoint: sw:descriptionGraph ?dg }
+  FILTER EXISTS { GRAPH run: { endpoint: sw:descriptionGraph ?any } }
+} ;
+INSERT { GRAPH sw:current { endpoint: sw:descriptionGraph ?dg } }
+WHERE  { GRAPH run: { endpoint: sw:descriptionGraph ?dg } } ;
 DELETE { GRAPH sw:current { endpoint: ?vp ?vo } }
 WHERE {
   VALUES ?vp { sw:voidSource sw:voidValid sw:voidGraph sw:voidTriples
@@ -649,6 +688,10 @@ WHERE  { GRAPH run: { endpoint: sw:declarationsRead ?read } } ;
 # parsed.
 INSERT { GRAPH sw:current { endpoint: sw:descriptionSource ?src } }
 WHERE  { GRAPH run: { endpoint: sw:descriptionSource ?src } } ;
+# NOT the copy pointer. `descriptionGraph` is republished from its own run by
+# `_REPLACE_DESCRIPTION`, because it is written on a slower cadence than this
+# unit's run: rewriting it here would delete a daily copy whenever an hourly run
+# was an endpoint's newest.
 # The well-known VoID pointers. Four separate units because each is optional
 # and independent: a document can be there and invalid, in which case there is
 # a source and a validity and no graph and no count.
@@ -1213,6 +1256,8 @@ def _newest_per_endpoint(
     dict[tuple[str, str], str],
     dict[tuple[str, str], str],
     dict[tuple[str, str], str],
+    dict[str, str],
+    dict[str, str],
 ]:
     """The newest run per endpoint, and per (endpoint, metric) three ways.
 
@@ -1235,6 +1280,10 @@ def _newest_per_endpoint(
     # _VOID_ENDPOINTS: produced daily, so routinely older than the endpoint's
     # newest run and not readable from that one.
     void: dict[str, str] = {}
+    # The newest run that COPIED each endpoint's description. Kept apart from
+    # `measured` for the reason `void` is: the copy is written on the daily
+    # sweep, so the endpoint's newest run usually does not hold one.
+    described: dict[str, str] = {}
     # Keyed on the PAIR, because a run may sample classes and decline properties
     # and each half then has its own newest run.
     sampled: dict[tuple[str, str], str] = {}
@@ -1254,6 +1303,8 @@ def _newest_per_endpoint(
             _keep_newest(measured, instants, endpoint, run, instant, CURRENT_RUN)
         for endpoint in _run_endpoints(store, run, _VOID_ENDPOINTS):
             _keep_newest(void, instants, endpoint, run, instant, "void")
+        for endpoint in _run_endpoints(store, run, _DESCRIPTION_ENDPOINTS):
+            _keep_newest(described, instants, endpoint, run, instant, "description")
         # The `pointer` argument namespaces the tie-detection key, and these
         # three dicts are all keyed on (endpoint, metric): passing the bare
         # metric for each made them share one key, so a run that measured a
@@ -1289,7 +1340,7 @@ def _newest_per_endpoint(
     # nothing was ever observed.
     declined_pairs = dict(declined_policy)
     declined_pairs.update(declined_observed)
-    return measured, measured_pairs, declined_pairs, sampled, void
+    return measured, measured_pairs, declined_pairs, sampled, void, described
 
 
 def _keep_newest(
@@ -1335,7 +1386,7 @@ def rebuild_current(store: Store) -> RebuildResult:
     diagnose.
     """
     runs = _run_graphs(store)
-    measured, measured_pairs, declined_pairs, sampled, void = _newest_per_endpoint(
+    measured, measured_pairs, declined_pairs, sampled, void, described = _newest_per_endpoint(
         store, runs
     )
 
@@ -1381,6 +1432,12 @@ def rebuild_current(store: Store) -> RebuildResult:
             _update_text(_REPLACE_VOID),
             prefixes=_endpoint_run(endpoint, run),
         )
+    # The same, for the description copy, and for the same reason.
+    for endpoint, run in sorted(described.items()):
+        store.update(
+            _update_text(_REPLACE_DESCRIPTION),
+            prefixes=_endpoint_run(endpoint, run),
+        )
 
     touched = set(measured) | {endpoint for endpoint, _ in sampled}
     return RebuildResult(
@@ -1415,7 +1472,7 @@ def check_current(store: Store) -> CheckResult:
     # graphs pair by pair, and the void facts hang off the endpoint rather than
     # a pair. Naming it explicitly so the discard is a decision rather than a
     # tuple that happened to be the wrong length.
-    measured, measured_pairs, declined_pairs, sampled, _void = _newest_per_endpoint(
+    measured, measured_pairs, declined_pairs, sampled, _void, _described = _newest_per_endpoint(
         store, runs
     )
     reasons: dict[str, list[str]] = {}
