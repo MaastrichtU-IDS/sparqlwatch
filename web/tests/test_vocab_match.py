@@ -252,7 +252,71 @@ def test_every_term_carries_its_tokens(store_content_profiles):
     """The browser must not re-tokenise every row on every keystroke."""
     from explore_payload import endpoint_vocabulary
 
-    terms = endpoint_vocabulary(store_content_profiles, ENDPOINT_WITH_VOCABULARY)
+    from explore_payload import build_payload
+
+    terms = endpoint_vocabulary(
+        build_payload(store_content_profiles), ENDPOINT_WITH_VOCABULARY
+    )
     assert terms, "the fixture must have vocabulary"
     for term in terms:
         assert term["tokens"] == " ".join(tokenize(term["local"]) + tokenize(term["prefix"]))
+
+
+def test_the_endpoint_page_builds_the_fleet_payload_at_most_once(store_content_profiles):
+    """THE cost that made an endpoint page take seconds.
+
+    `endpoint_vocabulary` used to call `build_payload(store)` -- the uncached
+    function in explore_payload, not the `@lru_cache`d wrapper in web/app.py --
+    so every endpoint page rebuilt the WHOLE FLEET's vocabulary to keep one
+    endpoint's terms. Measured 2026-09-30 on the deployment: 2.4-3.9 s of a
+    3-5 s page, every time. Locally against a store of the same shape, 4.94 s
+    to reduce 15,844 terms to 156; after the fix, 0.013 s.
+
+    This asserts the property rather than a duration: two endpoint pages must
+    build the payload ONCE between them. A timing assertion would be flaky on a
+    loaded machine and would not say what went wrong.
+    """
+    import app
+    import explore_payload
+    from urllib.parse import quote
+    from fastapi.testclient import TestClient
+
+    calls = 0
+    real = explore_payload.build_payload
+
+    def counting(store):
+        nonlocal calls
+        calls += 1
+        return real(store)
+
+    app.build_payload.cache_clear()
+    # BOTH NAMES FOR THE SAME FUNCTION. `app.py` binds it at import as
+    # `_build_payload`, so patching only the attribute in explore_payload
+    # leaves that binding untouched -- and the first version of this test
+    # passed the mutation that called it, which is the exact regression it
+    # exists to catch.
+    explore_payload.build_payload = counting
+    app._build_payload = counting
+    app.app.dependency_overrides[app.get_store] = lambda: store_content_profiles
+    try:
+        client = TestClient(app.app)
+        # TWO HANDLER INVOCATIONS, forced by varying the cache key rather than
+        # the endpoint: this fixture holds one endpoint, and requesting the same
+        # url twice is served the second time from `SnapshotCache` -- so the
+        # handler runs once and the test passes whatever the handler does. The
+        # first version of this test did exactly that and passed the mutation.
+        for nonce in (1, 2):
+            r = client.get(
+                f"/endpoint?url={quote(ENDPOINT_WITH_VOCABULARY, safe='')}&_={nonce}",
+                headers={"accept": "text/html"},
+            )
+            assert r.status_code == 200, r.status_code
+        assert calls <= 1, (
+            f"the fleet payload was rebuilt {calls} times for endpoint pages; "
+            "the reader is bypassing app.build_payload's cache again"
+        )
+    finally:
+        explore_payload.build_payload = real
+        app._build_payload = real
+        app.app.dependency_overrides.clear()
+        app.build_payload.cache_clear()

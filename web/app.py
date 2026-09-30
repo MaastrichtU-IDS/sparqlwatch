@@ -2078,7 +2078,13 @@ def endpoint_resource(
             return value
 
         history = _read("history", lambda: endpoint_history(store, url, limit=_HISTORY_RUNS))
-        vocabulary = _read("vocab", lambda: endpoint_vocabulary(store, url))
+        # `build_payload` here is THIS module's lru_cached wrapper, so the
+        # fleet-wide pass is paid once per store handle rather than once per
+        # endpoint page. Reaching it is the whole fix: the reader used to call
+        # the uncached function inside explore_payload.
+        vocabulary = _read(
+            "vocab", lambda: endpoint_vocabulary(build_payload(store), url)
+        )
         summary = _read("void", lambda: void_summary(store, url))
         partitions = _read("parts", lambda: void_partitions(store, url))
         source = _read("descsrc", lambda: description_source(store, url))
