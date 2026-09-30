@@ -237,13 +237,26 @@ def build_payload(store: Store) -> dict:
     }
 
 
-def endpoint_vocabulary(store: Store, endpoint: str) -> list[dict]:
+def endpoint_vocabulary(payload: dict, endpoint: str) -> list[dict]:
     """One endpoint's terms, with the state each one is in for THAT endpoint.
 
     Built from the same pass the explorer's payload is, filtered, rather than
     from a query of its own. Two readers answering "what vocabulary does this
     endpoint have" would be two chances to disagree, on two pages a reader
     moves between.
+
+    TAKES THE PAYLOAD, NOT THE STORE, and that is a performance fix rather than
+    a tidiness one. It used to call `build_payload(store)` -- the uncached
+    function in this module, not the `@lru_cache`d wrapper in web/app.py -- so
+    every endpoint page rebuilt the WHOLE FLEET's vocabulary to keep one
+    endpoint's terms. Measured 2026-09-30 on the deployment: 2.4-3.9 s of a
+    3-5 s page, every time, and locally against a store of the same shape 4.9 s
+    to reduce 15,844 terms to 156.
+
+    Passing the payload in makes the caller decide how often it is built, which
+    is where web/app.py says that decision belongs -- "the opinion belongs next
+    to the handle it depends on". The cache was already there; nothing reached
+    it.
 
     Sorted classes first and then by local name, which is how somebody looking
     for a term looks: they know what it is called, not which namespace its
@@ -264,7 +277,7 @@ def endpoint_vocabulary(store: Store, endpoint: str) -> list[dict]:
             # prefix joins it because people search by namespace too.
             "tokens": " ".join(tokenize(t["l"]) + tokenize(t["p"])),
         }
-        for t in build_payload(store)["terms"]
+        for t in payload["terms"]
         if endpoint in t["at"]
     ]
     terms.sort(key=lambda t: (t["kind"] != "class", t["local"].lower(), t["iri"]))
