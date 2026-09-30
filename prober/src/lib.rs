@@ -258,7 +258,7 @@ pub async fn run_sweep<W: std::io::Write>(
             // wait ends after 60s rather than 600s. Eight of those is the
             // most an endpoint can spend against the shipped `metrics.toml`:
             // the description fetch plus the seven metrics that issue a probe
-            // of their own, `service-description` being `FetchWellKnown`,
+            // of their own, `service-description` being `DereferenceEndpoint`,
             // which reads that same fetch's outcome rather than making a
             // request. So 480s against a 600s endpoint budget, and 420s at the
             // default cheap ceiling, where `classes` is declined. The endpoint
@@ -860,7 +860,7 @@ async fn probe_endpoint(
     // One queryless fetch per endpoint, not one per metric: six metrics must
     // not mean six identical GETs landing in an operator's log. Its outcome
     // feeds two things below: the `Declarations` every metric's `Declared`
-    // is built from, and the `FetchWellKnown` row itself.
+    // is built from, and the `DereferenceEndpoint` row itself.
     let fetch_outcome = budget.with_metric_budget(client.fetch_rdf(ep)).await;
     let declarations = match &fetch_outcome {
         // `parse_declarations` never panics and yields partial (often empty)
@@ -922,7 +922,7 @@ async fn probe_endpoint(
     for def in defs {
         // The description was already fetched once above; this row reports
         // that outcome rather than issuing a second, redundant fetch.
-        if def.kind == ProbeKind::FetchWellKnown {
+        if def.kind == ProbeKind::DereferenceEndpoint {
             acc.rows.push(MeasurementRow {
                 endpoint: ep.to_string(),
                 metric_id: def.id.clone(),
@@ -931,7 +931,7 @@ async fn probe_endpoint(
                 // `graded`: that flag, not the probe kind, is what
                 // `metrics.toml` uses to say "this one carries a grade", and
                 // metrics are data a config edit can change. Keying off
-                // `graded` here means a future non-graded `FetchWellKnown`
+                // `graded` here means a future non-graded `DereferenceEndpoint`
                 // metric (or a graded metric of some other kind, should one
                 // ever exist) gets exactly the row shape its definition asks
                 // for, not one implied by its probe kind.
@@ -959,7 +959,7 @@ async fn probe_endpoint(
         // A kind with no implemented probe is skipped before any request is
         // built: the generic query path would send `?query=` to a real
         // operator and learn nothing. No current kind takes this path (even
-        // `FetchWellKnown` is handled above), but the mechanism stays for
+        // `DereferenceEndpoint` is handled above), but the mechanism stays for
         // whichever future kind arrives without one.
         if !def.kind.has_probe() {
             acc.rows.push(MeasurementRow {
@@ -1029,7 +1029,7 @@ async fn probe_endpoint(
                 ProbeKind::CorsPreflight => client.preflight(ep).await,
                 ProbeKind::Liveness => client.ask(ep, &q).await,
                 ProbeKind::AskFilter => client.ask(ep, &q).await,
-                ProbeKind::FetchWellKnown => unreachable!("FetchWellKnown is handled once per endpoint before the per-metric dispatch"),
+                ProbeKind::DereferenceEndpoint => unreachable!("DereferenceEndpoint is handled once per endpoint before the per-metric dispatch"),
                 ProbeKind::ClassProfile => unreachable!("ClassProfile is handled after the per-metric dispatch, and pushes no measurement row"),
                 ProbeKind::VocabularyDescribed => unreachable!("VocabularyDescribed sends no request; it is derived after the profile pass"),
             }

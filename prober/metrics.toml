@@ -150,7 +150,7 @@ SELECT ?g WHERE { ?s geo:asWKT ?g } LIMIT 1
 id = "service-description"
 label = "Service description informativeness"
 dimension = "documentation"
-kind = "FetchWellKnown"
+kind = "DereferenceEndpoint"
 cost = "cheap"
 cadence = "hourly"
 graded = true

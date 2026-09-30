@@ -543,7 +543,7 @@ pub fn resolve(def: &MetricDef, declared: Declared, obs: Result<&Observation, Ex
         // `resolve_fetch` for the verdict and discards the level. `run_sweep`
         // calls `resolve_fetch` directly for the graded row, so the level is
         // never lost, only unavailable on this path.
-        ProbeKind::FetchWellKnown => resolve_fetch(&Declarations::empty(), Ok(o)).0,
+        ProbeKind::DereferenceEndpoint => resolve_fetch(&Declarations::empty(), Ok(o)).0,
     }
 }
 
@@ -562,7 +562,7 @@ pub fn grade_from_declarations(defs: &Declarations) -> Level {
     )
 }
 
-/// Resolve the `FetchWellKnown` probe: did the endpoint publish a
+/// Resolve the `DereferenceEndpoint` probe: did the endpoint publish a
 /// dereferenceable, parseable service description, and if so, how informative
 /// is it. The fetch behind this is a queryless GET on the endpoint URL itself
 /// (see `Client::fetch_rdf`), not a request to any `/.well-known/` path; the
@@ -790,14 +790,14 @@ mod tests {
 
     #[test]
     fn claimed_but_unprobeable_is_indeterminate_not_declared_only() {
-        // Before `resolve_fetch` existed, an unparsed FetchWellKnown body
+        // Before `resolve_fetch` existed, an unparsed DereferenceEndpoint body
         // fell back to `declared.claimed` and could reach `DeclaredOnly`.
         // `resolve_fetch` judges the fetched body on its own terms and takes
         // no `claimed` flag at all, so an unparsed body is `Indeterminate`
         // regardless of what some other declaration claims elsewhere.
         let mut o = obs(None);
         o.body_kind = BodyKind::Other;
-        let v = resolve(&def(ProbeKind::FetchWellKnown, None), Declared { claimed: true, value: None }, Ok(&o));
+        let v = resolve(&def(ProbeKind::DereferenceEndpoint, None), Declared { claimed: true, value: None }, Ok(&o));
         assert_eq!(v, Verdict::Indeterminate);
     }
 
@@ -1156,7 +1156,7 @@ mod tests {
     fn fetch_well_known_unparsed_body_unclaimed_is_indeterminate_not_absent() {
         let mut o = obs(None);
         o.body_kind = BodyKind::Other;
-        let v = resolve(&def(ProbeKind::FetchWellKnown, None), Declared { claimed: false, value: None }, Ok(&o));
+        let v = resolve(&def(ProbeKind::DereferenceEndpoint, None), Declared { claimed: false, value: None }, Ok(&o));
         assert_eq!(v, Verdict::Indeterminate);
     }
 
