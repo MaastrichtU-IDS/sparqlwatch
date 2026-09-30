@@ -56,7 +56,7 @@ fn tempdir() -> std::path::PathBuf {
 /// one `Budget::request` under the threshold flag (`dormancy::MIN_COST_MS`), so
 /// a sweep cannot measure an expensive endpoint in less time than the threshold
 /// itself. Two counted requests at `SILENT_REPLY` each is the cheapest shape
-/// that clears 30 s: a `FetchWellKnown` metric, whose row carries the
+/// that clears 30 s: a `DereferenceEndpoint` metric, whose row carries the
 /// description fetch's own elapsed time, plus one query metric. `--min-gap-ms 0`
 /// keeps the pause out of it, since the gap is not what is being measured.
 ///
@@ -193,7 +193,7 @@ const SWEEP_BOUND: std::time::Duration = std::time::Duration::from_secs(90);
 /// Two metrics whose rows BOTH carry an elapsed time, which is what makes this
 /// endpoint's measured cost equal to the sweep's wall clock.
 ///
-/// The `FetchWellKnown` metric is the reason for the pairing: the description is
+/// The `DereferenceEndpoint` metric is the reason for the pairing: the description is
 /// fetched once per endpoint whatever the definitions say, and its elapsed time
 /// reaches a row only through a metric of that kind (`lib.rs`'s `fetch_elapsed`).
 /// Without it the fetch costs 15.6 s of wall clock that the policy never counts,
@@ -203,7 +203,7 @@ const TWO_COUNTED_METRICS: &str = r#"
 id = "service-description"
 label = "Service description informativeness"
 dimension = "documentation"
-kind = "FetchWellKnown"
+kind = "DereferenceEndpoint"
 cost = "cheap"
 
 [[metric]]

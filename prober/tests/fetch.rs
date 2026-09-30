@@ -40,7 +40,7 @@ async fn a_turtle_body_is_classified_as_rdf_and_retained() {
 #[tokio::test]
 async fn the_fetch_sends_no_query_parameter() {
     // The service description is obtained by a QUERYLESS GET. Sending
-    // `?query=` is what the old FetchWellKnown path did wrong: a malformed
+    // `?query=` is what the old DereferenceEndpoint path did wrong: a malformed
     // protocol request in every operator's log, learning nothing.
     let server = MockServer::start().await;
     Mock::given(method("GET")).and(path("/sparql"))

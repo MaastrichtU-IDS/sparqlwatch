@@ -393,7 +393,7 @@ async fn a_metric_binding_a_nonstandard_variable_is_extracted_via_its_declared_v
 /// Service Description's discovery rule) and `/.well-known/void` (VoID's).
 /// Each is pinned at exactly one. This supersedes an earlier test
 /// (`a_probe_kind_with_no_implementation_issues_no_request`, removed) that
-/// pinned `FetchWellKnown` issuing *no* request at all -- true only while it
+/// pinned `DereferenceEndpoint` issuing *no* request at all -- true only while it
 /// had no probe. Now that it does, the invariant worth pinning is "exactly
 /// one", not "zero", and no other kind in the closed set currently lacks a
 /// probe to exercise the old assertion with.
@@ -464,10 +464,10 @@ async fn a_fetched_description_puts_a_level_on_its_row() {
 }
 
 /// The level is keyed on the metric definition's `graded` flag, not on the
-/// probe kind: `probe_endpoint` computes a level for every `FetchWellKnown`
+/// probe kind: `probe_endpoint` computes a level for every `DereferenceEndpoint`
 /// fetch internally, but must only put it on the row when the metric that
 /// asked for it is declared `graded = true` in `metrics.toml`. A
-/// `FetchWellKnown` metric that is not graded must carry no level at all,
+/// `DereferenceEndpoint` metric that is not graded must carry no level at all,
 /// even though the same fetch resolves to `Verified` and a level was
 /// available to attach.
 #[tokio::test]
@@ -482,7 +482,7 @@ async fn a_non_graded_fetch_metric_carries_no_level() {
         id: "service-description-ungraded".into(),
         label: "ungraded fetch".into(),
         dimension: "capability".into(),
-        kind: ProbeKind::FetchWellKnown,
+        kind: ProbeKind::DereferenceEndpoint,
         query: None,
         fallback_query: None,
             overlap_probe: None,

@@ -14,9 +14,9 @@ about in others -- nine of nine catalogued endpoints publishing nothing a
 consumer can read -- so not publishing one ourselves would be hard to defend.
 
 IT DOES NOT CHANGE OUR OWN VERDICTS, and it should not be expected to. This
-prober's `FetchWellKnown` probe is a queryless GET on the endpoint URL itself
-and dereferences no well-known path -- the probe name is legacy, and
-resolve.rs says so. So the five metrics that read `undeclared-but-verified`
+prober's `DereferenceEndpoint` probe is a queryless GET on the endpoint URL
+itself and dereferences no well-known path. (It was called `FetchWellKnown`
+until 2026-09-30, which said the opposite of what it does.) So the five metrics that read `undeclared-but-verified`
 about us still will. Making those read as declared means putting the same
 claims in what `/sparql` returns to a queryless GET, which is a separate
 change to the service description, not this file.

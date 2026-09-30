@@ -439,7 +439,7 @@ exception is narrow: only 404 and 410, only when the transport succeeded. A
 403, a throttle or a timeout stays `indeterminate`, because those are cases
 where we did not find out.
 
-Note that `ProbeKind::FetchWellKnown`, which backs `service-description`, does
+Note that `ProbeKind::DereferenceEndpoint`, which backs `service-description`, does
 **not** fetch a well-known URL. The name is legacy from an earlier design and
 `resolve.rs` says so; `FetchVoid` is the kind that dereferences one.
 
@@ -1093,7 +1093,7 @@ Known limitations.
 
 **`metrics.toml`** is the metric definitions, as *data*. Each names a probe
 kind from a closed set (`Liveness`, `Cors`, `CorsPreflight`, `AskFilter`,
-`AskData`, `SelectIris`, `FetchWellKnown`) plus its parameters, so adding a metric that
+`AskData`, `SelectIris`, `DereferenceEndpoint`) plus its parameters, so adding a metric that
 fits an existing kind needs no Rust change. An unknown kind, an unrecognised
 `cost` value, a bindings-reading kind with no `var`, a key the loader does not
 recognise, and an `id` defined twice are each a loud load error rather than a
@@ -1117,7 +1117,7 @@ The definitions are hashed into a `metricDefinitionRevision` recorded
 on every run, a pure function of the definitions themselves, so a measurement
 can be read against the definition that produced it.
 
-`FetchWellKnown` probes by fetching the queryless GET described above. It returns
+`DereferenceEndpoint` probes by fetching the queryless GET described above. It returns
 `Verified`, plus a level reflecting the description's informativeness, only when
 a **2xx** response arrives under an RDF-specific media type (`text/turtle`,
 `application/rdf+xml`, `application/ld+json`, `application/n-triples`,

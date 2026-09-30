@@ -43,15 +43,28 @@ pub enum ProbeKind {
     /// for presence. `tolerance` is what keeps a description written last year
     /// from being called wrong because the dataset grew since.
     Counted,
-    FetchWellKnown,
+    /// Dereference the ENDPOINT URL and read whatever RDF it serves.
+    ///
+    /// That is SPARQL 1.1 Service Description's discovery rule: a service
+    /// describes itself at its own address. It is deliberately NOT named for
+    /// the document it hopes to find, because what comes back is whatever the
+    /// publisher chose to put there -- `sparql.uniprot.org` answers this
+    /// request with 1,245 lines of VoID, not a service description.
+    ///
+    /// Called `FetchWellKnown` until 2026-09-30, which was simply wrong: it
+    /// never asked for a `/.well-known/` path. `FetchVoid` is the kind that
+    /// does. The old spelling is still accepted in a metrics file so a
+    /// hand-written one passed to `--metrics` does not break.
+    #[serde(alias = "FetchWellKnown")]
+    DereferenceEndpoint,
     /// Whether the endpoint's host publishes a VoID description at the
     /// location the VoID spec names for one: `/.well-known/void`.
     ///
-    /// DISTINCT FROM `FetchWellKnown` DESPITE THAT KIND'S NAME, which is
-    /// legacy: that one dereferences the ENDPOINT URL, because that is where
-    /// SPARQL 1.1 Service Description says a service's description lives. This
-    /// one asks a different URL, derived from the endpoint's origin, because
-    /// VoID states its own discovery rule and it is not the same rule.
+    /// DISTINCT FROM `DereferenceEndpoint`, and the two are not
+    /// interchangeable: that one asks the ENDPOINT URL, because that is where
+    /// SPARQL 1.1 Service Description says a service describes itself. This one
+    /// asks a different URL, derived from the endpoint's origin, because VoID
+    /// states its own discovery rule and it is not the same rule.
     ///
     /// The two find genuinely different documents. Measured 2026-09-28:
     /// `sparql.uniprot.org` serves 1,245 lines of VoID at its endpoint URL and
@@ -85,7 +98,7 @@ impl ProbeKind {
         ProbeKind::AskFilter,
         ProbeKind::AskData,
         ProbeKind::SelectIris,
-        ProbeKind::FetchWellKnown,
+        ProbeKind::DereferenceEndpoint,
         ProbeKind::FetchVoid,
         ProbeKind::ClassProfile,
         ProbeKind::VocabularyDescribed,
@@ -112,7 +125,7 @@ impl ProbeKind {
             | ProbeKind::AskFilter
             | ProbeKind::AskData
             | ProbeKind::SelectIris
-            | ProbeKind::FetchWellKnown
+            | ProbeKind::DereferenceEndpoint
             // A verdict about what the publisher publishes, and the whole
             // point of the metric: every endpoint gets a row saying whether a
             // VoID is at the location the spec names.
@@ -150,7 +163,7 @@ impl ProbeKind {
             | ProbeKind::AskFilter
             | ProbeKind::AskData
             | ProbeKind::SelectIris
-            | ProbeKind::FetchWellKnown
+            | ProbeKind::DereferenceEndpoint
             // One request at a URL derived from the endpoint's, so the
             // ordinary per-metric dispatch handles it like any other fetch.
             | ProbeKind::FetchVoid
@@ -177,7 +190,7 @@ impl ProbeKind {
             ProbeKind::AskFilter => 3,
             ProbeKind::AskData => 4,
             ProbeKind::SelectIris => 5,
-            ProbeKind::FetchWellKnown => 6,
+            ProbeKind::DereferenceEndpoint => 6,
             ProbeKind::FetchVoid => 7,
             ProbeKind::ClassProfile => 8,
             ProbeKind::VocabularyDescribed => 9,
@@ -185,7 +198,7 @@ impl ProbeKind {
         }
     }
 
-    /// Whether a probe is actually implemented for this kind. `FetchWellKnown`
+    /// Whether a probe is actually implemented for this kind. `DereferenceEndpoint`
     /// now has one too -- a single queryless fetch per endpoint, issued once
     /// in `probe_endpoint` ahead of this per-metric dispatch rather than
     /// through it -- so every current kind returns `true`. The mechanism
@@ -203,7 +216,7 @@ impl ProbeKind {
             | ProbeKind::AskFilter
             | ProbeKind::AskData
             | ProbeKind::SelectIris
-            | ProbeKind::FetchWellKnown
+            | ProbeKind::DereferenceEndpoint
             | ProbeKind::FetchVoid
             | ProbeKind::ClassProfile
             // Derived, and therefore always "implemented": it sends no request
@@ -977,7 +990,7 @@ query = "ASK { }"
 
     #[test]
     fn every_probe_kind_has_a_probe() {
-        // FetchWellKnown's probe is the once-per-endpoint fetch in
+        // DereferenceEndpoint's probe is the once-per-endpoint fetch in
         // `probe_endpoint`, dispatched ahead of this generic per-metric path
         // rather than through it, but it is implemented now: no kind in the
         // closed set currently lacks one.
@@ -1629,6 +1642,25 @@ query = "SELECT ?s WHERE { ?s ?p ?o } LIMIT 1"
              sample_limit=200\nquery=\"\"\"\n# every class, bounded, in whichever graph the endpoint defaults to\n\
              SELECT DISTINCT ?c WHERE { ?s a ?c } LIMIT 200\n\"\"\"\n";
         assert!(load_metrics(harmless).is_ok(), "a comment is not a limit, and not a problem either");
+    }
+
+    #[test]
+    fn the_old_spelling_of_dereference_endpoint_still_loads() {
+        // `DereferenceEndpoint` was called `FetchWellKnown` until 2026-09-30.
+        // This repo's metrics.toml ships inside the image beside the binary, so
+        // the two never disagree here -- but `--metrics` takes a path, and a
+        // hand-written file naming the old kind must not become a load error
+        // for having been written before the rename.
+        let old = load_metrics(
+            "[[metric]]\nid=\"m\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"FetchWellKnown\"\n",
+        )
+        .expect("the old spelling is still accepted");
+        let new = load_metrics(
+            "[[metric]]\nid=\"m\"\nlabel=\"l\"\ndimension=\"d\"\nkind=\"DereferenceEndpoint\"\n",
+        )
+        .unwrap();
+        assert_eq!(old[0].kind, ProbeKind::DereferenceEndpoint);
+        assert_eq!(old[0].kind, new[0].kind, "the alias names the same kind");
     }
 
     #[test]
