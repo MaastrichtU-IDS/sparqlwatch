@@ -25,6 +25,7 @@ web/tests/fixtures/; see each fixture's header comment for its provenance.
 """
 
 import re
+import time
 import urllib.parse
 from html.parser import HTMLParser
 from pathlib import Path
@@ -3328,7 +3329,7 @@ def test_startup_warms_the_caches_so_the_first_reader_does_not(tmp_path, monkeyp
     for cached in (app.endpoint_index, app.fleet_history, app.build_payload):
         cached.cache_clear()
 
-    app._warm_the_caches()
+    app._warm()
 
     for cached in (app.endpoint_index, app.fleet_history, app.build_payload):
         info = cached.cache_info()
@@ -3348,4 +3349,70 @@ def test_startup_serves_even_with_no_store(monkeypatch):
         raise RuntimeError("no store to read")
 
     monkeypatch.setattr(app, "_store_path", boom)
-    app._warm_the_caches()  # must not raise
+    app._warm()  # must not raise
+
+
+def test_startup_does_not_block_on_warming(tmp_path, monkeypatch):
+    """THE availability cliff this exists to remove.
+
+    Warming took 25.8 s on 2026-09-29 and 29.1 s a day later, against the
+    container's 40 s HEALTHCHECK start-period. Breaching it does not make a
+    page slow -- the kubelet kills the container mid-warm and restarts it,
+    which is an outage. So the startup handler starts the work and returns.
+    """
+    import threading
+    import app
+
+    release = threading.Event()
+    entered = threading.Event()
+
+    def slow():
+        entered.set()
+        release.wait(timeout=10)
+
+    monkeypatch.setattr(app, "_warm", slow)
+    started = time.perf_counter()
+    app._warm_the_caches()
+    elapsed = time.perf_counter() - started
+    try:
+        assert entered.wait(timeout=5), "the warm never started"
+        assert elapsed < 1.0, (
+            f"startup blocked for {elapsed:.1f}s on warming; readiness must not wait"
+        )
+    finally:
+        release.set()
+
+
+def test_concurrent_first_readers_build_the_payload_once(tmp_path, monkeypatch):
+    """`lru_cache` does no locking, and the background warm opened the window.
+
+    Concurrent callers on a cold cache all compute and one result wins. That
+    did not matter while warming blocked readiness -- nothing could ask until
+    it was done. Now that it runs in the background, several readers arriving
+    into the window would each pay the twenty-second build, which is worse
+    than the blocking version this replaces.
+    """
+    import threading
+    import app
+    import explore_payload
+
+    store = _store_with(tmp_path, _WELL_KNOWN_VOID)
+    calls = []
+    real = explore_payload.build_payload
+
+    def counting(s):
+        calls.append(1)
+        time.sleep(0.3)  # long enough for the others to pile up behind the lock
+        return real(s)
+
+    monkeypatch.setattr(app, "_build_payload", counting)
+    app.build_payload.cache_clear()
+    try:
+        threads = [threading.Thread(target=lambda: app.build_payload(store)) for _ in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+        assert len(calls) == 1, f"the payload was built {len(calls)} times by 5 readers"
+    finally:
+        app.build_payload.cache_clear()
