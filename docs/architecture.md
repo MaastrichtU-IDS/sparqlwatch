@@ -390,6 +390,21 @@ comments are the evidence, and a claim without a number is treated as a guess.
 - **A golden file** (`web/tools/capture_reader_golden.py`) pins what the readers
   produce, so a change in output is visible rather than inferred.
 
+## What it is called in the cluster
+
+Deploying is a second repo's job (`MaastrichtU-IDS/services`,
+`ids3/projects/sparqlwatch/dev/`), and its README holds the full table. The one
+fact worth repeating here, because it is the one that gets guessed wrong: the
+web Deployment is **`site`**, not `sparqlwatch`. The project name belongs to the
+namespace (`sparqlwatch-dev`) and to the things that are shared — the ingress
+and the three PVCs — while the components are named for what they are: `site`,
+`synthetic`, `prober`, `prober-profile`.
+
+    kubectl -n sparqlwatch-dev logs deploy/site -c site --tail=50
+
+The `site` pod runs two containers, `site` and `sparql`, after an init container
+`build-store`; `-c` is therefore not optional.
+
 ## Sweeping one endpoint, on demand
 
 Adding a url to `prober/endpoints.toml` does not measure it. Four metrics
