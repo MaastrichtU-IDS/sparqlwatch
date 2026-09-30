@@ -54,6 +54,7 @@ from collections import Counter, OrderedDict
 from datetime import date, timedelta
 from functools import lru_cache
 from pathlib import Path
+from threading import Lock, Thread
 from time import perf_counter
 import logging
 from urllib.parse import parse_qs, quote, urlparse
@@ -602,9 +603,39 @@ def fleet_history(store: Store) -> FleetHistory:
 
 
 @lru_cache(maxsize=4)
-def build_payload(store: Store) -> dict:
+def _cached_build_payload(store: Store) -> dict:
     """`explore_payload.build_payload`, once per store handle."""
     return _build_payload(store)
+
+
+# Serialises the FIRST build, which `lru_cache` alone does not.
+#
+# `lru_cache` is thread-safe for correctness and does no locking around the
+# call: concurrent callers on a cold cache all compute, and one result wins.
+# That did not matter while warming blocked readiness, because nothing could
+# ask until it was done. Now that the warm runs in the background the window is
+# open, and this build takes twenty seconds -- five requests arriving into it
+# would be five twenty-second builds competing for the same CPU, which is worse
+# than the blocking version it replaces.
+_PAYLOAD_LOCK = Lock()
+
+
+def build_payload(store: Store) -> dict:
+    """The explorer's payload, built at most once per store handle.
+
+    Locked rather than merely cached: see `_PAYLOAD_LOCK`. Holding it across a
+    cache HIT costs a dict lookup, so the lock is free once warm and is only
+    contended during the startup window it exists for.
+    """
+    with _PAYLOAD_LOCK:
+        return _cached_build_payload(store)
+
+
+# The wrapper keeps the cached function's surface, so callers and tests that
+# reach for `cache_info()` or `cache_clear()` do not have to know a lock was
+# put in front of it.
+build_payload.cache_info = _cached_build_payload.cache_info
+build_payload.cache_clear = _cached_build_payload.cache_clear
 
 
 # ---------------------------------------------------------------------------
@@ -2007,10 +2038,7 @@ def endpoint_resource(
 
     _started = perf_counter()
     measurements = endpoint_measurements(store, url)
-    _measurements_cost = perf_counter() - _started
-    _started = perf_counter()
     content = endpoint_content(store, url)
-    _content_cost = perf_counter() - _started
 
     # What is actually checked, and it is narrower than "the store holds any
     # fact about this endpoint": a measurement, a decline, or a class sample.
@@ -2054,60 +2082,43 @@ def endpoint_resource(
         )
 
     if media_type == HTML_MEDIA_TYPE:
-        # TIMED, AND SAID ONCE PER REQUEST. This page takes seconds on its first
-        # view and 0.10 s afterwards, and three rounds of measuring from outside
-        # could not say where the time goes: every query timed against the
-        # `sparql` container -- a different process with its own warm store
-        # handle -- came back in hundredths of a second; warming `current` at
-        # startup changed nothing; and bounding the history scan to the newest
-        # 30 runs made it twenty times WORSE, 0.27 s to 15.27 s, because the
-        # VALUES scoping forces a different plan. The one thing left untried was
-        # asking this process what it is doing.
+        # Timed, and said once per request, as a total. The per-read breakdown
+        # that used to be here found what it was for -- `endpoint_vocabulary`
+        # was running the whole fleet-wide pass per page -- and measuring from
+        # outside had failed three times before it: every query timed against
+        # the `sparql` container (a different process, its own warm handle) came
+        # back in hundredths of a second, and bounding the history scan to the
+        # newest 30 runs made it twenty times WORSE, 0.27s to 15.27s, because
+        # the VALUES scoping forces a different plan. The total stays so a
+        # regression is visible in the log; put the breakdown back if one is.
         #
-        # HTML branch only. The RDF branch answers from one CONSTRUCT in 0.8 s
-        # and is not the slow one; the gap between them is the nine reads below.
-        timed: list[tuple[str, float]] = [
-            ("measure", _measurements_cost),
-            ("content", _content_cost),
-        ]
-
-        def _read(label: str, call):
-            started = perf_counter()
-            value = call()
-            timed.append((label, perf_counter() - started))
-            return value
-
-        history = _read("history", lambda: endpoint_history(store, url, limit=_HISTORY_RUNS))
-        # `build_payload` here is THIS module's lru_cached wrapper, so the
+        # HTML branch only. The RDF branch answers from one CONSTRUCT and is not
+        # the slow one.
+        history = endpoint_history(store, url, limit=_HISTORY_RUNS)
+        # `build_payload` here is THIS module's cached, locked wrapper, so the
         # fleet-wide pass is paid once per store handle rather than once per
         # endpoint page. Reaching it is the whole fix: the reader used to call
         # the uncached function inside explore_payload.
-        vocabulary = _read(
-            "vocab", lambda: endpoint_vocabulary(build_payload(store), url)
-        )
-        summary = _read("void", lambda: void_summary(store, url))
-        partitions = _read("parts", lambda: void_partitions(store, url))
-        source = _read("descsrc", lambda: description_source(store, url))
-        document = _read("voiddoc", lambda: void_document(store, url))
-        body = _read(
-            "render",
-            lambda: _endpoint_html(
-                url,
-                measurements,
-                content,
-                history,
-                vocabulary,
-                summary,
-                partitions,
-                source,
-                document,
-            ),
+        vocabulary = endpoint_vocabulary(build_payload(store), url)
+        summary = void_summary(store, url)
+        partitions = void_partitions(store, url)
+        source = description_source(store, url)
+        document = void_document(store, url)
+        body = _endpoint_html(
+            url,
+            measurements,
+            content,
+            history,
+            vocabulary,
+            summary,
+            partitions,
+            source,
+            document,
         )
         _LOG.info(
-            "endpoint page %s | %s | reads+render %.2fs | %d bytes",
+            "endpoint page %s | reads+render %.2fs | %d bytes",
             url,
-            " ".join(f"{label}={cost:.2f}" for label, cost in timed),
-            sum(cost for _, cost in timed),
+            perf_counter() - _started,
             len(body),
         )
         return Response(content=body, media_type="text/html; charset=utf-8")
@@ -5332,24 +5343,29 @@ def get_sparql_pool():
 # leaving this file with two idioms for the same thing.
 @app.on_event("startup")
 def _warm_the_caches() -> None:
-    """Pay the fleet-wide passes here, so the first reader does not.
+    """Start the fleet-wide passes, so the first reader does not pay for them.
 
-    WHY IN THIS PROCESS. The caches these fill are `@lru_cache`s keyed on the
-    store handle, and the handle belongs to this process -- so warming in the
-    init container, which then exits, warms the node's page cache and leaves
-    every Python-side result to be computed again. `build_payload` is mostly
-    that Python side: 15,844 terms assembled from ~19,000 rows.
+    RETURNS IMMEDIATELY. The work is in `_warm` on a background thread; this
+    handler must not block readiness. See that function for why.
+    """
+    Thread(target=_warm, name="warm-caches", daemon=True).start()
 
-    WHAT IT COSTS AND WHY IT IS STILL RIGHT. `build_payload` took 20.5 s on the
-    deployment measured 2026-09-30 -- as the first endpoint page, where a reader
-    waited for it. That was already being paid once per restart and the site
-    restarts hourly; this moves it before the first request rather than into it.
-    The container's HEALTHCHECK has a 40 s start-period, which covers it.
 
-    FAILURES ARE LOGGED AND SWALLOWED. A store that cannot be opened is the
-    normal state of a fresh namespace before the first sweep lands, and
-    `_store_path` raises for it by design. Refusing to start over a warm-up
-    would turn a cache miss into an outage.
+def _warm() -> None:
+    """The warming itself, off the readiness path.
+
+    IN A THREAD, because this blocked startup and the container's HEALTHCHECK
+    has a 40 s start-period. Warming took 25.8 s on 2026-09-29 and 29.1 s a day
+    later -- it grows with the number of endpoints profiled, not with the
+    archive, and the fleet went from 79 endpoints to 128 this week. Breaching
+    the start-period does not make a page slow, it makes the kubelet kill the
+    container mid-warm and restart it, which is an outage.
+
+    So readiness no longer waits. A reader arriving during the window may still
+    pay for a pass, and `_PAYLOAD_LOCK` is what keeps that from being several
+    readers each paying for the same one.
+
+    Daemon, so a shutdown during warming is not held up by it.
     """
     started = perf_counter()
     try:
