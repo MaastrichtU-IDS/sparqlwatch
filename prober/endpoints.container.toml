@@ -71,7 +71,10 @@ endpoint = [
   "https://www.imgt.org/fuseki/ImgtKg/sparql",
   "https://sparql.omabrowser.org/sparql",
   "https://ts.glycosmos.org/sparql",
-  "https://query.wikidata.org/sparql",
+  # Wikidata is in YummyData's list too, and was listed twice here until
+  # 2026-09-30. The sweep list is a SET of urls to ask, not a record of which
+  # catalogues name an endpoint -- registry/kg-catalog.toml and
+  # registry/yummydata.toml both carry it, and that is where membership lives.
   "https://hamap.expasy.org/sparql/",
   "https://ts.glytoucan.org/sparql",
   "https://hitontology.eu/sparql",
@@ -143,7 +146,9 @@ endpoint = [
   "https://sparql.healthdata.nl/repositories/fdp",
   "https://fdp.dcc.sib.swiss/store/fdp/sparql",
   "http://rdf.corpora.uni-leipzig.de/sparql",
-  "https://bio2rdf.org/sparql",
+  # bio2rdf.org is listed once, at the top of this file, where the comment
+  # records its DNS state. It was appended here again on 2026-09-28 and removed
+  # on 2026-09-30.
   # Retired 2026-09-27: neXtProt was archived upstream and the URL now
   # redirects to expasy.org/archives/nextprot. Kept so the answer to
   # "where was it" survives; never probed. See registry::load_inactive.
