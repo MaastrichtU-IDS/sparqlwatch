@@ -5326,6 +5326,57 @@ def get_sparql_pool():
     return _POOL
 
 
+# `on_event` rather than a lifespan, matching the shutdown handler below.
+# Both are deprecated in favour of `lifespan=`, which has to be passed at
+# construction; converting is a tidy-up worth doing on its own rather than
+# leaving this file with two idioms for the same thing.
+@app.on_event("startup")
+def _warm_the_caches() -> None:
+    """Pay the fleet-wide passes here, so the first reader does not.
+
+    WHY IN THIS PROCESS. The caches these fill are `@lru_cache`s keyed on the
+    store handle, and the handle belongs to this process -- so warming in the
+    init container, which then exits, warms the node's page cache and leaves
+    every Python-side result to be computed again. `build_payload` is mostly
+    that Python side: 15,844 terms assembled from ~19,000 rows.
+
+    WHAT IT COSTS AND WHY IT IS STILL RIGHT. `build_payload` took 20.5 s on the
+    deployment measured 2026-09-30 -- as the first endpoint page, where a reader
+    waited for it. That was already being paid once per restart and the site
+    restarts hourly; this moves it before the first request rather than into it.
+    The container's HEALTHCHECK has a 40 s start-period, which covers it.
+
+    FAILURES ARE LOGGED AND SWALLOWED. A store that cannot be opened is the
+    normal state of a fresh namespace before the first sweep lands, and
+    `_store_path` raises for it by design. Refusing to start over a warm-up
+    would turn a cache miss into an outage.
+    """
+    started = perf_counter()
+    try:
+        store = _opened_store(_store_path())
+    except Exception as exc:  # noqa: BLE001 - see the docstring
+        _LOG.info("not warming: no store to read yet (%s)", exc)
+        return
+    warmed = []
+    # In the order a first reader meets them: the index is the front page, the
+    # payload is what made an endpoint page take twenty seconds.
+    for label, call in (
+        ("index", lambda: endpoint_index(store)),
+        ("fleet history", lambda: fleet_history(store)),
+        ("vocabulary payload", lambda: build_payload(store)),
+    ):
+        at = perf_counter()
+        try:
+            call()
+        except Exception as exc:  # noqa: BLE001 - see the docstring
+            _LOG.warning("warming %s failed, serving anyway: %s", label, exc)
+            continue
+        warmed.append(f"{label} {perf_counter() - at:.1f}s")
+    _LOG.info(
+        "warmed in %.1fs: %s", perf_counter() - started, ", ".join(warmed) or "nothing"
+    )
+
+
 @app.on_event("shutdown")
 def _stop_sparql_pool() -> None:
     if _POOL is not None:
