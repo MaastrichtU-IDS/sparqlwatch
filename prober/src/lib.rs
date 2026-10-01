@@ -10,6 +10,7 @@ pub mod politeness;
 pub mod profile;
 pub mod metrics;
 pub mod registry;
+pub mod rotation;
 pub mod resolve;
 pub mod seed;
 pub mod state_file;
@@ -177,6 +178,7 @@ pub async fn run_sweep<W: std::io::Write>(
     budget: Budget,
     concurrency: NonZeroUsize,
     memory: &crate::profile::ContentMemory,
+    rotation: &crate::rotation::Rotation,
     writer: &mut RunWriter<W>,
 ) -> anyhow::Result<Sweep> {
     // Endpoints grouped by host, each keeping its input index as its slot, in
@@ -200,6 +202,8 @@ pub async fn run_sweep<W: std::io::Write>(
     // One shared copy of the definitions for the whole sweep. A `to_vec()` per
     // endpoint would be 548 copies of the definition list at stage 1d.
     let shared_defs = Arc::new(defs.to_vec());
+    // `Copy`, so each group task carries the schedule rather than borrowing it.
+    let rotation = *rotation;
     let shared_memory = Arc::new(memory.clone());
     // Finished endpoints on their way to the writer. BOUNDED, and safe to bound
     // because the loop that drains it does no probing: a `send` that has to wait
@@ -278,7 +282,11 @@ pub async fn run_sweep<W: std::io::Write>(
                 .await
                 .expect("the sweep owns this semaphore and never closes it");
             for (slot, ep) in group {
-                let swept = probe_one_endpoint(&ep, &defs, &client, budget, &memory).await;
+                // TONIGHT'S QUESTIONS FOR THIS ENDPOINT. The held-back half is
+                // not probed and not forgotten: `assemble_endpoint` below
+                // records a `Cadence` decline for each, from the same split.
+                let (due, _held) = rotation.split(&defs, &ep);
+                let swept = probe_one_endpoint(&ep, &due, &client, budget, &memory).await;
                 // A send error means the receiver is gone, which means the sweep
                 // is over: it either stopped on a write failure or was cancelled.
                 // So this task returns quietly rather than reaching for
@@ -305,7 +313,15 @@ pub async fn run_sweep<W: std::io::Write>(
     let run = RunId(writer.run().0.clone());
     let mut slots: Vec<Option<EndpointFactLists>> = endpoints.iter().map(|_| None).collect();
     while let Some((slot, swept)) = arrivals.recv().await {
-        let facts = assemble_endpoint(&endpoints[slot], Some(swept), defs, declined);
+        // Re-split rather than carried through the channel: it is a pure
+        // function of the endpoint and the sweep's instant, so computing it
+        // twice cannot disagree with itself, and the arrival channel keeps
+        // carrying exactly what was measured.
+        let (due, held) = rotation.split(defs, &endpoints[slot]);
+        let mut declined_here: Vec<(MetricDef, NotMeasuredReason)> = declined.to_vec();
+        declined_here.extend(held);
+        let facts =
+            assemble_endpoint(&endpoints[slot], Some(swept), &due, &declined_here);
         // On arrival, which is what makes a chunk the unit of loss: a sweep
         // killed here has published every endpoint that finished before this one
         // and nothing about the ones that have not. The slot keeps the same
@@ -346,7 +362,10 @@ pub async fn run_sweep<W: std::io::Write>(
         let facts = match slots[slot].take() {
             Some(arrived) => arrived,
             None => {
-                let failed = assemble_endpoint(ep, None, defs, declined);
+                let (due, held) = rotation.split(defs, ep);
+                let mut declined_here: Vec<(MetricDef, NotMeasuredReason)> = declined.to_vec();
+                declined_here.extend(held);
+                let failed = assemble_endpoint(ep, None, &due, &declined_here);
                 writer.write_endpoint(failed.chunk(&run))?;
                 failed
             }
