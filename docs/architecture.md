@@ -467,6 +467,44 @@ and the three PVCs — while the components are named for what they are: `site`,
 The `site` pod runs two containers, `site` and `sparql`, after an init container
 `build-store`; `-c` is therefore not optional.
 
+## Summarising a closed day
+
+Written 2026-10-01, and **nothing reads it or deletes anything yet** — see the
+last paragraph.
+
+A day's 23 hourly runs are about 233,000 quads. Once that day is over nothing
+reads them individually: `_daily_series` buckets readings by day and asks only
+for aggregates, and the one reader that wants per-sweep detail,
+`fleet.fleet_history`, keeps the newest 40 sweeps — under two days. Measured on
+an hourly run of 10,143 quads: **34% `notMeasured` facts** repeating the previous
+hour's unchanged, 34% `rdf:type` and provenance overhead, and **19% actual
+measurements**. That is why measuring less does not help — a decline costs 3
+quads where a measurement costs 4, so moving a metric to a slower cadence just
+converts one into the other.
+
+`daily.summarise_day` writes one summary per (endpoint, metric, day) into
+`urn:sparqlwatch:daily:<day>` — its own graph, never a run graph, because this is
+arithmetic rather than something a sweep saw. About **6 quads a pair, ~3,000 a
+day against 233,000**.
+
+It stores **counts per verdict**, not a decided up/down. What counts as up is
+`app._POSITIVE_VERDICTS`, and the page is built so that word is read in one
+place; storing the decision would freeze it into history where a later change
+could not reach it. The one exception is `dailyMedianMs`/`dailyP95Ms`, which
+cannot be recovered from counts and so are taken once over the sweeps that
+**succeeded** — not merely answered. That distinction is not pedantic: a 404
+answers in 50ms, and including it drags the median down until a broken endpoint
+reads as a fast one. `daily.POSITIVE` duplicates the table so this module stays
+importable without building a web application, and a test pins the two together.
+
+**Nothing is deleted.** `daily.agrees_with_raw` compares a summary against the
+runs it came from, and `daily.day_from_summary` lets the same day be drawn both
+ways and compared. Pruning is a separate decision, and when it comes the pin rule
+is already known: **a run is pinned if `sw:current` references it in any way.**
+Not a list of pointers — the live store referenced 21 runs on 2026-10-01, the
+oldest from 2026-09-13, because `_REPLACE_MEASURED` keeps a reading from an old
+run when newer runs declined that metric.
+
 ## Sweeping one endpoint, on demand
 
 Adding a url to `prober/endpoints.toml` does not measure it. Four metrics
