@@ -455,6 +455,27 @@ publisher has put a file at a fixed location does not change between breakfast
 and lunch, and it is one more request to somebody else's server — one a night
 per endpoint rather than one an hour.
 
+**The class-profile pass goes further: one night in seven per endpoint.** Its
+cost is not its query but its fan-out — one query per class the endpoint holds.
+Measured 2026-10-01 across the fleet: 2,339 classes profiled, 49,060 properties,
+279,215 quads in a single night, 95% of that run, and a Wikidata mirror was 48%
+of it alone (23,770 properties across 183 classes). Nothing read any of it but
+the newest, because a profile is only reached through `sw:sampleRunIs` — the one
+run that last profiled that endpoint.
+
+So `--profile-every-days` (default 7) visits each endpoint on one night in
+seven, chosen by a hash of its URL against the sweep's `--at`. Stateless, like
+everything else here: no cursor, nothing to coordinate, and a missed night means
+that endpoint waits for its next slot. Hashing the URL rather than its registry
+position is what keeps adding an endpoint from reshuffling everybody's night.
+`--profile-every-days 1` restores nightly profiling.
+
+The endpoints not due tonight have the two exhaustive metrics **declined** for
+`cadence`, not skipped. `vocabulary-described` grades what the pass found and
+reads `indeterminate` without it, and a verdict replaces the real one in
+`current` while a decline does not — so skipping would quietly erase a real
+verdict six nights in seven. See `src/rotation.rs`.
+
 **A 404 there is `absent`, even when the error page is HTML.** Everywhere else
 in `resolve.rs` an HTML body means we reached a console instead of the thing we
 asked about, and nothing may be concluded from it. This URL is fixed by the

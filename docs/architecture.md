@@ -114,6 +114,32 @@ SUPERSET rather than the other half of a partition, and `Cadence::default()` is
 `Daily` — a metric added to the file without the field is asked once a day
 rather than sixteen times more often, so forgetting it makes a sweep quieter.
 
+**A THIRD axis, per endpoint: the profile rotation.** Cost and cadence are both
+properties of a metric, so they narrow a sweep the same way for everyone. The
+class-profile pass needed narrowing per ENDPOINT, because its cost is not the
+query — it is one query per class the endpoint holds. Measured 2026-10-01: 2,339
+classes profiled, 49,060 properties, **279,215 quads, 95% of the night's run**,
+of which one Wikidata mirror was 48% on its own (23,770 properties across 183
+classes). That was about 500,000 quads a day into a store holding 3.7 million,
+and it is what OOM-killed the `sparql` container and took the site down that
+morning.
+
+Nothing read any of it but the newest. A profile is only ever reached through
+`sw:sampleRunIs` on the endpoint in `sw:current` — the one run that last profiled
+it — so the read path already tolerated staleness, and demonstrably: on
+2026-10-01 the oldest such pointer reached back fifteen days with nothing wrong.
+
+So each endpoint is profiled every `--profile-every-days` nights (default 7),
+chosen by a hash of its URL against the sweep's own `--at`. Stateless, like the
+rest of the prober: no cursor to keep, nothing to coordinate, and a night the
+sweep does not run means those endpoints wait for their next slot. Hashing the
+URL rather than its position in the registry is what stops adding one endpoint
+reshuffling everyone else's night.
+
+It also costs strangers less. 183 queries a night to a Wikidata mirror, for an
+answer this service does not look at until it changes, was not a price worth
+paying.
+
 **A metric a sweep does not ask is DECLINED, never omitted.** This is the part
 worth reading twice, because the obvious implementation is wrong and was
 measured to be wrong on 2026-09-18. Giving the hourly job a smaller metrics
@@ -124,6 +150,16 @@ measurements went invisible for 23 hours of every 24. "Not mentioned" is not
 "not measured this time". So an out-of-cadence metric gets a `NotMeasured` fact
 with reason `cadence`, exactly as the ceiling has always given one with reason
 `cost-ceiling`, and the column survives saying why it is empty.
+
+The rotation rides that same rule, and must. `vocabulary-described` grades what
+the profile pass found and reads `indeterminate` without it, so a sweep that
+merely SKIPPED an endpoint's profiling would publish a verdict saying the
+endpoint describes nothing — and a verdict replaces the real one in `current`,
+while a decline does not. Six nights in seven, the page would lose the answer it
+had. The off-night metrics are therefore declined for `cadence` rather than left
+out, which also means the rotation needed no new vocabulary word, no page copy
+and no change in the web tier: `cadence` was already refused the right to
+overwrite a reading that was actually taken.
 
 **Cost is decided first, and the two reasons stay apart.** `triple-count` is
 both expensive and daily; on a cheap-ceiling sweep it reads `cost-ceiling`,

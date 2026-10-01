@@ -88,6 +88,23 @@ struct Args {
     /// hourly sweep is the one that has to ask for less.
     #[arg(long, value_enum, default_value_t = Cadence::Daily)]
     cadence: Cadence,
+    /// How many days between class profiles of one endpoint.
+    ///
+    /// The profile pass asks one query PER CLASS it finds, and it used to do
+    /// that for every endpoint every night. Measured 2026-10-01: 2,339 classes,
+    /// 49,060 properties, 279,215 quads -- 95% of the night's run, and one
+    /// Wikidata mirror was 48% of it by itself. Nothing reads any of it but the
+    /// newest: a profile is only ever reached through `sw:sampleRunIs`, the one
+    /// run that last profiled that endpoint.
+    ///
+    /// So each endpoint is profiled every `profile_every_days` nights, chosen by
+    /// a hash of its URL against the sweep's own `--at`. Stateless: there is no
+    /// cursor to keep and a night the sweep does not run just means those
+    /// endpoints wait for their next slot.
+    ///
+    /// `1` restores the old behaviour -- every endpoint, every night.
+    #[arg(long, default_value_t = 7)]
+    profile_every_days: u32,
     /// The minimum pause between two consecutive requests to one host,
     /// measured from the end of one to the start of the next. Requests to one
     /// host are also never in flight together, whatever this is set to.
@@ -655,6 +672,11 @@ async fn main() -> anyhow::Result<()> {
     // decision and it is the one that would still apply on a daily run. Two
     // `NotMeasured` facts for one (endpoint, metric) pair is what `emit`'s
     // duplicate-subject guard refuses, so exactly one reason is recorded.
+    // TONIGHT'S SCHEDULE, built from the sweep's own `--at` so the whole run
+    // stays a function of its inputs. See `rotation` for why the profile pass
+    // is not run against every endpoint every night.
+    let rotation =
+        sparqlwatch_prober::rotation::Rotation::new(args.profile_every_days, &args.at);
     let (affordable, too_costly) = within_cost(&defs, args.max_cost);
     let (run, out_of_cadence) = within_cadence(&affordable, args.cadence);
     let declined: Vec<(MetricDef, NotMeasuredReason)> = too_costly
@@ -697,7 +719,7 @@ async fn main() -> anyhow::Result<()> {
     // below, which has to see every entry so a hold can lapse on a date rather
     // than on being swept.
     let Sweep { rows, declarations_read, void_documents, description_documents, not_measured, content_samples, failed_endpoints } =
-        run_sweep(&plan.probe, &run, &declined, &client, budget, args.concurrency, &memory, &mut writer)
+        run_sweep(&plan.probe, &run, &declined, &client, budget, args.concurrency, &memory, &rotation, &mut writer)
             .await?;
     // The footer, and then the rename onto `--out`. Last, because it publishes
     // `failedEndpoints`, which summarises the chunks, and because the rename is
@@ -721,6 +743,7 @@ async fn main() -> anyhow::Result<()> {
                    description_documents = description_documents.len(),
                    not_measured = not_measured.len(), content_samples = content_samples.len(),
                    max_cost = args.max_cost.slug(), concurrency = args.concurrency,
+                   profile_every_days = rotation.every_days(),
                    failed_endpoints, revision = %revision, out = %args.out, "sweep complete");
 
     // The dormancy write-back, after the footer and BEFORE the failure bail.

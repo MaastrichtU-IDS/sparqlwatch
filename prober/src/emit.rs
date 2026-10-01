@@ -230,7 +230,17 @@ pub enum NotMeasuredReason {
     /// SEPARATE FROM `CostCeiling` because the two say different things to a
     /// reader, and both of them are true of some metric on every hourly sweep.
     /// `cost-ceiling` means "we judged this too expensive to point at you";
-    /// `cadence` means "we ask this less often, and tonight's sweep will".
+    /// `cadence` means "we ask this less often, and another sweep will".
+    ///
+    /// SINCE 2026-10-01 IT ALSO CARRIES THE PROFILE ROTATION, which is the same
+    /// sentence asked per endpoint rather than per sweep: the class-profile pass
+    /// visits each endpoint every `--profile-every-days` nights, and the ones
+    /// not due tonight are declined for cadence. Deliberately not a new word.
+    /// The reason a reader is owed is "we ask this less often", and whether the
+    /// schedule is the sweep's or this endpoint's place in it does not change
+    /// what they should conclude. It also keeps the web tier unchanged: a
+    /// `cadence` decline is already refused the right to overwrite a reading
+    /// that was actually taken, which is exactly what an off night needs.
     /// Collapsing them would tell an operator their endpoint is being spared
     /// an expensive query when it is simply not this hour's question.
     ///
