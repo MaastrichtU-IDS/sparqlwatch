@@ -295,3 +295,134 @@ def day_from_summary(store: Store, endpoint: str, metric: str, day: str) -> dict
         "median_ms": durations.get("dailyMedianMs"),
         "p95_ms": durations.get("dailyP95Ms"),
     }
+
+
+def days_in_store(store: Store) -> list[str]:
+    """Every day the run archive covers, oldest first."""
+    return sorted(
+        {
+            row["at"].value[:10]
+            for row in store.query(
+                """
+                PREFIX prov: <http://www.w3.org/ns/prov#>
+                SELECT ?at WHERE { GRAPH ?g { ?a a prov:Activity ; prov:generatedAtTime ?at } }
+                """
+            )
+        }
+    )
+
+
+def day_quads(store: Store, day: str) -> int:
+    """How many quads `day`'s run graphs hold, for the report."""
+    runs = [
+        row["g"].value
+        for row in store.query(
+            """
+            PREFIX prov: <http://www.w3.org/ns/prov#>
+            SELECT ?g WHERE { GRAPH ?g { ?a a prov:Activity ; prov:generatedAtTime ?at }
+              FILTER(STRSTARTS(STR(?at), "%s")) }
+            """
+            % day
+        )
+    ]
+    total = 0
+    for run in runs:
+        for row in store.query("SELECT (COUNT(*) AS ?n) WHERE { GRAPH <%s> { ?s ?p ?o } }" % run):
+            total += int(row["n"].value)
+    return total
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Summarise the closed days of a store and report whether they agree.
+
+    WRITES, AND DELETES NOTHING. Each day gets a summary graph beside the runs
+    it came from; the runs stay exactly as they were. That is what makes this
+    safe to run against a live store and what makes the report meaningful --
+    both representations are there to be compared.
+
+    A non-zero exit means at least one day's summary disagrees with its runs,
+    which is the one result that must stop anything being deleted later.
+    """
+    import sys
+
+    args = sys.argv[1:] if argv is None else argv
+    if not args or args[0] in ("-h", "--help"):
+        print(
+            "usage: daily.py <store> [--keep-days N] [--check|--drop]\n"
+            "  summarise every day except the newest N (default 3), then check\n"
+            "  each summary against the runs it came from.\n"
+            "  --check verifies the summaries already written, writing nothing:\n"
+            "          this is the gate a pruning step must pass, because it can\n"
+            "          see a summary that has gone stale.\n"
+            "  --drop  removes the summaries again, leaving the runs untouched.",
+            file=sys.stderr,
+        )
+        return 2
+    from pathlib import Path
+
+    path = args[0]
+    if not Path(path).is_dir():
+        print(f"{path} is not an existing store directory", file=sys.stderr)
+        return 2
+    keep = 3
+    drop = "--drop" in args
+    # VERIFY WITHOUT WRITING. The default path summarises and then checks, which
+    # proves the round trip but can never catch a summary that has gone stale --
+    # it has just been rewritten from the runs. A pruning step needs the other
+    # question: does the summary ALREADY in the store still match the day it
+    # claims to describe? A run arriving after its day was summarised is exactly
+    # that, and it is the shape that would delete a day whose summary is short
+    # by a sweep.
+    check_only = "--check" in args
+    if "--keep-days" in args:
+        keep = int(args[args.index("--keep-days") + 1])
+
+    store = Store(path)
+    days = days_in_store(store)
+    # THE TAIL STAYS RAW. `fleet.fleet_history` reads the newest 40 sweeps per
+    # sweep, which is under two days, and a day still being written is not a
+    # closed day. Three is that with room to spare.
+    closed = days[:-keep] if keep else days
+    print(f"{len(days)} day(s) in the store, {len(closed)} closed, keeping the newest {keep} raw")
+
+    if drop:
+        for day in closed:
+            store.update(f"DROP SILENT GRAPH <{graph_iri(day)}>")
+        print(f"dropped {len(closed)} summary graph(s); the runs are untouched")
+        return 0
+
+    raw_total = summary_total = 0
+    failures: list[str] = []
+    for day in closed:
+        pairs = len(read_summary(store, day)) if check_only else summarise_day(store, day)
+        problems = agrees_with_raw(store, day)
+        raw = day_quads(store, day)
+        kept = 0
+        for row in store.query(
+            "SELECT (COUNT(*) AS ?n) WHERE { GRAPH <%s> { ?s ?p ?o } }" % graph_iri(day)
+        ):
+            kept = int(row["n"].value)
+        raw_total += raw
+        summary_total += kept
+        verdict = "ok" if not problems else f"{len(problems)} DISAGREEMENT(S)"
+        ratio = f"{raw / kept:.0f}x" if kept else "-"
+        print(f"  {day}  {pairs:5d} pairs  {raw:8d} raw  {kept:6d} summary  {ratio:>5}  {verdict}")
+        for problem in problems[:5]:
+            print(f"      {problem}")
+        if problems:
+            failures.append(day)
+
+    print(
+        f"total: {raw_total} quads of runs summarised into {summary_total}"
+        + (f" ({raw_total / summary_total:.0f}x)" if summary_total else "")
+    )
+    if failures:
+        print(f"DISAGREED on {len(failures)} day(s): {', '.join(failures)}")
+        print("nothing may be deleted until this is empty")
+        return 1
+    print("every closed day's summary agrees with the runs it came from")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
