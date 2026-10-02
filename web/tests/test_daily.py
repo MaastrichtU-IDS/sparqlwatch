@@ -427,3 +427,29 @@ def test_drop_removes_summaries_and_keeps_every_run(tmp_path, capsys):
     )
     assert summaries == 0, "--drop left summaries behind"
     assert runs == before, f"--drop touched the archive: {before} -> {runs}"
+
+
+def test_a_day_reads_only_its_own_run_graphs(tmp_path):
+    """THE SHAPE THAT MAKES THIS USABLE, not just correct.
+
+    Two earlier versions were right and far too slow: one selected every reading
+    in the store and filtered the day in Python, the other scoped the day inside
+    a single query but left `GRAPH ?run` unbound. Both make the engine consider
+    every graph in the archive, because a `STRSTARTS` over a timestamp literal
+    cannot use an index -- 8.8s for one day of a 36,000-quad store, against 4.2
+    million in production. The first ran 108 minutes without finishing a day.
+
+    Asserting on the run list rather than on a clock: a timing test would be
+    flaky, and the mechanism is what has to hold. If `runs_on` ever returns the
+    archive, the slow shape is back.
+    """
+    import load_run
+
+    store = _store(tmp_path, [_run("2026-09-20T01:00:00Z", "verified", 100)])
+    for at in ("2026-09-21T01:00:00Z", "2026-09-22T01:00:00Z", "2026-09-23T01:00:00Z"):
+        load_run.load_run(store, _run(at, "verified", 100))
+
+    runs = daily.runs_on(store, "2026-09-20")
+    assert len(runs) == 1, f"a single day named {len(runs)} run graphs: {runs}"
+    assert "2026-09-20" in runs[0]
+    assert daily.runs_on(store, "2026-09-99") == [], "a day with no runs named some"

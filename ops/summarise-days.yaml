@@ -18,7 +18,9 @@
 # site after writing. No restart is needed here, because nothing reads what this
 # writes.
 #
-#   sed 's/IMAGE/<the running tag>/' ops/summarise-days.yaml \
+#   sed "s/IMAGE/$(kubectl -n sparqlwatch-dev get deploy site \
+#     -o jsonpath='{.spec.template.spec.containers[0].image}' | sed 's/.*:sha-//')/" \
+#     ops/summarise-days.yaml \
 #     | kubectl -n sparqlwatch-dev create -f -
 #   kubectl -n sparqlwatch-dev wait --for=condition=complete job/<name> --timeout=60m
 #   kubectl -n sparqlwatch-dev logs job/<name>
@@ -43,7 +45,13 @@ spec:
         fsGroup: 10001
       containers:
         - name: summarise
-          image: ghcr.io/maastrichtu-ids/sparqlwatch:IMAGE
+          # `sha-` is part of the tag the Release workflow pushes, so IMAGE is
+          # the bare commit sha. Substituting the full tag here produces
+          # `sparqlwatch:sha-sha-...`; substituting a bare sha WITHOUT this
+          # prefix produces a tag that does not exist, and the job sits in
+          # ImagePullBackOff for an hour saying nothing useful. Both have
+          # happened.
+          image: ghcr.io/maastrichtu-ids/sparqlwatch:sha-IMAGE
           imagePullPolicy: IfNotPresent
           workingDir: /app/web
           # The store's own path, not the mount: the init container opens
