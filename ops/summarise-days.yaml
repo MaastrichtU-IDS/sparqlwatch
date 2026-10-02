@@ -1,0 +1,64 @@
+# Summarise the closed days of the run archive, and report whether each summary
+# says what its runs said. WRITES SUMMARIES; DELETES NOTHING.
+#
+# WHAT IT IS FOR. A day's 23 hourly runs are about 233,000 quads and nothing
+# reads them individually once the day is over -- `_daily_series` buckets
+# readings by day, and the one per-sweep reader keeps the newest 40 sweeps. A
+# summary is about 12 quads per (endpoint, metric, day). This job writes them
+# and then checks them, so the question "could these runs be deleted" is
+# answered by evidence from the real archive rather than from fixtures.
+#
+# IT IS NOT THE DELETION. Nothing here removes a run, and nothing reads a
+# summary: the site does not know they exist. A non-zero exit means at least one
+# day disagreed, which is the result that must stop any later pruning.
+#
+# WHEN IT IS SAFE TO RUN. Any time. The site opens the store READ-ONLY and
+# caches its snapshot for the life of the pod, so this neither blocks it nor
+# changes what it serves -- the same reason the hourly sweep has to restart the
+# site after writing. No restart is needed here, because nothing reads what this
+# writes.
+#
+#   sed 's/IMAGE/<the running tag>/' ops/summarise-days.yaml \
+#     | kubectl -n sparqlwatch-dev create -f -
+#   kubectl -n sparqlwatch-dev wait --for=condition=complete job/<name> --timeout=60m
+#   kubectl -n sparqlwatch-dev logs job/<name>
+#
+# To undo it entirely, run the same job with `--drop` appended to the command.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: summarise-days-
+spec:
+  backoffLimit: 0
+  # It walks every run graph of every closed day and queries each one. The
+  # rebuild job's full walk took about ten minutes at 389 runs; this does more
+  # per run, so the bound is wider.
+  activeDeadlineSeconds: 7200
+  template:
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: summarise
+          image: ghcr.io/maastrichtu-ids/sparqlwatch:IMAGE
+          imagePullPolicy: IfNotPresent
+          workingDir: /app/web
+          # The store's own path, not the mount: the init container opens
+          # /data/store/sparqlwatch.db and this must be the same database.
+          #
+          # `--keep-days 3` leaves the newest three days raw. `fleet_history`
+          # reads the newest 40 sweeps at per-sweep granularity, which is under
+          # two days, and a day still being swept is not a closed day.
+          command: ["python", "daily.py", "/data/store/sparqlwatch.db", "--keep-days", "3"]
+          resources:
+            requests: { cpu: "200m", memory: "512Mi" }
+            limits:   { cpu: "2",    memory: "4Gi" }
+          volumeMounts:
+            - { name: store, mountPath: /data/store }
+      volumes:
+        - name: store
+          persistentVolumeClaim:
+            claimName: sparqlwatch-store

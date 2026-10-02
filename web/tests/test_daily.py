@@ -346,3 +346,84 @@ def test_the_duration_table_matches_the_one_the_page_reads(tmp_path):
     import app
 
     assert daily.POSITIVE == app._POSITIVE_VERDICTS
+
+
+def test_the_cli_reports_a_disagreement_and_exits_non_zero(tmp_path, capsys):
+    """The job's exit code is what a later pruning step would gate on.
+
+    A verification that printed its complaint and exited 0 would be read by
+    `kubectl wait` as success, and the day would be deleted on the strength of a
+    green tick over a red report.
+    """
+    import load_run
+
+    store_path = tmp_path / "s"
+    store = _store(tmp_path, [_run("2026-09-20T01:00:00Z", "verified", 100)])
+    for day in ("21", "22", "23"):
+        load_run.load_run(store, _run(f"2026-09-{day}T01:00:00Z", "verified", 100))
+    del store
+
+    assert daily.main([str(store_path)]) == 0
+    assert "agrees with the runs" in capsys.readouterr().out
+
+    # A run arriving after its day was summarised: the shape a careless roll-up
+    # produces -- summarise at midnight, load the straggler at 00:05, delete the
+    # day. The summary is now short by a sweep and says nothing about it.
+    late = Store(str(store_path))
+    load_run.load_run(late, _run("2026-09-20T23:00:00Z", "absent"))
+    del late
+
+    # `--check` is the mode that can see this. The default path would summarise
+    # the day again first and report agreement, truthfully but uselessly: the
+    # question a pruning step asks is whether the summary ALREADY written still
+    # describes the day.
+    assert daily.main([str(store_path), "--check"]) == 1, (
+        "a stale summary was reported as agreeing, and exited 0"
+    )
+    out = capsys.readouterr().out
+    assert "DISAGREED" in out and "nothing may be deleted" in out, out
+
+    # And re-summarising repairs it, so the failure is about staleness rather
+    # than about the day being unsummarisable.
+    assert daily.main([str(store_path)]) == 0
+
+
+def test_drop_removes_summaries_and_keeps_every_run(tmp_path, capsys):
+    """Undoing the job must cost nothing. It writes into the live store, so the
+    way back has to be exact: the summaries go, the archive does not."""
+    import load_run
+
+    store_path = tmp_path / "s"
+    store = _store(tmp_path, [_run("2026-09-20T01:00:00Z", "verified", 100)])
+    for day in ("21", "22", "23"):
+        load_run.load_run(store, _run(f"2026-09-{day}T01:00:00Z", "verified", 100))
+    before = next(
+        int(r["n"].value)
+        for r in store.query(
+            'SELECT (COUNT(*) AS ?n) WHERE { GRAPH ?g { ?s ?p ?o } '
+            'FILTER(STRSTARTS(STR(?g), "urn:sparqlwatch:run:")) }'
+        )
+    )
+    del store
+
+    daily.main([str(store_path)])
+    capsys.readouterr()
+    assert daily.main([str(store_path), "--drop"]) == 0
+
+    after = Store(str(store_path))
+    summaries = next(
+        int(r["n"].value)
+        for r in after.query(
+            'SELECT (COUNT(*) AS ?n) WHERE { GRAPH ?g { ?s ?p ?o } '
+            'FILTER(STRSTARTS(STR(?g), "urn:sparqlwatch:daily:")) }'
+        )
+    )
+    runs = next(
+        int(r["n"].value)
+        for r in after.query(
+            'SELECT (COUNT(*) AS ?n) WHERE { GRAPH ?g { ?s ?p ?o } '
+            'FILTER(STRSTARTS(STR(?g), "urn:sparqlwatch:run:")) }'
+        )
+    )
+    assert summaries == 0, "--drop left summaries behind"
+    assert runs == before, f"--drop touched the archive: {before} -> {runs}"
