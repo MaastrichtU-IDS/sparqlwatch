@@ -18,9 +18,21 @@
 #   kubectl -n sparqlwatch-dev wait --for=condition=complete job/<name> --timeout=30m
 #   kubectl -n sparqlwatch-dev rollout restart deploy/site
 #
-# The site opens the store READ-ONLY and caches its snapshot for the life of the
-# pod, so it neither blocks this job nor notices what it did until it restarts.
-# That is the same reason the hourly sweep restarts the site after writing.
+# The site SERVES from a `Store.read_only` handle, so it neither blocks this job
+# nor notices what it did until it restarts. That is the same reason the hourly
+# sweep restarts the site after writing.
+#
+# BUT THE SITE'S INIT CONTAINER OPENS THE STORE READ-WRITE, and the hourly
+# prober restarts the site, so a new init container asks for the write lock at
+# the top of every hour. This job holds that lock while it runs. Ten minutes
+# usually fits between two restarts; if it does not, the SITE crashloops on
+#
+#   OSError: ... /data/store/sparqlwatch.db/LOCK: Resource temporarily unavailable
+#
+# which reads as a fault in the site rather than in whatever holds the store.
+# That took the deployment down for fourteen hours on 2026-10-02, with a slower
+# job. If this one is going to run long, scale the site to zero first and back
+# up afterwards -- see ops/summarise-days.yaml, where it is mandatory.
 apiVersion: batch/v1
 kind: Job
 metadata:
