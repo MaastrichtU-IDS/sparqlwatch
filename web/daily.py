@@ -39,6 +39,7 @@ happens. See `agrees_with_raw`.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from time import perf_counter
 
 from pyoxigraph import Literal, NamedNode, Quad, Store
 
@@ -473,6 +474,25 @@ def main(argv: list[str] | None = None) -> int:
         freed_total += freed
         if dropped or kept:
             print(f"  {day}  {dropped:3d} run(s) {'dropped' if commit else 'prunable'}, {kept:2d} pinned, {freed:8d} quads")
+    # COMPACTION IS PART OF THE PRUNE, not an optimisation after it.
+    #
+    # `DROP GRAPH` writes tombstones. RocksDB reclaims nothing until it compacts,
+    # and this process exits before its background threads would -- the same
+    # reason `load_run` compacts after a load, where the comment records the
+    # store keeping four times its compacted size.
+    #
+    # So a prune without this leaves the store LARGER to scan than it found it,
+    # and that is not theory: on 2026-10-03 dropping 411 run graphs put the site
+    # into an OOM crashloop, because every scan now walked two million
+    # tombstones. Compacting took 36 seconds and the warm went from 29s to 4.8s.
+    #
+    # A prune that leaves the store heavier than it found it is worse than no
+    # prune, so this is not conditional on anything but having dropped something.
+    if commit and dropped_total:
+        started = perf_counter()
+        store.optimize()
+        print(f"compacted in {perf_counter() - started:.0f}s")
+
     verb = "freed" if commit else "would free"
     print(
         f"{dropped_total} run graph(s) {'dropped' if commit else 'prunable'}, "

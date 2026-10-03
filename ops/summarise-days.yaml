@@ -40,6 +40,13 @@
 #   kubectl -n sparqlwatch-dev get pods | grep prober-   # the top of the hour is done
 #   ... start the job, watch it, read the log ...
 #
+# PRUNING COMPACTS, and the job's deadline has to allow for it. `DROP GRAPH`
+# writes tombstones; RocksDB reclaims nothing until it compacts, and a prune
+# that skipped it left the store HEAVIER to scan than it found it -- 411 dropped
+# run graphs put the site into an OOM crashloop on 2026-10-03 because every scan
+# walked two million tombstones. The compaction took 36 seconds and the startup
+# warm went from 29s to 4.8s. `daily.main` now does it as part of the prune.
+#
 # `activeDeadlineSeconds` below is the guard rail rather than the plan: it is
 # shorter than the gap between two restarts, so a job that hangs is killed
 # before it can reach one. It was 7200 -- two hours -- which is what let the
