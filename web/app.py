@@ -73,6 +73,7 @@ from pyoxigraph import (
     serialize,
 )
 
+import daily
 import charts
 import sparql_pool
 import sparql_service
@@ -1209,7 +1210,20 @@ _UPTIME_WINDOW_DAYS = 30
 _HISTORY_RUNS = _UPTIME_WINDOW_DAYS * 25
 
 
-def _daily_series(history: EndpointHistory) -> dict:
+def daily_summaries(store: Store, endpoint: str, metric: str) -> dict:
+    """`daily.endpoint_days`, tolerating a store that has none.
+
+    A store nobody has summarised answers with an empty dict and the chart falls
+    back to the runs, which is every store until the first summarise job runs.
+    """
+    try:
+        return daily.endpoint_days(store, endpoint, metric)
+    except Exception:  # noqa: BLE001 - a missing summary must not cost the page
+        _LOG.exception("could not read daily summaries for %s", endpoint)
+        return {}
+
+
+def _daily_series(history: EndpointHistory, summaries: dict | None = None) -> dict:
     """Uptime and response time per day, oldest first, gaps preserved.
 
     WHAT COUNTS AS UP is `_POSITIVE_VERDICTS`, the same table the availability
@@ -1250,7 +1264,20 @@ def _daily_series(history: EndpointHistory) -> dict:
     # the axis would put 09-10 next to 09-13 at one day's spacing and the charts
     # would claim a week of daily observations for a week that has four. The
     # window is time, so the axis has to be time.
-    for day in _calendar(min(by_day), max(by_day)):
+    summaries = summaries or {}
+    # A DAY THE SUMMARY KNOWS IS DRAWN FROM THE SUMMARY. After `daily.prune_day`
+    # a closed day keeps only the runs `sw:current` still pins -- often one,
+    # sometimes a profile run that measured a handful of metrics -- so reading
+    # uptime off what survives would report "1 sweep, 100%" for a day that had
+    # twenty-four. Partial raw data is not a coarser answer than the summary, it
+    # is a wrong one. The summary wins wherever it exists; the raw path below
+    # serves the unsummarised tail, where every run is still present.
+    span = [*by_day, *summaries]
+    for day in _calendar(min(span), max(span)):
+        summarised = summaries.get(day)
+        if summarised is not None:
+            days.append(_day_from_counts(day, summarised))
+            continue
         # `indeterminate` DOES NOT COUNT AGAINST AN ENDPOINT, and leaving it in
         # the denominator was this chart's worst error. The verdict means no
         # answer arrived -- a throttle, a timeout, a proxy, a blip on our side
@@ -1303,6 +1330,31 @@ def _daily_series(history: EndpointHistory) -> dict:
         # trend from one observation, which is what has_history already refuses
         # for the matrix this replaces.
         "has_series": len([d for d in days if d["uptime"] is not None]) > 1,
+    }
+
+
+def _day_from_counts(day: str, cell: dict) -> dict:
+    """One summarised day, in the shape the raw path produces.
+
+    The up/down split is applied HERE and is not stored, so a summarised day and
+    a live one read `_POSITIVE_VERDICTS` the same way -- which is the whole
+    reason `daily` keeps counts per verdict rather than a decided up and down.
+    `_UNREACHED_VERDICT` likewise: a verdict nobody could interpret is neither
+    up nor down, and a day whose every sweep was unreached is still 0% rather
+    than a gap.
+    """
+    verdicts = cell["verdicts"]
+    answered = sum(n for v, n in verdicts.items() if v != _UNREACHED_VERDICT)
+    counted = answered or sum(verdicts.values())
+    if not counted:
+        return {"day": day, "uptime": None, "median_ms": None, "p95_ms": None}
+    up = sum(n for v, n in verdicts.items() if v in _POSITIVE_VERDICTS)
+    return {
+        "day": day,
+        "uptime": round(100.0 * up / counted, 1),
+        "sweeps": counted,
+        "median_ms": cell["median_ms"],
+        "p95_ms": cell["p95_ms"],
     }
 
 
@@ -1796,6 +1848,7 @@ def _page_context(
     description_source: str | None = None,
     description_copy: str | None = None,
     void_doc=None,
+    summaries: dict | None = None,
 ) -> dict:
     """Everything the template renders, decided here rather than in the page.
 
@@ -1840,7 +1893,11 @@ def _page_context(
     # reads it too: the class sample is that list's source when no profile pass
     # exists, and carries the sentences that explain an absent one.
     sample = _sample(measurements, content)
-    series = _daily_series(history)
+    # The summarised past, for the days whose runs have been pruned. Empty on a
+    # store nothing has summarised, which is why this is a fallback and not a
+    # replacement: the chart reads the same from either source, and
+    # `test_daily` pins that by drawing one day both ways.
+    series = _daily_series(history, summaries)
     return {
         # The vendor's own document about their service, when one was read:
         # everything else on this page is what THIS service observed, and that
@@ -1963,6 +2020,7 @@ def _endpoint_html(
     description_source: str | None = None,
     description_copy: str | None = None,
     void_doc=None,
+    summaries: dict | None = None,
 ) -> str:
     """The page, rendered."""
     return _TEMPLATES.get_template("endpoint.html").render(
@@ -1977,6 +2035,7 @@ def _endpoint_html(
             description_source,
             description_copy,
             void_doc,
+            summaries,
         )
     )
 
@@ -2155,6 +2214,11 @@ def endpoint_resource(
             source,
             copy,
             document,
+            # The summarised past, for days whose runs have been pruned. Empty
+            # on a store nothing has summarised -- which is every store until
+            # the first summarise job runs -- so the chart falls back to the
+            # runs and reads identically either way.
+            daily_summaries(store, url, _AVAILABILITY_METRIC),
         )
         _LOG.info(
             "endpoint page %s | reads+render %.2fs | %d bytes",

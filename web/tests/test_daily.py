@@ -618,3 +618,71 @@ def test_the_cli_runs_as_a_script(tmp_path):
     )
     assert done.returncode == 0, done.stderr[-800:]
     assert "DRY RUN: nothing was deleted" in done.stdout, done.stdout[-500:]
+
+
+def test_a_pruned_day_still_draws_the_chart_it_drew_before(tmp_path):
+    """THE WHOLE POINT OF THE EXERCISE, end to end.
+
+    Summarise a day, draw its chart, prune its runs, draw it again. The two must
+    be the same -- otherwise the summaries were a story told about data that is
+    now gone.
+
+    The failure this guards is specific and quiet. Pruning leaves behind the
+    runs `sw:current` pins, so a closed day keeps a sweep or two. A chart that
+    read those would report "1 sweep, 100%" for a day that had six and was down
+    for two of them. Partial raw data is a WRONG answer, not a coarse one, which
+    is why `_daily_series` prefers the summary wherever one exists.
+    """
+    import app
+    import endpoint_history
+    import load_run
+
+    sweeps = [
+        ("01", "verified", 300),
+        ("02", "verified", 400),
+        ("03", "absent", 50),
+        ("04", "verified", 500),
+        ("05", "indeterminate", None),
+        ("06", "absent", 60),
+    ]
+    store = _store(
+        tmp_path, [_run(f"2026-09-20T{h}:00:00Z", v, ms) for h, v, ms in sweeps]
+    )
+    for day in ("21", "22", "23"):
+        load_run.load_run(store, _run(f"2026-09-{day}T01:00:00Z", "verified", 100))
+    load_run.rebuild_current(store)
+
+    before = next(
+        d for d in app._daily_series(endpoint_history.endpoint_history(store, EP, limit=200))["days"]
+        if d and d.get("day") == "2026-09-20"
+    )
+    assert before["sweeps"] == 5, before          # six sweeps, one unreached
+    assert before["uptime"] == 60.0, before       # three up of five answered
+
+    daily.summarise_day(store, "2026-09-20")
+    dropped, kept, _ = daily.prune_day(
+        store, "2026-09-20", pinned=daily.pinned_runs(store), commit=True
+    )
+    assert dropped, "nothing was pruned, so this proves nothing"
+
+    summaries = daily.endpoint_days(store, EP, AVAIL)
+    after = next(
+        d for d in app._daily_series(
+            endpoint_history.endpoint_history(store, EP, limit=200), summaries
+        )["days"]
+        if d and d.get("day") == "2026-09-20"
+    )
+    assert after == before, f"the chart changed when the runs went:\n  {before}\n  {after}"
+
+    # And without the summaries it would NOT be the same -- which is what makes
+    # the assertion above worth making.
+    naked = next(
+        (d for d in app._daily_series(
+            endpoint_history.endpoint_history(store, EP, limit=200)
+        )["days"] if d and d.get("day") == "2026-09-20"),
+        None,
+    )
+    assert naked != before, (
+        "the raw runs still draw the original chart after pruning, so this test "
+        "cannot tell whether the summary was used"
+    )
