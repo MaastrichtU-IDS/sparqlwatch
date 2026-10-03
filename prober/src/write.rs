@@ -424,10 +424,23 @@ mod tests {
         let out = header_and_one_chunk();
         let quads = quads_of(&out);
 
-        // One graph, and it is the run's. A chunk in another graph would not
-        // join to the header at all, since every read query wraps both in one
-        // `GRAPH ?run` block.
-        let graphs: BTreeSet<String> = quads.iter().map(|q| q.graph_name.to_string()).collect();
+        // The JOINABLE facts are in one graph, and it is the run's. A fact in
+        // another graph would not join to the header at all, since every read
+        // query wraps both in one `GRAPH ?run` block.
+        //
+        // The vendor copies and the class profiles are the exception and are
+        // not an oversight: each is a payload reached through a POINTER that
+        // lives in the run graph (`voidGraph`, `descriptionGraph`,
+        // `profileGraph`), never by joining to the header. They are excluded
+        // here by their graph prefix rather than by being absent from the
+        // fixture, so adding another payload family fails this test and has to
+        // be thought about.
+        let payload = ["urn:sparqlwatch:void:", "urn:sparqlwatch:description:", "urn:sparqlwatch:profile:"];
+        let graphs: BTreeSet<String> = quads
+            .iter()
+            .map(|q| q.graph_name.to_string())
+            .filter(|g| !payload.iter().any(|p| g.contains(p)))
+            .collect();
         assert_eq!(
             graphs,
             BTreeSet::from(["<urn:sparqlwatch:run:r1>".to_string()]),

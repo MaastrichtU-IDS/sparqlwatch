@@ -467,6 +467,44 @@ and the three PVCs — while the components are named for what they are: `site`,
 The `site` pod runs two containers, `site` and `sparql`, after an init container
 `build-store`; `-c` is therefore not optional.
 
+## Class profiles live in their own graph
+
+Since 2026-10-03. A profile is the biggest thing a sweep writes and the least
+often read — **95.6% of a nightly run's quads**, reached only through the
+pointer naming the one run that last profiled an endpoint.
+
+Inside the run graph it made that run unprunable in full. The pin is on a
+measurement; holding the run to keep the measurement held a quarter of a million
+quads of profile with it. Measured 2026-10-03: twelve of twenty pinned runs were
+nightly profile runs, and retention freed 56% of the closed archive rather than
+the 41× the summaries promised. A pinned run now costs about twelve thousand
+quads instead of two hundred and eighty thousand.
+
+The arrangement is the one VoID and description copies already use, for the
+third time: the payload goes in `urn:sparqlwatch:profile:<run>:<endpoint>` and
+the run graph keeps a `sw:profileGraph` pointer. The pointer is published only
+where a profile was written, because a graph IRI naming an empty graph promises
+evidence that is not there.
+
+**`sw:profileGraph` is the slowest-moving pointer in the store.** The pass visits
+each endpoint once every `--profile-every-days` nights, so it arrives about every
+167 hourly runs — against 23 for the VoID and description pointers. It therefore
+needs the same guard they have, and needs it more: unguarded, the endpoint page's
+vocabulary and `/void` would empty out within the hour of being written and
+refill one night in seven.
+
+**Two shapes are read during the move.** Every profile written before 2026-10-03
+is still inline in its run graph, and with the rotation an endpoint can wait a
+week to be rewritten, so `explore_vocabulary.rq` and `endpoint_void.rq` take
+either. Exactly one branch yields rows per endpoint: a re-profiled endpoint's
+newest run holds no inline profiles. The UNION goes when the last inline profile
+is pruned.
+
+What did NOT move: `sw:declaredClass` and `sw:declaredProperty` are small, are
+written by the hourly description fetch, and stay in the run graph; and
+`endpoint_void.rq` still reads the run's own `prov:generatedAtTime`, which is
+when the profile was taken and is not in the profile graph.
+
 ## Summarising a closed day
 
 Written 2026-10-01, and **nothing reads it or deletes anything yet** — see the

@@ -2802,3 +2802,64 @@ def test_a_newer_copy_replaces_an_older_one(tmp_path):
     ]
     assert len(pointers) == 1, f"current holds {len(pointers)} copy pointers: {pointers}"
     assert "2026-10-01" in pointers[0], f"current still points at the older copy: {pointers[0]}"
+
+
+def test_an_hourly_run_does_not_wipe_the_rotated_profile_pointer(tmp_path):
+    """The slowest-moving pointer in the store, and the one most exposed.
+
+    `sw:voidGraph` waits 23 hourly runs between writes and `sw:descriptionGraph`
+    the same. `sw:profileGraph` waits about 167: the profile pass visits each
+    endpoint once every `--profile-every-days` nights. Unguarded, the endpoint
+    page's vocabulary and /void would empty out within the hour of being written
+    and refill one night in seven.
+    """
+    import load_run
+    from pyoxigraph import Store
+
+    ep = "https://e.test/sparql"
+    graph = "urn:sparqlwatch:profile:2026-10-04T03:30:00Z:https%3A%2F%2Fe.test%2Fsparql"
+
+    def run(at: str, with_profile: bool) -> bytes:
+        g, a = f"<urn:sparqlwatch:run:{at}>", f"<urn:sparqlwatch:activity:{at}>"
+        lines = [
+            f"{a} <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/prov#Activity> {g} .",
+            f'{a} <http://www.w3.org/ns/prov#generatedAtTime> "{at}"^^<http://www.w3.org/2001/XMLSchema#dateTime> {g} .',
+            f"<urn:sparqlwatch:m:{at}> <http://www.w3.org/ns/dqv#computedOn> <{ep}> {g} .",
+            f"<urn:sparqlwatch:m:{at}> <http://www.w3.org/ns/dqv#isMeasurementOf> <urn:sparqlwatch:metric:availability> {g} .",
+            f'<urn:sparqlwatch:m:{at}> <http://www.w3.org/ns/dqv#value> "verified" {g} .',
+        ]
+        if with_profile:
+            lines.append(f"<{ep}> <urn:sparqlwatch:profileGraph> <{graph}> {g} .")
+            lines.append(
+                f"<urn:sparqlwatch:p:1> <urn:sparqlwatch:profiledFrom> <{ep}> <{graph}> ."
+            )
+        return ("\n".join(lines) + "\n").encode()
+
+    store = Store(str(tmp_path / "s"))
+    has_pointer = (
+        "ASK { GRAPH <urn:sparqlwatch:current> { ?e <urn:sparqlwatch:profileGraph> ?g } }"
+    )
+
+    load_run.load_run(store, run("2026-10-04T03:30:00Z", with_profile=True))
+    assert bool(store.query(has_pointer)), "the profile pointer never reached current"
+
+    # A day and a half of hourly sweeps, none of which profile anything.
+    for hour in range(4, 36):
+        load_run.load_run(
+            store,
+            run(f"2026-10-{4 + hour // 24:02d}T{hour % 24:02d}:00:00Z", with_profile=False),
+        )
+    assert bool(store.query(has_pointer)), "an hourly run wiped the rotated profile pointer"
+
+    load_run.rebuild_current(store)
+    assert bool(store.query(has_pointer)), "the rebuild dropped the profile pointer"
+
+    # The payload is still in its own graph, not folded into current or a run.
+    assert bool(
+        store.query("ASK { GRAPH <%s> { ?s <urn:sparqlwatch:profiledFrom> ?o } }" % graph)
+    ), "the profile itself is gone"
+    assert not bool(
+        store.query(
+            "ASK { GRAPH <urn:sparqlwatch:current> { ?s <urn:sparqlwatch:profiledFrom> ?o } }"
+        )
+    ), "a profile leaked into current"
