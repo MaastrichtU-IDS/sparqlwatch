@@ -12,46 +12,38 @@
 # summary: the site does not know they exist. A non-zero exit means at least one
 # day disagreed, which is the result that must stop any later pruning.
 #
-# THE SITE MUST BE SCALED TO ZERO WHILE THIS RUNS, and that is not optional.
+# RUN IT IN THE FIRST HALF OF THE HOUR, AND NEVER LET IT SPAN A RESTART.
 #
-# WHAT I GOT WRONG ON 2026-10-02, written out because the mistake is easy to
-# repeat and its symptom points somewhere else. The site SERVES from a
-# `Store.read_only` handle, which takes no write lock -- so "the site cannot
-# block this job" is true and was the whole of my reasoning. It is only half the
-# system. The site's INIT container opens the same store READ-WRITE to load new
-# runs, and the hourly prober `rollout restart`s the site, so a new init
-# container tries for the write lock at the top of every hour.
-#
-# A job holding that lock does not fail: the SITE fails, with
+# This job holds the store's WRITE lock. So does the site's init container,
+# which opens the store read-write to load new runs every time a site pod
+# starts -- and the hourly prober `rollout restart`s the site at about :06. Two
+# writers cannot both have it, and the one that loses is the SITE:
 #
 #   OSError: IO error: While lock file: /data/store/sparqlwatch.db/LOCK:
 #   Resource temporarily unavailable
 #
-# and `Init:CrashLoopBackOff`, which reads as a problem with the site rather
-# than with whatever is holding the store. It took the deployment down for
-# fourteen hours.
+# reported as `Init:CrashLoopBackOff`, which reads as a fault in the site rather
+# than in whatever is holding the store. On 2026-10-02 a two-hour run of this
+# job spanned four hourly restarts and took the deployment down for fourteen
+# hours.
 #
-# `ops/rebuild-current.yaml` carries the same hazard and has got away with it:
-# ten minutes usually fits between two hourly restarts. Anything slower does
-# not, and "usually" is not a property worth relying on.
+# SCALING THE SITE TO ZERO DOES NOT WORK HERE, which was my first fix and was
+# wrong: ArgoCD tracks this namespace and synced `replicas` back to 1 inside two
+# minutes. Suspending the prober CronJob fails the same way, for the same
+# reason. A GitOps-managed namespace does not take instructions from kubectl.
 #
-#   sudo kubectl -n sparqlwatch-dev scale deploy/site --replicas=0
-#   sudo kubectl -n sparqlwatch-dev wait --for=delete pod -l app=site --timeout=5m
-#   ... run the job, wait for it ...
-#   sudo kubectl -n sparqlwatch-dev scale deploy/site --replicas=1
+# What works is the clock. The sweep starts at :00, takes five or six minutes,
+# and restarts the site at about :06. Start this job after that restart lands
+# and it has fifty minutes of clear air, which is ample now that it takes
+# minutes rather than hours.
 #
-# The sweep that lands while the site is down loses nothing: the prober writes
-# its run file to the runs volume and the next init container loads it. Measured
-# on the way out of that outage -- 488 run files present, 0 to load, nothing
-# missing.
+#   kubectl -n sparqlwatch-dev get pods | grep prober-   # the top of the hour is done
+#   ... start the job, watch it, read the log ...
 #
-#
-#   sed "s/IMAGE/$(kubectl -n sparqlwatch-dev get deploy site \
-#     -o jsonpath='{.spec.template.spec.containers[0].image}' | sed 's/.*:sha-//')/" \
-#     ops/summarise-days.yaml \
-#     | kubectl -n sparqlwatch-dev create -f -
-#   kubectl -n sparqlwatch-dev wait --for=condition=complete job/<name> --timeout=60m
-#   kubectl -n sparqlwatch-dev logs job/<name>
+# `activeDeadlineSeconds` below is the guard rail rather than the plan: it is
+# shorter than the gap between two restarts, so a job that hangs is killed
+# before it can reach one. It was 7200 -- two hours -- which is what let the
+# outage happen.
 #
 # To undo it entirely, run the same job with `--drop` appended to the command.
 apiVersion: batch/v1
@@ -60,10 +52,13 @@ metadata:
   generateName: summarise-days-
 spec:
   backoffLimit: 0
-  # It walks every run graph of every closed day and queries each one. The
-  # rebuild job's full walk took about ten minutes at 389 runs; this does more
-  # per run, so the bound is wider.
-  activeDeadlineSeconds: 7200
+  # SHORTER THAN THE GAP BETWEEN TWO SITE RESTARTS, deliberately. The site is
+  # restarted at about :06 every hour; a job that cannot finish inside this
+  # window must die rather than still be holding the write lock when the next
+  # init container asks for it. Thirty minutes is several times what a full
+  # pass needs -- 17 closed days took well under that once the day's readings
+  # were read from their own run graphs instead of from the whole archive.
+  activeDeadlineSeconds: 1800
   template:
     spec:
       restartPolicy: Never
