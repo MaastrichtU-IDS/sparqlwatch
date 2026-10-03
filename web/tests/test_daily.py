@@ -686,3 +686,38 @@ def test_a_pruned_day_still_draws_the_chart_it_drew_before(tmp_path):
         "the raw runs still draw the original chart after pruning, so this test "
         "cannot tell whether the summary was used"
     )
+
+
+def test_a_committed_prune_compacts_and_a_dry_run_does_not(tmp_path, monkeypatch):
+    """A prune that leaves the store heavier than it found it is worse than none.
+
+    `DROP GRAPH` writes tombstones and RocksDB reclaims nothing until it
+    compacts, which this process never reaches on its own -- it exits first.
+    On 2026-10-03 dropping 411 run graphs put the deployment into an OOM
+    crashloop for exactly that reason: every scan walked two million tombstones.
+    Compacting took 36 seconds and the startup warm went from 29s to 4.8s.
+
+    Asserted by watching for the call rather than by measuring bytes: the
+    reclaim is RocksDB's to do and its timing is not ours to pin, but whether we
+    ASK is.
+    """
+    import daily as daily_module
+
+    calls = []
+    real = Store.optimize
+
+    def counting(self):
+        calls.append(1)
+        return real(self)
+
+    monkeypatch.setattr(Store, "optimize", counting)
+
+    store = _multi_day_store(tmp_path)
+    daily_module.summarise_day(store, "2026-09-20")
+    del store
+
+    daily_module.main([str(tmp_path / "s"), "--keep-days", "3", "--prune"])
+    assert not calls, "a dry run compacted, which means it wrote to the store"
+
+    daily_module.main([str(tmp_path / "s"), "--keep-days", "3", "--prune", "--commit"])
+    assert calls, "a committed prune left its tombstones behind"
