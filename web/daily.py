@@ -577,3 +577,41 @@ def prune_day(store: Store, day: str, pinned: set[str], commit: bool) -> tuple[i
 # evaluates the whole file before anything calls `main`.
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+_ENDPOINT_DAYS = """
+PREFIX sw: <urn:sparqlwatch:>
+SELECT ?day ?verdict ?readings ?sweeps ?median ?p95 WHERE {
+  GRAPH ?g {
+    ?s sw:dailyOf <%s> ; sw:dailyMetric <%s> ; sw:dailyDate ?day ; sw:dailySweeps ?sweeps ;
+       sw:dailyReading ?r .
+    ?r sw:verdict ?verdict ; sw:readings ?readings .
+    OPTIONAL { ?s sw:dailyMedianMs ?median }
+    OPTIONAL { ?s sw:dailyP95Ms ?p95 }
+  }
+  FILTER(STRSTARTS(STR(?g), "urn:sparqlwatch:daily:"))
+}
+"""
+
+
+def endpoint_days(store: Store, endpoint: str, metric: str) -> dict[str, dict]:
+    """Every summarised day for one (endpoint, metric), keyed by day.
+
+    One query for the whole history rather than one per day: the endpoint page
+    draws thirty of them and thirty round trips to answer one question is the
+    shape `endpoint_history` already avoids for run instants.
+    """
+    out: dict[str, dict] = {}
+    for row in store.query(_ENDPOINT_DAYS % (endpoint, metric)):
+        day = row["day"].value[:10]
+        cell = out.setdefault(
+            day,
+            {
+                "verdicts": {},
+                "sweeps": int(row["sweeps"].value),
+                "median_ms": int(row["median"].value) if row["median"] is not None else None,
+                "p95_ms": int(row["p95"].value) if row["p95"] is not None else None,
+            },
+        )
+        cell["verdicts"][row["verdict"].value] = int(row["readings"].value)
+    return out
