@@ -40,12 +40,29 @@ WHERE {
     # A class the pass profiled, with how many instances it drew from and how
     # it drew them. `?sampling` is what decides whether the caller may state
     # the count in VoID's own vocabulary or only in ours.
-    GRAPH sw:current {
-      ?ptr sw:sampleRunFor ?endpoint ;
-           sw:sampleRunMetric <urn:sparqlwatch:metric:class-profiles> ;
-           sw:sampleRunIs ?run .
+    # WHERE THE PROFILES ARE, which is two places during the move. Since
+    # 2026-10-03 a profile lives in its own graph with a `sw:profileGraph`
+    # pointer; everything written before is still inline in its run graph, and
+    # the seven-day rotation means an endpoint can wait a week to be rewritten.
+    # Both are read until the last inline profile is pruned. Exactly one branch
+    # yields rows per endpoint: a re-profiled endpoint's newest run holds no
+    # inline profiles. See explore_vocabulary.rq, which carries the same UNION.
+    #
+    # The block above keeps `?run`: it reads the run's own
+    # `prov:generatedAtTime`, which is when the profile was taken and is not in
+    # the profile graph.
+    {
+      { GRAPH sw:current { ?endpoint sw:profileGraph ?source } }
+      UNION
+      {
+        GRAPH sw:current {
+          ?ptr sw:sampleRunFor ?endpoint ;
+               sw:sampleRunMetric <urn:sparqlwatch:metric:class-profiles> ;
+               sw:sampleRunIs ?source .
+        }
+      }
     }
-    GRAPH ?run {
+    GRAPH ?source {
       ?profile sw:profiledFrom ?endpoint ;
                sw:profiledClass ?class ;
                sw:profileSampling ?sampling ;
@@ -56,12 +73,29 @@ WHERE {
   UNION
   {
     # A property those instances carried, and how many of them carried it.
-    GRAPH sw:current {
-      ?ptr sw:sampleRunFor ?endpoint ;
-           sw:sampleRunMetric <urn:sparqlwatch:metric:class-profiles> ;
-           sw:sampleRunIs ?run .
+    # WHERE THE PROFILES ARE, which is two places during the move. Since
+    # 2026-10-03 a profile lives in its own graph with a `sw:profileGraph`
+    # pointer; everything written before is still inline in its run graph, and
+    # the seven-day rotation means an endpoint can wait a week to be rewritten.
+    # Both are read until the last inline profile is pruned. Exactly one branch
+    # yields rows per endpoint: a re-profiled endpoint's newest run holds no
+    # inline profiles. See explore_vocabulary.rq, which carries the same UNION.
+    #
+    # The block above keeps `?run`: it reads the run's own
+    # `prov:generatedAtTime`, which is when the profile was taken and is not in
+    # the profile graph.
+    {
+      { GRAPH sw:current { ?endpoint sw:profileGraph ?source } }
+      UNION
+      {
+        GRAPH sw:current {
+          ?ptr sw:sampleRunFor ?endpoint ;
+               sw:sampleRunMetric <urn:sparqlwatch:metric:class-profiles> ;
+               sw:sampleRunIs ?source .
+        }
+      }
     }
-    GRAPH ?run {
+    GRAPH ?source {
       ?profile sw:profiledFrom ?endpoint ;
                sw:profiledClass ?class ;
                sw:profileSampling ?sampling ;

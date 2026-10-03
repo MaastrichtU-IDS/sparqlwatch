@@ -77,12 +77,35 @@ WHERE {
   UNION
   # OBSERVED: the classes the profile pass found.
   {
-    GRAPH sw:current {
-      ?ptr sw:sampleRunFor ?endpoint ;
-           sw:sampleRunMetric <urn:sparqlwatch:metric:class-profiles> ;
-           sw:sampleRunIs ?run .
+    # WHERE THE PROFILES ARE, which is two places during the move.
+    #
+    # Since 2026-10-03 a class profile is written into its own graph and the run
+    # keeps a `sw:profileGraph` pointer, so pinning a run to keep one
+    # measurement no longer keeps a quarter of a million quads of profile with
+    # it. Every profile written BEFORE that is still inline in its run graph,
+    # and with the pass on a seven-day rotation an endpoint can wait a week to
+    # be rewritten -- so both shapes are read until the last inline profile is
+    # pruned, and then this UNION goes.
+    #
+    # Exactly one branch yields rows per endpoint. A re-profiled endpoint has a
+    # `profileGraph` AND a `sampleRunIs` naming its newest run, but that run
+    # holds no inline profiles, so the second branch matches nothing for it.
+    #
+    # The DECLARED blocks above keep reading `?run`: a description's
+    # `declaredClass` and `declaredProperty` are small, are written by the
+    # hourly fetch, and never moved.
+    {
+      { GRAPH sw:current { ?endpoint sw:profileGraph ?source } }
+      UNION
+      {
+        GRAPH sw:current {
+          ?ptr sw:sampleRunFor ?endpoint ;
+               sw:sampleRunMetric <urn:sparqlwatch:metric:class-profiles> ;
+               sw:sampleRunIs ?source .
+        }
+      }
     }
-    GRAPH ?run {
+    GRAPH ?source {
       ?profile sw:profiledClass ?term ;
                sw:profiledFrom ?endpoint .
     }
@@ -92,12 +115,35 @@ WHERE {
   UNION
   # OBSERVED: the properties those classes' instances carried.
   {
-    GRAPH sw:current {
-      ?ptr sw:sampleRunFor ?endpoint ;
-           sw:sampleRunMetric <urn:sparqlwatch:metric:class-profiles> ;
-           sw:sampleRunIs ?run .
+    # WHERE THE PROFILES ARE, which is two places during the move.
+    #
+    # Since 2026-10-03 a class profile is written into its own graph and the run
+    # keeps a `sw:profileGraph` pointer, so pinning a run to keep one
+    # measurement no longer keeps a quarter of a million quads of profile with
+    # it. Every profile written BEFORE that is still inline in its run graph,
+    # and with the pass on a seven-day rotation an endpoint can wait a week to
+    # be rewritten -- so both shapes are read until the last inline profile is
+    # pruned, and then this UNION goes.
+    #
+    # Exactly one branch yields rows per endpoint. A re-profiled endpoint has a
+    # `profileGraph` AND a `sampleRunIs` naming its newest run, but that run
+    # holds no inline profiles, so the second branch matches nothing for it.
+    #
+    # The DECLARED blocks above keep reading `?run`: a description's
+    # `declaredClass` and `declaredProperty` are small, are written by the
+    # hourly fetch, and never moved.
+    {
+      { GRAPH sw:current { ?endpoint sw:profileGraph ?source } }
+      UNION
+      {
+        GRAPH sw:current {
+          ?ptr sw:sampleRunFor ?endpoint ;
+               sw:sampleRunMetric <urn:sparqlwatch:metric:class-profiles> ;
+               sw:sampleRunIs ?source .
+        }
+      }
     }
-    GRAPH ?run {
+    GRAPH ?source {
       ?profile sw:profiledFrom ?endpoint ;
                sw:profileProperty ?row .
       ?row sw:property ?term .

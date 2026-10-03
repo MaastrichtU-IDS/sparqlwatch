@@ -429,6 +429,26 @@ SELECT DISTINCT ?endpoint WHERE {
 }
 """
 
+# The endpoints whose class profiles this run wrote into their own graph.
+#
+# ITS OWN POINTER, and the slowest-moving one yet. The profile pass visits each
+# endpoint once every `--profile-every-days` nights (7 by default), so this
+# fact arrives roughly every 167 hourly runs. Reading it from the endpoint's
+# newest run would find it almost never.
+_PROFILE_ENDPOINTS = _PREAMBLE + """
+SELECT DISTINCT ?endpoint WHERE {
+  GRAPH run: { ?endpoint sw:profileGraph ?graph }
+}
+"""
+
+# One endpoint's profile-graph pointer, rewritten from the run that last wrote
+# one.
+_REPLACE_PROFILE = """
+DELETE WHERE { GRAPH sw:current { endpoint: sw:profileGraph ?o } } ;
+INSERT { GRAPH sw:current { endpoint: sw:profileGraph ?o } }
+WHERE  { GRAPH run: { endpoint: sw:profileGraph ?o } } ;
+"""
+
 # One endpoint's description copy pointer, rewritten from the run that last
 # published it. `descriptionSource` is NOT here: it rides the endpoint's newest
 # run like every hourly fact, and rewriting it from an older run would publish a
@@ -652,6 +672,17 @@ WHERE {
 } ;
 INSERT { GRAPH sw:current { endpoint: sw:descriptionGraph ?dg } }
 WHERE  { GRAPH run: { endpoint: sw:descriptionGraph ?dg } } ;
+# The same guard for the profile graph, and it matters more here than anywhere:
+# the pass rotates, so this fact arrives about every 167 hourly runs rather than
+# every 24. Unguarded, the endpoint page's vocabulary and /void would empty out
+# within the hour and refill one night in seven.
+DELETE { GRAPH sw:current { endpoint: sw:profileGraph ?pg } }
+WHERE {
+  GRAPH sw:current { endpoint: sw:profileGraph ?pg }
+  FILTER EXISTS { GRAPH run: { endpoint: sw:profileGraph ?any } }
+} ;
+INSERT { GRAPH sw:current { endpoint: sw:profileGraph ?pg } }
+WHERE  { GRAPH run: { endpoint: sw:profileGraph ?pg } } ;
 DELETE { GRAPH sw:current { endpoint: ?vp ?vo } }
 WHERE {
   VALUES ?vp { sw:voidSource sw:voidValid sw:voidGraph sw:voidTriples
@@ -1258,6 +1289,7 @@ def _newest_per_endpoint(
     dict[tuple[str, str], str],
     dict[str, str],
     dict[str, str],
+    dict[str, str],
 ]:
     """The newest run per endpoint, and per (endpoint, metric) three ways.
 
@@ -1284,6 +1316,9 @@ def _newest_per_endpoint(
     # `measured` for the reason `void` is: the copy is written on the daily
     # sweep, so the endpoint's newest run usually does not hold one.
     described: dict[str, str] = {}
+    # The newest run that wrote each endpoint's profile graph. Slowest of the
+    # lot: the pass rotates, so this is one run in 167 rather than one in 24.
+    profiled: dict[str, str] = {}
     # Keyed on the PAIR, because a run may sample classes and decline properties
     # and each half then has its own newest run.
     sampled: dict[tuple[str, str], str] = {}
@@ -1305,6 +1340,8 @@ def _newest_per_endpoint(
             _keep_newest(void, instants, endpoint, run, instant, "void")
         for endpoint in _run_endpoints(store, run, _DESCRIPTION_ENDPOINTS):
             _keep_newest(described, instants, endpoint, run, instant, "description")
+        for endpoint in _run_endpoints(store, run, _PROFILE_ENDPOINTS):
+            _keep_newest(profiled, instants, endpoint, run, instant, "profile")
         # The `pointer` argument namespaces the tie-detection key, and these
         # three dicts are all keyed on (endpoint, metric): passing the bare
         # metric for each made them share one key, so a run that measured a
@@ -1340,7 +1377,7 @@ def _newest_per_endpoint(
     # nothing was ever observed.
     declined_pairs = dict(declined_policy)
     declined_pairs.update(declined_observed)
-    return measured, measured_pairs, declined_pairs, sampled, void, described
+    return measured, measured_pairs, declined_pairs, sampled, void, described, profiled
 
 
 def _keep_newest(
@@ -1386,7 +1423,7 @@ def rebuild_current(store: Store) -> RebuildResult:
     diagnose.
     """
     runs = _run_graphs(store)
-    measured, measured_pairs, declined_pairs, sampled, void, described = _newest_per_endpoint(
+    measured, measured_pairs, declined_pairs, sampled, void, described, profiled = _newest_per_endpoint(
         store, runs
     )
 
@@ -1438,6 +1475,12 @@ def rebuild_current(store: Store) -> RebuildResult:
             _update_text(_REPLACE_DESCRIPTION),
             prefixes=_endpoint_run(endpoint, run),
         )
+    # The same, for the profile graph, and for the same reason.
+    for endpoint, run in sorted(profiled.items()):
+        store.update(
+            _update_text(_REPLACE_PROFILE),
+            prefixes=_endpoint_run(endpoint, run),
+        )
 
     touched = set(measured) | {endpoint for endpoint, _ in sampled}
     return RebuildResult(
@@ -1472,7 +1515,7 @@ def check_current(store: Store) -> CheckResult:
     # graphs pair by pair, and the void facts hang off the endpoint rather than
     # a pair. Naming it explicitly so the discard is a decision rather than a
     # tuple that happened to be the wrong length.
-    measured, measured_pairs, declined_pairs, sampled, _void, _described = _newest_per_endpoint(
+    measured, measured_pairs, declined_pairs, sampled, _void, _described, _profiled = _newest_per_endpoint(
         store, runs
     )
     reasons: dict[str, list[str]] = {}

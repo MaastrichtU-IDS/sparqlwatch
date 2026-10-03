@@ -202,6 +202,20 @@ impl DescriptionDocument {
     }
 }
 
+/// The graph one endpoint's class profiles are written into, for one run.
+///
+/// Per run and per endpoint, like the VoID and description copies and for the
+/// same reasons: a copy is never overwritten in place, two runs' profiles can be
+/// compared, and `encode_unreserved` puts the endpoint in verbatim and
+/// reversibly.
+pub fn profile_graph_iri(run: &RunId, endpoint: &str) -> String {
+    format!(
+        "urn:sparqlwatch:profile:{}:{}",
+        run.0,
+        encode_unreserved(endpoint)
+    )
+}
+
 impl VoidDocument {
     /// The graph this endpoint's copy is written into, for one run.
     ///
@@ -2051,9 +2065,37 @@ pub fn emit_endpoint(state: &mut EmitState, facts: EndpointFacts) -> anyhow::Res
     // written after it would be a fact a reader holding the terminator does not
     // have. A cut here loses profiles and no terminator, which every consumer
     // already handles as an unfinished chunk.
+    //
+    // THEIR OWN GRAPH, NOT THIS ONE, since 2026-10-03. A class profile is the
+    // biggest thing a sweep writes and the least often read: 95.6% of a nightly
+    // run's quads, reached only through the pointer that names the ONE run that
+    // last profiled an endpoint. Left in the run graph it made that run
+    // unprunable in full -- the pin is on a measurement, and holding the run to
+    // keep the measurement held a quarter of a million quads of profile with it.
+    // Measured 2026-10-03: twelve of twenty pinned runs were nightly profile
+    // runs, and retention freed 56% of the closed archive instead of the 41% the
+    // summaries promised.
+    //
+    // Same arrangement as the VoID and description copies, for the third time:
+    // the payload goes in `urn:sparqlwatch:profile:<run>:<endpoint>` and the run
+    // graph keeps a pointer. What pins the run now costs twelve thousand quads
+    // rather than two hundred and eighty.
+    let mut profiled: BTreeSet<&str> = BTreeSet::new();
     for profile in content_profiles {
-        match profile_quads(profile, run, &graph) {
-            Ok(qs) => quads.extend(qs),
+        let profile_graph = match nn(&profile_graph_iri(run, &profile.endpoint)) {
+            Ok(g) => GraphName::NamedNode(g),
+            Err(e) => {
+                tracing::warn!(endpoint = %profile.endpoint, error = %e, "skipping a class profile: its graph iri is invalid");
+                continue;
+            }
+        };
+        match profile_quads(profile, run, &profile_graph) {
+            Ok(qs) => {
+                if !qs.is_empty() {
+                    profiled.insert(profile.endpoint.as_str());
+                }
+                quads.extend(qs)
+            }
             // Non-fatal, for the same reason every other fact here is: one junk
             // class out of two hundred must not cost the chunk its output after
             // the probing is already paid for.
@@ -2064,6 +2106,27 @@ pub fn emit_endpoint(state: &mut EmitState, facts: EndpointFacts) -> anyhow::Res
                 "skipping a class profile: it cannot be written"
             ),
         }
+    }
+
+    // THE POINTER, one per endpoint that produced a profile. Published only
+    // where something was written, for the reason the VoID and description
+    // copies give: a graph IRI naming an empty graph is a promise of evidence
+    // that is not there, and a reader following it finds nothing and cannot
+    // tell that from an endpoint with no vocabulary.
+    for endpoint in profiled {
+        let subject = match nn(endpoint) {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!(endpoint = %endpoint, error = %e, "skipping profileGraph: endpoint is not a valid IRI");
+                continue;
+            }
+        };
+        quads.push(Quad::new(
+            NamedOrBlankNode::NamedNode(subject),
+            nn("urn:sparqlwatch:profileGraph")?,
+            Term::NamedNode(nn(&profile_graph_iri(run, endpoint))?),
+            graph.clone(),
+        ));
     }
 
     // marker too. The fact is about the chunk being whole, not about the probe
@@ -5334,5 +5397,113 @@ mod description_copy_tests {
             !nq.contains("urn:sparqlwatch:void:"),
             "a description copy was written into a VoID graph"
         );
+    }
+}
+
+#[cfg(test)]
+mod profile_graph_tests {
+    use super::*;
+
+    fn profile(endpoint: &str) -> ContentProfile {
+        ContentProfile {
+            endpoint: endpoint.into(),
+            metric_id: "class-profiles".into(),
+            class: "https://e.test/Gene".into(),
+            sampling: "exact".into(),
+            sampling_prefix: None,
+            properties: vec![ProfileProperty {
+                property: "https://e.test/name".into(),
+                subjects: 7,
+                datatypes: 1,
+                any_datatype: Some("http://www.w3.org/2001/XMLSchema#string".into()),
+            }],
+        }
+    }
+
+    fn emit(profiles: &[ContentProfile]) -> String {
+        let mut state = EmitState::new();
+        emit_endpoint(
+            &mut state,
+            EndpointFacts {
+                run: &RunId("R".into()),
+                endpoint: "https://e.test/sparql",
+                rows: &[],
+                declarations_read: &[],
+                void_documents: &[],
+                description_documents: &[],
+                not_measured: &[],
+                content_samples: &[],
+                content_profiles: profiles,
+            },
+        )
+        .unwrap()
+    }
+
+    /// WHY PROFILES LEFT THE RUN GRAPH.
+    ///
+    /// A class profile is the biggest thing a sweep writes and the least often
+    /// read: 95.6% of a nightly run's quads, reached only through the pointer
+    /// naming the ONE run that last profiled an endpoint. Inside the run graph
+    /// it made that run unprunable in full -- a pin on one measurement held a
+    /// quarter of a million quads of profile with it. Measured 2026-10-03,
+    /// twelve of twenty pinned runs were nightly profile runs.
+    #[test]
+    fn a_profile_lands_in_its_own_graph_and_not_the_run_graph() {
+        let nq = emit(&[profile("https://e.test/sparql")]);
+        let line = nq
+            .lines()
+            .find(|l| l.contains("profileProperty"))
+            .expect("no profile was written at all");
+        assert!(
+            line.contains("urn:sparqlwatch:profile:R:"),
+            "the profile is not in its own graph: {line}"
+        );
+        assert!(
+            !line.contains("urn:sparqlwatch:run:"),
+            "the profile landed in the run graph, which is what made runs unprunable: {line}"
+        );
+    }
+
+    /// The pointer is what a reader follows, so it has to be where the reader
+    /// joins -- in the run graph, on the endpoint.
+    #[test]
+    fn the_run_graph_keeps_a_pointer_to_the_profile_graph() {
+        let nq = emit(&[profile("https://e.test/sparql")]);
+        assert!(
+            nq.lines().any(|l| l.contains("urn:sparqlwatch:profileGraph")
+                && l.contains("urn:sparqlwatch:profile:R:")
+                && l.contains("urn:sparqlwatch:run:")),
+            "no pointer from the run graph to the profile graph"
+        );
+    }
+
+    /// One pointer per endpoint, however many classes it profiled. Two hundred
+    /// classes are two hundred profiles and one graph.
+    #[test]
+    fn many_classes_share_one_graph_and_one_pointer() {
+        let mut second = profile("https://e.test/sparql");
+        second.class = "https://e.test/Protein".into();
+        let nq = emit(&[profile("https://e.test/sparql"), second]);
+        let pointers = nq.lines().filter(|l| l.contains("profileGraph")).count();
+        assert_eq!(pointers, 1, "{pointers} pointers for one endpoint");
+        let graphs: std::collections::BTreeSet<&str> = nq
+            .lines()
+            .filter(|l| l.contains("profiledClass"))
+            .filter_map(|l| l.rsplit(' ').nth(1))
+            .collect();
+        assert_eq!(graphs.len(), 1, "two classes went to {graphs:?}");
+    }
+
+    /// A profile with no properties publishes nothing, and nothing is not a
+    /// pointer either: a graph IRI naming an empty graph promises evidence that
+    /// is not there, and a reader cannot tell it from an endpoint with no
+    /// vocabulary.
+    #[test]
+    fn an_empty_profile_gets_no_graph_and_no_pointer() {
+        let mut empty = profile("https://e.test/sparql");
+        empty.properties.clear();
+        let nq = emit(&[empty]);
+        assert!(!nq.contains("profileGraph"), "an empty profile got a pointer");
+        assert!(!nq.contains("urn:sparqlwatch:profile:R:"), "an empty profile got a graph");
     }
 }
