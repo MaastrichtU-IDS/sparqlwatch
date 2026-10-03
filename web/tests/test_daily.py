@@ -29,6 +29,11 @@ def _run(at: str, verdict: str, elapsed: int | None = None, endpoint: str = EP) 
         f"{m} <http://www.w3.org/ns/dqv#computedOn> <{endpoint}> {g} .",
         f"{m} <http://www.w3.org/ns/dqv#isMeasurementOf> <{AVAIL}> {g} .",
         f'{m} <http://www.w3.org/ns/dqv#value> "{verdict}" {g} .',
+        # How a measurement names the run it came from, and the route by which
+        # `current` pins an old run. Left out of the first version of this
+        # fixture, so nothing could be pinned except via `sw:currentRun` -- and
+        # that only ever names the NEWEST run, which pruning never considers.
+        f"{m} <http://www.w3.org/ns/prov#wasGeneratedBy> {a} {g} .",
     ]
     if elapsed is not None:
         lines.append(
@@ -453,3 +458,163 @@ def test_a_day_reads_only_its_own_run_graphs(tmp_path):
     assert len(runs) == 1, f"a single day named {len(runs)} run graphs: {runs}"
     assert "2026-09-20" in runs[0]
     assert daily.runs_on(store, "2026-09-99") == [], "a day with no runs named some"
+
+
+_RARE = "urn:sparqlwatch:metric:class-count"
+
+
+def _rare_run(at: str) -> bytes:
+    """A sweep that measures a metric no later sweep does.
+
+    THE SHAPE THE PIN RULE EXISTS FOR, and the first version of this fixture
+    did not have it. Every run measuring the same metric means `current` only
+    ever cites the NEWEST run, which sits in the kept tail -- so pruning never
+    considers a pinned run and the pin check is never exercised. Removing it
+    entirely still passed.
+
+    A metric measured once, long ago, and declined or absent since keeps its
+    reading in `current` citing an old run. On the deployment that reached back
+    to 2026-09-13, the first day of the archive.
+    """
+    g, a = f"<urn:sparqlwatch:run:{at}>", f"<urn:sparqlwatch:activity:{at}>"
+    m = f"<urn:sparqlwatch:rare:{at}>"
+    return ("\n".join([
+        f"{a} <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/prov#Activity> {g} .",
+        f'{a} <http://www.w3.org/ns/prov#generatedAtTime> "{at}"^^<http://www.w3.org/2001/XMLSchema#dateTime> {g} .',
+        f"{m} <http://www.w3.org/ns/dqv#computedOn> <{EP}> {g} .",
+        f"{m} <http://www.w3.org/ns/dqv#isMeasurementOf> <{_RARE}> {g} .",
+        f'{m} <http://www.w3.org/ns/dqv#value> "verified" {g} .',
+        f"{m} <http://www.w3.org/ns/prov#wasGeneratedBy> {a} {g} .",
+    ]) + "\n").encode()
+
+
+def _multi_day_store(tmp_path):
+    """Four days of sweeps, with current derived -- the shape prune reads.
+
+    The OLDEST day carries a metric nothing measures again, so `current` cites
+    a run inside a CLOSED day and the pin rule is actually under test.
+    """
+    import load_run
+
+    store = Store(str(tmp_path / "s"))
+    load_run.load_run(store, _rare_run("2026-09-20T00:30:00Z"))
+    for day in ("20", "21", "22", "23"):
+        for hour in ("01", "02"):
+            load_run.load_run(store, _run(f"2026-09-{day}T{hour}:00:00Z", "verified", 100))
+    load_run.rebuild_current(store)
+    return store
+
+
+def test_prune_is_a_dry_run_unless_committed(tmp_path, capsys):
+    """THE ONLY IRREVERSIBLE THING IN THIS MODULE takes two flags.
+
+    `--prune` reports and `--prune --commit` acts. A single flag that deleted
+    would be one typo away from an archive, and the report is what anyone would
+    want to read first anyway.
+    """
+    store = _multi_day_store(tmp_path)
+    before = next(
+        int(r["n"].value)
+        for r in store.query(
+            'SELECT (COUNT(*) AS ?n) WHERE { GRAPH ?g { ?s ?p ?o } '
+            'FILTER(STRSTARTS(STR(?g), "urn:sparqlwatch:run:")) }'
+        )
+    )
+    del store
+
+    assert daily.main([str(tmp_path / "s"), "--keep-days", "3", "--prune"]) == 0
+    assert "DRY RUN: nothing was deleted" in capsys.readouterr().out
+
+    after = Store(str(tmp_path / "s"))
+    still = next(
+        int(r["n"].value)
+        for r in after.query(
+            'SELECT (COUNT(*) AS ?n) WHERE { GRAPH ?g { ?s ?p ?o } '
+            'FILTER(STRSTARTS(STR(?g), "urn:sparqlwatch:run:")) }'
+        )
+    )
+    assert still == before, f"a dry run deleted {before - still} quads"
+
+
+def test_prune_never_drops_a_run_current_still_needs(tmp_path, capsys):
+    """The pin rule, which is not a list of pointers.
+
+    `_REPLACE_MEASURED` keeps a reading from an old run when newer runs decline
+    that metric, so `current` carries measurements whose `prov:wasGeneratedBy`
+    names an activity in an arbitrarily old run -- on the deployment, 2026-09-13,
+    the first day of the archive. Any run `current` mentions by any route has to
+    survive, or `rebuild_current` derives a different graph than the load path.
+    """
+    store = _multi_day_store(tmp_path)
+    pins = daily.pinned_runs(store)
+    assert pins, "nothing was pinned, so this test cannot fail for the right reason"
+    # ... and at least one of them must be in a day pruning will consider, or
+    # the pin check is never reached. `--keep-days 3` closes 2026-09-20 only.
+    assert any("2026-09-20" in run for run in pins), (
+        f"no pinned run falls in a closed day, so this proves nothing: {sorted(pins)}"
+    )
+    del store
+
+    daily.main([str(tmp_path / "s"), "--keep-days", "3", "--prune", "--commit"])
+    capsys.readouterr()
+
+    after = Store(str(tmp_path / "s"))
+    for run in pins:
+        assert bool(
+            after.query("ASK { GRAPH <%s> { ?s ?p ?o } }" % run)
+        ), f"prune dropped {run}, which sw:current still references"
+
+    # And the derived graph still rebuilds to the same thing from what is left.
+    import load_run
+
+    before_rows = {
+        (str(r["s"]), str(r["p"]), str(r["o"]))
+        for r in after.query("SELECT ?s ?p ?o WHERE { GRAPH <urn:sparqlwatch:current> { ?s ?p ?o } }")
+    }
+    load_run.rebuild_current(after)
+    after_rows = {
+        (str(r["s"]), str(r["p"]), str(r["o"]))
+        for r in after.query("SELECT ?s ?p ?o WHERE { GRAPH <urn:sparqlwatch:current> { ?s ?p ?o } }")
+    }
+    assert before_rows == after_rows, (
+        "rebuilding after a prune derived a different `current`; a run it needed is gone"
+    )
+
+
+def test_prune_refuses_a_day_with_no_summary(tmp_path):
+    """The second lock on the same door. The CLI checks agreement first; this
+    refuses even if a caller skips that, because the operation cannot be undone
+    from inside the store."""
+    store = _multi_day_store(tmp_path)
+    try:
+        daily.prune_day(store, "2026-09-20", pinned=set(), commit=True)
+    except AssertionError as exc:
+        assert "no summary" in str(exc)
+    else:
+        raise AssertionError("pruned a day that had never been summarised")
+
+
+def test_the_cli_runs_as_a_script(tmp_path):
+    """Importing the module is not running it, and only one of those was tested.
+
+    `if __name__ == "__main__"` executes where it is WRITTEN. With helpers
+    defined below it, `python daily.py --prune` reached `main()` before they
+    existed and died on a NameError -- while every test here passed, because
+    importing the module evaluates the whole file before anything calls `main`.
+    Seventeen green tests and a CLI that could not start.
+    """
+    import subprocess
+    import sys
+
+    store = _multi_day_store(tmp_path)
+    del store
+
+    done = subprocess.run(
+        [sys.executable, "daily.py", str(tmp_path / "s"), "--keep-days", "3", "--prune"],
+        cwd=str(Path(__file__).resolve().parents[1]),
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert done.returncode == 0, done.stderr[-800:]
+    assert "DRY RUN: nothing was deleted" in done.stdout, done.stdout[-500:]
