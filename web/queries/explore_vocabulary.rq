@@ -77,35 +77,34 @@ WHERE {
   UNION
   # OBSERVED: the classes the profile pass found.
   {
-    # WHERE THE PROFILES ARE, which is two places during the move.
+    # THE NEW SHAPE: a profile in its own graph, since 2026-10-03.
     #
-    # Since 2026-10-03 a class profile is written into its own graph and the run
-    # keeps a `sw:profileGraph` pointer, so pinning a run to keep one
-    # measurement no longer keeps a quarter of a million quads of profile with
-    # it. Every profile written BEFORE that is still inline in its run graph,
-    # and with the pass on a seven-day rotation an endpoint can wait a week to
-    # be rewritten -- so both shapes are read until the last inline profile is
-    # pruned, and then this UNION goes.
-    #
-    # Exactly one branch yields rows per endpoint. A re-profiled endpoint has a
-    # `profileGraph` AND a `sampleRunIs` naming its newest run, but that run
-    # holds no inline profiles, so the second branch matches nothing for it.
-    #
-    # The DECLARED blocks above keep reading `?run`: a description's
-    # `declaredClass` and `declaredProperty` are small, are written by the
-    # hourly fetch, and never moved.
-    {
-      { GRAPH sw:current { ?endpoint sw:profileGraph ?source } }
-      UNION
-      {
-        GRAPH sw:current {
-          ?ptr sw:sampleRunFor ?endpoint ;
-               sw:sampleRunMetric <urn:sparqlwatch:metric:class-profiles> ;
-               sw:sampleRunIs ?source .
-        }
-      }
+    # Written as a SIBLING BRANCH rather than by unioning the graph variable with
+    # the old shape's. Both are correct and return the same 55,574 rows, and the
+    # difference is 4.8x: measured against the deployed store, unioning `?source`
+    # took 7.00s where this takes 1.49s. Binding the graph inside one branch lets
+    # the planner push the join; a union of two graph bindings does not.
+    GRAPH sw:current { ?endpoint sw:profileGraph ?pg }
+    GRAPH ?pg {
+      ?profile sw:profiledClass ?term ;
+               sw:profiledFrom ?endpoint .
     }
-    GRAPH ?source {
+    BIND("class" AS ?kind)
+    BIND(false AS ?declared)
+  }
+  UNION
+  {
+    # THE OLD SHAPE: a profile inline in its run graph, written before
+    # 2026-10-03. The pass rotates every seven days, so an endpoint can wait a
+    # week to be rewritten; this branch goes when the last inline profile is
+    # pruned. Exactly one branch yields rows per endpoint, because a re-profiled
+    # endpoint's newest run holds no inline profiles.
+    GRAPH sw:current {
+      ?ptr sw:sampleRunFor ?endpoint ;
+           sw:sampleRunMetric <urn:sparqlwatch:metric:class-profiles> ;
+           sw:sampleRunIs ?run .
+    }
+    GRAPH ?run {
       ?profile sw:profiledClass ?term ;
                sw:profiledFrom ?endpoint .
     }
@@ -115,35 +114,35 @@ WHERE {
   UNION
   # OBSERVED: the properties those classes' instances carried.
   {
-    # WHERE THE PROFILES ARE, which is two places during the move.
+    # THE NEW SHAPE: a profile in its own graph, since 2026-10-03.
     #
-    # Since 2026-10-03 a class profile is written into its own graph and the run
-    # keeps a `sw:profileGraph` pointer, so pinning a run to keep one
-    # measurement no longer keeps a quarter of a million quads of profile with
-    # it. Every profile written BEFORE that is still inline in its run graph,
-    # and with the pass on a seven-day rotation an endpoint can wait a week to
-    # be rewritten -- so both shapes are read until the last inline profile is
-    # pruned, and then this UNION goes.
-    #
-    # Exactly one branch yields rows per endpoint. A re-profiled endpoint has a
-    # `profileGraph` AND a `sampleRunIs` naming its newest run, but that run
-    # holds no inline profiles, so the second branch matches nothing for it.
-    #
-    # The DECLARED blocks above keep reading `?run`: a description's
-    # `declaredClass` and `declaredProperty` are small, are written by the
-    # hourly fetch, and never moved.
-    {
-      { GRAPH sw:current { ?endpoint sw:profileGraph ?source } }
-      UNION
-      {
-        GRAPH sw:current {
-          ?ptr sw:sampleRunFor ?endpoint ;
-               sw:sampleRunMetric <urn:sparqlwatch:metric:class-profiles> ;
-               sw:sampleRunIs ?source .
-        }
-      }
+    # Written as a SIBLING BRANCH rather than by unioning the graph variable with
+    # the old shape's. Both are correct and return the same 55,574 rows, and the
+    # difference is 4.8x: measured against the deployed store, unioning `?source`
+    # took 7.00s where this takes 1.49s. Binding the graph inside one branch lets
+    # the planner push the join; a union of two graph bindings does not.
+    GRAPH sw:current { ?endpoint sw:profileGraph ?pg }
+    GRAPH ?pg {
+      ?profile sw:profiledFrom ?endpoint ;
+               sw:profileProperty ?row .
+      ?row sw:property ?term .
     }
-    GRAPH ?source {
+    BIND("property" AS ?kind)
+    BIND(false AS ?declared)
+  }
+  UNION
+  {
+    # THE OLD SHAPE: a profile inline in its run graph, written before
+    # 2026-10-03. The pass rotates every seven days, so an endpoint can wait a
+    # week to be rewritten; this branch goes when the last inline profile is
+    # pruned. Exactly one branch yields rows per endpoint, because a re-profiled
+    # endpoint's newest run holds no inline profiles.
+    GRAPH sw:current {
+      ?ptr sw:sampleRunFor ?endpoint ;
+           sw:sampleRunMetric <urn:sparqlwatch:metric:class-profiles> ;
+           sw:sampleRunIs ?run .
+    }
+    GRAPH ?run {
       ?profile sw:profiledFrom ?endpoint ;
                sw:profileProperty ?row .
       ?row sw:property ?term .
