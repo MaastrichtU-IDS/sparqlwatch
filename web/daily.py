@@ -375,7 +375,11 @@ def main(argv: list[str] | None = None) -> int:
             "  --check verifies the summaries already written, writing nothing:\n"
             "          this is the gate a pruning step must pass, because it can\n"
             "          see a summary that has gone stale.\n"
-            "  --drop  removes the summaries again, leaving the runs untouched.",
+            "  --drop  removes the summaries again, leaving the runs untouched.\n"
+            "  --prune shows which run graphs a verified summary makes redundant.\n"
+            "          DRY RUN unless --commit is also given. Never drops a run\n"
+            "          `sw:current` still depends on, and never a day whose\n"
+            "          summary does not agree with it.",
             file=sys.stderr,
         )
         return 2
@@ -395,6 +399,10 @@ def main(argv: list[str] | None = None) -> int:
     # that, and it is the shape that would delete a day whose summary is short
     # by a sweep.
     check_only = "--check" in args
+    prune = "--prune" in args
+    # TWO FLAGS FOR THE ONLY IRREVERSIBLE THING HERE. `--prune` alone reports;
+    # it takes `--commit` as well to actually drop a graph.
+    commit = "--commit" in args
     if "--keep-days" in args:
         keep = int(args[args.index("--keep-days") + 1])
 
@@ -446,8 +454,126 @@ def main(argv: list[str] | None = None) -> int:
         print("nothing may be deleted until this is empty")
         return 1
     print("every closed day's summary agrees with the runs it came from")
+
+    if not prune:
+        return 0
+
+    # ONLY PAST THE GATE ABOVE. Reaching here means every closed day was
+    # summarised and every summary agreed with the runs it describes.
+    pins = pinned_runs(store)
+    print(
+        f"\npruning: {len(pins)} run graph(s) are still referenced by sw:current and stay"
+        + ("" if commit else "   [DRY RUN -- pass --commit to drop anything]")
+    )
+    dropped_total = kept_total = freed_total = 0
+    for day in closed:
+        dropped, kept, freed = prune_day(store, day, pins, commit)
+        dropped_total += dropped
+        kept_total += kept
+        freed_total += freed
+        if dropped or kept:
+            print(f"  {day}  {dropped:3d} run(s) {'dropped' if commit else 'prunable'}, {kept:2d} pinned, {freed:8d} quads")
+    verb = "freed" if commit else "would free"
+    print(
+        f"{dropped_total} run graph(s) {'dropped' if commit else 'prunable'}, "
+        f"{kept_total} pinned and kept, {freed_total} quads {verb}"
+    )
+    if not commit:
+        print("DRY RUN: nothing was deleted")
     return 0
 
 
+
+
+# Every IRI `sw:current` mentions, in either position. A run graph whose own
+# IRI or whose activity appears here is still load-bearing.
+# The triple pattern is repeated in each branch rather than written once with
+# two BINDs over it. `{ BIND(?s AS ?iri) } UNION { BIND(?o AS ?iri) }` reads as
+# the same thing and is not: each UNION branch is its own group, ?s and ?o are
+# not in scope inside it, and the whole query returns NOTHING. It did, and
+# `test_prune_never_drops_a_run_current_still_needs` is what said so -- a pin
+# set that is silently empty is a prune that deletes everything.
+_CURRENT_REFERENCES = """
+SELECT DISTINCT ?iri WHERE {
+  { GRAPH <urn:sparqlwatch:current> { ?iri ?p ?o } }
+  UNION
+  { GRAPH <urn:sparqlwatch:current> { ?s ?p ?iri } }
+  FILTER(isIRI(?iri))
+}
+"""
+
+_ACTIVITY_OF = """
+PREFIX prov: <http://www.w3.org/ns/prov#>
+SELECT ?a WHERE { GRAPH <%s> { ?a a prov:Activity } }
+"""
+
+
+def pinned_runs(store: Store) -> set[str]:
+    """The run graphs `sw:current` still depends on, by any route.
+
+    NOT A LIST OF POINTERS. `sampleRunIs`, `currentRun`, `voidGraph` and
+    `descriptionGraph` are the ones anybody would think of, and they are not
+    enough: `_REPLACE_MEASURED` keeps a reading from an old run when newer runs
+    declined that metric, so `current` carries measurements whose
+    `prov:wasGeneratedBy` names an activity in an arbitrarily old run. On
+    2026-10-03 that reached back to 2026-09-13, the first day of the archive.
+
+    So the rule is every IRI `current` mentions, matched against each run graph's
+    own IRI and against the activity inside it. A pointer added later needs no
+    change here, which is the point: a pin list that has to be maintained is a
+    pin list that will one day be out of date, and the failure is a deleted run
+    that `rebuild_current` needed.
+    """
+    referenced = {row["iri"].value for row in store.query(_CURRENT_REFERENCES)}
+    pinned: set[str] = set()
+    for row in store.query(
+        'SELECT DISTINCT ?g WHERE { GRAPH ?g { ?s ?p ?o } '
+        'FILTER(STRSTARTS(STR(?g), "urn:sparqlwatch:run:")) }'
+    ):
+        run = row["g"].value
+        if run in referenced:
+            pinned.add(run)
+            continue
+        for activity in store.query(_ACTIVITY_OF % run):
+            if activity["a"].value in referenced:
+                pinned.add(run)
+                break
+    return pinned
+
+
+def prune_day(store: Store, day: str, pinned: set[str], commit: bool) -> tuple[int, int, int]:
+    """Drop `day`'s unpinned run graphs. Returns (dropped, kept, quads freed).
+
+    REFUSES WITHOUT A VERIFIED SUMMARY. The caller checks `agrees_with_raw`
+    first and does not call this if it found anything; the assertion here is the
+    second lock on the same door, because this is the one operation in the
+    module that cannot be undone from inside the store.
+
+    It can be undone from OUTSIDE it. The run FILES on the runs volume are never
+    deleted -- 488 of them on 2026-10-03 -- and the store is an index built from
+    them. Remove the `.loaded.json` manifest beside the store and the next
+    init container replays the archive from nothing. That is slow (ten minutes
+    at 294 files, measured 2026-09-25) and it is a real way back.
+    """
+    if not read_summary(store, day):
+        raise AssertionError(f"{day} has no summary; refusing to prune it")
+    dropped = kept = freed = 0
+    for run in runs_on(store, day):
+        if run in pinned:
+            kept += 1
+            continue
+        for row in store.query("SELECT (COUNT(*) AS ?n) WHERE { GRAPH <%s> { ?s ?p ?o } }" % run):
+            freed += int(row["n"].value)
+        if commit:
+            store.update(f"DROP SILENT GRAPH <{run}>")
+        dropped += 1
+    return dropped, kept, freed
+
+
+# LAST IN THE FILE, and it has to be. This guard runs where it is WRITTEN, not
+# after the module is read: with `pinned_runs` and `prune_day` defined below it,
+# `python daily.py ... --prune` reached `main()` before those existed and died
+# on a NameError -- while every test passed, because importing the module
+# evaluates the whole file before anything calls `main`.
 if __name__ == "__main__":
     raise SystemExit(main())
