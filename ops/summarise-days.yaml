@@ -12,13 +12,43 @@
 # summary: the site does not know they exist. A non-zero exit means at least one
 # day disagreed, which is the result that must stop any later pruning.
 #
-# WHEN IT IS SAFE TO RUN. Any time. The site opens the store READ-ONLY and
-# caches its snapshot for the life of the pod, so this neither blocks it nor
-# changes what it serves -- the same reason the hourly sweep has to restart the
-# site after writing. No restart is needed here, because nothing reads what this
-# writes.
+# THE SITE MUST BE SCALED TO ZERO WHILE THIS RUNS, and that is not optional.
 #
-#   sed 's/IMAGE/<the running tag>/' ops/summarise-days.yaml \
+# WHAT I GOT WRONG ON 2026-10-02, written out because the mistake is easy to
+# repeat and its symptom points somewhere else. The site SERVES from a
+# `Store.read_only` handle, which takes no write lock -- so "the site cannot
+# block this job" is true and was the whole of my reasoning. It is only half the
+# system. The site's INIT container opens the same store READ-WRITE to load new
+# runs, and the hourly prober `rollout restart`s the site, so a new init
+# container tries for the write lock at the top of every hour.
+#
+# A job holding that lock does not fail: the SITE fails, with
+#
+#   OSError: IO error: While lock file: /data/store/sparqlwatch.db/LOCK:
+#   Resource temporarily unavailable
+#
+# and `Init:CrashLoopBackOff`, which reads as a problem with the site rather
+# than with whatever is holding the store. It took the deployment down for
+# fourteen hours.
+#
+# `ops/rebuild-current.yaml` carries the same hazard and has got away with it:
+# ten minutes usually fits between two hourly restarts. Anything slower does
+# not, and "usually" is not a property worth relying on.
+#
+#   sudo kubectl -n sparqlwatch-dev scale deploy/site --replicas=0
+#   sudo kubectl -n sparqlwatch-dev wait --for=delete pod -l app=site --timeout=5m
+#   ... run the job, wait for it ...
+#   sudo kubectl -n sparqlwatch-dev scale deploy/site --replicas=1
+#
+# The sweep that lands while the site is down loses nothing: the prober writes
+# its run file to the runs volume and the next init container loads it. Measured
+# on the way out of that outage -- 488 run files present, 0 to load, nothing
+# missing.
+#
+#
+#   sed "s/IMAGE/$(kubectl -n sparqlwatch-dev get deploy site \
+#     -o jsonpath='{.spec.template.spec.containers[0].image}' | sed 's/.*:sha-//')/" \
+#     ops/summarise-days.yaml \
 #     | kubectl -n sparqlwatch-dev create -f -
 #   kubectl -n sparqlwatch-dev wait --for=condition=complete job/<name> --timeout=60m
 #   kubectl -n sparqlwatch-dev logs job/<name>
@@ -43,7 +73,13 @@ spec:
         fsGroup: 10001
       containers:
         - name: summarise
-          image: ghcr.io/maastrichtu-ids/sparqlwatch:IMAGE
+          # `sha-` is part of the tag the Release workflow pushes, so IMAGE is
+          # the bare commit sha. Substituting the full tag here produces
+          # `sparqlwatch:sha-sha-...`; substituting a bare sha WITHOUT this
+          # prefix produces a tag that does not exist, and the job sits in
+          # ImagePullBackOff for an hour saying nothing useful. Both have
+          # happened.
+          image: ghcr.io/maastrichtu-ids/sparqlwatch:sha-IMAGE
           imagePullPolicy: IfNotPresent
           workingDir: /app/web
           # The store's own path, not the mount: the init container opens

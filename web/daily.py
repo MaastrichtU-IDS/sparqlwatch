@@ -55,18 +55,39 @@ XSD_DATE = NamedNode("http://www.w3.org/2001/XMLSchema#date")
 # Every reading of every metric, with the day its run belongs to. Readings only:
 # a decline has no verdict and no duration, and a day's declines are exactly the
 # bookkeeping this summary exists to stop storing.
-_READINGS = """
+# ONE RUN GRAPH AT A TIME, EACH NAMED. Two earlier shapes were both too slow to
+# use, and for the same reason: an unbound `GRAPH ?run` makes the engine consider
+# every graph in the store, and a `STRSTARTS` over a timestamp literal cannot use
+# an index to narrow it.
+#
+#   selecting every reading and filtering the day in Python
+#       -- a full scan of the archive per day, twice over (`agrees_with_raw`
+#          reads it again). The job ran 108 minutes without finishing one day.
+#   scoping the day inside one query, `?run` still unbound
+#       -- 8.8s for a day of a 36,000-quad store, which is minutes against 4.2
+#          million.
+#
+# So the run graphs for the day are found first -- that query is bound and costs
+# 0.01s -- and the readings are then asked of each one BY NAME, which is the
+# shape `day_quads` already used.
+_RUNS_ON = """
+PREFIX prov: <http://www.w3.org/ns/prov#>
+SELECT ?g WHERE {
+  GRAPH ?g { ?a a prov:Activity ; prov:generatedAtTime ?at }
+  FILTER(STRSTARTS(STR(?at), "%s"))
+}
+"""
+
+_READINGS_IN = """
 PREFIX sw: <urn:sparqlwatch:>
 PREFIX dqv: <http://www.w3.org/ns/dqv#>
-PREFIX prov: <http://www.w3.org/ns/prov#>
-SELECT ?endpoint ?metric ?verdict ?elapsed ?at WHERE {
-  GRAPH ?run {
+SELECT ?endpoint ?metric ?verdict ?elapsed WHERE {
+  GRAPH <%s> {
     ?m dqv:computedOn ?endpoint ;
        dqv:isMeasurementOf ?metric ;
        dqv:value ?verdict .
     OPTIONAL { ?m sw:elapsedMs ?elapsed }
   }
-  GRAPH ?run { ?a prov:generatedAtTime ?at }
 }
 """
 
@@ -109,22 +130,25 @@ def _percentile(values: list[int], share: float) -> int:
     return ordered[rank - 1]
 
 
+def runs_on(store: Store, day: str) -> list[str]:
+    """The run graphs `day` covers, named so everything else can bind them."""
+    return [row["g"].value for row in store.query(_RUNS_ON % day)]
+
+
 def read_day(store: Store, day: str) -> dict[tuple[str, str], DayCell]:
     """What the raw runs of `day` say, keyed by (endpoint, metric)."""
     cells: dict[tuple[str, str], DayCell] = {}
-    for row in store.query(_READINGS):
-        at = row["at"].value
-        if at[:10] != day:
-            continue
-        key = (row["endpoint"].value, row["metric"].value)
-        cell = cells.setdefault(key, DayCell())
-        cell.sweeps += 1
-        verdict = row["verdict"].value
-        cell.verdicts[verdict] = cell.verdicts.get(verdict, 0) + 1
-        # SUCCESSFUL sweeps only: see POSITIVE. An endpoint that answered
-        # `absent` in 240ms did answer, and is not a 240ms endpoint.
-        if row["elapsed"] is not None and verdict in POSITIVE:
-            cell.answered_ms.append(int(row["elapsed"].value))
+    for run in runs_on(store, day):
+        for row in store.query(_READINGS_IN % run):
+            key = (row["endpoint"].value, row["metric"].value)
+            cell = cells.setdefault(key, DayCell())
+            cell.sweeps += 1
+            verdict = row["verdict"].value
+            cell.verdicts[verdict] = cell.verdicts.get(verdict, 0) + 1
+            # SUCCESSFUL sweeps only: see POSITIVE. An endpoint that answered
+            # `absent` in 240ms did answer, and is not a 240ms endpoint.
+            if row["elapsed"] is not None and verdict in POSITIVE:
+                cell.answered_ms.append(int(row["elapsed"].value))
     return cells
 
 
@@ -138,14 +162,19 @@ def graph_iri(day: str) -> str:
     return f"{SW}daily:{day}"
 
 
-def summarise_day(store: Store, day: str) -> int:
+def summarise_day(
+    store: Store, day: str, cells: dict[tuple[str, str], DayCell] | None = None
+) -> int:
     """Write `day`'s summary, replacing any earlier one. Returns pairs written.
 
     Idempotent: subject IRIs are a function of (day, endpoint, metric, verdict),
     so re-running after a late-arriving run rewrites the same subjects rather
     than accumulating a second opinion.
     """
-    cells = read_day(store, day)
+    # `cells` lets a caller that has already read the day hand it over. Reading
+    # it twice is the difference between one scan of a day's runs and two, and
+    # the job does this for every closed day.
+    cells = read_day(store, day) if cells is None else cells
     graph = NamedNode(graph_iri(day))
     store.update(f"DROP SILENT GRAPH <{graph_iri(day)}>")
     for (endpoint, metric), cell in cells.items():
@@ -222,7 +251,9 @@ def read_summary(store: Store, day: str) -> dict[tuple[str, str], DayCell]:
     return out
 
 
-def agrees_with_raw(store: Store, day: str) -> list[str]:
+def agrees_with_raw(
+    store: Store, day: str, raw: dict[tuple[str, str], DayCell] | None = None
+) -> list[str]:
     """Every way the summary of `day` differs from the runs it came from.
 
     THE GATE BEFORE ANYTHING IS DELETED. A summary is only worth having if the
@@ -230,7 +261,8 @@ def agrees_with_raw(store: Store, day: str) -> list[str]:
     know is to compute both from real data and compare. An empty list means they
     agree; each string names one disagreement, in a form that says which pair.
     """
-    raw, summary = read_day(store, day), read_summary(store, day)
+    raw = read_day(store, day) if raw is None else raw
+    summary = read_summary(store, day)
     problems: list[str] = []
     for key in sorted(set(raw) | set(summary)):
         endpoint, metric = key
@@ -314,19 +346,8 @@ def days_in_store(store: Store) -> list[str]:
 
 def day_quads(store: Store, day: str) -> int:
     """How many quads `day`'s run graphs hold, for the report."""
-    runs = [
-        row["g"].value
-        for row in store.query(
-            """
-            PREFIX prov: <http://www.w3.org/ns/prov#>
-            SELECT ?g WHERE { GRAPH ?g { ?a a prov:Activity ; prov:generatedAtTime ?at }
-              FILTER(STRSTARTS(STR(?at), "%s")) }
-            """
-            % day
-        )
-    ]
     total = 0
-    for run in runs:
+    for run in runs_on(store, day):
         for row in store.query("SELECT (COUNT(*) AS ?n) WHERE { GRAPH <%s> { ?s ?p ?o } }" % run):
             total += int(row["n"].value)
     return total
@@ -394,8 +415,12 @@ def main(argv: list[str] | None = None) -> int:
     raw_total = summary_total = 0
     failures: list[str] = []
     for day in closed:
-        pairs = len(read_summary(store, day)) if check_only else summarise_day(store, day)
-        problems = agrees_with_raw(store, day)
+        if check_only:
+            pairs, cells = len(read_summary(store, day)), None
+        else:
+            cells = read_day(store, day)
+            pairs = summarise_day(store, day, cells=cells)
+        problems = agrees_with_raw(store, day, raw=cells)
         raw = day_quads(store, day)
         kept = 0
         for row in store.query(
