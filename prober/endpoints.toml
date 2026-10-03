@@ -19,10 +19,22 @@
 # The state of the other two, measured 2026-09-05, recorded because a reader
 # comparing a run against this file should not have to rediscover it:
 #
-#   bio2rdf.org          DNS SERVFAIL from its own authoritative nameservers,
-#                        confirmed against 8.8.8.8 and 1.1.1.1. Not a timeout
-#                        and not a 500: the name does not resolve at all, so
-#                        every metric will read indeterminate until it does.
+#   bio2rdf.org          BACK UP since 2026-10-02T15:00:11Z, which is the first
+#                        sweep that read `verified` after nineteen days of
+#                        `indeterminate`. Nothing was done to bring it back and
+#                        nothing had to be: the hourly sweep kept asking and
+#                        recorded the answer the hour it changed.
+#
+#                        What was wrong, recorded 2026-09-05 and true until
+#                        then: DNS SERVFAIL from its own authoritative
+#                        nameservers, confirmed against 8.8.8.8 and 1.1.1.1.
+#                        Not a timeout and not a 500 -- the name did not
+#                        resolve at all, so every metric read indeterminate.
+#
+#                        The counts still read indeterminate as of 2026-10-03.
+#                        That is a separate question from reachability and has
+#                        not been looked into: availability, cors and
+#                        cors-preflight all read `verified`.
 #
 #   ontoexplorer...      /sparql is the single-page app's own route and serves
 #                        HTML for every path and method, so it was replaced on
