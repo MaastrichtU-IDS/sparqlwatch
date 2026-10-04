@@ -49,7 +49,70 @@ The last line is the important measurement: **one process may read and write
 concurrently, from many threads, and sees its own writes immediately.** That is
 supported, and it is the foundation of the recommended design.
 
+## D — immutable snapshots (recommended after the spike of 2026-10-04)
+
+Readers cannot safely share a store with a writer. A SNAPSHOT has no writer, so
+readers sharing a frozen checkpoint is fully defined.
+
+The writer owns the live store and calls `Store.backup()` after each load.
+Readers open `snapshots/gen-N` read-only. Nothing will ever write to it.
+
+**Measured against the deployed store, 2,950,651 quads and 1.07 GB:**
+
+```
+backup():                       0.013-0.015s
+four snapshots, actual disk:    81,920 bytes   (hard links)
+snapshot cold open:             ~0s
+build_payload on a snapshot:    2.4s
+```
+
+So a snapshot is free in time and very nearly free in disk.
+
+**What it buys that A and B cannot.** Readers hold no exclusive resource, so
+deploys roll with `maxUnavailable: 0` — and a reader can re-open a NEWER
+snapshot in place, because that one is immutable too. Both restart causes go.
+It also keeps everything the other designs spend: the `ops/` jobs still open the
+live store exactly as they do now, the `sparql` container keeps its own memory
+ceiling, and `substitutions=`, `optimize` and the four integrity refusals all
+stay.
+
+### THE SNAPSHOT MUST BE TAKEN FROM A READ-WRITE HANDLE
+
+This is the spike's most important result and it fails SILENTLY.
+
+```
+read-only handle sees:             8000
+snapshot taken from that handle:   5000   <- the WAL is missing
+snapshot taken from a read-write:  8000
+```
+
+`backup()` from a read-only handle omits whatever is still in the write-ahead
+log. It does not error. It produces a valid database quietly missing the most
+recent writes — in production, readers permanently a run behind with nothing to
+show for it. The spike saw exactly this against the deployment: the handle read
+2,950,651 quads and its snapshot held 2,940,244, the 10,407 difference being the
+17:00 run still in the WAL after the init container exited.
+
+A read-write handle's checkpoint flushes first and is correct. So the snapshot
+belongs INSIDE the loader, immediately after the load, with one process doing
+both.
+
+A second hazard from the same spike: a read-only backup taken while a writer is
+active can fail outright, hard-linking an SST that compaction removed
+underneath it (`FileNotFoundError: while link file to ... 000009.sst`). Loud
+rather than silent, and another reason the writer owns the snapshot.
+
+### What is still unknown
+
+Four snapshots of a store nobody is writing to is the easy case. The question
+the spike cannot answer is what a week of snapshot-and-reap does while the live
+store compacts underneath: hard links keep superseded SSTs alive, so disk is
+held by whatever the oldest retained snapshot references. Build the producer,
+watch disk for several days, and only then change how readers open the store.
+
 ## Three designs
+
+
 
 ### A — `oxigraph serve` behind an HTTP proxy
 
