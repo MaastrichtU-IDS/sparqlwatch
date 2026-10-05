@@ -28,6 +28,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import threading
 from pathlib import Path
 
 from pyoxigraph import NamedNode, Quad, Store
@@ -163,3 +164,112 @@ def reap(root: Path, *, keep: int = 2, in_use: set[int] | None = None) -> list[i
         shutil.rmtree(path_of(root, generation), ignore_errors=True)
         gone.append(generation)
     return gone
+
+
+class Follower:
+    """One read-only handle on the published generation, swapped when CURRENT moves.
+
+    THIS IS A POLL, and nothing here pretends otherwise. What it buys over a TTL
+    on freshness is not that it avoids a guess -- the interval is a guess -- but
+    that each generation is internally consistent and named. A reader is never
+    part-way through taking one, so a page is never assembled from two. Staleness
+    is bounded by the interval and is reportable, which a TTL over a mutating
+    store cannot offer.
+
+    THE HANDOVER IS ONE ASSIGNMENT, and that is the whole concurrency design.
+    `pinned()` reads a single tuple, so a request that has started holds its
+    generation and its store together; rebinding `_pinned` cannot tear that pair
+    apart or change what an in-flight request sees. The previous generation then
+    survives exactly as long as some request still refers to it, and is released
+    by refcounting the moment the last one returns -- which is what lets the
+    reaper's unlinked files actually come back as free blocks. A cache that
+    holds store handles defeats that, which is why `on_swap` exists: callers
+    with such caches clear them there.
+    """
+
+    def __init__(self, root, *, open_store=None, prewarm=None, on_swap=None):
+        self._root = Path(root)
+        self._open = open_store or Store.read_only
+        self._prewarm = prewarm
+        self._on_swap = on_swap
+        self._lock = threading.Lock()
+        self._pinned: tuple[int, Store] | None = None
+        self._thread: threading.Thread | None = None
+        self._stop = threading.Event()
+        self.last_error: BaseException | None = None
+
+        generation = published(self._root)
+        if generation is None:
+            raise RuntimeError(
+                f"{self._root} holds no published generation. Opening a store "
+                f"here would create an empty one, and the site would answer "
+                f"every question as though no sweep had ever run. Load a run "
+                f"with web/load_run.py --skip-loaded first."
+            )
+        # Deliberately NOT guarded the way `refresh` guards a later open: there
+        # is no older generation to fall back to, so a failure here is fatal and
+        # says so rather than coming back as an empty page.
+        self._take(generation)
+
+    @property
+    def running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def pinned(self) -> tuple[int, Store]:
+        """The generation being served and its handle, as one indivisible pair."""
+        return self._pinned
+
+    def _take(self, generation: int) -> None:
+        store = self._open(str(path_of(self._root, generation)))
+        # WARM BEFORE THE SWAP, never after: the first requests against a cold
+        # handle pay the whole cost of building the page, and that is every hour
+        # for whoever arrives first. While this runs, `pinned()` still returns
+        # the previous generation and requests keep being served from it.
+        if self._prewarm is not None:
+            self._prewarm(store)
+        self._pinned = (generation, store)
+        if self._on_swap is not None:
+            self._on_swap(generation)
+
+    def refresh(self) -> int | None:
+        """Take the published generation if it has moved. Returns it, or None.
+
+        Under the lock end to end, so two threads that notice the same new
+        CURRENT do not both open it. The loser would not merely waste an open:
+        its swap would land second and release a generation the winner's
+        requests had already pinned.
+        """
+        with self._lock:
+            generation = published(self._root)
+            if generation is None or generation == self._pinned[0]:
+                return None
+            try:
+                self._take(generation)
+            except Exception as exc:  # noqa: BLE001 - the site keeps serving
+                # A generation can be reaped between reading CURRENT and opening
+                # it. Serving the previous one is the correct outcome; taking the
+                # site down to report that a NEWER store exists is not.
+                self.last_error = exc
+                return None
+            self.last_error = None
+            return generation
+
+    def start(self, interval: float = 30.0) -> None:
+        if self.running:
+            return
+        self._stop.clear()
+
+        def poll():
+            # `wait` rather than `sleep` so `stop()` returns promptly instead of
+            # after up to one interval.
+            while not self._stop.wait(interval):
+                self.refresh()
+
+        self._thread = threading.Thread(target=poll, name="snapshot-follower", daemon=True)
+        self._thread.start()
+
+    def stop(self, timeout: float = 5.0) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=timeout)
+            self._thread = None
