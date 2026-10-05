@@ -119,6 +119,11 @@ class _Worker:
     process: object
     conn: object
     busy: bool = False
+    # Set when the pool has moved to a newer generation and this worker still
+    # holds the old one. It is not killed: it is answering a query out of a
+    # generation that still exists, and that answer is correct. It is replaced
+    # when it next goes idle.
+    stale: bool = False
 
 
 class Pool:
@@ -165,17 +170,56 @@ class Pool:
             while len(self._workers) < self.size:
                 self._workers.append(self._spawn())
 
+    @staticmethod
+    def _retire(worker: _Worker) -> None:
+        """Ask one worker to exit, and insist if it will not."""
+        try:
+            worker.conn.send(None)
+        except (BrokenPipeError, OSError):
+            pass
+        worker.process.join(timeout=2)
+        if worker.process.is_alive():
+            worker.process.kill()
+
     def stop(self) -> None:
         with self._lock:
+            workers, self._workers = self._workers, []
+        for worker in workers:
+            self._retire(worker)
+
+    def repoint(self, store_path: str) -> None:
+        """Answer out of a different store from now on.
+
+        THE LAST READER OF THE LIVE STORE. Each worker opens the store once and
+        holds that handle for its life, which is the whole reason the pool is
+        fast; it is also why a worker cannot be told about a new generation and
+        has to be replaced by one that opens it.
+
+        IDLE WORKERS GO FIRST, and the new ones are spawned only once they are
+        gone. Spawning first would briefly double the pool, and a worker is
+        allowed 320 MB inside a 1Gi container -- two of those plus two more is
+        how the pool itself becomes the OOM it exists to prevent.
+
+        A BUSY WORKER IS LEFT ALONE. It is answering out of a generation that
+        still exists -- two are retained -- so its answer is correct and
+        complete, and killing it would turn a running query into an error for
+        no gain. It is marked and replaced when it next goes idle.
+        """
+        with self._lock:
+            if store_path == self.store_path:
+                return
+            self.store_path = store_path
+            idle = [w for w in self._workers if not w.busy]
             for worker in self._workers:
-                try:
-                    worker.conn.send(None)
-                except (BrokenPipeError, OSError):
-                    pass
-                worker.process.join(timeout=2)
-                if worker.process.is_alive():
-                    worker.process.kill()
-            self._workers = []
+                worker.stale = True
+            for worker in idle:
+                self._workers.remove(worker)
+        # Outside the lock: retiring joins a process and spawning waits for a
+        # store to open, and the pool must stay answerable from the old workers
+        # throughout.
+        for worker in idle:
+            self._retire(worker)
+        self.start()
 
     # -- dispatch ----------------------------------------------------------
     def _claim(self) -> _Worker | None:
@@ -187,16 +231,23 @@ class Pool:
         return None
 
     def _release(self, worker: _Worker, replace: bool) -> None:
+        retire = None
         with self._lock:
-            if not replace:
+            if not replace and not worker.stale:
                 worker.busy = False
                 return
+            # A worker that is merely stale is still alive and still holding a
+            # store open, so unlike a killed one it has to be told to go.
+            if worker.stale and not replace:
+                retire = worker
             # A killed worker cannot be reused: its pipe is dead and its store
             # handle went with it. It is dropped and a fresh one takes its
             # place, so the pool's capacity recovers rather than eroding with
             # every hostile query.
             if worker in self._workers:
                 self._workers.remove(worker)
+        if retire is not None:
+            self._retire(retire)
         try:
             self._workers.append(self._spawn())
         except RuntimeError:

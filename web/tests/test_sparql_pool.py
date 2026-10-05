@@ -247,3 +247,117 @@ def test_a_slow_but_modest_query_is_not_stopped_by_the_memory_watch(tmp_path):
         assert complete, "a query well under the limit was cut short"
     finally:
         pool.stop()
+
+
+# ---------------------------------------------------------------------------
+# Moving the pool to a newer generation
+# ---------------------------------------------------------------------------
+# A worker opens its store once and holds that handle for its life, which is
+# why the pool is fast and why it cannot be told about a new generation: it has
+# to be replaced by a worker that opens one.
+
+
+def _store_with(tmp_path, name, subject):
+    from pathlib import Path
+    from pyoxigraph import NamedNode, Quad, Store
+    from load_run import load_run
+
+    path = tmp_path / name
+    store = Store(str(path))
+    load_run(store, (Path(__file__).parent / "fixtures" / "run-with-samples.nq").read_bytes())
+    store.add(
+        Quad(NamedNode(subject), NamedNode("http://marker"), NamedNode("http://yes"),
+             NamedNode("urn:sparqlwatch:current"))
+    )
+    del store
+    return path
+
+
+def test_the_pool_answers_from_the_store_it_was_repointed_to(tmp_path):
+    first = _store_with(tmp_path, "gen-one", "http://only-in-one")
+    second = _store_with(tmp_path, "gen-two", "http://only-in-two")
+
+    p = Pool(str(first), workers=2, budget=10.0)
+    p.start()
+    try:
+        ask = 'ASK { <%s> <http://marker> ?o }'
+        assert b"true" in p.execute(ask % "http://only-in-one")[0]
+        assert b"false" in p.execute(ask % "http://only-in-two")[0]
+
+        p.repoint(str(second))
+
+        assert b"true" in p.execute(ask % "http://only-in-two")[0]
+        assert b"false" in p.execute(ask % "http://only-in-one")[0]
+    finally:
+        p.stop()
+
+
+def test_repointing_leaves_the_pool_at_full_strength(tmp_path):
+    """Workers are replaced, not merely discarded.
+
+    A pool that shed a worker on every generation would be down to nothing by
+    the end of a day, and the symptom -- queries queueing -- would show up
+    hours after the cause.
+    """
+    first = _store_with(tmp_path, "gen-one", "http://a")
+    second = _store_with(tmp_path, "gen-two", "http://b")
+
+    p = Pool(str(first), workers=2, budget=10.0)
+    p.start()
+    try:
+        p.repoint(str(second))
+        assert len(p._workers) == 2
+        assert not any(w.stale for w in p._workers)
+        assert all(w.process.is_alive() for w in p._workers)
+    finally:
+        p.stop()
+
+
+def test_repointing_to_the_same_store_replaces_nothing(tmp_path):
+    first = _store_with(tmp_path, "gen-one", "http://a")
+    p = Pool(str(first), workers=2, budget=10.0)
+    p.start()
+    try:
+        before = {w.process.pid for w in p._workers}
+        p.repoint(str(first))
+        assert {w.process.pid for w in p._workers} == before
+    finally:
+        p.stop()
+
+
+def test_a_busy_worker_is_not_killed_and_is_replaced_when_it_finishes(tmp_path):
+    """A busy worker holds a generation that still exists -- two are retained --
+    so its answer is correct and complete, and killing it would turn a running
+    query into an error for nothing. It is replaced when it next goes idle.
+
+    Driven through `_claim`/`_release` rather than a slow query because the
+    timing has to be exact: an earlier version of this test ran a query that
+    returns in 0.03s, so the worker was never busy when the repoint landed and
+    the test passed against a pool that killed busy workers outright. Mutation
+    testing is what exposed that.
+    """
+    first = _store_with(tmp_path, "gen-one", "http://only-in-one")
+    second = _store_with(tmp_path, "gen-two", "http://only-in-two")
+
+    p = Pool(str(first), workers=2, budget=10.0)
+    p.start()
+    try:
+        busy = p._claim()                       # as a query in flight would
+        assert busy is not None
+
+        p.repoint(str(second))
+
+        assert busy.process.is_alive(), "the repoint killed a worker mid-query"
+        assert busy in p._workers, "the repoint dropped a worker mid-query"
+        assert busy.stale
+
+        p._release(busy, replace=False)         # the query finishes
+
+        assert busy.process.pid not in {w.process.pid for w in p._workers}, (
+            "a worker still holding the old generation was put back to work"
+        )
+        assert len(p._workers) == 2
+        assert not any(w.stale for w in p._workers)
+        assert b"true" in p.execute('ASK { <http://only-in-two> <http://marker> ?o }')[0]
+    finally:
+        p.stop()
