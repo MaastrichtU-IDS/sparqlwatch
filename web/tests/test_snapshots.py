@@ -1,6 +1,7 @@
 """Immutable generations: publishing, verifying, and reaping under a live reader."""
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -306,3 +307,74 @@ def test_the_snapshot_is_taken_after_the_compaction(tmp_path, monkeypatch):
     assert order == ["optimize", "publish"], (
         f"the snapshot was not taken after the compaction: {order}"
     )
+
+
+def test_a_fully_loaded_store_that_never_published_gets_a_generation(tmp_path):
+    """THE STATE THE DEPLOYED STORE WAS ACTUALLY IN.
+
+    On 2026-10-05 the cluster store held all 539 runs and had never been
+    snapshotted, because the producer shipped after the runs were loaded. Every
+    restart from there takes the `0 to load` path, which returns before the
+    store is even opened -- so no generation would ever appear, and a reader
+    following CURRENT would have found nothing to open and refused to start.
+
+    A restart that loads nothing is the common case, not the rare one, so this
+    cannot be left to the next sweep.
+    """
+    import load_run
+
+    store_path = tmp_path / "sparqlwatch.db"
+    run = _run_file(tmp_path, "2026-10-05T08:00:00Z")
+    assert load_run.main(["--skip-loaded", str(store_path), str(run)]) == 0
+
+    # Throw away what the first load published, leaving a loaded store that has
+    # never published -- the cluster's state exactly.
+    shutil.rmtree(tmp_path / "snapshots")
+    assert snapshots.published(tmp_path / "snapshots") is None
+
+    assert load_run.main(["--skip-loaded", str(store_path), str(run)]) == 0
+
+    generation = snapshots.published(tmp_path / "snapshots")
+    assert generation is not None, "a loaded store that never published still has no generation"
+    snap = Store.read_only(str(snapshots.path_of(tmp_path / "snapshots", generation)))
+    assert bool(snap.query("ASK { GRAPH ?g { ?s <http://www.w3.org/ns/dqv#value> ?v } }"))
+
+
+def test_the_bootstrap_does_not_repeat_once_a_generation_exists(tmp_path):
+    """Publishing on every restart would churn generations for no new facts."""
+    import load_run
+
+    store_path = tmp_path / "sparqlwatch.db"
+    run = _run_file(tmp_path, "2026-10-05T09:00:00Z")
+    load_run.main(["--skip-loaded", str(store_path), str(run)])
+    first = snapshots.published(tmp_path / "snapshots")
+
+    load_run.main(["--skip-loaded", str(store_path), str(run)])
+
+    assert snapshots.published(tmp_path / "snapshots") == first
+
+
+def test_the_bootstrap_does_not_create_a_store_that_is_not_there(tmp_path):
+    """The early return exists so a wrong path is not silently made into a store.
+
+    `Store()` CREATES the RocksDB directory when it is missing, so a typo in
+    SPARQLWATCH_STORE used to come back as a site answering every question out
+    of an empty store it had just made. The bootstrap opens the store on a path
+    that previously never opened it, so it is the obvious place to reintroduce
+    that, and it is guarded rather than assumed.
+    """
+    import load_run
+    import loaded_manifest
+
+    run = _run_file(tmp_path, "2026-10-05T10:00:00Z")
+    typo = tmp_path / "sparqlwatc.db"          # the store that was never there
+
+    # A manifest that says this run is already loaded, which is what sends the
+    # run down the early-return path without the store existing.
+    loaded_manifest.write(str(typo), {run.name: loaded_manifest.digest(run.read_bytes())})
+    assert not typo.exists()
+
+    assert load_run.main(["--skip-loaded", str(typo), str(run)]) == 0
+
+    assert not typo.exists(), "the bootstrap created a store where there was none"
+    assert snapshots.published(tmp_path / "snapshots") is None
