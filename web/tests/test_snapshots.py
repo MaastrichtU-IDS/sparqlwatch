@@ -378,3 +378,75 @@ def test_the_bootstrap_does_not_create_a_store_that_is_not_there(tmp_path):
 
     assert not typo.exists(), "the bootstrap created a store where there was none"
     assert snapshots.published(tmp_path / "snapshots") is None
+
+
+def test_the_publish_line_reports_free_space(tmp_path, capsys):
+    """The number the design says to watch, and the only way to see it.
+
+    An open handle on a reaped generation keeps its unlinked files alive, so
+    `du` reports the reap as a success while free space does not move. Nobody
+    outside the pod can read `df` on that volume, so the publish line carries
+    it.
+    """
+    import load_run
+
+    store_path = tmp_path / "sparqlwatch.db"
+    load_run.main(
+        ["--skip-loaded", str(store_path), str(_run_file(tmp_path, "2026-10-05T11:00:00Z"))]
+    )
+
+    out = capsys.readouterr().out
+    assert "published generation 1" in out
+    assert "GiB free of" in out, out
+
+
+def test_a_tight_disk_says_so_and_still_loads(tmp_path, capsys, monkeypatch):
+    """Loud, not fatal. A full disk is not this load's to refuse."""
+    import load_run
+
+    tight = shutil.disk_usage(tmp_path)
+    monkeypatch.setattr(
+        load_run.shutil, "disk_usage",
+        lambda _p: type(tight)(tight.total, tight.total - 1, 1),
+    )
+
+    store_path = tmp_path / "sparqlwatch.db"
+    rc = load_run.main(
+        ["--skip-loaded", str(store_path), str(_run_file(tmp_path, "2026-10-05T12:00:00Z"))]
+    )
+
+    assert rc == 0, "a tight disk must not fail the load"
+    assert "BELOW 4 GiB" in capsys.readouterr().out
+
+
+def test_free_space_that_cannot_be_read_does_not_fail_the_publish(tmp_path, capsys):
+    """A publish that worked must not be REPORTED as having failed.
+
+    Mutation caught this test being vacuous: `_free` runs after the generation
+    is already on disk, so the generation exists and the exit status is 0
+    whether or not the failure is handled. What actually changes is the log --
+    an unreadable filesystem would come back as "could not publish a snapshot",
+    sending an operator after a snapshot problem that does not exist.
+    """
+    import load_run
+
+    def unreadable(_p):
+        raise OSError("no such filesystem")
+
+    load_run.shutil.disk_usage, real = unreadable, load_run.shutil.disk_usage
+    try:
+        store_path = tmp_path / "sparqlwatch.db"
+        rc = load_run.main(
+            ["--skip-loaded", str(store_path), str(_run_file(tmp_path, "2026-10-05T13:00:00Z"))]
+        )
+    finally:
+        load_run.shutil.disk_usage = real
+
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert snapshots.published(tmp_path / "snapshots") == 1
+    assert "published generation 1" in captured.out
+    assert "free space unknown" in captured.out
+    assert "could not publish" not in captured.err, (
+        "a readable-store/unreadable-df publish was reported as a failed snapshot"
+    )

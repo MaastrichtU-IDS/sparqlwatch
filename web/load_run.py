@@ -212,6 +212,7 @@ page says without a quad of current moving.
 
 from __future__ import annotations
 
+import shutil
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -2260,6 +2261,32 @@ def _check_mode(path: str) -> int:
     return 1
 
 
+# Below this, say so loudly. The volume is 20Gi and a stalled reaper grows the
+# snapshot root by about a gigabyte per compaction, so a few GB of headroom is
+# the difference between noticing and being paged. Not an error: a full disk is
+# not this load's to refuse, and a load that stops is worse than a tight one.
+_FREE_FLOOR = 4 * 1024**3
+
+
+def _free(root: Path) -> str:
+    """How much room is left where the generations live.
+
+    Reported on every publish because this is the number the design says to
+    watch and the one nobody can see from outside the pod: an open handle on a
+    reaped generation keeps its unlinked files alive, so `du` reports the reap
+    as a success while the free space does not move. `disk_usage` reads the
+    filesystem, which is the thing that cannot be fooled.
+    """
+    try:
+        usage = shutil.disk_usage(root)
+    except OSError as exc:
+        return f"free space unknown ({exc})"
+    line = f"{usage.free / 1024**3:.1f} GiB free of {usage.total / 1024**3:.1f} GiB"
+    if usage.free < _FREE_FLOOR:
+        return f"{line} -- BELOW {_FREE_FLOOR / 1024**3:.0f} GiB, generations may stop publishing"
+    return line
+
+
 def _publish(store: Store, store_path: str) -> None:
     """Publish a generation, and never fail the load doing it.
 
@@ -2267,13 +2294,12 @@ def _publish(store: Store, store_path: str) -> None:
     checkpoint fails, the right outcome is a stale generation and a loud line,
     not a failed load that leaves the run file to be replayed.
     """
+    root = Path(store_path).parent / "snapshots"
     started = datetime.now(timezone.utc)
     try:
-        generation = snapshots.publish(
-            store, Path(store_path).parent / "snapshots", keep=_SNAPSHOT_KEEP
-        )
+        generation = snapshots.publish(store, root, keep=_SNAPSHOT_KEEP)
         took = (datetime.now(timezone.utc) - started).total_seconds()
-        print(f"published generation {generation} in {took:.1f}s")
+        print(f"published generation {generation} in {took:.1f}s; {_free(root)}")
     except Exception as exc:  # noqa: BLE001 - see above
         print(f"could not publish a snapshot ({exc}); readers keep the last one",
               file=sys.stderr)
