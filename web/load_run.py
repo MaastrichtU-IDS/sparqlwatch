@@ -221,6 +221,21 @@ from urllib.parse import quote
 from pyoxigraph import DefaultGraph, NamedNode, RdfFormat, Store, parse
 
 import loaded_manifest
+import snapshots
+
+# HOW MANY GENERATIONS SURVIVE A PUBLISH.
+#
+# Two, not more. Every retained generation hard-links the SST set as it was,
+# so one that straddles a compaction pins a whole distinct copy -- and this
+# store is rewritten twice a day, by `optimize` here and by `daily.py` after a
+# prune. Keeping 24 of them -- a day at this cadence -- would cost roughly
+# three full copies plus the live store at its post-write size, about 8 GB
+# against a 20Gi volume. Survivable, but nothing reads a generation that old.
+#
+# The floor is two rather than one because a reader that has just read CURRENT
+# has not opened it yet. "No reader reports this generation" is not "no reader
+# is about to".
+_SNAPSHOT_KEEP = 2
 
 
 
@@ -2444,6 +2459,40 @@ def main(argv: list[str] | None = None) -> int:
         store.optimize()
         print(f"compacted the store in {(datetime.now(timezone.utc) - started).total_seconds():.1f}s")
         loaded_manifest.write(args[0], manifest, optimized=started)
+
+    # THE SNAPSHOT, and it comes last on purpose.
+    #
+    # Readers cannot safely share this store: pyoxigraph is explicit that
+    # "opening as read-only while having an other process writing the database
+    # is undefined behavior", and 0.5.9 offers no secondary mode. A frozen
+    # checkpoint has no writer, so readers can share one of those. See
+    # `snapshots` and docs/superpowers/specs/2026-10-04-oxigraph-as-a-service-design.md.
+    #
+    # AFTER the compaction above, never before: a snapshot hard-links the SST
+    # set as it finds it, so one taken before a compaction pins the bloated
+    # version -- the code just above records that as four times the compacted
+    # size -- and pins it for as long as the generation is retained.
+    #
+    # Only on the --skip-loaded path, for the reason `optimize` gives: that is
+    # the deployment's own restart path and the only caller that owns the
+    # store's long-term shape. A person loading one run by hand should not
+    # silently publish a generation to a site.
+    #
+    # NOT FATAL. A sweep that loaded is a sweep whose facts are in the store; if
+    # the checkpoint fails, the right outcome is a stale generation and a loud
+    # line, not a failed load that leaves the run file to be replayed.
+    if skip_loaded:
+        started = datetime.now(timezone.utc)
+        try:
+            generation = snapshots.publish(
+                store, Path(args[0]).parent / "snapshots", keep=_SNAPSHOT_KEEP
+            )
+            took = (datetime.now(timezone.utc) - started).total_seconds()
+            print(f"published generation {generation} in {took:.1f}s")
+        except Exception as exc:  # noqa: BLE001 - see above
+            print(f"could not publish a snapshot ({exc}); readers keep the last one",
+                  file=sys.stderr)
+
     return 1 if drifted else 0
 
 
