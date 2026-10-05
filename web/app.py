@@ -75,6 +75,7 @@ from pyoxigraph import (
 
 import daily
 import charts
+import snapshots
 import sparql_pool
 import sparql_service
 import void_self
@@ -402,7 +403,12 @@ def _explore_probe_note(payload: dict) -> str:
 STORE_PATH_VARIABLE = "SPARQLWATCH_STORE"
 
 
-@lru_cache(maxsize=None)
+# ONE. This no longer opens generations -- `Follower` does, and it holds exactly
+# one handle at a time -- so the only path that ever reaches here is the live
+# store of the no-generations fallback above. Unbounded was the leak the design
+# called out: keyed on path, a new generation every hour would have added a
+# handle that nothing ever released.
+@lru_cache(maxsize=1)
 def _opened_store(path: str) -> Store:
     """One Store object per path per process, opened once and checked once.
 
@@ -542,6 +548,75 @@ def _store_path() -> str:
     return path
 
 
+# How often to look at CURRENT. A generation is published once an hour, so this
+# is not about catching one quickly -- it is about how long after a publish the
+# site is still answering from the previous one, which with hourly data is not a
+# number anyone can feel. Short enough to be well inside the hour, long enough
+# that the poll is never the reason anything happens.
+_FOLLOW_SECONDS = float(os.environ.get("SPARQLWATCH_FOLLOW_SECONDS", "30"))
+
+# Keyed on the snapshot root, not a single global, because the decision below is
+# about a STORE and not about this process. One process only ever serves one
+# store, so in the deployment this dict holds exactly one entry; keying it is
+# what keeps a test that drove a store without generations from deciding the
+# question for every store a later test builds.
+_FOLLOWERS: "dict[str, snapshots.Follower | None]" = {}
+_FOLLOWER_LOCK = threading.Lock()
+
+
+def _snapshot_root() -> Path:
+    return Path(_store_path()).parent / "snapshots"
+
+
+def _follower() -> "snapshots.Follower | None":
+    """The generation follower, or None when this store publishes none.
+
+    DECIDED ONCE. A store either has generations or it does not, and that does
+    not change under a running process -- the publisher is the init container,
+    which cannot start while this one holds the port. Re-deciding per request
+    would put an `iterdir` of the snapshot root on every page.
+
+    None is the local case, not a failure. `load_run.py` publishes only on
+    --skip-loaded, so a developer who built a store by hand has no generations
+    and should still get a site. It is said out loud because on the cluster it
+    would mean the publisher has stopped and nobody would otherwise notice.
+    """
+    root = _snapshot_root()
+    key = str(root)
+    if key in _FOLLOWERS:
+        return _FOLLOWERS[key]
+    with _FOLLOWER_LOCK:
+        if key not in _FOLLOWERS:
+            follower = None
+            if snapshots.published(root) is None:
+                _LOG.warning(
+                    "no published generation under %s: serving from the live store, "
+                    "which means this process cannot see a load and must be restarted "
+                    "to publish one. Expected locally; on the cluster it means "
+                    "load_run.py has stopped publishing.", root,
+                )
+            else:
+                follower = snapshots.Follower(
+                    root, prewarm=_warm_store, on_swap=_took_generation
+                )
+                follower.start(_FOLLOW_SECONDS)
+                _LOG.info("following %s, serving generation %d", root, follower.pinned()[0])
+            _FOLLOWERS[key] = follower
+    return _FOLLOWERS[key]
+
+
+def _took_generation(generation: int) -> None:
+    """Said on every swap, which is the only outward sign that following works.
+
+    The caches below are NOT cleared here, deliberately. The warm that `Follower`
+    runs before the swap has just filled them for the incoming handle, and
+    clearing would throw exactly that away and hand the next reader the cold
+    build this whole arrangement exists to avoid. They are bounded instead -- see
+    `maxsize` there.
+    """
+    _LOG.info("now serving generation %d", generation)
+
+
 def get_store() -> Store:
     """The store dependency.
 
@@ -549,7 +624,16 @@ def get_store() -> Store:
     with `app.dependency_overrides[get_store]` so each test gets its own
     store: a module-level open would make every test share one, and then the
     order they ran in would start to change their results.
+
+    ONE CALL, ONE GENERATION. FastAPI resolves a dependency once per request, so
+    a request takes the handle that was current when it started and assembles
+    its whole page from that one generation. A swap underneath it cannot change
+    what it sees, which is what keeps a page from being built out of two
+    internally consistent halves that disagree.
     """
+    follower = _follower()
+    if follower is not None:
+        return follower.pinned()[1]
     return _opened_store(_store_path())
 
 
@@ -588,7 +672,15 @@ def get_store() -> Store:
 # explore_payload.py, so that those three stay what they say they are: pure
 # functions of a store, answerable about any store, with no opinion about how
 # often anyone asks. The opinion belongs next to the handle it depends on.
-@lru_cache(maxsize=4)
+# TWO, matching the two generations `load_run._SNAPSHOT_KEEP` retains. These
+# caches key on the store HANDLE and so keep it alive, and a handle kept alive
+# pins the unlinked files of a reaped generation: `du` would report the reap as
+# a success while `df` did not move, and a query reaching a reaped generation
+# opens its SSTs lazily and fails mid-answer. Four was safe while the handle
+# never changed; following CURRENT is what makes the number load-bearing. Two
+# holds the generation being served and the one requests are still finishing in,
+# which is exactly the set that still exists on disk.
+@lru_cache(maxsize=2)
 def endpoint_index(store: Store) -> list[EndpointMeasurements]:
     """`endpoint_index.endpoint_index`, once per store handle, minus aliases.
 
@@ -612,13 +704,13 @@ def endpoint_index(store: Store) -> list[EndpointMeasurements]:
     return [e for e in _endpoint_index(store) if e.endpoint not in _ALIASES]
 
 
-@lru_cache(maxsize=4)
+@lru_cache(maxsize=2)
 def fleet_history(store: Store) -> FleetHistory:
     """`fleet.fleet_history`, once per store handle."""
     return _fleet_history(store)
 
 
-@lru_cache(maxsize=4)
+@lru_cache(maxsize=2)
 def _cached_build_payload(store: Store) -> dict:
     """`explore_payload.build_payload`, once per store handle."""
     return _build_payload(store)
@@ -5554,12 +5646,24 @@ def _warm() -> None:
 
     Daemon, so a shutdown during warming is not held up by it.
     """
-    started = perf_counter()
     try:
-        store = _opened_store(_store_path())
+        store = get_store()
     except Exception as exc:  # noqa: BLE001 - see the docstring
         _LOG.info("not warming: no store to read yet (%s)", exc)
         return
+    _warm_store(store)
+
+
+def _warm_store(store: Store) -> None:
+    """The three fleet-wide passes, against one handle.
+
+    Taken by `Follower` as its pre-warm, which runs it on the INCOMING
+    generation while the outgoing one is still being served. That is the whole
+    reason this is a function of a store rather than of the environment: the
+    handle being warmed is deliberately not the handle `get_store` is returning
+    yet.
+    """
+    started = perf_counter()
     warmed = []
     # In the order a first reader meets them: the index is the front page, the
     # payload is what made an endpoint page take twenty seconds.
@@ -5584,6 +5688,9 @@ def _warm() -> None:
 def _stop_sparql_pool() -> None:
     if _POOL is not None:
         _POOL.stop()
+    for follower in _FOLLOWERS.values():
+        if follower is not None:
+            follower.stop()
 
 
 def external_url(request: Request) -> str:

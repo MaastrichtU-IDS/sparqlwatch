@@ -1,6 +1,7 @@
 """Following CURRENT: taking a new generation without ever serving half of one."""
 
 import gc
+import shutil
 import sys
 import threading
 import weakref
@@ -157,8 +158,10 @@ def test_the_new_generation_is_warmed_before_it_is_served(tmp_path):
     second = snapshots.publish(live, root)
     follower.refresh()
 
-    assert seen == [(50, None), (75, first)], (
-        "the warm must run on the NEW generation while the OLD one is still served"
+    assert seen == [(75, first)], (
+        "the warm must run on the NEW generation while the OLD one is still "
+        "served, and must not run on the first open, where there is no older "
+        "generation and the caller is still starting up"
     )
     assert follower.pinned()[0] == second
 
@@ -264,3 +267,107 @@ def test_two_refreshes_at_once_open_the_generation_once(tmp_path):
         assert not t.is_alive(), "a refresh never returned"
 
     assert len(opens) == 1, f"opened the same generation {len(opens)} times"
+
+
+# ---------------------------------------------------------------------------
+# The site wired to a follower
+# ---------------------------------------------------------------------------
+# These drive `app.get_store` for real, which almost nothing else does: every
+# other test replaces it through `app.dependency_overrides`. What is under test
+# here is the wiring, not the pages.
+
+
+def _loaded(tmp_path, at="2026-10-05T14:00:00Z"):
+    """A store built the way the deployment builds one, generations included."""
+    import load_run
+
+    g, a = f"<urn:sparqlwatch:run:{at}>", f"<urn:sparqlwatch:activity:{at}>"
+    lines = [
+        f"{a} <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/prov#Activity> {g} .",
+        f'{a} <http://www.w3.org/ns/prov#generatedAtTime> "{at}"^^<http://www.w3.org/2001/XMLSchema#dateTime> {g} .',
+    ]
+    for i in range(5):
+        m = f"<urn:sparqlwatch:m:{at}:{i}>"
+        lines += [
+            f"{m} <http://www.w3.org/ns/dqv#computedOn> <https://e{i}.test/sparql> {g} .",
+            f"{m} <http://www.w3.org/ns/dqv#isMeasurementOf> <urn:sparqlwatch:metric:availability> {g} .",
+            f'{m} <http://www.w3.org/ns/dqv#value> "verified" {g} .',
+        ]
+    run = tmp_path / f"run-{at}.nq"
+    run.write_text("\n".join(lines) + "\n")
+    store_path = tmp_path / "sparqlwatch.db"
+    load_run.main(["--skip-loaded", str(store_path), str(run)])
+    return store_path, run
+
+
+def test_the_site_serves_from_a_generation_not_the_live_store(tmp_path, monkeypatch):
+    import app
+
+    store_path, _ = _loaded(tmp_path)
+    monkeypatch.setenv(app.STORE_PATH_VARIABLE, str(store_path))
+    app._FOLLOWERS.clear()
+
+    store = app.get_store()
+    follower = app._follower()
+    try:
+        assert follower is not None, "the site opened the live store despite a generation"
+        assert store is follower.pinned()[1]
+    finally:
+        if follower is not None:
+            follower.stop()
+        app._FOLLOWERS.clear()
+
+
+def test_a_store_with_no_generations_still_serves(tmp_path, monkeypatch):
+    """The local case. `load_run.py` publishes only on --skip-loaded, so a store
+    built by hand has no generations and must still produce a site."""
+    import app
+
+    store_path, _ = _loaded(tmp_path)
+    shutil.rmtree(tmp_path / "snapshots")
+    monkeypatch.setenv(app.STORE_PATH_VARIABLE, str(store_path))
+    app._FOLLOWERS.clear()
+
+    try:
+        assert app._follower() is None
+        assert app.get_store() is not None
+    finally:
+        app._FOLLOWERS.clear()
+
+
+def test_the_site_follows_a_newly_published_generation(tmp_path, monkeypatch):
+    import app
+    import load_run
+
+    store_path, _ = _loaded(tmp_path)
+    monkeypatch.setenv(app.STORE_PATH_VARIABLE, str(store_path))
+    app._FOLLOWERS.clear()
+
+    follower = app._follower()
+    try:
+        before = follower.pinned()[0]
+        _, run = _loaded(tmp_path, at="2026-10-05T15:00:00Z")
+        assert load_run.main(["--skip-loaded", str(store_path), str(run)]) == 0
+
+        assert follower.refresh() == before + 1
+        assert app.get_store() is follower.pinned()[1]
+    finally:
+        follower.stop()
+        app._FOLLOWERS.clear()
+
+
+def test_the_store_keyed_caches_hold_no_more_than_the_generations_kept(tmp_path):
+    """The leak, as a number rather than a comment.
+
+    These caches key on the store HANDLE and so keep it alive. A handle kept
+    alive pins the unlinked files of a reaped generation, which is why the
+    bound has to match what `load_run._SNAPSHOT_KEEP` retains rather than being
+    whatever it was when the handle could never change.
+    """
+    import app
+    import load_run
+
+    assert app.endpoint_index.cache_info().maxsize == load_run._SNAPSHOT_KEEP
+    assert app.fleet_history.cache_info().maxsize == load_run._SNAPSHOT_KEEP
+    assert app._cached_build_payload.cache_info().maxsize == load_run._SNAPSHOT_KEEP
+    assert app._opened_store.cache_info().maxsize == 1

@@ -209,7 +209,14 @@ class Follower:
         # Deliberately NOT guarded the way `refresh` guards a later open: there
         # is no older generation to fall back to, so a failure here is fatal and
         # says so rather than coming back as an empty page.
-        self._take(generation)
+        #
+        # AND NOT WARMED. The warm exists so that a NEW generation is not served
+        # cold while a warm one is still available; on the first open there is no
+        # older generation and nothing is being served yet. Warming here would
+        # also run inside whatever lock the caller built this under -- in the
+        # site that is a 25-30s pass with every arriving request queued behind
+        # it, which is the startup stall this is meant to prevent, not cause.
+        self._take(generation, warm=False)
 
     @property
     def running(self) -> bool:
@@ -219,13 +226,13 @@ class Follower:
         """The generation being served and its handle, as one indivisible pair."""
         return self._pinned
 
-    def _take(self, generation: int) -> None:
+    def _take(self, generation: int, *, warm: bool = True) -> None:
         store = self._open(str(path_of(self._root, generation)))
         # WARM BEFORE THE SWAP, never after: the first requests against a cold
         # handle pay the whole cost of building the page, and that is every hour
         # for whoever arrives first. While this runs, `pinned()` still returns
         # the previous generation and requests keep being served from it.
-        if self._prewarm is not None:
+        if warm and self._prewarm is not None:
             self._prewarm(store)
         self._pinned = (generation, store)
         if self._on_swap is not None:
