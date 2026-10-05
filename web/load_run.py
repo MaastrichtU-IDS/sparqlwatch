@@ -2260,6 +2260,25 @@ def _check_mode(path: str) -> int:
     return 1
 
 
+def _publish(store: Store, store_path: str) -> None:
+    """Publish a generation, and never fail the load doing it.
+
+    A sweep that loaded is a sweep whose facts are in the store. If the
+    checkpoint fails, the right outcome is a stale generation and a loud line,
+    not a failed load that leaves the run file to be replayed.
+    """
+    started = datetime.now(timezone.utc)
+    try:
+        generation = snapshots.publish(
+            store, Path(store_path).parent / "snapshots", keep=_SNAPSHOT_KEEP
+        )
+        took = (datetime.now(timezone.utc) - started).total_seconds()
+        print(f"published generation {generation} in {took:.1f}s")
+    except Exception as exc:  # noqa: BLE001 - see above
+        print(f"could not publish a snapshot ({exc}); readers keep the last one",
+              file=sys.stderr)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
     if len(args) == 2 and args[0] in ("--rebuild", "--check"):
@@ -2332,6 +2351,22 @@ def main(argv: list[str] | None = None) -> int:
             # Nothing to load means nothing to open. Store() would create the
             # directory if the path were wrong, and there is no work here that
             # justifies the risk of that on the hot restart path.
+            #
+            # UNLESS NOTHING HAS EVER BEEN PUBLISHED. Readers open a generation,
+            # not this store, so a store that is fully loaded and has never been
+            # snapshotted leaves them with nothing to open at all -- which is
+            # the exact state of the deployed store the first time this ships,
+            # and a restart that loads nothing is the common case, not the rare
+            # one. Publishing here is a one-off: the next restart finds a
+            # generation and takes the cheap path above.
+            #
+            # Guarded on the directory existing for the reason the paragraph
+            # above gives -- this must not be the thing that creates an empty
+            # store.
+            if Path(args[0]).is_dir() and snapshots.published(
+                Path(args[0]).parent / "snapshots"
+            ) is None:
+                _publish(Store(args[0]), args[0])
             return 0
     run_paths = [run_paths[i] for i in pending]
     contents = [contents[i] for i in pending]
@@ -2482,16 +2517,7 @@ def main(argv: list[str] | None = None) -> int:
     # the checkpoint fails, the right outcome is a stale generation and a loud
     # line, not a failed load that leaves the run file to be replayed.
     if skip_loaded:
-        started = datetime.now(timezone.utc)
-        try:
-            generation = snapshots.publish(
-                store, Path(args[0]).parent / "snapshots", keep=_SNAPSHOT_KEEP
-            )
-            took = (datetime.now(timezone.utc) - started).total_seconds()
-            print(f"published generation {generation} in {took:.1f}s")
-        except Exception as exc:  # noqa: BLE001 - see above
-            print(f"could not publish a snapshot ({exc}); readers keep the last one",
-                  file=sys.stderr)
+        _publish(store, args[0])
 
     return 1 if drifted else 0
 
