@@ -555,6 +555,12 @@ def _store_path() -> str:
 # that the poll is never the reason anything happens.
 _FOLLOW_SECONDS = float(os.environ.get("SPARQLWATCH_FOLLOW_SECONDS", "30"))
 
+# How old the data may get before the site says the pipeline has stopped. Two
+# missed sweeps; see `snapshots.STALE_AFTER` for why that number.
+_STALE_SECONDS = float(
+    os.environ.get("SPARQLWATCH_STALE_SECONDS", str(snapshots.STALE_AFTER))
+)
+
 # Keyed on the snapshot root, not a single global, because the decision below is
 # about a STORE and not about this process. One process only ever serves one
 # store, so in the deployment this dict holds exactly one entry; keying it is
@@ -572,9 +578,9 @@ def _follower() -> "snapshots.Follower | None":
     """The generation follower, or None when this store publishes none.
 
     DECIDED ONCE. A store either has generations or it does not, and that does
-    not change under a running process -- the publisher is the init container,
-    which cannot start while this one holds the port. Re-deciding per request
-    would put an `iterdir` of the snapshot root on every page.
+    not change under a running process: the publisher is the sweep's own job,
+    and nothing it does can take the last generation back. Re-deciding per
+    request would put an `iterdir` of the snapshot root on every page.
 
     None is the local case, not a failure. `load_run.py` publishes only on
     --skip-loaded, so a developer who built a store by hand has no generations
@@ -597,12 +603,34 @@ def _follower() -> "snapshots.Follower | None":
                 )
             else:
                 follower = snapshots.Follower(
-                    root, prewarm=_warm_store, on_swap=_took_generation
+                    root,
+                    prewarm=_warm_store,
+                    on_swap=_took_generation,
+                    on_stale=_store_has_stopped_moving,
+                    stale_after=_STALE_SECONDS,
                 )
                 follower.start(_FOLLOW_SECONDS)
                 _LOG.info("following %s, serving generation %d", root, follower.pinned()[0])
             _FOLLOWERS[key] = follower
     return _FOLLOWERS[key]
+
+
+def _store_has_stopped_moving(generation: int, age: float) -> None:
+    """The sweep has stopped reaching readers, and this is the only place it shows.
+
+    The site is fine and stays fine -- it serves the last whole generation it
+    took. What has stopped is new data arriving, and since the loader moved into
+    its own job there is nothing else in this deployment that notices: the
+    failure is a job that did not finish and a date on the page that quietly
+    stops advancing. See `snapshots.Follower.check_stale`.
+    """
+    _LOG.warning(
+        "generation %d is %.1f hours old: nothing has been published since. "
+        "The hourly sweep or its load has stopped; the site keeps serving this "
+        "generation until one arrives. Check the prober CronJob and the last "
+        "load_run.py publish line.",
+        generation, age / 3600,
+    )
 
 
 def _took_generation(generation: int) -> None:
