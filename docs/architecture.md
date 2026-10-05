@@ -324,6 +324,11 @@ from the `build-store` init container, which then exits, and achieved nothing
 measurable: it filled the node's page cache and left every Python-side result
 to be computed again. `build_payload` is almost entirely that Python side.
 
+That is also why the generation swap below warms BEFORE it swaps, on the
+incoming handle, rather than clearing the caches afterwards: clearing would
+throw away the warm that was just paid for and hand the next reader the cold
+build this whole arrangement exists to avoid.
+
 Four theories were wrong before instrumentation settled it: cold Longhorn
 reads, the unbounded history scan (bounding it is twenty times *worse*), CPU
 starvation, and size-proportional rendering (`render` is 0.00–0.10 s on a
@@ -346,12 +351,50 @@ rebuild already derives current from every run graph in instant order and is
 already the path a deploy takes, so it is known correct for exactly this input.
 A second implementation of "which run wins for this pair" could disagree with
 the first. It fires only when a file lands behind current — in steady state once
-a day, after the daily pass, and never on the hourly restart.
+a day, after the daily pass. (It used to be "and never on the hourly restart";
+there is no hourly restart any more.)
 
 ### `app.py` (2,692 lines)
 
 Serves each resource in five representations: HTML, Turtle, N-Triples, RDF/XML
 and JSON-LD.
+
+#### Generations
+
+**The site never reads the store the loader writes.** `load_run.py` finishes a
+load by checkpointing the store into `snapshots/gen-N` and renaming a `CURRENT`
+file to name it; `app.py` follows that file and holds a read-only handle on
+whichever generation it names. A checkpoint is hard links, not a copy -- 0.5 s
+and a few kilobytes of real disk against three million quads -- and it has no
+writer, which is the whole point: pyoxigraph calls reading a store some other
+process is writing undefined behaviour, and that sharing is what forced every
+reader to be destroyed and rebuilt whenever new data arrived.
+
+The swap is one assignment. `Follower.pinned()` returns a `(generation, store)`
+tuple, FastAPI resolves the store dependency once per request, so a request
+assembles its whole page out of one generation and a swap underneath it cannot
+hand it two internally consistent halves that disagree. The previous generation
+is released when the last request holding it returns.
+
+Two details are load-bearing and were each got wrong first:
+
+- **The checkpoint must come from a read-write handle.** `backup()` from a
+  read-only one silently omits the write-ahead log: a valid store quietly
+  missing the newest run. Measured on the deployment, 2,950,651 quads seen and
+  2,940,244 snapshotted. `snapshots.publish` therefore stamps a generation quad
+  into the live store and reads it back out of the snapshot before publishing.
+- **The checkpoint must come after `store.optimize()`.** It pins the SST set as
+  it finds it, so one taken before compaction pins the bloated version -- about
+  four times the compacted size -- for that generation's life.
+
+**A stalled pipeline is reported, because nothing else would notice.** With the
+loader in its own job, a load that fails is a failed job and a site serving its
+last generation indefinitely: correct data, arbitrarily old, and a "last sweep"
+date on the page that quietly stops advancing. `Follower.check_stale` therefore
+warns when `CURRENT` has not moved in two hours -- two missed sweeps -- repeating
+hourly while it lasts so that `kubectl logs --tail` can still see it. It never
+refuses to serve: a stale site is better than no site by a wide margin, which is
+the requirement this design exists for.
 
 **HTML and RDF are derived independently, on purpose.** HTML comes from SELECT
 queries through view-model modules (`endpoint_measurements.py`,
@@ -464,8 +507,11 @@ and the three PVCs — while the components are named for what they are: `site`,
 
     kubectl -n sparqlwatch-dev logs deploy/site -c site --tail=50
 
-The `site` pod runs two containers, `site` and `sparql`, after an init container
-`build-store`; `-c` is therefore not optional.
+The `site` pod runs two containers, `site` and `sparql`; `-c` is therefore not
+optional. It used to run an init container `build-store` that loaded the newest
+run before the site started, which is what made every deploy and every hourly
+sweep an outage. Since 2026-10-05 the loading happens in the sweep's own job and
+the site pod only ever reads -- see *Generations* below.
 
 ## Class profiles live in their own graph
 

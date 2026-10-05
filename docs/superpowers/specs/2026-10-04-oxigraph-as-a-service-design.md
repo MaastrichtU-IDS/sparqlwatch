@@ -1,6 +1,9 @@
 # Publishing without a restart
 
-**Status:** design, third draft, 2026-10-04. Nothing built.
+**Status:** built and deployed 2026-10-05. See *What shipped* at the end for
+what was measured and what was left out. The body below is the design as it
+was argued, kept unedited -- its predictions are worth more against the
+outcome than they would be quietly corrected.
 
 Two reviews and one spike changed this twice. Draft 1 proposed `oxigraph serve`
 behind an HTTP proxy; its cache key was unsound and its sequence unsafe. Draft 2
@@ -185,3 +188,63 @@ Build in one step, locally first:
 
 Only once that harness is boring does any of it reach the cluster, and readers
 move after the producer has run for days.
+
+## What shipped
+
+Deployed to dev on 2026-10-05 across sparqlwatch #58-#63 and services #486/#488.
+
+**The hourly outage is gone**, which was the requirement. The 14:00 sweep of
+2026-10-05 is the proof: it wrote `run-2026-10-05T14:00:30Z.nq`, loaded it,
+published generation 9, and the site was serving that generation by 14:07:41 --
+same pod, zero restarts, 115 requests across the window and not one non-200.
+That is the first time in this deployment's life that new data reached readers
+without the process being destroyed. Deploys roll the same way: `Recreate` is
+gone, `maxUnavailable: 0`.
+
+**Measured on the deployment**, against roughly three million quads:
+
+```
+publish (flush, backup, verify, rename, reap):  0.5 s
+disk after nine generations, retention of two:  18.4 GiB free of 19.5
+swap picked up after a publish:                 inside one poll (30 s)
+```
+
+Disk is the number the design was least sure of, and it is the one to keep
+watching: `load_run.py` now prints free space on every publish, so the evidence
+accumulates hourly without anyone mounting the PVC. One figure is not a
+retention measurement -- what matters is a figure from either side of a
+compaction, and that takes a day.
+
+**What was built differently.** The loader moved out of the site pod entirely,
+into the sweep's own job, rather than staying an init container -- which is what
+made `RollingUpdate` safe and removed the last writer a reader could share a
+store with. The site pod and both CronJobs carry a `podAffinity`, because the
+store PVC is ReadWriteOnce and that is per node, not per pod; read-only mounts
+do not soften it.
+
+**What was NOT built.** The reaper deletes by count, with a floor of two. It
+does not consult live readers, and no `X-Generation` header is served. The
+design's argument for that still stands -- a reader that has just read `CURRENT`
+has not opened it yet -- but the floor of two covers the same window at a
+fraction of the machinery, and disk is nowhere near the pressure that would
+justify the rest. Revisit it when the free-space figures say to.
+
+**A failure got quieter, and was then given a voice.** Before, a loader that
+could not open the store crashlooped the pod: impossible to miss. Afterwards it
+is a failed job and a site serving its last generation indefinitely -- correct
+data, arbitrarily old, nothing saying so. The follower therefore reports a
+`CURRENT` that has not moved in two hours (`snapshots.Follower.check_stale`),
+since it is the one process always running and already reading that file. It
+never refuses to serve: a stale site beats no site, which is the same
+requirement this whole document is about.
+
+**Three things this design reasoned wrong**, each settled by the cluster:
+
+- `RollingUpdate` alone would not have prevented the 2026-10-05 morning outage;
+  `Recreate` was load-bearing for correctness until the writer moved out.
+- The snapshot has to be taken **after** `store.optimize()`. A checkpoint pins
+  the SST set as it finds it, so one taken before compaction pins the bloated
+  version -- about four times the compacted size -- for that generation's life.
+- A fully loaded store that had never published would never publish, because
+  `load_run.py` returns before opening the store when there is nothing to load.
+  The bootstrap in `--skip-loaded` exists for exactly that state.

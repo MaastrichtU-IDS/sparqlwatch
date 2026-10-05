@@ -1,9 +1,12 @@
 """Following CURRENT: taking a new generation without ever serving half of one."""
 
 import gc
+import logging
+import os
 import shutil
 import sys
 import threading
+import time
 import weakref
 from pathlib import Path
 
@@ -371,3 +374,198 @@ def test_the_store_keyed_caches_hold_no_more_than_the_generations_kept(tmp_path)
     assert app.fleet_history.cache_info().maxsize == load_run._SNAPSHOT_KEEP
     assert app._cached_build_payload.cache_info().maxsize == load_run._SNAPSHOT_KEEP
     assert app._opened_store.cache_info().maxsize == 1
+
+
+# --- a pipeline that has stopped ---------------------------------------------
+#
+# These are about the failure that got quieter when the loader moved off the site
+# pod. Before, a loader that could not open the store crashlooped the pod and was
+# impossible to miss. Now it is a failed CronJob and a site that goes on serving
+# the last generation it took, indefinitely and without complaint. The follower
+# is the one process always running and always looking at CURRENT, so it is where
+# the stall gets noticed.
+
+
+def _stall(root, hours):
+    """Backdate CURRENT, which is how old the generation being served is."""
+    at = time.time() - hours * 3600
+    os.utime(root / snapshots.CURRENT, (at, at))
+
+
+def test_a_generation_published_just_now_is_not_stale(tmp_path):
+    live = _live(tmp_path)
+    root = tmp_path / "snapshots"
+    snapshots.publish(live, root)
+
+    said = []
+    follower = snapshots.Follower(root, on_stale=lambda g, age: said.append((g, age)))
+
+    assert follower.published_age() < 60
+    assert follower.check_stale() is None
+    assert said == []
+
+
+def test_a_store_that_stopped_being_republished_is_reported(tmp_path):
+    live = _live(tmp_path)
+    root = tmp_path / "snapshots"
+    generation = snapshots.publish(live, root)
+
+    said = []
+    follower = snapshots.Follower(root, on_stale=lambda g, age: said.append((g, age)))
+    _stall(root, hours=3)
+
+    assert follower.check_stale() == pytest.approx(3 * 3600, abs=60)
+    assert len(said) == 1
+    assert said[0][0] == generation
+    assert said[0][1] == pytest.approx(3 * 3600, abs=60)
+
+
+def test_a_stall_just_short_of_the_threshold_is_not_reported(tmp_path):
+    """The hourly sweep plus a slow run is not yet a pipeline that has stopped."""
+    live = _live(tmp_path)
+    root = tmp_path / "snapshots"
+    snapshots.publish(live, root)
+
+    said = []
+    follower = snapshots.Follower(root, on_stale=lambda g, age: said.append(g))
+    _stall(root, hours=1.9)
+
+    assert follower.check_stale() is None
+    assert said == []
+
+
+def test_a_stall_is_said_once_and_not_on_every_poll(tmp_path):
+    """At a 30s poll, saying it every time is 120 lines an hour and no signal."""
+    live = _live(tmp_path)
+    root = tmp_path / "snapshots"
+    snapshots.publish(live, root)
+
+    said = []
+    follower = snapshots.Follower(root, on_stale=lambda g, age: said.append(g))
+    _stall(root, hours=3)
+
+    for _ in range(20):
+        follower.check_stale()
+
+    assert len(said) == 1
+
+
+def test_a_stall_still_going_an_hour_later_is_said_again(tmp_path, monkeypatch):
+    """Saying it once and never again is a line nobody will be looking at yet.
+
+    The repeat is what `kubectl logs --tail` can still see hours later, and the
+    age it carries is how the reader learns whether this is new or has been
+    going all night.
+    """
+    live = _live(tmp_path)
+    root = tmp_path / "snapshots"
+    snapshots.publish(live, root)
+
+    clock = [1000.0]
+    monkeypatch.setattr(snapshots.time, "monotonic", lambda: clock[0])
+
+    said = []
+    follower = snapshots.Follower(root, on_stale=lambda g, age: said.append(age))
+    _stall(root, hours=3)
+
+    assert follower.check_stale() is not None
+    clock[0] += 59 * 60
+    assert follower.check_stale() is None, "said twice inside the hour"
+    clock[0] += 2 * 60
+    assert follower.check_stale() is not None, "an hour on, and still silent"
+    assert len(said) == 2
+
+
+def test_a_new_generation_arms_the_report_again(tmp_path):
+    """A stall that was reported, recovered, and came back is news a second time."""
+    live = _live(tmp_path)
+    root = tmp_path / "snapshots"
+    snapshots.publish(live, root)
+
+    said = []
+    follower = snapshots.Follower(root, on_stale=lambda g, age: said.append(g))
+    _stall(root, hours=3)
+    follower.check_stale()
+    assert len(said) == 1
+
+    _add(live, 25, 50)
+    second = snapshots.publish(live, root)
+    assert follower.refresh() == second
+    assert follower.check_stale() is None     # fresh again, and nothing said
+
+    _stall(root, hours=3)
+    assert follower.check_stale() is not None
+    assert said == [1, second]
+
+
+def test_a_current_that_cannot_be_read_is_not_reported_as_a_stall(tmp_path):
+    """Unreadable is a different fault, and guessing an age would be inventing one."""
+    live = _live(tmp_path)
+    root = tmp_path / "snapshots"
+    snapshots.publish(live, root)
+
+    said = []
+    follower = snapshots.Follower(root, on_stale=lambda g, age: said.append(g))
+    (root / snapshots.CURRENT).unlink()
+
+    assert follower.published_age() is None
+    assert follower.check_stale() is None
+    assert said == []
+
+
+def test_a_follower_with_nowhere_to_report_does_not_try(tmp_path):
+    """The local case: no reporter wired, and a stall must not become a crash."""
+    live = _live(tmp_path)
+    root = tmp_path / "snapshots"
+    snapshots.publish(live, root)
+
+    follower = snapshots.Follower(root)
+    _stall(root, hours=9)
+
+    assert follower.check_stale() is None
+
+
+def test_a_report_that_raises_does_not_stop_the_follower(tmp_path):
+    """The poll thread dying is worse than the stall it was trying to report:
+    the site would serve one generation forever with nothing to say so."""
+    live = _live(tmp_path)
+    root = tmp_path / "snapshots"
+    snapshots.publish(live, root)
+
+    def boom(generation, age):
+        raise RuntimeError("the logger is on fire")
+
+    follower = snapshots.Follower(root, on_stale=boom, stale_after=0)
+    follower.start(interval=0.01)
+    try:
+        _add(live, 25, 50)
+        second = snapshots.publish(live, root)
+        deadline = time.time() + 5
+        while follower.pinned()[0] != second and time.time() < deadline:
+            time.sleep(0.01)
+        assert follower.pinned()[0] == second, "the poll thread stopped following"
+        assert follower.running
+    finally:
+        follower.stop()
+
+
+def test_the_site_says_so_when_the_store_stops_being_republished(tmp_path, monkeypatch, caplog):
+    import app
+
+    live = _live(tmp_path)
+    root = tmp_path / "snapshots"
+    snapshots.publish(live, root)
+
+    monkeypatch.setenv("SPARQLWATCH_STORE", str(tmp_path / "live"))
+    app._FOLLOWERS.clear()
+    app._opened_store.cache_clear()
+    follower = app._follower()
+    try:
+        _stall(root, hours=5)
+        with caplog.at_level(logging.WARNING, logger="uvicorn.error"):
+            assert follower.check_stale() is not None
+        assert "5.0 hours" in caplog.text
+        assert "sweep" in caplog.text
+    finally:
+        follower.stop()
+        app._FOLLOWERS.clear()

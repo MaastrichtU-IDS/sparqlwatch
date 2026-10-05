@@ -29,6 +29,7 @@ import os
 import re
 import shutil
 import threading
+import time
 from pathlib import Path
 
 from pyoxigraph import NamedNode, Quad, Store
@@ -43,6 +44,14 @@ META = NamedNode("urn:sparqlwatch:meta")
 
 CURRENT = "CURRENT"
 _GEN = re.compile(r"^gen-(\d{6})$")
+
+# When a store that is no longer being republished stops being a slow hour and
+# starts being a stopped pipeline. The sweep publishes once an hour, so one
+# missed hour is a long run or a late node; two in a row is not.
+STALE_AFTER = 2 * 60 * 60
+# And once it HAS stopped, repeating it every poll is 120 lines an hour, which
+# reads the same as saying nothing.
+_REPEAT_AFTER = 60 * 60
 
 
 def _generations(root: Path) -> list[int]:
@@ -72,6 +81,22 @@ def published(root: Path) -> int | None:
 
 def path_of(root: Path, generation: int) -> Path:
     return root / f"gen-{generation:06d}"
+
+
+def published_at(root: Path) -> float | None:
+    """When CURRENT last moved, as a POSIX timestamp, or None if it cannot be read.
+
+    This is the publish time of the generation being served, and `publish` gets
+    it right for free: the pointer is written to a temporary file and renamed,
+    and rename carries the mtime across. It is deliberately NOT the time this
+    process took the generation -- a pod that starts after the pipeline has
+    already been dead for a day would otherwise call its day-old data fresh,
+    which is the exact case worth catching.
+    """
+    try:
+        return (root / CURRENT).stat().st_mtime
+    except OSError:
+        return None
 
 
 def _stamp(store: Store, generation: int) -> None:
@@ -187,15 +212,19 @@ class Follower:
     with such caches clear them there.
     """
 
-    def __init__(self, root, *, open_store=None, prewarm=None, on_swap=None):
+    def __init__(self, root, *, open_store=None, prewarm=None, on_swap=None,
+                 on_stale=None, stale_after: float = STALE_AFTER):
         self._root = Path(root)
         self._open = open_store or Store.read_only
         self._prewarm = prewarm
         self._on_swap = on_swap
+        self._on_stale = on_stale
+        self._stale_after = stale_after
         self._lock = threading.Lock()
         self._pinned: tuple[int, Store] | None = None
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
+        self._said_at: float | None = None
         self.last_error: BaseException | None = None
 
         generation = published(self._root)
@@ -261,6 +290,46 @@ class Follower:
             self.last_error = None
             return generation
 
+    def published_age(self) -> float | None:
+        """How long ago the generation being served was published, in seconds."""
+        at = published_at(self._root)
+        return None if at is None else time.time() - at
+
+    def check_stale(self) -> float | None:
+        """Report a store that has stopped being republished. Returns what it said.
+
+        WHY THE FOLLOWER CARRIES THIS. The loader runs in its own job now, so a
+        loader that cannot open the store is a failed job and a site that goes
+        on serving the last generation it took -- correct data, indefinitely
+        old, and nothing anywhere saying so. This process is the only one always
+        running and already looking at CURRENT every poll, so the stall costs a
+        `stat` to notice here and a cron-watcher to notice anywhere else.
+
+        It never touches what is being served. Refusing to answer because the
+        data is old would turn a stale site into no site, and a stale site is
+        the better of those two by a wide margin.
+        """
+        if self._on_stale is None:
+            return None
+        age = self.published_age()
+        if age is None:
+            # Unreadable is a different fault from old, and the age that would
+            # have to be invented to report it is the whole content of the
+            # report. `refresh` already carries CURRENT going missing.
+            return None
+        if age < self._stale_after:
+            self._said_at = None
+            return None
+        # `monotonic` for the repeat clock, wall time for the age: the age is
+        # measured against a filesystem timestamp and has to be, while a clock
+        # that steps backwards should not be able to silence the repeat.
+        now = time.monotonic()
+        if self._said_at is not None and now - self._said_at < _REPEAT_AFTER:
+            return None
+        self._said_at = now
+        self._on_stale(self._pinned[0], age)
+        return age
+
     def start(self, interval: float = 30.0) -> None:
         if self.running:
             return
@@ -270,7 +339,15 @@ class Follower:
             # `wait` rather than `sleep` so `stop()` returns promptly instead of
             # after up to one interval.
             while not self._stop.wait(interval):
-                self.refresh()
+                # NOTHING GETS OUT OF THIS LOOP. A poll thread that dies leaves a
+                # site serving one generation for the rest of the process with no
+                # swap and no complaint -- strictly worse than every failure it
+                # could be dying of, including a reporting callback that throws.
+                try:
+                    self.refresh()
+                    self.check_stale()
+                except Exception as exc:  # noqa: BLE001 - see above
+                    self.last_error = exc
 
         self._thread = threading.Thread(target=poll, name="snapshot-follower", daemon=True)
         self._thread.start()
