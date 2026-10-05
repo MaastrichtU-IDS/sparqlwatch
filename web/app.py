@@ -606,15 +606,38 @@ def _follower() -> "snapshots.Follower | None":
 
 
 def _took_generation(generation: int) -> None:
-    """Said on every swap, which is the only outward sign that following works.
+    """Said on every swap, and where the SPARQL workers are moved across.
 
     The caches below are NOT cleared here, deliberately. The warm that `Follower`
     runs before the swap has just filled them for the incoming handle, and
     clearing would throw exactly that away and hand the next reader the cold
     build this whole arrangement exists to avoid. They are bounded instead -- see
     `maxsize` there.
+
+    The pool is repointed rather than restarted, and only if one exists: it is
+    built on the first /sparql query, so on a site nobody has queried there is
+    nothing here to move, and the pool will open the generation current when it
+    is eventually built.
     """
     _LOG.info("now serving generation %d", generation)
+    if _POOL is not None:
+        _POOL.repoint(str(snapshots.path_of(_snapshot_root(), generation)))
+
+
+def _query_store_path() -> str:
+    """The store the SPARQL workers open: a generation when there is one.
+
+    A worker opening the LIVE store is the last reader that shares it with the
+    init container's writer, which pyoxigraph calls undefined behaviour, and the
+    last thing standing between this deployment and a rolling update.
+
+    It is also an answer nobody could reconcile: /sparql would be answering out
+    of a different store from the pages beside it.
+    """
+    follower = _follower()
+    if follower is None:
+        return _store_path()
+    return str(snapshots.path_of(_snapshot_root(), follower.pinned()[0]))
 
 
 def get_store() -> Store:
@@ -5610,7 +5633,7 @@ def get_sparql_pool():
     if _POOL is None:
         with _POOL_LOCK:
             if _POOL is None:
-                pool = sparql_pool.Pool(_store_path())
+                pool = sparql_pool.Pool(_query_store_path())
                 pool.start()
                 _POOL = pool
     return _POOL
