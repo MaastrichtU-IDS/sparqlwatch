@@ -569,3 +569,66 @@ def test_the_site_says_so_when_the_store_stops_being_republished(tmp_path, monke
     finally:
         follower.stop()
         app._FOLLOWERS.clear()
+
+
+# --- what the hourly OOMKill needs measured ----------------------------------
+
+
+def test_the_memory_line_carries_both_numbers():
+    """RSS alone cannot tell a reference leak from a fragmented allocator.
+
+    The site container is killed at its 2Gi limit every 15-20 hours, always on
+    a swap. `getallocatedblocks` climbing with RSS means an object graph to go
+    and find; staying flat while RSS climbs means the allocator is holding
+    arenas the hourly warm fragmented. The fix differs, so both ship.
+    """
+    import app
+
+    line = app._memory()
+    assert "python blocks" in line
+    assert "rss" in line
+    mib = int(line.split("rss ")[1].split(" MiB")[0])
+    assert 0 < mib < 100_000, line
+
+
+def test_the_memory_line_survives_an_unreadable_proc(monkeypatch):
+    """Instrumentation that can fail a swap is worse than no instrumentation."""
+    import builtins
+    import app
+
+    real = builtins.open
+
+    def refuse(path, *a, **k):
+        if str(path) == "/proc/self/status":
+            raise OSError("no /proc here")
+        return real(path, *a, **k)
+
+    monkeypatch.setattr(builtins, "open", refuse)
+    line = app._memory()
+    assert "rss unknown" in line
+    assert "python blocks" in line
+
+
+def test_a_swap_reports_memory(tmp_path, monkeypatch, caplog):
+    """The per-swap series is the whole point: one line an hour, comparable."""
+    import logging as _logging
+
+    import app
+
+    live = _live(tmp_path)
+    root = tmp_path / "snapshots"
+    snapshots.publish(live, root)
+    monkeypatch.setenv("SPARQLWATCH_STORE", str(tmp_path / "live"))
+    app._FOLLOWERS.clear()
+    app._opened_store.cache_clear()
+    follower = app._follower()
+    try:
+        _add(live, 25, 50)
+        second = snapshots.publish(live, root)
+        with caplog.at_level(_logging.INFO, logger="uvicorn.error"):
+            assert follower.refresh() == second
+        assert f"now serving generation {second}" in caplog.text
+        assert "python blocks" in caplog.text
+    finally:
+        follower.stop()
+        app._FOLLOWERS.clear()
