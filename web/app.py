@@ -49,6 +49,7 @@ import html
 import json
 import os
 import re
+import sys
 import threading
 from collections import Counter, OrderedDict
 from datetime import date, timedelta
@@ -615,6 +616,35 @@ def _follower() -> "snapshots.Follower | None":
     return _FOLLOWERS[key]
 
 
+def _memory() -> str:
+    """RSS beside Python's own allocation count, because the pair is the diagnosis.
+
+    The site container OOMKills at its 2Gi limit every 15-20 hours, always
+    within seconds of a generation swap, and RSS at a given age is reproducible
+    to within 20 MiB across container lives (1563 MiB at 12.0h on 2026-10-07,
+    1545 MiB at 12.8h on 2026-10-09). So roughly 50-60 MiB is retained per
+    swap, and the question is what kind of retention.
+
+    THAT IS WHAT THE SECOND NUMBER IS FOR. `getallocatedblocks` counts blocks
+    Python itself still holds. If it climbs with RSS, something keeps a
+    reference and there is an object graph to go and find. If it stays flat
+    while RSS climbs, nothing is leaked in Python's sense: the allocator is
+    holding freed arenas that the hourly warm's large transient payloads
+    fragmented, and the fix is a trim rather than a hunt. Guessing between
+    those two costs a release each time, which is why this ships before any fix.
+    """
+    rss = "rss unknown"
+    try:
+        with open("/proc/self/status") as fh:
+            for line in fh:
+                if line.startswith("VmRSS:"):
+                    rss = f"rss {int(line.split()[1]) / 1024:.0f} MiB"
+                    break
+    except (OSError, ValueError, IndexError):
+        pass
+    return f"{rss}, {sys.getallocatedblocks()} python blocks"
+
+
 def _store_has_stopped_moving(generation: int, age: float) -> None:
     """The sweep has stopped reaching readers, and this is the only place it shows.
 
@@ -647,7 +677,7 @@ def _took_generation(generation: int) -> None:
     nothing here to move, and the pool will open the generation current when it
     is eventually built.
     """
-    _LOG.info("now serving generation %d", generation)
+    _LOG.info("now serving generation %d; %s", generation, _memory())
     if _POOL is not None:
         _POOL.repoint(str(snapshots.path_of(_snapshot_root(), generation)))
 
@@ -5716,6 +5746,11 @@ def _warm_store(store: Store) -> None:
     """
     started = perf_counter()
     warmed = []
+    # BEFORE, because the warm is the hourly peak and the peak is where the
+    # kubelet has killed this container every time: it builds a whole new set
+    # of fleet-wide payloads while the outgoing generation's set is still
+    # live and still being served from.
+    _LOG.info("warming: %s", _memory())
     # In the order a first reader meets them: the index is the front page, the
     # payload is what made an endpoint page take twenty seconds.
     for label, call in (
@@ -5731,7 +5766,8 @@ def _warm_store(store: Store) -> None:
             continue
         warmed.append(f"{label} {perf_counter() - at:.1f}s")
     _LOG.info(
-        "warmed in %.1fs: %s", perf_counter() - started, ", ".join(warmed) or "nothing"
+        "warmed in %.1fs: %s; %s",
+        perf_counter() - started, ", ".join(warmed) or "nothing", _memory(),
     )
 
 
