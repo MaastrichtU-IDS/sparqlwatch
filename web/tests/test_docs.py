@@ -440,3 +440,24 @@ def test_no_docs_page_ships_an_href_jinja_could_not_resolve(client):
         hrefs = [a["href"] for a in with_attribute(body, "href")]
         assert hrefs, f"{path} has no links at all"
         assert "" not in hrefs, f"{path} has an href Jinja could not resolve"
+
+
+def test_the_footer_links_to_the_source_on_every_page(client):
+    """Chrome, so it is asserted on a page that reads no store at all.
+
+    The mark carries no caption, which is the whole reason it needs an
+    accessible name: without one the footer offers a reader using a screen
+    reader an unlabelled link and nothing else.
+    """
+    from app import STYLESHEET_PATH
+
+    page = html(client, DOCS_METRICS_PATH)
+    assert 'href="https://github.com/MaastrichtU-IDS/sparqlwatch"' in page
+    assert 'aria-label="Source code on GitHub"' in page
+    assert 'class="source"' in page
+    # The glyph itself, not an <img> that would need a second request and a
+    # second thing to go missing.
+    assert "<svg" in page.split('class="source"')[1].split("</a>")[0]
+
+    css = client.get(STYLESHEET_PATH).text
+    assert "footer .source" in css, "the mark would sit at the version's elbow"
