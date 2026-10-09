@@ -188,4 +188,11 @@ footer { border-top: 1px solid var(--border); margin: 30px 0 0;
          font-size: 12px; color: var(--text-muted); }
 footer .version { font-family: var(--mono); }
 footer a { color: var(--text-muted); }
+/* The one link the footer carries again since 2026-10-09. `margin-left: auto`
+   puts it at the far edge the way `header nav` sits, so the build label stays
+   the left-hand anchor and the row keeps its two ends. The icon needs its own
+   `center` because the footer aligns on the baseline, which a 15px glyph with
+   no text beside it has no sensible one of. */
+footer .source { margin-left: auto; display: flex; align-items: center; }
+footer .source:hover { color: var(--accent); }
 @media (max-width: 640px) { footer { padding: 12px 14px; } }
