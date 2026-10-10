@@ -315,8 +315,11 @@ the uncached function — rather than the `@lru_cache`d wrapper here, so every
 page rebuilt the whole fleet's vocabulary (15,844 terms from ~19,000 rows) to
 keep one endpoint's 156. Fixing that moved the cost onto whoever opened the
 first page after a restart, 20.5 s of it, so `app.py` now pays it in a startup
-handler: index, fleet history, vocabulary payload, about 26 s inside the
-container's 40 s HEALTHCHECK start-period. Pages are 0.4–1.3 s.
+handler: index, fleet history, vocabulary payload, inside the container's 40 s
+HEALTHCHECK start-period. Pages are 0.4–1.3 s. That warm cost about 26 s when
+it was first measured against the live store; against a published generation it
+is 6–7 s (measured in the dev pod, 2026-10-10: index 0.7 s, fleet history
+2.6 s, vocabulary payload 2.9 s).
 
 It has to be THIS process. These are `@lru_cache`s keyed on the store handle,
 and that handle belongs to whoever serves requests — an earlier attempt warmed
@@ -386,6 +389,22 @@ Two details are load-bearing and were each got wrong first:
 - **The checkpoint must come after `store.optimize()`.** It pins the SST set as
   it finds it, so one taken before compaction pins the bloated version -- about
   four times the compacted size -- for that generation's life.
+
+**Every swap hands the heap back, and that is not housekeeping.** A warm builds
+a fresh payload set of roughly 100 MiB; the caches are bounded at two, so taking
+a generation retires the set from two swaps ago. Python released it and glibc
+kept it: measured across fourteen swaps on 2026-10-10, `getallocatedblocks` moved
+647,695 -> 649,626 while RSS went 199 -> 1755 MiB. A flat block count over
+fourteen swaps means the live object graph did not grow -- nothing was leaked in
+Python's sense -- so the site walked into whatever ceiling it was given, 2Gi in
+16 hours and 4Gi in about 34, and was OOMKilled on a swap each time.
+`_took_generation` therefore collects and calls `malloc_trim(0)` after the swap,
+which walks every arena rather than only the main one. That matters because the
+warm runs on the poll thread while requests run on others, and per-thread arenas
+are where this retention hides. Measured on the deployed image: six warm cycles
+took RSS to 444 MiB, one trim returned 101 MiB, and six further cycles held the
+floor at 342-350 MiB. The per-swap log line reports what each trim gave back, so
+the next regression is readable in `kubectl logs` rather than in a postmortem.
 
 **A stalled pipeline is reported, because nothing else would notice.** With the
 loader in its own job, a load that fails is a failed job and a site serving its

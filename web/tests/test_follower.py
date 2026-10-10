@@ -632,3 +632,164 @@ def test_a_swap_reports_memory(tmp_path, monkeypatch, caplog):
     finally:
         follower.stop()
         app._FOLLOWERS.clear()
+
+
+def test_the_rss_reading_is_a_number_or_nothing():
+    """Zero and unreadable are different facts, and only one is a measurement."""
+    import app
+
+    mib = app._rss_mib()
+    assert mib is not None
+    assert 0 < mib < 100_000, mib
+
+
+def test_an_unreadable_proc_reads_as_nothing_not_as_zero(monkeypatch):
+    """A trim reporting "0 MiB back" for a failed reading would say the opposite."""
+    import builtins
+    import app
+
+    real = builtins.open
+
+    def refuse(path, *a, **k):
+        if str(path) == "/proc/self/status":
+            raise OSError("no /proc here")
+        return real(path, *a, **k)
+
+    monkeypatch.setattr(builtins, "open", refuse)
+    assert app._rss_mib() is None
+
+
+def test_the_trim_is_resolved_once():
+    """Per-swap is rare, but a dlopen per swap is still a dlopen nobody needs."""
+    import app
+
+    assert app._malloc_trim() is app._malloc_trim()
+
+
+def test_the_trim_declares_its_argument_type():
+    """A size_t marshalled as a 32-bit int is a correct call made undefined."""
+    import ctypes
+
+    import app
+
+    trim = app._malloc_trim()
+    if trim is None:
+        pytest.skip("no glibc here")
+    assert trim.argtypes == [ctypes.c_size_t]
+    assert trim.restype == ctypes.c_int
+
+
+def test_the_heap_is_handed_back_and_says_how_much():
+    """The number is the whole report: a trim nobody can measure is a guess."""
+    import app
+
+    said = app._give_the_heap_back()
+    if said == "no trim here":
+        pytest.skip("no glibc here")
+    assert "MiB back" in said, said
+    int(said.split("trimmed ")[1].split(" MiB")[0])
+
+
+def test_a_platform_without_glibc_swaps_anyway(monkeypatch):
+    """Trading an outage for a tidier heap is the wrong trade."""
+    import app
+
+    monkeypatch.setattr(app, "_malloc_trim", lambda: None)
+    assert app._give_the_heap_back() == "no trim here"
+
+
+def test_an_unmeasurable_trim_still_runs(monkeypatch):
+    """The trim is the point; the number beside it is the report."""
+    import app
+
+    called = []
+    monkeypatch.setattr(app, "_malloc_trim", lambda: lambda pad: called.append(pad))
+    monkeypatch.setattr(app, "_rss_mib", lambda: None)
+    assert app._give_the_heap_back() == "trimmed"
+    assert called == [0], called
+
+
+def test_the_trim_is_asked_for_the_whole_heap(monkeypatch):
+    """`malloc_trim(0)` keeps no pad; anything else leaves slack behind."""
+    import app
+
+    called = []
+    monkeypatch.setattr(app, "_malloc_trim", lambda: lambda pad: called.append(pad))
+    app._give_the_heap_back()
+    assert called == [0], called
+
+
+def test_a_swap_hands_the_heap_back(tmp_path, monkeypatch, caplog):
+    """The swap is the only moment a whole payload set has just been retired."""
+    import logging as _logging
+
+    import app
+
+    live = _live(tmp_path)
+    root = tmp_path / "snapshots"
+    snapshots.publish(live, root)
+    monkeypatch.setenv("SPARQLWATCH_STORE", str(tmp_path / "live"))
+    app._FOLLOWERS.clear()
+    app._opened_store.cache_clear()
+
+    follower = app._follower()
+    # Patched AFTER the follower exists: taking the first generation is a swap
+    # too and trims like any other, so counting from construction would count it.
+    called = []
+    monkeypatch.setattr(app, "_give_the_heap_back", lambda: called.append(1) or "trimmed 7 MiB back")
+    try:
+        _add(live, 25, 50)
+        second = snapshots.publish(live, root)
+        with caplog.at_level(_logging.INFO, logger="uvicorn.error"):
+            assert follower.refresh() == second
+        assert called == [1], called
+        assert "trimmed 7 MiB back" in caplog.text
+        # The pre-trim reading stays on the same line, or the series recorded
+        # before the trim shipped stops being comparable with the one after.
+        assert "python blocks" in caplog.text
+    finally:
+        follower.stop()
+        app._FOLLOWERS.clear()
+
+
+def test_the_number_is_what_the_trim_gave_back(monkeypatch):
+    """Subtracted the other way round this reports a leak on every healthy swap."""
+    import app
+
+    readings = iter([500.0, 400.0])
+    monkeypatch.setattr(app, "_malloc_trim", lambda: lambda pad: 1)
+    monkeypatch.setattr(app, "_rss_mib", lambda: next(readings))
+    assert app._give_the_heap_back() == "trimmed 100 MiB back"
+
+
+def test_one_unreadable_reading_is_enough_to_withhold_the_number(monkeypatch):
+    """Half a measurement subtracted from nothing is not a measurement."""
+    import app
+
+    readings = iter([None, 400.0])
+    monkeypatch.setattr(app, "_malloc_trim", lambda: lambda pad: 1)
+    monkeypatch.setattr(app, "_rss_mib", lambda: next(readings))
+    assert app._give_the_heap_back() == "trimmed"
+
+
+def test_what_the_swap_dropped_is_collected_before_the_trim():
+    """A trim returns only pages nothing holds, and a cycle still holds its own.
+
+    The caches drop their last reference to a retired payload on eviction, which
+    frees everything acyclic in it immediately and frees nothing that refers to
+    itself. Trimming before collecting those would walk the arenas while the
+    retired set was still resident and return the pages a swap later.
+    """
+    import app
+
+    class Payload:
+        pass
+
+    held = Payload()
+    held.self = held  # the cycle refcounting alone will not break
+    gone = weakref.ref(held)
+    del held
+    assert gone() is not None, "refcounting freed it; this test proves nothing"
+
+    app._give_the_heap_back()
+    assert gone() is None

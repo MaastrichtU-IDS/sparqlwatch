@@ -44,6 +44,8 @@ cosmetic:
 
 from __future__ import annotations
 
+import ctypes
+import gc
 import hashlib
 import html
 import json
@@ -616,6 +618,23 @@ def _follower() -> "snapshots.Follower | None":
     return _FOLLOWERS[key]
 
 
+def _rss_mib() -> float | None:
+    """Resident set size in MiB, or None where /proc will not say.
+
+    None rather than zero: a reading that failed and a process holding nothing
+    are different facts, and a trim that reported "0 MiB back" for an unreadable
+    /proc would be a measurement saying the opposite of what happened.
+    """
+    try:
+        with open("/proc/self/status") as fh:
+            for line in fh:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) / 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
 def _memory() -> str:
     """RSS beside Python's own allocation count, because the pair is the diagnosis.
 
@@ -625,24 +644,91 @@ def _memory() -> str:
     1545 MiB at 12.8h on 2026-10-09). So roughly 50-60 MiB is retained per
     swap, and the question is what kind of retention.
 
-    THAT IS WHAT THE SECOND NUMBER IS FOR. `getallocatedblocks` counts blocks
-    Python itself still holds. If it climbs with RSS, something keeps a
-    reference and there is an object graph to go and find. If it stays flat
-    while RSS climbs, nothing is leaked in Python's sense: the allocator is
-    holding freed arenas that the hourly warm's large transient payloads
-    fragmented, and the fix is a trim rather than a hunt. Guessing between
-    those two costs a release each time, which is why this ships before any fix.
+    THAT IS WHAT THE SECOND NUMBER IS FOR, and on 2026-10-10 it answered.
+    `getallocatedblocks` counts blocks Python itself still holds: climbing with
+    RSS would mean a reference kept and an object graph to go and find, flat
+    while RSS climbs means the allocator is holding freed arenas. Over fourteen
+    swaps it moved 647,695 -> 649,626 -- 0.3% -- while RSS went 199 -> 1755 MiB.
+    Flat. Nothing is leaked in Python's sense, and the fix was a trim rather
+    than a hunt: see `_give_the_heap_back`.
+
+    IT STAYS AFTER THE ANSWER, because it is now how the trim is judged. The
+    series is only comparable if this keeps reading the same thing at the same
+    point in the swap, which is why the caller takes it before trimming.
     """
-    rss = "rss unknown"
+    rss = _rss_mib()
+    shown = "rss unknown" if rss is None else f"rss {rss:.0f} MiB"
+    return f"{shown}, {sys.getallocatedblocks()} python blocks"
+
+
+@lru_cache(maxsize=1)
+def _malloc_trim():
+    """glibc's `malloc_trim`, resolved once, or None where there is no glibc.
+
+    The runtime image is python:3.12-slim-bookworm, which is glibc, so on the
+    cluster this is always found. It is still allowed to be absent: a musl base
+    has no `libc.so.6` to open and no `malloc_trim` to look up, and a site that
+    refused to swap generations on an image without one would be trading an
+    outage for a tidier heap.
+    """
     try:
-        with open("/proc/self/status") as fh:
-            for line in fh:
-                if line.startswith("VmRSS:"):
-                    rss = f"rss {int(line.split()[1]) / 1024:.0f} MiB"
-                    break
-    except (OSError, ValueError, IndexError):
-        pass
-    return f"{rss}, {sys.getallocatedblocks()} python blocks"
+        trim = ctypes.CDLL("libc.so.6").malloc_trim
+    except (OSError, AttributeError):
+        return None
+    # Declared rather than inferred. `malloc_trim` takes a size_t and ctypes
+    # would otherwise marshal the argument as a 32-bit int against a 64-bit
+    # parameter, which is how a correct call becomes an undefined one.
+    trim.argtypes = [ctypes.c_size_t]
+    trim.restype = ctypes.c_int
+    return trim
+
+
+def _give_the_heap_back() -> str:
+    """Return the retired payload's arenas to the OS, and say how much came back.
+
+    WHAT THE SWAP LINES SETTLED. Across fourteen swaps on 2026-10-10,
+    `getallocatedblocks` moved 647,695 -> 649,626 while RSS went 199 -> 1755 MiB,
+    and the sparql container did the same at its own scale. A flat block count
+    over fourteen swaps means the live object graph at the end is the size it was
+    at the start: the retired payload really is being dropped, and nothing is
+    leaked in Python's sense. glibc is keeping the freed arenas, so a process
+    handed a fresh ~100 MiB payload every hour and never giving the last one back
+    walks into any ceiling it is given -- it reached 2Gi in 16 hours and was on
+    course for 4Gi in about 34.
+
+    `malloc_trim(0)` walks every arena rather than only the main one and
+    MADV_DONTNEEDs the free pages in each, which is what makes it the right
+    instrument here: the warm runs on the poll thread while requests run on
+    others, and per-thread arenas are exactly where this kind of retention hides.
+
+    MEASURED, in a throwaway job on the deployed image against generation 128:
+    six warm cycles took RSS to 444 MiB, one trim returned 101 MiB of it, and six
+    further cycles held the floor at 342-350 MiB while each warm still peaked
+    near 440.
+
+    WHAT THAT PROVES AND WHAT IT DOES NOT. It proves the retention is the
+    allocator's and that a trim reverses it. It does NOT prove this arrests the
+    production climb, and the honest reason is that the job plateaued by its
+    third cycle: it reopened one generation and rebuilt a byte-identical payload
+    each time, while the deployment gets a different and slightly larger one
+    every hour across several request threads. So this ships as the smallest
+    reversible change that the existing per-swap line can judge -- three or four
+    swaps will say, and if RSS still climbs the retention is native and the next
+    place to look is the generation handles pyoxigraph holds.
+    """
+    trim = _malloc_trim()
+    if trim is None:
+        return "no trim here"
+    before = _rss_mib()
+    # Collect first. A trim can only return pages nothing holds, and the payload
+    # set this swap retired is released by a cache eviction, which drops the last
+    # reference but does not itself break any cycle inside what it dropped.
+    gc.collect()
+    trim(0)
+    after = _rss_mib()
+    if before is None or after is None:
+        return "trimmed"
+    return f"trimmed {before - after:.0f} MiB back"
 
 
 def _store_has_stopped_moving(generation: int, age: float) -> None:
@@ -676,10 +762,21 @@ def _took_generation(generation: int) -> None:
     built on the first /sparql query, so on a site nobody has queried there is
     nothing here to move, and the pool will open the generation current when it
     is eventually built.
+
+    THE TRIM BELONGS HERE and nowhere else. A swap is the one moment a whole
+    payload set is dropped -- the caches are bounded at two, so taking a
+    generation evicts the one from two swaps ago -- and it is the only moment
+    worth paying for the walk. Trimming on a timer would hit mid-request; after
+    the warm but before the swap would trim while the retired set is still live
+    and return nothing. See `_give_the_heap_back`.
     """
-    _LOG.info("now serving generation %d; %s", generation, _memory())
+    # Read BEFORE the trim and before the repoint, so this number stays
+    # comparable with the series already on record from the swaps that had
+    # neither. What the trim gave back is reported beside it, not folded in.
+    was = _memory()
     if _POOL is not None:
         _POOL.repoint(str(snapshots.path_of(_snapshot_root(), generation)))
+    _LOG.info("now serving generation %d; %s; %s", generation, was, _give_the_heap_back())
 
 
 def _query_store_path() -> str:
