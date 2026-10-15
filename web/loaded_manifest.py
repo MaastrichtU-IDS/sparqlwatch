@@ -189,15 +189,22 @@ def key_for(path: str | Path) -> str:
 
 
 def partition(
-    run_paths: list[str], contents: list[bytes], loaded: dict[str, str]
+    run_paths: list[str], digests: list[str], loaded: dict[str, str]
 ) -> tuple[list[int], list[int]]:
     """Split the run files into (skip, load) index lists.
 
     A file is skipped only when the manifest records THIS run with THESE
     contents. Bytes that have changed are loaded again, which is what makes a
     re-run of one instant reach the store instead of being silently dropped.
+
+    DIGESTS RATHER THAN CONTENTS, because the caller cannot afford to be
+    holding the contents. It once passed a list of every run file's bytes,
+    which made the loader's peak memory a function of the whole archive and
+    eventually OOMKilled forty consecutive hourly sweeps; see the validation
+    loop in load_run.main. Everything this function ever did with those bytes
+    was hash them, so it asks for the hash.
     """
     skip, load = [], []
-    for i, (path, data) in enumerate(zip(run_paths, contents)):
-        (skip if loaded.get(key_for(path)) == digest(data) else load).append(i)
+    for i, (path, sha) in enumerate(zip(run_paths, digests)):
+        (skip if loaded.get(key_for(path)) == sha else load).append(i)
     return skip, load
