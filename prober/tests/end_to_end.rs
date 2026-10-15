@@ -264,6 +264,84 @@ async fn an_endpoint_that_answers_nothing_is_asked_once_and_declined_for_the_res
     assert!(!declined.contains(&"availability"), "availability was measured, not declined");
 }
 
+/// AN UNREACHABLE ENDPOINT MUST SAY WHAT STOPPED THE ANSWER.
+///
+/// The test above proves the row and the declines are right. It said nothing
+/// about whether an operator can find out WHY, and for a long time they could
+/// not: the transport error was captured into `Observation::error`, read once
+/// with `is_some()`, and dropped.
+///
+/// This is the path that matters for that question, and it is the one the
+/// first attempt at this instrumentation missed. That version logged beside
+/// `resolve` in the main metric loop; an unreachable endpoint returns before
+/// ever reaching it. The sweep of 2026-10-15T13:00Z deployed with that gap and
+/// logged two unrelated CORS failures while `sparql.healthdata.nl` timed out
+/// at 30000ms in the same run without a word -- which is exactly the question
+/// the work was commissioned to answer.
+#[tokio::test]
+async fn an_unreachable_endpoint_says_what_stopped_the_answer() {
+    use std::sync::{Arc, Mutex};
+    use tracing_subscriber::fmt::MakeWriter;
+
+    #[derive(Clone, Default)]
+    struct Buf(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Buf {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    impl<'a> MakeWriter<'a> for Buf {
+        type Writer = Buf;
+        fn make_writer(&'a self) -> Buf {
+            self.clone()
+        }
+    }
+
+    let buf = Buf::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(buf.clone())
+        .with_max_level(tracing::Level::WARN)
+        .finish();
+    // GLOBAL rather than thread-local. `run_sweep` drives its endpoints on a
+    // `JoinSet`, and a scoped `set_default` only covers the thread that set it,
+    // so the warning this test exists to assert was emitted somewhere the
+    // subscriber could not see -- it captured zero bytes whenever the target
+    // ran its tests in parallel, and passed when run alone, which is the worst
+    // shape a test can have. Nothing else in this target installs a subscriber,
+    // so taking the global slot is free; other tests' events landing in the
+    // same buffer are harmless to a `contains` assertion.
+    let _ = tracing::subscriber::set_global_default(subscriber);
+
+    let defs = load_metrics(include_str!("../metrics.toml")).unwrap();
+    let client = std::sync::Arc::new(Client::new(Budget::default(), Politeness::unlimited()).unwrap());
+    // Port 1: nothing listens, so the connection is refused immediately. A
+    // refusal rather than a timeout keeps this test fast and still exercises
+    // the same path a timeout takes.
+    let _ = without_deadlocking(run_sweep(&["http://127.0.0.1:1/sparql".to_string()], &defs, &[], &client, Budget::default(), NonZeroUsize::new(1).unwrap(), &Default::default(), &sparqlwatch_prober::rotation::Rotation::always(), &mut common::discarding())).await.unwrap();
+
+    let logged = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
+    assert!(
+        logged.contains("availability"),
+        "the metric that failed is named: {logged}"
+    );
+    assert!(
+        logged.contains("indeterminate"),
+        "the verdict being explained is named: {logged}"
+    );
+    // THE CAUSE, not merely that something failed. `reqwest`'s own Display is
+    // "error sending request for url (...)" and stops there; the condition is
+    // in the source chain underneath, which `client::because` walks.
+    let lower = logged.to_lowercase();
+    assert!(
+        lower.contains("refused") || lower.contains("connect"),
+        "what stopped the answer reaches the log, not just that it was stopped: {logged}"
+    );
+}
+
 /// REACHABLE IS NOT THE SAME AS WORKING, and the gate must not confuse them.
 ///
 /// A host answering HTML is answering: its CORS headers and its service

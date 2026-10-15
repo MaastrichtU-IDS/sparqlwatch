@@ -879,6 +879,21 @@ async fn probe_endpoint(
         // read -- we did not fetch one -- and liveness declares nothing in the
         // service-description vocabulary anyway.
         if let (Some(def), Some(observed)) = (live_def, prefetched_liveness.as_ref()) {
+            // THE REASON BELONGS HERE TOO, and this is the path that carries
+            // it. An unreachable endpoint returns early, so the logging beside
+            // `resolve` further down never runs for the one case where the
+            // question "why?" is always asked: the whole endpoint was skipped.
+            //
+            // Found the hard way. The first version of this instrumented only
+            // the main loop, and the sweep after it deployed logged two
+            // unrelated CORS failures while `sparql.healthdata.nl` timed out at
+            // 30000ms in the same run and said nothing at all -- because it
+            // failed HERE, and every other metric on it became
+            // `liveness-failed` without a word about what the liveness probe
+            // actually hit.
+            if let Some(why) = why_indeterminate(observed.as_ref()) {
+                tracing::warn!(endpoint = ep, metric = def.id.as_str(), "{why}");
+            }
             acc.rows.push(MeasurementRow {
                 endpoint: ep.to_string(),
                 metric_id: def.id.clone(),

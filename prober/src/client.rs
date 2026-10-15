@@ -148,6 +148,38 @@ pub struct Client {
 /// and the code that reads it cannot drift apart.
 pub const OVERLAP_VAR: &str = "overlap";
 
+/// A transport error AND ITS CAUSES, as one line.
+///
+/// `reqwest::Error`'s own `Display` is the outer frame only -- "error sending
+/// request for url (https://...)" -- and the fact anyone needs is in the
+/// `source()` chain beneath it: timed out, connection refused, dns error,
+/// certificate verification failed. Calling `to_string()` on the error, which
+/// is what every call site here used to do, throws that away and leaves a log
+/// line that says a request failed without saying how.
+///
+/// Measured on the sweep of 2026-10-15T13:00Z, which is why this exists: every
+/// failure that run logged as `error sending request for url (...)` and nothing
+/// more, so the sweep built to answer "why is this indeterminate" could not.
+fn because(e: &dyn std::error::Error) -> String {
+    use std::fmt::Write;
+    let mut out = e.to_string();
+    let mut source = e.source();
+    // Bounded. A cause chain is short in practice, but this runs on every
+    // transport failure of every sweep and a cyclic `source()` would hang it.
+    for _ in 0..8 {
+        let Some(cause) = source else { break };
+        let text = cause.to_string();
+        // Skipped when the outer frame already said it: hyper and reqwest
+        // often stringify the same condition twice, and "timed out: timed out"
+        // reads as two findings.
+        if !out.contains(&text) {
+            let _ = write!(out, ": {text}");
+        }
+        source = cause.source();
+    }
+    out
+}
+
 impl Client {
     pub fn new(budget: Budget, politeness: Politeness) -> anyhow::Result<Self> {
         // HTTP_PROXY / HTTPS_PROXY are read automatically thanks to the
@@ -421,7 +453,7 @@ impl Client {
 
         let resp = match resp {
             Ok(r) => r,
-            Err(e) => return Attempt::failed(e.to_string(), elapsed, String::new()),
+            Err(e) => return Attempt::failed(because(&e), elapsed, String::new()),
         };
         let status = resp.status().as_u16();
         let cors = resp.headers().contains_key("access-control-allow-origin");
@@ -435,7 +467,7 @@ impl Client {
             .to_ascii_lowercase();
         let body = match resp.text().await {
             Ok(b) => b,
-            Err(e) => return Attempt::failed(e.to_string(), elapsed, String::new()),
+            Err(e) => return Attempt::failed(because(&e), elapsed, String::new()),
         };
 
         let looks_html = ctype.contains("text/html")
@@ -563,7 +595,7 @@ impl Client {
 
         let resp = match resp {
             Ok(r) => r,
-            Err(e) => return Attempt::failed(e.to_string(), elapsed, ()),
+            Err(e) => return Attempt::failed(because(&e), elapsed, ()),
         };
         let status = resp.status().as_u16();
         let cors = resp.headers().contains_key("access-control-allow-origin");
@@ -583,7 +615,7 @@ impl Client {
             .to_string();
         let body = match resp.text().await {
             Ok(b) => b,
-            Err(e) => return Attempt::failed(e.to_string(), elapsed, ()),
+            Err(e) => return Attempt::failed(because(&e), elapsed, ()),
         };
         // Truncate BEFORE classifying, so classification and the declaration
         // parse downstream read the same bytes. Classifying the full body while
@@ -762,7 +794,7 @@ impl Client {
 
         let resp = match resp {
             Ok(r) => r,
-            Err(e) => return Attempt::failed(e.to_string(), elapsed, ()),
+            Err(e) => return Attempt::failed(because(&e), elapsed, ()),
         };
         let headers = resp.headers();
         let value = |name: &str| Self::header(headers, name);
@@ -1003,6 +1035,72 @@ impl Client {
             o.profile = Self::extract_profile(&a.extra);
         }
         o
+    }
+}
+
+#[cfg(test)]
+mod because_tests {
+    use super::because;
+    use std::error::Error;
+    use std::fmt;
+
+    #[derive(Debug)]
+    struct Layer(&'static str, Option<Box<Layer>>);
+
+    impl fmt::Display for Layer {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str(self.0)
+        }
+    }
+
+    impl Error for Layer {
+        fn source(&self) -> Option<&(dyn Error + 'static)> {
+            self.1.as_ref().map(|b| b.as_ref() as &(dyn Error + 'static))
+        }
+    }
+
+    fn chain(names: &[&'static str]) -> Layer {
+        let mut it = names.iter().rev();
+        let mut node = Layer(it.next().expect("at least one"), None);
+        for name in it {
+            node = Layer(name, Some(Box::new(node)));
+        }
+        node
+    }
+
+    /// THE WHOLE POINT. The outer frame of a reqwest error names the url and
+    /// nothing else; the condition is underneath it.
+    #[test]
+    fn the_cause_underneath_reaches_the_message() {
+        let e = chain(&["error sending request for url (https://example.org/sparql)", "operation timed out"]);
+        let out = because(&e);
+        assert!(out.contains("operation timed out"), "the cause must survive: {out}");
+        assert!(out.contains("https://example.org/sparql"), "and so must the url: {out}");
+    }
+
+    /// A deep chain keeps the innermost cause, which is the specific one.
+    #[test]
+    fn every_layer_of_the_chain_is_kept() {
+        let out = because(&chain(&["outer", "middle", "connection refused"]));
+        for want in ["outer", "middle", "connection refused"] {
+            assert!(out.contains(want), "{want} missing from {out}");
+        }
+    }
+
+    /// hyper and reqwest often stringify one condition twice. "timed out:
+    /// timed out" reads as two findings and is one.
+    #[test]
+    fn a_cause_the_outer_frame_already_said_is_not_repeated() {
+        let out = because(&chain(&["timed out", "timed out"]));
+        assert_eq!(out, "timed out", "got {out}");
+    }
+
+    /// A cyclic or pathological chain must not hang a sweep.
+    #[test]
+    fn the_walk_is_bounded() {
+        let deep: Vec<&'static str> = vec!["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"];
+        let out = because(&chain(&deep));
+        assert!(out.len() < 200, "bounded rather than unbounded: {out}");
     }
 }
 
