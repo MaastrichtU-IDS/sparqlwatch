@@ -464,3 +464,72 @@ async fn the_real_dsmz_refusal_shape_triggers_the_fallback() {
     assert_eq!(o.status, Some(200), "the fallback's 200 must be what stands");
     assert_eq!(o.boolean, Some(false), "an empty fallback is absent, not indeterminate");
 }
+
+/// ONE QUESTION, ONE CONNECTION -- counted at the socket.
+///
+/// A pooled connection the peer has already closed looks live until the
+/// request is written into it, and then returns `connection closed before
+/// message completed`, or nothing at all until the budget ends. Either way the
+/// sweep publishes `indeterminate` about an endpoint that did nothing wrong.
+///
+/// Seen in production, which is why this exists. The sweep of
+/// 2026-10-15T15:00Z reported `sparql.dsmz.de/api/brenda` and
+/// `.../api/mediadive` as indeterminate after 0ms and 1ms respectively,
+/// `connection closed before message completed` -- both on the connection
+/// their own availability probe had used seconds earlier.
+///
+/// Asserted by COUNTING ACCEPTED SOCKETS rather than by reading the client's
+/// configuration back, which reqwest does not expose: with an idle pool the
+/// second ask reuses the first socket and this stub accepts once.
+#[tokio::test]
+async fn each_question_gets_its_own_connection() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let accepts = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&accepts);
+
+    // Keep-alive and no `Connection: close`, so nothing but the client's own
+    // pooling decides whether a second socket is opened.
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut sock) = stream else { return };
+            counted.fetch_add(1, Ordering::SeqCst);
+            std::thread::spawn(move || {
+                let body = r#"{"head":{},"boolean":true}"#;
+                let mut buf = [0u8; 4096];
+                while let Ok(n) = sock.read(&mut buf) {
+                    if n == 0 {
+                        return;
+                    }
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/sparql-results+json\r\n\
+                         content-length: {}\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    if sock.write_all(resp.as_bytes()).is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+    });
+
+    let c = Client::new(Budget::default(), Politeness::unlimited()).unwrap();
+    let url = format!("http://{addr}/sparql");
+    for i in 0..2 {
+        let o = without_deadlocking(c.ask(&url, "ASK{}")).await;
+        assert_eq!(o.status, Some(200), "ask {i} reached the stub");
+    }
+
+    assert_eq!(
+        accepts.load(Ordering::SeqCst),
+        2,
+        "each question opened its own connection rather than inheriting one"
+    );
+}
