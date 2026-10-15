@@ -19,7 +19,7 @@ pub mod write;
 use crate::budget::{Budget, Expired};
 use crate::client::Client;
 use crate::declare::{parse_declarations_for, Declarations};
-use crate::observe::BodyKind;
+use crate::observe::{BodyKind, Observation};
 use crate::emit::{
     ContentProfile, ContentSample, DeclarationsRead, EndpointFacts, MeasurementRow,
     DescriptionDocument, NotMeasured, NotMeasuredReason, ProfileProperty, VoidDocument,
@@ -30,6 +30,31 @@ use crate::profile::{profile_classes, ProfileOutcome, Sampling};
 use crate::politeness::host_key;
 use crate::resolve::{is_a_readable_result, resolve, resolve_fetch, Declared};
 use crate::verdict::Verdict;
+
+/// What stopped an answer, for a probe that resolved to `indeterminate`.
+///
+/// `None` where the verdict was reached from an answer the endpoint actually
+/// gave -- a 404, an HTML console, a body that did not parse. Those are
+/// findings about the endpoint and `resolve` has already said so. This names
+/// only the cases where NOTHING came back, which are the ones a reader cannot
+/// otherwise reconstruct.
+///
+/// The two are kept apart because they fail differently. `Expired` is OUR
+/// ceiling: the metric budget ran out, and the request may still have been in
+/// flight. A transport error is the REQUEST's own ending, and its `elapsed_ms`
+/// is evidence -- a value equal to the request budget, to the millisecond and
+/// on every run, is a socket that took the write and never answered, which is
+/// not the same finding as a scattered set of slow replies.
+fn why_indeterminate(observed: Result<&Observation, &Expired>) -> Option<String> {
+    match observed {
+        Err(Expired) => {
+            Some("indeterminate: the metric budget expired before any answer arrived".to_string())
+        }
+        Ok(o) => o.error.as_ref().map(|error| {
+            format!("indeterminate after {}ms: the request failed: {error}", o.elapsed_ms)
+        }),
+    }
+}
 use crate::write::RunWriter;
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
@@ -1099,6 +1124,34 @@ async fn probe_endpoint(
         };
         let declared = Declared::from(&declarations, def);
         let verdict = resolve(def, declared, observed.as_ref().map_err(|e| *e));
+        // WHY AN INDETERMINATE WAS INDETERMINATE.
+        //
+        // `Observation::error` is set on every transport failure and then only
+        // ever read with `is_some()`. Nothing logged it and nothing emitted it,
+        // so the verdict reached the site with no account of itself and the
+        // sweep that produced it said nothing at all.
+        //
+        // That is not a missing nicety, it is the reason a question about one
+        // endpoint cost a day. On 2026-10-15 `sparql.healthdata.nl` had been
+        // reading `indeterminate` on 342 of 392 runs since 2026-09-30. The
+        // endpoint answers this prober's exact query in 189ms from this
+        // cluster, through this proxy, with this user-agent -- it only fails
+        // inside a full sweep -- and establishing even that much needed four
+        // throwaway Jobs and a store archaeology session, because the one fact
+        // that would have named the cause was captured and dropped on the
+        // floor. `indeterminate` means "no answer was established"; an
+        // operator reading it is owed what stopped the answer.
+        //
+        // WARN rather than DEBUG, because the value is in production and a
+        // level nobody runs would leave this question exactly as unanswerable
+        // as it was. The volume is bounded by the failures themselves -- 8 of
+        // 126 endpoints on the run this was written against -- which is well
+        // under what the loader already prints per file.
+        if verdict == Verdict::Indeterminate {
+            if let Some(why) = why_indeterminate(observed.as_ref()) {
+                tracing::warn!(endpoint = ep, metric = def.id.as_str(), "{why}");
+            }
+        }
         // THE LOCAL COPY, kept whenever the well-known fetch reached anything
         // at all -- including a document that is there and does not parse,
         // because "they publish something invalid" is a finding and the
@@ -1415,6 +1468,40 @@ async fn probe_endpoint(
 mod tests {
     use super::*;
     use crate::metrics::{Cost, ProbeKind};
+
+    /// A transport failure must reach the log with the error AND the elapsed.
+    ///
+    /// The elapsed is half the finding. `sparql.healthdata.nl` read
+    /// `indeterminate` at 30001ms on run after run while answering this
+    /// prober's own query in 189ms when asked on its own; a message naming the
+    /// error without the duration would not have distinguished "the server is
+    /// slow" from "the request budget ended a request nothing was answering".
+    #[test]
+    fn a_failed_request_says_what_failed_and_how_long_it_took() {
+        let o = Observation::failed("operation timed out".into(), 30001);
+        let why = why_indeterminate(Ok(&o)).expect("a transport failure has a reason");
+        assert!(why.contains("operation timed out"), "the error itself: {why}");
+        assert!(why.contains("30001"), "the elapsed, which is evidence: {why}");
+    }
+
+    /// Our own ceiling is not the endpoint's failure, and must not read as one.
+    #[test]
+    fn an_expired_budget_says_it_was_ours() {
+        let why = why_indeterminate(Err(&Expired)).expect("an expiry has a reason");
+        assert!(why.contains("budget"), "names the budget rather than the endpoint: {why}");
+    }
+
+    /// AN ANSWER IS NOT A FAILURE. An endpoint that replied -- a 404, an HTML
+    /// console, a body that did not parse -- has already been accounted for by
+    /// `resolve`, and a second line claiming the request failed would be a
+    /// wrong account of a server that answered.
+    #[test]
+    fn an_endpoint_that_answered_is_not_reported_as_a_failed_request() {
+        let mut o = Observation::failed("x".into(), 5);
+        o.error = None;
+        o.status = Some(404);
+        assert_eq!(why_indeterminate(Ok(&o)), None);
+    }
 
     /// What the panic log may name, and what it may not.
     ///
