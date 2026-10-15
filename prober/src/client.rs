@@ -187,6 +187,34 @@ impl Client {
         // is load-bearing rather than a convenience.
         let http = reqwest::Client::builder()
             .timeout(budget.request)
+            // NO IDLE CONNECTION POOL, and this is correctness rather than
+            // tuning.
+            //
+            // A pooled connection the peer has already closed is indis-
+            // tinguishable from a live one until the request is written into
+            // it, and what comes back is either `connection closed before
+            // message completed` or, when the peer went away without a FIN,
+            // nothing at all until the request budget ends. Both are published
+            // as `indeterminate` ABOUT THE ENDPOINT -- a verdict this project
+            // exists to get right, spent on our own socket.
+            //
+            // Observed, not theorised. The sweep of 2026-10-15T15:00Z:
+            //
+            //   sparql.dsmz.de/api/brenda     cors-preflight  0ms  connection
+            //                                 closed before message completed
+            //   sparql.dsmz.de/api/mediadive  cors-preflight  1ms  the same
+            //
+            // Zero and one millisecond: no request reached anybody. Those
+            // endpoints had answered their availability probe seconds earlier
+            // on the connection this one reused.
+            //
+            // Nothing is given up by switching it off. `politeness::acquire`
+            // holds every host to one request at a time with a gap between
+            // them -- two seconds by default -- so a pooled connection is idle
+            // for longer than most servers keep one, and a sweep is paced by
+            // that gap rather than by handshakes. One question, one
+            // connection, no inherited state.
+            .pool_max_idle_per_host(0)
             // Never follow a redirect implicitly: a hop reqwest takes for us
             // is a request our per-host gate never saw. `gated_chain` follows
             // them instead, one gated hop at a time. See the field's comment.
