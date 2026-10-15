@@ -230,9 +230,24 @@ ran inference.
 
 Python 3.12 in `web/`, about 5,200 lines, on FastAPI and pyoxigraph.
 
-### `load_run.py` (1,670 lines)
+### `load_run.py` (2,577 lines)
 
 One job: put a run graph into the store and maintain the derived graph.
+
+**Its memory footprint is one run, and that is a requirement rather than a
+property.** The loader is handed the WHOLE archive on every sweep -- `sweep.sh`
+globs `/data/runs` and `--skip-loaded` sorts out what is already held -- so any
+per-file state it keeps across the archive is multiplied by a number that grows
+by twenty-four a day and never shrinks. It kept one such thing: the validation
+pass retained every run's decompressed bytes so the manifest could hash them.
+That crossed the prober's 2Gi ceiling on 2026-10-13T18:00Z, and the next forty
+hourly sweeps were all OOMKilled in that loop, after a Rust sweep that had
+succeeded, before the loader logged its first line -- so the site went on
+answering 200 in a tenth of a second while serving two-day-old data, which is
+the failure mode a quality monitor can least afford. The pass now keeps a
+64-byte digest per file and the pending files are read again; measured against
+the fixture archive, peak allocation is flat at 112-126 KiB as the archive goes
+from 482 KiB to 5.8 MiB, where before it tracked the archive at 1.03x.
 
 Graphs are **replaced, never merged**. Two loads of the same run IRI must not
 produce a graph where one measurement carries two values.

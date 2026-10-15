@@ -2345,7 +2345,22 @@ def main(argv: list[str] | None = None) -> int:
     # existing run, and creating the store directory for a run that then
     # fails to load is the same mistake pointed at a store that never
     # existed before this invocation.
-    contents = []
+    #
+    # ONE FILE AT A TIME, AND THE BYTES ARE NOT KEPT. This loop used to append
+    # every run's decompressed contents to a list so the manifest could digest
+    # them below, which made peak memory a function of THE ARCHIVE instead of
+    # the backlog -- and the archive grows by twenty-four runs a day forever.
+    # It crossed the prober's 2Gi ceiling on 2026-10-13T18:00Z and every hourly
+    # sweep for the next forty hours was OOMKilled here, after a sweep that had
+    # succeeded, before this function printed its first line. The site served
+    # two-day-old data throughout while answering 200 in a tenth of a second.
+    #
+    # A digest is 64 bytes and a run is megabytes, and the digest is all the
+    # manifest wants, so the bytes are released as each file is validated and
+    # the pending ones are read again below. Validation still happens HERE, in
+    # full, before Store() -- that ordering is the point of this loop and is
+    # argued above -- so what changed is only what survives it.
+    digests = []
     for path in run_paths:
         # Decompressed before anything looks at it, so every path below --
         # validation, the digest the manifest records, the load itself -- sees
@@ -2354,14 +2369,14 @@ def main(argv: list[str] | None = None) -> int:
         # would read as every run changing at once.
         data = loaded_manifest.decompress(Path(path).read_bytes())
         _parsed_graphs(data)
-        contents.append(data)
+        digests.append(loaded_manifest.digest(data))
 
     # The manifest is consulted AFTER the validation loop above, so a corrupt
     # run file is still refused before the store directory is created, and
     # BEFORE Store() below, so a run already held costs no store work at all.
     manifest = loaded_manifest.read(args[0]) if skip_loaded else {}
     skipped, pending = (
-        loaded_manifest.partition(run_paths, contents, manifest)
+        loaded_manifest.partition(run_paths, digests, manifest)
         if skip_loaded
         else ([], list(range(len(run_paths))))
     )
@@ -2395,7 +2410,6 @@ def main(argv: list[str] | None = None) -> int:
                 _publish(Store(args[0]), args[0])
             return 0
     run_paths = [run_paths[i] for i in pending]
-    contents = [contents[i] for i in pending]
 
     store = Store(args[0])
     # Whether any file left current attributing facts to a run that no longer
@@ -2406,12 +2420,23 @@ def main(argv: list[str] | None = None) -> int:
     # Set when any file in this invocation landed behind current. See the
     # rebuild below: on this deployment the daily pass always lands late.
     out_of_order = False
-    for path, data in zip(run_paths, contents):
+    for path in run_paths:
+        # Read again rather than carried down from the validation pass, which is
+        # what keeps this function's footprint at one run instead of an archive.
+        # The re-read is of the PENDING files only -- on the hourly path that is
+        # one file against a few hundred skipped.
+        data = loaded_manifest.decompress(Path(path).read_bytes())
         result = load_run(store, data)
         if skip_loaded:
             # RECORDED AFTER THE LOAD, one file at a time. A manifest naming a
             # file the store does not hold would skip that run forever and say
             # nothing, so the entry never runs ahead of the fact it asserts.
+            #
+            # Digested from the bytes THIS loop loaded, not from the matching
+            # entry in `digests` above. The two are the same file read twice and
+            # normally agree; if a run were rewritten in between they would not,
+            # and the manifest has to describe what reached the store rather
+            # than what was validated.
             manifest[loaded_manifest.key_for(path)] = loaded_manifest.digest(data)
             loaded_manifest.write(args[0], manifest)
         # Reported from the result of the load, not from the validation pass

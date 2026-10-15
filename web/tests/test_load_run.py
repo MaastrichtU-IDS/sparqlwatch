@@ -2463,6 +2463,61 @@ def test_a_compressed_run_whose_contents_changed_is_still_reloaded(tmp_path, cap
     assert "0 run file(s) already in the store, 1 to load" in capsys.readouterr().out
 
 
+def test_a_loaded_archive_is_not_held_in_memory_while_it_is_skipped(tmp_path):
+    """THE OUTAGE OF 2026-10-13, and the reason this module reads twice.
+
+    The validation pass below used to keep every run file's decompressed bytes
+    in a list so that `partition` could digest them, which made PEAK MEMORY A
+    FUNCTION OF THE ARCHIVE rather than of the backlog -- and the archive grows
+    by twenty-four runs a day forever. On 2026-10-13T18:00Z it crossed the
+    prober's 2Gi ceiling, and every hourly sweep for the next forty hours was
+    OOMKilled in this function, after a sweep that had succeeded, before this
+    function logged its first line. The site served two-day-old data throughout
+    while answering 200 in a tenth of a second.
+
+    What makes it a trap rather than a bug is that the archive it holds is the
+    part it is about to SKIP. This measures the case that broke: an archive
+    entirely in the store, nothing to load.
+
+    tracemalloc, not RSS: it accounts for CPython's allocator only, so the
+    store's own Rust allocations are not counted and the number is the run
+    bytes this function is holding, which is exactly the quantity at issue.
+    """
+    import tracemalloc
+    from datetime import datetime, timedelta, timezone
+
+    store = str(tmp_path / "store")
+    # Forty consecutive hours, which is both a realistic archive shape and the
+    # exact span the deployed loader spent OOMKilled.
+    base = datetime(2026, 9, 1, 0, 0, tzinfo=timezone.utc)
+    runs = [
+        _run_file(
+            tmp_path,
+            f"run-{(base + timedelta(hours=h)).strftime('%Y-%m-%dT%H-%M-%SZ')}.nq",
+            (base + timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        )
+        for h in range(40)
+    ]
+    archive = sum(Path(r).stat().st_size for r in runs)
+    assert main(["--skip-loaded", store, *runs]) == 0
+
+    # The second pass is the one production runs every hour: everything is in
+    # the store, so nothing is loaded and the only work is deciding that.
+    tracemalloc.start()
+    assert main(["--skip-loaded", store, *runs]) == 0
+    _, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+
+    # Half the archive is a deliberately loose bound. Holding all forty files
+    # overshoots it by eightfold, holding one undershoots it by twentyfold, and
+    # anything in between is a regression worth a failure rather than a close
+    # call about allocator overhead.
+    assert peak < archive / 2, (
+        f"held {peak} bytes while skipping a {archive}-byte archive; "
+        "the validation pass is retaining run contents again"
+    )
+
+
 def test_the_store_is_compacted_on_a_cold_start_and_not_every_restart(tmp_path, capsys):
     """Compaction is the only thing that shrinks the store, and it costs downtime.
 
