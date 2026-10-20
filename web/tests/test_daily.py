@@ -326,8 +326,11 @@ def test_the_chart_a_summary_draws_is_the_chart_the_runs_draw(tmp_path):
     # could not interpret is neither up nor down. The summary keeps the total and
     # the breakdown, so the reader derives the same number rather than storing it.
     assert summary["sweeps"] == len(sweeps)
-    assert answered == drawn["sweeps"], (
-        f"summary answers {answered}, the chart counts {drawn['sweeps']}"
+    assert answered == drawn["answered"], (
+        f"summary answers {answered}, the chart counts {drawn['answered']}"
+    )
+    assert summary["sweeps"] == drawn["probes"], (
+        f"summary saw {summary['sweeps']} probes, the chart reports {drawn['probes']}"
     )
     assert uptime == drawn["uptime"], (
         f"summary says {uptime}% up, the runs draw {drawn['uptime']}%"
@@ -656,7 +659,8 @@ def test_a_pruned_day_still_draws_the_chart_it_drew_before(tmp_path):
         d for d in app._daily_series(endpoint_history.endpoint_history(store, EP, limit=200))["days"]
         if d and d.get("day") == "2026-09-20"
     )
-    assert before["sweeps"] == 5, before          # six sweeps, one unreached
+    assert before["answered"] == 5, before        # six sweeps, one unreached
+    assert before["probes"] == 6, before          # and the page says six
     assert before["uptime"] == 60.0, before       # three up of five answered
 
     daily.summarise_day(store, "2026-09-20")

@@ -2756,7 +2756,7 @@ def test_uptime_is_the_share_of_sweeps_that_answered(tmp_path):
 
     day = _daily_series(endpoint_history(store, KADASTER))["days"][0]
     assert day["uptime"] == 66.7, day
-    assert day["sweeps"] == 3
+    assert day["answered"] == 3
 
 
 def test_one_day_is_not_a_series(tmp_path):
@@ -2791,10 +2791,22 @@ def test_up_is_the_same_word_the_rest_of_the_page_uses(tmp_path):
 # that is invisible in a picture and wrong in a way a reader would believe.
 # ---------------------------------------------------------------------------
 def _days(*rows):
-    """(day, uptime, sweeps, median, p95) tuples as _daily_series emits them."""
+    """(day, uptime, answered, median, p95) tuples as _daily_series emits them.
+
+    `probes` defaults to `answered`, which is the ordinary day: everything we
+    asked came back. A test about the denominator passes a sixth element and
+    says so.
+    """
     return [
-        {"day": d, "uptime": u, "sweeps": s, "median_ms": m, "p95_ms": p}
-        for d, u, s, m, p in rows
+        {
+            "day": r[0],
+            "uptime": r[1],
+            "answered": r[2],
+            "probes": r[5] if len(r) > 5 else r[2],
+            "median_ms": r[3],
+            "p95_ms": r[4],
+        }
+        for r in rows
     ]
 
 
@@ -2891,6 +2903,68 @@ def test_every_day_is_answerable_including_the_ones_with_no_mark():
     assert len(g["slots"]) == 2
     assert "not measured" in g["slots"][0]["readout"]
     assert g["slots"][1]["w"] > 8, "a column narrower than a finger"
+
+
+def test_a_day_that_answered_once_does_not_read_as_a_full_day(tmp_path):
+    """THE CASE THIS WAS BUILT FOR, as it was reported.
+
+    On 2026-10-15 sparql.healthdata.nl answered one probe of thirty-four and
+    its page said 100%. True of the probe that answered; a wrong account of the
+    day. The share is deliberately UNCHANGED here -- silence is still not
+    counted as downtime, for the reason `_daily_series` argues at length -- and
+    what changes is that the page now says what the share is of.
+
+    Twenty-four probes rather than thirty-four so the day fits in a day, which
+    is the real shape anyway: the sweep is hourly.
+    """
+    from pyoxigraph import Store
+    import load_run
+    from app import _daily_series
+    from endpoint_history import endpoint_history
+
+    source = (Path(__file__).parent / "fixtures" / "run-with-samples.nq").read_text()
+    store = Store(str(tmp_path / "quiet"))
+    for hour in range(24):
+        verdict = "verified" if hour == 0 else "indeterminate"
+        run = source.replace("2026-08-22T16:00:00Z", f"2026-09-01T{hour:02d}:00:00Z")
+        load_run.load_run(store, run.replace('"verified"', f'"{verdict}"').encode())
+    load_run.rebuild_current(store)
+
+    day = _daily_series(endpoint_history(store, KADASTER, limit=100))["days"][0]
+    assert day["uptime"] == 100.0, "the share is over what answered, and is not the thing at issue"
+    assert day["answered"] == 1, day
+    assert day["probes"] == 24, day
+
+
+def test_the_readout_says_what_the_share_is_of():
+    """The sentence a reader actually meets, in full."""
+    g = charts.daily_charts(_days(("2026-10-15", 100.0, 1, 137, 149, 34)))
+    assert g["slots"][0]["readout"] == (
+        "2026-10-15 — 1 of 34 probes answered, 100% verified; "
+        "137 ms median, 149 ms p95"
+    ), g["slots"][0]["readout"]
+
+
+def test_an_ordinary_day_does_not_pay_for_the_denominator():
+    """A day where everything answered reads as plainly as it did before.
+
+    The fix must not make the common case wordy, which is what ruled out
+    appending a clause that says `0 of 24 got no answer` every day.
+    """
+    g = charts.daily_charts(_days(("2026-10-16", 100.0, 24, 131, 142)))
+    assert g["slots"][0]["readout"] == (
+        "2026-10-16 — 24 of 24 probes answered, 100% verified; "
+        "131 ms median, 142 ms p95"
+    ), g["slots"][0]["readout"]
+
+
+def test_a_day_that_answered_nothing_claims_no_share():
+    """`0 of 48 probes answered, 0% verified` states one nothing twice, and the
+    second half invites a reader to think a measurement happened."""
+    g = charts.daily_charts(_days(("2026-10-14", 0.0, 0, None, None, 48)))
+    assert g["slots"][0]["readout"] == "2026-10-14 — 0 of 48 probes answered", (
+        g["slots"][0]["readout"]
+    )
 
 
 def test_the_charts_replace_the_matrix_and_keep_the_metrics_table(
@@ -3038,7 +3112,10 @@ def test_a_day_we_reached_for_and_never_got_is_still_an_outage(tmp_path):
     assert by_day["2026-09-02"]["uptime"] == 0.0, (
         "a day the endpoint never answered was drawn as a day nobody asked"
     )
-    assert by_day["2026-09-02"]["sweeps"] == 4, (
+    assert by_day["2026-09-02"]["answered"] == 0, (
+        "nothing answered, and the page now says so rather than implying four did"
+    )
+    assert by_day["2026-09-02"]["probes"] == 4, (
         "the sweeps we tried are the denominator when none of them answered"
     )
 
@@ -3085,7 +3162,8 @@ def test_one_unreached_sweep_does_not_drag_a_good_day_down(tmp_path):
     )
     day = _daily_series(history)["days"][0]
     assert day["uptime"] == 100.0, day
-    assert day["sweeps"] == 3, "the unreached sweep was counted as one we learned from"
+    assert day["answered"] == 3, "the unreached sweep was counted as one we learned from"
+    assert day["probes"] == 4, "and the probe it could not interpret is still reported"
 
 
 def _microdata(body: str) -> list:
