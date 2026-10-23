@@ -366,36 +366,54 @@ def test_the_reaper_keeps_more_than_the_reader_holds(tmp_path):
     kept alive pins the unlinked files of a reaped generation: `du` reports the
     reap as a success while `df` does not move.
 
-    THIS ASSERTED EQUALITY UNTIL 2026-10-23, on the reasoning that a reader
-    cannot hold more generations than it caches. It can. `_held_generations`
-    reads /proc/self/fd, and the swap to generation 413 printed, in both
-    containers:
+    THIS ASSERTED EQUALITY, AND IT ONLY LISTED app.py's CACHES. Both were
+    wrong, and the second is why the first went unnoticed: `void_self.counts`
+    and `void_self.vocabulary` were `maxsize=4`, so the reader held four
+    generations while this test checked three caches bounded at two and
+    passed.
 
-        holding gen-000411:39 gen-000412:41 gen-000413:39
+    `_held_generations` reads /proc/self/fd. A pod started at 16:09 on
+    2026-10-23 printed, on consecutive swaps:
 
-    Three held against a cache bound of two. Reaped while still held, the
-    generation that straddles a compaction stranded 2.1 GiB a day -- it shares
-    no SSTs with the rewritten store, so unlike an ordinary retained
-    generation it costs its full size.
+        generation 417; holding gen-000417
+        generation 418; holding gen-000417 gen-000418
+        generation 419; holding gen-000417 gen-000418 gen-000419
+        generation 420; holding gen-000417 gen-000418 gen-000419 gen-000420
 
-    So the relationship is now an INEQUALITY, and it is the reaper's floor that
-    has to clear the reader rather than the reader's bound that has to match
-    the floor. Equality is exactly the configuration that stranded a
-    generation every day.
+    One more every swap, up to the largest cache's bound. Reaped while still
+    held, the generation that straddles a compaction strands its whole size --
+    it shares no SSTs with the rewritten store -- which cost 1.7 GiB that day
+    and 2.1 GiB the day before.
+
+    So the relationship is an INEQUALITY over EVERY store-keyed cache, and the
+    reader's depth is set by the largest of them. Raising `_SNAPSHOT_KEEP` to
+    clear a cache does not work and was tried: a bigger floor reaps the same
+    generation an hour later and strands it just the same.
     """
     import app
     import load_run
+    import void_self
 
+    # EVERY store-keyed cache in the web tier, not just app.py's. The two in
+    # void_self were `maxsize=4` until 2026-10-23 and are why the site held
+    # four generations: this test listed app.py's three and said nothing about
+    # them, so the invariant it claims to enforce was not enforced anywhere
+    # they lived. A cache added in a fourth module would still slip through --
+    # the list is by hand because there is no registry to walk -- so anything
+    # that takes a `Store` and caches on it belongs here.
     for name, cache in (
         ("endpoint_index", app.endpoint_index),
         ("fleet_history", app.fleet_history),
         ("_cached_build_payload", app._cached_build_payload),
+        ("void_self.counts", void_self.counts),
+        ("void_self.vocabulary", void_self.vocabulary),
     ):
         maxsize = cache.cache_info().maxsize
         assert maxsize < load_run._SNAPSHOT_KEEP, (
             f"{name} caches {maxsize} generations and the reaper keeps "
-            f"{load_run._SNAPSHOT_KEEP}; the reader holds one more than it "
-            "caches, so the floor must clear it"
+            f"{load_run._SNAPSHOT_KEEP}; the reader holds as many generations "
+            "as its largest store-keyed cache retains, so every one of them "
+            "has to stay under the floor"
         )
     assert app._opened_store.cache_info().maxsize == 1
 
