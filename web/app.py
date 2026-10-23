@@ -684,6 +684,54 @@ def _malloc_trim():
     return trim
 
 
+def _held_generations() -> str:
+    """Which published generations this process still has files open in.
+
+    THE ONE QUESTION NOTHING ELSE CAN ANSWER. The store volume has been losing
+    space to generations the reaper unlinked while this process still held
+    them -- measured on 2026-10-22, 2.1 GiB stranded by the reap that follows a
+    compaction, never released, and returned only by restarting the pod. `df`
+    says it is happening and `du` cannot see it, because an open handle keeps
+    an unlinked file alive.
+
+    Reading the code did not find the holder. The Follower pins one generation,
+    the three fleet caches are `maxsize=2`, the worker pool retires on repoint:
+    every path says at most two generations, and the volume says otherwise. So
+    this stops arguing and asks the kernel.
+
+    NOT COUNTED FROM PYTHON, because it cannot be. `pyoxigraph.Store` is
+    neither GC-tracked nor weak-referenceable -- checked, not assumed -- so
+    `gc.get_objects()` never lists one and a weakref raises. The file
+    descriptors are the thing actually being held, and `/proc/self/fd` names
+    them exactly: a generation five swaps old appearing here IS the leak, with
+    its identity attached.
+
+    Cheap enough to run on every swap: one directory listing and a readlink per
+    descriptor, hourly. It returns a string rather than raising, because a
+    diagnostic that can take the swap down is worse than no diagnostic.
+    """
+    counts: dict[str, int] = {}
+    try:
+        names = os.listdir("/proc/self/fd")
+    except OSError:
+        return "fds unknown"
+    for name in names:
+        try:
+            target = os.readlink(f"/proc/self/fd/{name}")
+        except OSError:
+            # The descriptor closed while we were looking, which is ordinary
+            # and not a finding: listdir and readlink are not one operation.
+            continue
+        _, marker, rest = target.partition("/snapshots/")
+        if not marker:
+            continue
+        generation = rest.split("/")[0]
+        counts[generation] = counts.get(generation, 0) + 1
+    if not counts:
+        return "holding no generation files"
+    return "holding " + " ".join(f"{g}:{n}" for g, n in sorted(counts.items()))
+
+
 def _give_the_heap_back() -> str:
     """Return the retired payload's arenas to the OS, and say how much came back.
 
@@ -777,7 +825,13 @@ def _took_generation(generation: int) -> None:
     was = _memory()
     if _POOL is not None:
         _POOL.repoint(str(snapshots.path_of(_snapshot_root(), generation)))
-    _LOG.info("now serving generation %d; %s; %s", generation, was, _give_the_heap_back())
+    _LOG.info(
+        "now serving generation %d; %s; %s; %s",
+        generation,
+        was,
+        _give_the_heap_back(),
+        _held_generations(),
+    )
 
 
 def _query_store_path() -> str:

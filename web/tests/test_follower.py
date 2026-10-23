@@ -793,3 +793,79 @@ def test_what_the_swap_dropped_is_collected_before_the_trim():
 
     app._give_the_heap_back()
     assert gone() is None
+
+
+def test_the_generations_we_hold_are_named(tmp_path):
+    """THE DIAGNOSTIC THAT FINDS THE HOLDER.
+
+    A generation the reaper unlinked while this process held it costs real
+    space and is invisible to `du`. Reading the code did not find what holds
+    one; this asks the kernel instead, and a generation several swaps old
+    appearing in the answer is the leak with its identity attached.
+    """
+    import app
+
+    from pyoxigraph import NamedNode, Quad, Store
+
+    snapshots = tmp_path / "snapshots"
+    snapshots.mkdir()
+    live = Store(str(tmp_path / "db"))
+    live.add(Quad(NamedNode("http://e/s"), NamedNode("http://e/p"), NamedNode("http://e/o")))
+    for generation in (1, 2):
+        live.backup(str(snapshots / f"gen-{generation:06d}"))
+
+    first = Store.read_only(str(snapshots / "gen-000001"))
+    second = Store.read_only(str(snapshots / "gen-000002"))
+    both = app._held_generations()
+    assert "gen-000001" in both, both
+    assert "gen-000002" in both, both
+
+    # AND IT NOTICES A RELEASE. Without this the test would pass against a
+    # function that named every generation it had ever seen, which is the one
+    # wrong answer that would send the next reader hunting a phantom.
+    del first
+    after = app._held_generations()
+    assert "gen-000001" not in after, after
+    assert "gen-000002" in after, after
+    del second
+
+
+def test_holding_nothing_says_so_rather_than_nothing(monkeypatch):
+    """An empty answer has to be a sentence, because it appears in a log line
+    beside other sentences and a blank there reads as a truncated message.
+
+    The descriptor list is stubbed rather than trusted to be empty. Asserting
+    on this process's real file descriptors makes the test a statement about
+    whatever else the suite has open -- it passed alone and failed in the file,
+    against a generation another test was still holding.
+    """
+    import app
+
+    monkeypatch.setattr(app.os, "listdir", lambda _p: [])
+    assert app._held_generations() == "holding no generation files"
+
+
+def test_an_unreadable_proc_does_not_take_the_swap_down(monkeypatch):
+    """A diagnostic that can raise inside the swap is worse than no diagnostic:
+    the swap is how the site publishes, and it must not depend on /proc."""
+    import app
+
+    def refuse(_path):
+        raise OSError("no /proc here")
+
+    monkeypatch.setattr(app.os, "listdir", refuse)
+    assert app._held_generations() == "fds unknown"
+
+
+def test_a_descriptor_that_closes_mid_scan_is_not_an_error(monkeypatch, tmp_path):
+    """`listdir` and `readlink` are not one operation, so a descriptor can go
+    between them. That is ordinary, not a finding, and must not raise."""
+    import app
+
+    monkeypatch.setattr(app.os, "listdir", lambda _p: ["7"])
+
+    def vanished(_path):
+        raise OSError("stale descriptor")
+
+    monkeypatch.setattr(app.os, "readlink", vanished)
+    assert app._held_generations() == "holding no generation files"
