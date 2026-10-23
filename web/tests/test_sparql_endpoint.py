@@ -52,6 +52,61 @@ def _q(client, query, **kw):
 # ---------------------------------------------------------------------------
 # The guards
 # ---------------------------------------------------------------------------
+
+
+def test_a_query_does_not_run_on_the_event_loop(client_for, store):
+    """THE BLOCKING CALL MUST RUN SOMEWHERE ELSE.
+
+    `pool.execute` waits on a worker's pipe for as long as the query budget
+    allows, and `sparql` is the only `async def` route in the module -- every
+    other handler is a plain `def` that Starlette already runs in a thread. Run
+    directly, one query held the loop for up to fifteen seconds and nothing
+    else in the process was served: not another query, not a page, and not the
+    health probes.
+
+    That is how this container has been dying. On 2026-10-23T03:35Z three
+    expensive queries returned 504 back to back, the liveness probe went
+    unanswered throughout, and the kubelet killed the container -- exit 0 with
+    a graceful shutdown, which is what a SIGTERM from a failed probe looks
+    like. With one replica the pod leaves both Services while it restarts.
+
+    ASSERTED BY ASKING THE CALL WHERE IT IS. A thread running the loop has a
+    running asyncio loop; a worker thread does not, and `get_running_loop`
+    raises there. That is exact, needs no timing, and cannot pass by accident:
+    revert the `run_in_threadpool` and this fails on the first request.
+    """
+    import asyncio
+
+    import app as app_module
+
+    where = {}
+
+    class _Probe:
+        def execute(self, query, accept=""):
+            try:
+                asyncio.get_running_loop()
+                where["on_the_loop"] = True
+            except RuntimeError:
+                where["on_the_loop"] = False
+            return ('{"head":{},"boolean":true}', sparql_service.SELECT_JSON, 200, True)
+
+    # THE CLIENT FIRST. `client_for` installs its own pool override as it
+    # builds the client, so overriding before that call is overwritten by it --
+    # the probe is never reached and the test passes against anything.
+    client = client_for(store)
+    app_module.app.dependency_overrides[app_module.get_sparql_pool] = _Probe
+    try:
+        r = _q(client, "ASK{}")
+    finally:
+        app_module.app.dependency_overrides.pop(app_module.get_sparql_pool, None)
+
+    assert r.status_code == 200, r.text
+    assert where.get("on_the_loop") is False, (
+        "pool.execute ran on the event loop, so a query starves every other "
+        "request in this process including the health probes"
+    )
+
+
 @pytest.mark.parametrize(
     "query",
     [

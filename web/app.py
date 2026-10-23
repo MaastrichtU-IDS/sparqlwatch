@@ -63,6 +63,7 @@ import logging
 from urllib.parse import parse_qs, quote, urlparse
 
 from fastapi import Depends, FastAPI, Query, Request, Response
+from starlette.concurrency import run_in_threadpool
 from starlette.responses import RedirectResponse
 from starlette.middleware.gzip import GZipMiddleware
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -5955,8 +5956,28 @@ async def sparql(
     # yields no rows, so the deadline and row cap in sparql_service never get
     # a turn. The only thing that stops those is killing the process running
     # them, and the process running them must therefore not be this one.
-    body, media_type, status, complete = pool.execute(
-        query, accept=request.headers.get("accept", "")
+    #
+    # AND OFF THE EVENT LOOP, which is a second requirement and was missing.
+    # `pool.execute` waits on a pipe -- `_Worker.conn.poll` -- for as long as
+    # the query budget allows, and this is the ONLY `async def` route in the
+    # module; every other handler is a plain `def` that Starlette already runs
+    # in a thread. So a single query held the loop for up to fifteen seconds
+    # and nothing else in the process got served: not another query, not a
+    # page, and not the health probes.
+    #
+    # That is not a latency complaint, it is how this container has been dying.
+    # On 2026-10-23T03:35Z three expensive queries returned 504 back to back,
+    # the liveness probe went unanswered through all of it, and the kubelet
+    # killed the container -- `exitCode 0` with a graceful uvicorn shutdown,
+    # which is what a SIGTERM from a failed probe looks like. With one replica
+    # the pod leaves BOTH Services while it restarts, so the whole site goes
+    # with it. Raising the probe budgets on 2026-10-22 bought headroom against
+    # this and did not touch the cause: 150s of a blocked loop still kills it.
+    #
+    # A thread, not a task: the call is synchronous and blocking, so the only
+    # way to keep the loop free is to run it somewhere else.
+    body, media_type, status, complete = await run_in_threadpool(
+        pool.execute, query, accept=request.headers.get("accept", "")
     )
     answer = sparql_service.Answer(body, media_type, status, complete)
     headers = dict(sparql_service.CORS)
