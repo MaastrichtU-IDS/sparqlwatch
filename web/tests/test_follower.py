@@ -359,20 +359,44 @@ def test_the_site_follows_a_newly_published_generation(tmp_path, monkeypatch):
         app._FOLLOWERS.clear()
 
 
-def test_the_store_keyed_caches_hold_no_more_than_the_generations_kept(tmp_path):
+def test_the_reaper_keeps_more_than_the_reader_holds(tmp_path):
     """The leak, as a number rather than a comment.
 
-    These caches key on the store HANDLE and so keep it alive. A handle kept
-    alive pins the unlinked files of a reaped generation, which is why the
-    bound has to match what `load_run._SNAPSHOT_KEEP` retains rather than being
-    whatever it was when the handle could never change.
+    These caches key on the store HANDLE and so keep it alive, and a handle
+    kept alive pins the unlinked files of a reaped generation: `du` reports the
+    reap as a success while `df` does not move.
+
+    THIS ASSERTED EQUALITY UNTIL 2026-10-23, on the reasoning that a reader
+    cannot hold more generations than it caches. It can. `_held_generations`
+    reads /proc/self/fd, and the swap to generation 413 printed, in both
+    containers:
+
+        holding gen-000411:39 gen-000412:41 gen-000413:39
+
+    Three held against a cache bound of two. Reaped while still held, the
+    generation that straddles a compaction stranded 2.1 GiB a day -- it shares
+    no SSTs with the rewritten store, so unlike an ordinary retained
+    generation it costs its full size.
+
+    So the relationship is now an INEQUALITY, and it is the reaper's floor that
+    has to clear the reader rather than the reader's bound that has to match
+    the floor. Equality is exactly the configuration that stranded a
+    generation every day.
     """
     import app
     import load_run
 
-    assert app.endpoint_index.cache_info().maxsize == load_run._SNAPSHOT_KEEP
-    assert app.fleet_history.cache_info().maxsize == load_run._SNAPSHOT_KEEP
-    assert app._cached_build_payload.cache_info().maxsize == load_run._SNAPSHOT_KEEP
+    for name, cache in (
+        ("endpoint_index", app.endpoint_index),
+        ("fleet_history", app.fleet_history),
+        ("_cached_build_payload", app._cached_build_payload),
+    ):
+        maxsize = cache.cache_info().maxsize
+        assert maxsize < load_run._SNAPSHOT_KEEP, (
+            f"{name} caches {maxsize} generations and the reaper keeps "
+            f"{load_run._SNAPSHOT_KEEP}; the reader holds one more than it "
+            "caches, so the floor must clear it"
+        )
     assert app._opened_store.cache_info().maxsize == 1
 
 

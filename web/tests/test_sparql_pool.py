@@ -326,7 +326,7 @@ def test_repointing_to_the_same_store_replaces_nothing(tmp_path):
 
 
 def test_a_busy_worker_is_not_killed_and_is_replaced_when_it_finishes(tmp_path):
-    """A busy worker holds a generation that still exists -- two are retained --
+    """A busy worker holds a generation that still exists -- three are retained --
     so its answer is correct and complete, and killing it would turn a running
     query into an error for nothing. It is replaced when it next goes idle.
 
