@@ -64,7 +64,31 @@ _COUNTS = {
 }
 
 
-@lru_cache(maxsize=4)
+# TWO, NOT FOUR, AND THE NUMBER IS LOAD-BEARING. These key on the store
+# HANDLE and so keep it alive, and a live handle pins the unlinked files of a
+# reaped generation. `app.py` learned this and cut its own store-keyed caches
+# from four to two; these two, in another module, were missed -- by that change
+# and by six later audits of "what holds a generation", every one of which read
+# app.py and stopped there.
+#
+# What they cost, measured 2026-10-23. `app._held_generations` prints what the
+# process has open on every swap, and a pod that started at 16:09 showed:
+#
+#   generation 417; holding gen-000417
+#   generation 418; holding gen-000417 gen-000418
+#   generation 419; holding gen-000417 gen-000418 gen-000419
+#   generation 420; holding gen-000417 gen-000418 gen-000419 gen-000420
+#
+# One more every swap, never released, up to these caches' bound of four. The
+# reaper then unlinks a generation the site is still holding; while generations
+# share SSTs that costs nothing, but the one that straddles a compaction shares
+# none and costs its whole size -- 1.7 GiB that day, 2.1 GiB the day before,
+# returned only by restarting the pod.
+#
+# Raising `_SNAPSHOT_KEEP` to clear them does not work and was tried: the
+# reader's depth is set by THIS number, so a bigger floor just reaps a
+# generation one hour later and strands it anyway.
+@lru_cache(maxsize=2)
 def counts(store: Store) -> dict[str, int]:
     """Every number in the description, measured once per process.
 
@@ -244,7 +268,31 @@ _VOCABULARY = {
 EXTENSION_FUNCTIONS = ("http://www.opengis.net/def/function/geosparql/sfWithin",)
 
 
-@lru_cache(maxsize=4)
+# TWO, NOT FOUR, AND THE NUMBER IS LOAD-BEARING. These key on the store
+# HANDLE and so keep it alive, and a live handle pins the unlinked files of a
+# reaped generation. `app.py` learned this and cut its own store-keyed caches
+# from four to two; these two, in another module, were missed -- by that change
+# and by six later audits of "what holds a generation", every one of which read
+# app.py and stopped there.
+#
+# What they cost, measured 2026-10-23. `app._held_generations` prints what the
+# process has open on every swap, and a pod that started at 16:09 showed:
+#
+#   generation 417; holding gen-000417
+#   generation 418; holding gen-000417 gen-000418
+#   generation 419; holding gen-000417 gen-000418 gen-000419
+#   generation 420; holding gen-000417 gen-000418 gen-000419 gen-000420
+#
+# One more every swap, never released, up to these caches' bound of four. The
+# reaper then unlinks a generation the site is still holding; while generations
+# share SSTs that costs nothing, but the one that straddles a compaction shares
+# none and costs its whole size -- 1.7 GiB that day, 2.1 GiB the day before,
+# returned only by restarting the pod.
+#
+# Raising `_SNAPSHOT_KEEP` to clear them does not work and was tried: the
+# reader's depth is set by THIS number, so a bigger floor just reaps a
+# generation one hour later and strands it anyway.
+@lru_cache(maxsize=2)
 def vocabulary(store: Store) -> dict[str, tuple[str, ...]]:
     """The distinct classes and properties, sorted. Cached like `counts`."""
     out = {}
