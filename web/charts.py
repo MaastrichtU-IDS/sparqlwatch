@@ -220,11 +220,27 @@ def _readout(day: dict) -> str:
 
     Built here rather than in script so the markup carries it: the charts stay
     readable with no JavaScript, and the same words are what a test asserts.
+
+    THE DENOMINATOR LEADS. This read `100% of 1 sweep` for a day on which
+    sparql.healthdata.nl answered one probe of thirty-four, which is true of
+    the probe that answered and a wrong account of the day. Saying what the
+    share is of, first, costs one clause and cannot be misread.
+
+    ONE WORD FOR ONE THING: `answered` here and `answered` in the table beside
+    it. _daily_series' own header gives the rule -- a third reading of a word
+    on one page is how a page comes to contradict itself -- so this sentence
+    and that column are deliberately not two spellings of one idea.
+
+    The share is omitted when nothing answered. "0 of 48 probes answered, 0%
+    verified" states the same nothing twice, and the second half invites a
+    reader to think a measurement happened.
     """
     if day["uptime"] is None:
         return f"{day['day']} — not measured"
-    sweeps = day.get("sweeps", 0)
-    sentence = f"{day['day']} — {day['uptime']:g}% of {sweeps} sweep{'s' if sweeps != 1 else ''}"
+    answered, probes = day.get("answered", 0), day.get("probes", 0)
+    sentence = f"{day['day']} — {answered} of {probes} probe{'s' if probes != 1 else ''} answered"
+    if answered:
+        sentence += f", {day['uptime']:g}% verified"
     if day["median_ms"] is not None:
-        sentence += f", {day['median_ms']} ms median, {day['p95_ms']} ms p95"
+        sentence += f"; {day['median_ms']} ms median, {day['p95_ms']} ms p95"
     return sentence

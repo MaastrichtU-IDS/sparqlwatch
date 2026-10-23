@@ -694,12 +694,14 @@
         <table class="visually-hidden">
           <caption>Uptime and response time per day, oldest day first.</caption>
           <thead><tr><th scope="col">day</th><th scope="col">uptime</th>
-            <th scope="col">sweeps</th><th scope="col">median</th><th scope="col">p95</th></tr></thead>
+            <th scope="col">answered</th><th scope="col">probes</th>
+            <th scope="col">median</th><th scope="col">p95</th></tr></thead>
           <tbody>
             {% for d in series.days %}
             <tr><th scope="row">{{ d.day }}</th>
               <td>{% if d.uptime is none %}not measured{% else %}{{ d.uptime }}%{% endif %}</td>
-              <td>{{ d.sweeps if d.uptime is not none else "" }}</td>
+              <td>{{ d.answered if d.uptime is not none else "" }}</td>
+              <td>{{ d.probes if d.uptime is not none else "" }}</td>
               <td>{% if d.median_ms is not none %}{{ d.median_ms }} ms{% endif %}</td>
               <td>{% if d.p95_ms is not none %}{{ d.p95_ms }} ms{% endif %}</td></tr>
             {% endfor %}

@@ -1649,7 +1649,28 @@ def _daily_series(history: EndpointHistory, summaries: dict | None = None) -> di
             {
                 "day": day,
                 "uptime": round(100.0 * len(up) / len(counted), 1),
-                "sweeps": len(counted),
+                # BOTH HALVES OF THE FRACTION, because the share alone is not
+                # a reading anyone can check.
+                #
+                # Uptime is computed over the probes that ANSWERED, for the
+                # reason argued above, and that denominator used to be dropped
+                # here. On 2026-10-15 sparql.healthdata.nl answered one probe
+                # of thirty-four and its page reported 100%: true of the one
+                # that answered, and a wrong account of the day. Worse, the
+                # error is a cliff rather than a slope -- one success in
+                # thirty-four reads 100% and no successes in forty-eight reads
+                # 0%, with nothing between -- so the chart sits flat at the top
+                # until the day it hits the floor.
+                #
+                # These two say what the percentage is of. They assert nothing
+                # about the endpoint that `uptime` does not already assert:
+                # silence is still not counted as downtime, because a verdict
+                # nobody could interpret may be our throttle, our proxy or our
+                # budget. Reporting how often we got nothing is a fact about
+                # the probing, and a reader can draw their own conclusion from
+                # it without this service publishing one.
+                "answered": len(answered),
+                "probes": len(asked),
                 "median_ms": _quantile(timings, 0.5),
                 "p95_ms": _quantile(timings, 0.95),
             }
@@ -1682,7 +1703,12 @@ def _day_from_counts(day: str, cell: dict) -> dict:
     return {
         "day": day,
         "uptime": round(100.0 * up / counted, 1),
-        "sweeps": counted,
+        # The same two the raw path reports, from the same counts. `daily`
+        # stores verdict counts rather than a decided up and down, so a closed
+        # day can answer this as exactly as an open one -- no migration, and
+        # nothing new in the published RDF.
+        "answered": answered,
+        "probes": sum(verdicts.values()),
         "median_ms": cell["median_ms"],
         "p95_ms": cell["p95_ms"],
     }
