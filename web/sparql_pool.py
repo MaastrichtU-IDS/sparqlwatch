@@ -201,7 +201,8 @@ class Pool:
         how the pool itself becomes the OOM it exists to prevent.
 
         A BUSY WORKER IS LEFT ALONE. It is answering out of a generation that
-        still exists -- two are retained -- so its answer is correct and
+        still exists -- `load_run._SNAPSHOT_KEEP` retains three -- so its
+        answer is correct and
         complete, and killing it would turn a running query into an error for
         no gain. It is marked and replaced when it next goes idle.
         """

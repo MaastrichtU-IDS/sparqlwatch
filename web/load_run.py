@@ -236,7 +236,34 @@ import snapshots
 # The floor is two rather than one because a reader that has just read CURRENT
 # has not opened it yet. "No reader reports this generation" is not "no reader
 # is about to".
-_SNAPSHOT_KEEP = 2
+#
+# THREE SINCE 2026-10-23, BECAUSE THE READER HOLDS THREE. The caches in
+# `app` are `maxsize=2` and were sized to match this number exactly, on the
+# reasoning that a reader cannot hold more generations than it caches. It can,
+# and it does. `app._held_generations` reads /proc/self/fd and the swap to
+# generation 413 printed, in BOTH containers:
+#
+#   holding gen-000411:39 gen-000412:41 gen-000413:39
+#
+# Three, against a bound of two. Which reference survives the cache eviction is
+# not yet known -- the Follower's pin, `_opened_store`, `get_store`, the
+# startup warm and the worker pool are all eliminated -- so this does not
+# pretend to fix that. It makes the floor match what was measured instead of
+# what was assumed.
+#
+# WHY IT COSTS ALMOST NOTHING. Generations are checkpoints of hard links, so a
+# retained one shares its SSTs with its neighbours and occupies no space of its
+# own -- confirmed the same day, holding three generations with `df` and `du`
+# agreeing at 3.1G and nothing stranded. The exception is the hour after a
+# compaction, when the rewritten store leaves the previous generation sharing
+# nothing: that one costs its full size, and keeping it one cycle longer is the
+# whole point. Reaped while the site still held it, it stranded 2.1 GiB a day,
+# recoverable only by restarting the pod.
+#
+# So the invariant is no longer "keep what the caches hold". It is KEEP MORE
+# THAN THE READER HOLDS, and the reader holds one more than it caches.
+# `test_the_reaper_keeps_more_than_the_reader_holds` is what says so.
+_SNAPSHOT_KEEP = 3
 
 
 

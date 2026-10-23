@@ -905,7 +905,12 @@ def get_store() -> Store:
 # explore_payload.py, so that those three stay what they say they are: pure
 # functions of a store, answerable about any store, with no opinion about how
 # often anyone asks. The opinion belongs next to the handle it depends on.
-# TWO, matching the two generations `load_run._SNAPSHOT_KEEP` retains. These
+# TWO, AND THE REAPER NOW KEEPS THREE. This number used to equal
+# `load_run._SNAPSHOT_KEEP` on the reasoning that a reader cannot hold more
+# generations than it caches -- and on 2026-10-23 `_held_generations` showed it
+# holding three against this bound of two, in both containers, so the equality
+# was wrong and the reaper's floor moved rather than this one. Which reference
+# survives the eviction is still unknown; see the constant's comment. These
 # caches key on the store HANDLE and so keep it alive, and a handle kept alive
 # pins the unlinked files of a reaped generation: `du` would report the reap as
 # a success while `df` did not move, and a query reaching a reaped generation
